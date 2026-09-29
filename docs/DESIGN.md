@@ -22,7 +22,7 @@
 
 ---
 
-## 二、数据模型：三区 + 两条硬纪律
+## 二、数据模型：三区 + 四条硬纪律
 
 ```
 <数据根>/mind/          出厂固件（可推送、可被升级覆盖）
@@ -30,24 +30,57 @@
 <profile>/.dsh-market/  诊断与台账
 ```
 
-**数据根解析顺序**（`lib/paths.js`）：`MIND_HOME` > `DSH_HOME`（含 `mind/` 则认它，否则
-`<DSH_HOME>/mind-data`）> dev 上溯 > `~/.dsh-mind`。
+**数据根解析顺序**（`lib/paths.js`）：`MIND_HOME` > **dsh home** > dev 上溯 > 包内兜底。
+
+> **dsh home 的语义 ＝ `DSH_HOME`（非空白）?? `~/.dsh`** —— 与官方
+> `@deepseek-ai/dsh-home-paths` 的 `resolveDshHome` **同语义**。
+> 落到 `<home>/mind-data`（独立插件布局）或 `<home>` 本身（单体布局：其下有 `mind/`）。
 
 ### 纪律 ①：`mind-data` **不要求已存在**
 
 全新安装时它正等着首启自举创建。写成"不存在就换别的"会让固件落到**错误位置**。
 
-> **实测代价**：首版写成"两者都不存在 ⇒ 回落 `cwd`"，后果是"谁在哪跑就落哪"——
-> 独立插件装到别人机器上必然错位。由 `test/selftest.mjs` ② 与 ③ 钉住。
+> **实测代价**：首版写成"两者都不存在 ⇒ 回落 `cwd`"，后果是"谁在哪跑就落哪"。
 
 ### 纪律 ②：**永不回落 `cwd`**
 
-心智数据必须有**稳定归属**。cwd 随调用者漂移，不是能承载长期记忆的位置。兜底用 `~/.dsh-mind`。
+心智数据必须有**稳定归属**。cwd 随调用者漂移，不是能承载长期记忆的位置。
 
-### 纪律 ③：profile 目录**不读** `DSH_PROFILE` / `DSH_PROFILE_DIR`
+### 纪律 ③：profile 目录**按布局分档**（别一刀切）
 
-那两个是"**当前 GUI 会话**"的旋钮（实测：本机恒为 `desktop`），与"心智数据归属哪个 profile"
-是两回事。跟随它们会让落痕写到基座之外——**实测红过一整片断言**。
+| 布局 | 诊断/台账该落哪 | 理由 |
+|---|---|---|
+| **单体**（dsh home 含 `mind/`，如 DSHOME 仓库） | `<home>/profiles/<名>`，**忽略** `DSH_PROFILE_DIR` | 诊断属"心智自己的那个 profile"；跟随 GUI 会话旋钮会让 marker 写错目录（实测红过一整片断言） |
+| **独立插件**（如官方客户端） | 认 **`DSH_PROFILE_DIR`** | 诊断属"**插件正在运行的那个 profile**"；不认它会掉到包内 `.profile`，落痕跑进插件源码目录 |
+
+### 纪律 ④：上游包必须**从宿主**解析（`lib/host-resolve.js`）
+
+`import('@deepseek-ai/dsh-llm')` 按**本文件位置**往上找 node_modules。当插件以
+**junction / link** 方式安装时，Node 按 **realpath** 解析 ⇒ 找到插件源码目录（那里没有
+node_modules）⇒ 导入失败 ⇒ **R0 注入实际不工作**（marker 出现 `createUserMessage 不可用`）。
+
+**解法**：以**宿主入口**（`process.argv[1]`）为基准解析——官方客户端是
+`...\app.asar\dsh\node_modules\@deepseek-ai\dsh-desktop-host\lib\index.js`，dsh CLI 是
+`<dir>\node_modules\@deepseek-ai\dsh\lib\bin.js`，两者往上找都命中宿主的 node_modules。
+
+---
+
+## 二·补、**测试环境掩盖真缺陷**（2026-09-29 最重要的一课）
+
+纪律 ② 的 `~/.dsh` 档与纪律 ④，**在自建测试环境里全是绿的**，装进真实客户端才暴露。
+根因是**测试环境与真实环境有三处结构性差异**：
+
+| 差异 | 测试环境 | 真实客户端 | 掩盖了什么 |
+|---|---|---|---|
+| **安装方式** | `file:` **副本**（插件被复制进 profile 的 node_modules，旁边正好有上游包） | `link:` **junction**（按 realpath 解析到源码目录，没有 node_modules） | 纪律 ④ |
+| **环境变量** | 我手动设了 `DSH_HOME` | 客户端**不设** `DSH_HOME`（用命令行参数传 profile） | 纪律 ② 的 `~/.dsh` 档 |
+| **marker 检查** | 只看**最后一行** | 全量看 | ④ 的降级行被 `registered hook` 盖住 |
+
+**三条判据（写进门禁的教训）**：
+
+1. **测试环境的安装方式必须与目标一致**——`file:` 副本 ≠ `link:` junction，模块解析行为不同。
+2. **验证要看全量 marker，不能只看最后一行**——降级行会被后续正常行盖住。
+3. **不设环境变量跑一遍**——只测"env 齐全"的路径，等于没测默认路径。
 
 ---
 

@@ -10,6 +10,7 @@
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./paths": "./lib/paths.js",
     "./bootstrap": "./lib/bootstrap.js",
+    "./host-resolve": "./lib/host-resolve.js",
     "./search": "./lib/search.js",
     "./host/inject": "./lib/host/inject.js",
     "./host/recall": "./lib/host/recall.js",

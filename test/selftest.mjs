@@ -60,18 +60,29 @@ if (paths) {
   check('② MIND_HOME 最高优先', paths.dataRoot() === explicit, paths.dataRoot());
 
   // 2.d **反例**：永不回落 cwd（纪律 ②）
-  setEnv({});   // 无任何 env；但 dev 上溯可能命中真实布局 ⇒ 只断言"不等于 cwd"
+  setEnv({});   // 无任何 env ⇒ 官方语义落到 ~/.dsh
   const dr = paths.dataRoot();
   check('② 反例：无 env 时不回落 cwd（心智数据须有稳定归属）', dr !== process.cwd(), `got ${dr}`);
+  check('② 无 env ⇒ 官方语义落 ~/.dsh/mind-data（**不是** ~/.dsh-mind）',
+    paths.resolveDshHome().endsWith('.dsh') && dr.endsWith('mind-data'), `${paths.resolveDshHome()} → ${dr}`);
 
-  // 2.e profileDir 不读 DSH_PROFILE / DSH_PROFILE_DIR（那是 GUI 会话旋钮）
-  const guiHome = join(tmp, 'gui-home');
-  mkdirSync(guiHome, { recursive: true });
-  setEnv({ DSH_HOME: guiHome, MIND_PROFILE_NAME: 'mine' });
-  process.env.DSH_PROFILE = 'desktop';        // 故意设成"别的会话"
-  process.env.DSH_PROFILE_DIR = join(tmp, 'foreign');
-  check('② 反例：profileDir 不跟 GUI 会话旋钮跑（DSH_PROFILE/DIR 被忽略）',
-    paths.profileDir() === join(guiHome, 'profiles', 'mine'), paths.profileDir());
+  // 2.e profileDir **按布局分档**（2026-09-29 实测校正）
+  //   单体布局（DSH_HOME 含 mind/）⇒ 用"心智自己的 profile"，忽略 GUI 会话旋钮
+  const monoLayout = join(tmp, 'mono-layout');
+  mkdirSync(join(monoLayout, 'mind'), { recursive: true });
+  setEnv({ DSH_HOME: monoLayout, MIND_PROFILE_NAME: 'mine' });
+  process.env.DSH_PROFILE_DIR = join(tmp, 'foreign');   // 故意设成"别的会话"
+  check('② 单体布局：profileDir 忽略 DSH_PROFILE_DIR（用心智自己的 profile）',
+    paths.profileDir() === join(monoLayout, 'profiles', 'mine'), paths.profileDir());
+
+  //   独立插件布局（home 无 mind/）⇒ 认"插件正在运行的那个 profile"
+  const standaloneHome = join(tmp, 'standalone-home');
+  mkdirSync(standaloneHome, { recursive: true });
+  const runningProfile = join(standaloneHome, 'profiles', 'desktop');
+  setEnv({ DSH_HOME: standaloneHome });
+  process.env.DSH_PROFILE_DIR = runningProfile;
+  check('② 独立布局：profileDir 认 DSH_PROFILE_DIR（插件运行的那个 profile）',
+    paths.profileDir() === runningProfile, paths.profileDir());
   delete process.env.DSH_PROFILE;
   delete process.env.DSH_PROFILE_DIR;
 
@@ -366,6 +377,28 @@ if (roles) {
     check('⑭ discoverCards：发现真卡、跳过 `_` 开头的样板',
       found.length === 1 && found[0].id === 'engineer', JSON.stringify(found.map((c) => c.id)));
   } finally { rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// ── ⑮ 宿主解析（host-resolve.js）—— junction 安装下上游导入的命门 ──────────
+const hostResolve = loaded['lib/host-resolve.js'];
+if (hostResolve) {
+  check('⑮ 导出 hostImport / hostResolve', typeof hostResolve.hostImport === 'function' && typeof hostResolve.hostResolve === 'function');
+  // 反例：不存在的包 ⇒ 返回 null，不抛（fail-open 的承诺）
+  check('⑮ 反例：不存在的包 ⇒ hostImport 返回 null（不抛）',
+    (await hostResolve.hostImport('@deepseek-ai/definitely-not-a-real-package')) === null);
+  check('⑮ 反例：不存在的包 ⇒ hostResolve 返回 null',
+    hostResolve.hostResolve('@deepseek-ai/definitely-not-a-real-package') === null);
+  // 解析基准是**宿主入口**（process.argv[1]），不是本文件位置
+  check('⑮ 解析基准取自 process.argv[1]（宿主入口）', typeof process.argv[1] === 'string' && process.argv[1].length > 0);
+}
+
+// ── ⑯ upstream 走宿主解析（不是裸 import）──────────────────────────────────
+const upstream = loaded['lib/upstream.js'];
+if (upstream) {
+  check('⑯ 导出 createUserMessage（可为 null，取决于宿主是否可解析）',
+    'createUserMessage' in upstream);
+  check('⑯ 导出 upstreamSummary 供诊断', typeof upstream.upstreamSummary === 'function');
+  check('⑯ 失败清单可读（空 = 全部就位）', Array.isArray(upstream.upstreamFailures));
 }
 
 // ── ⑨ 护栏判定（guard.js）—— 纯函数，直接喂用例 ─────────────────────────────
