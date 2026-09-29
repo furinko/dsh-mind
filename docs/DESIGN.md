@@ -225,4 +225,71 @@ R0（宪法）与 R1（召回）**共用** `lib/injector.js`。三个要点：
 
 ---
 
+## 十一、注入消息的**形态是硬契约**（2026-09-29 把宿主带崩，最贵的一课）
+
+### 契约
+
+官方 `dsh-agent-instructions` / `dsh-time-context` 的形态（逐字对照）：
+
+```js
+createUserMessage({
+  content: [{ type: 'text', text }],              // ← content 数组，不是 { text }
+  source: { kind: 'plugin', plugin: name, form }, // ← **构造期**传入
+});
+```
+
+### 违反的后果：**整个回合作废**
+
+宿主有 **30+ 处**直接读 `message.source.kind`（`dsh-agent-loop` 的 `isOwned`、
+`dsh-api-session-controller`、`dsh-session-title`、`dsh-tool-skill`、
+`dsh-experimental-agent-team`、`dsh-goal`、`dsh-repeat-tool-reminder` …）。
+缺顶层 `source` ⇒ `undefined.kind` ⇒ 首次注入的那个回合直接失败：
+
+```
+本轮运行失败  Cannot read properties of undefined (reading 'kind')
+```
+
+**判断"是不是我干的"的线索**：错误发生在 `turn/start` 与第一个 `step/start` **之间**
+（`dsh-agent-loop` 里 `if (decision.kind === "reject")` 那一行）——那就是 `agent/pre-step` 的地盘。
+
+### 两个具体的错法（我都犯了）
+
+1. 传 `{ text }` 而不是 `{ content: [{type:'text', text}] }`。
+2. **消息被 `freezeMessage` 冻结** ⇒ 不能"创建后再补 `source`"。我写的
+   `msg.data.source = {...}` 既晚了一步、又瞄错了字段（`message.source` 才是契约字段，没有 `.data`）。
+
+### 为什么之前所有测试都是绿的
+
+| 缺的那一轴 | 说明 |
+|---|---|
+| **只验了"返回非 undefined"** | 水花不见得对：消息插进去了、形状是错的 ⇒ 宿主照炸 |
+| **只跑了单插件** | 全链才暴露；而且**注入是"每会话每代次一次"**——先跑隔离会把状态消耗掉，全链就**看起来没注入**（测试自身的坑） |
+| **没有"消息形态"断言** | 补上了 `test/pre-step-waterfall.mjs`：忠实模拟瀑布 + 断言每条注入消息都有 `source.kind` / `content` 数组 / `role` / `id` |
+
+> **判据：注入类改动的验收，必须断言"产物的形态"，不能只断言"函数返回了东西"。**
+> 并且**必须跑全链**，且**全链要跑在隔离之前**（否则被一次性状态吃掉）。
+
+---
+
+## 十二、跨环境验收的判据（两次实机翻车换来的）
+
+自建测试环境与真实客户端有**结构性差异**，会成片掩盖缺陷：
+
+| 差异 | 测试环境 | 真实客户端 | 掩盖了什么 |
+|---|---|---|---|
+| **安装方式** | `file:` **副本**（旁边正好有上游包） | `link:` **junction**（按 realpath 解析，没有 node_modules） | §二 纪律 ④（上游解析） |
+| **环境变量** | 我手动设了 `DSH_HOME` | 客户端**不设** `DSH_HOME`（用命令行参数传 profile） | §二 纪律 ②（`~/.dsh` 档） |
+| **观察方式** | 只看 marker **最后一行** | 全量看 | 降级行会被后续正常行盖住 |
+| **验收对象** | 只看"我的日志写了什么" | 要看"宿主拿到什么" | §十一（形态契约） |
+
+**四条判据**：
+
+1. 测试环境的**安装方式**必须与目标一致（副本 ≠ junction）。
+2. **不设环境变量跑一遍**——只测"env 齐全"等于没测默认路径。
+3. **看全量 marker**，不看最后一行。
+4. **断言宿主侧产物**（消息形态 / 事件流），不只断言自己写的日志。
+
+
+---
+
 _本文是现行文档：与实测不符即缺陷。_

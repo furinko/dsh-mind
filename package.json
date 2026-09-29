@@ -1,6 +1,6 @@
 {
   "name": "dsh-mind",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A portable mind for DeepSeek Harness: constitution injection, boot recall, write guardrails, skill triggers, and a factory firmware that seeds itself on first run.",
   "license": "MIT",
   "private": true,
@@ -36,7 +36,10 @@
     "README.md"
   ],
   "scripts": {
-    "selftest": "node test/selftest.mjs"
+    "selftest": "node test/selftest.mjs",
+    "contract": "node test/pre-step-waterfall.mjs",
+    "test": "node test/selftest.mjs && node test/pre-step-waterfall.mjs",
+    "verify-install": "node scripts/verify-dsh-mind-install.mjs"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
