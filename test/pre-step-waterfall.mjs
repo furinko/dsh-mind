@@ -166,25 +166,50 @@ try {
     check('全链返回值带 messages 数组', Array.isArray(full?.messages), typeof full?.messages);
   }
 
-  // ── 消息形态硬契约（2026-09-29 实机崩溃换来的判据）──────────────────────────
-  // 宿主有 30+ 处读 `message.source.kind`；缺 source ⇒ `undefined.kind` ⇒ **整个回合作废**。
-  // 这条断言就是当时缺的那一轴：只验了"返回非 undefined"，没验"消息形态对不对"。
-  const injected = (full?.messages ?? []).filter((m) => m?.source?.kind === 'plugin');
+  // ── 消息形态硬契约（2026-09-29 实机两次翻车换来的判据）──────────────────────
+  // ① 缺顶层 `source` ⇒ 宿主 `message.source.kind` 处炸（undefined.kind）
+  // ② `kind:'plugin'` 在 **0.2.0 的 V4 被明确拒绝**（producer-owned source kind）
+  // ⇒ 断言每条注入消息都带**合法形态**的 source，且**绝不出现裸 `plugin`**。
+  const isPluginSource = (s) => s?.kind === 'plugin' || (typeof s?.kind === 'string' && s.kind.startsWith('plugin:'));
+  const injected = (full?.messages ?? []).filter((m) => isPluginSource(m?.source));
+
+  // 按**宿主实际会话格式**判定期望形态（本测试可能跑在 V3 或 V4 宿主上）
+  const msgSourceMod = await import(pathToFileURL(join(PKG, 'lib', 'message-source.js')).href);
+  const hostVer = msgSourceMod.hostVersion();
+  const expectV4 = msgSourceMod.usesProducerOwnedSource(hostVer);
+  console.log(`宿主版本：${hostVer ?? '(取不到)'} ⇒ 期望形态：${expectV4 ? 'V4 producer-owned' : 'V3 旧包装'}\n`);
+
   if (hostEntry) {
-    check('确实注入了消息（source.kind=plugin）——否则下面的形态断言是空跑', injected.length > 0,
+    check('确实注入了消息（plugin 来源）——否则下面的形态断言是空跑', injected.length > 0,
       `插入了 ${(full?.messages ?? []).length} 条，其中 plugin 来源 ${injected.length} 条`);
   } else {
     check('⚠️ 注入形态断言**被跳过**（未找到宿主入口）⇒ 本次结果**不构成**形态已验证', false,
       '设 DSH_MIND_TEST_HOST=<dsh 的 lib/bin.js> 后重跑');
   }
   for (const [i, m] of injected.entries()) {
-    check(`注入消息[${i}] 有顶层 source.kind（宿主 30+ 处读它）`, typeof m?.source?.kind === 'string', JSON.stringify(m)?.slice(0, 100));
-    check(`注入消息[${i}] 有 source.plugin（可归属）`, typeof m?.source?.plugin === 'string', String(m?.source?.plugin));
+    const kind = m?.source?.kind;
+    check(`注入消息[${i}] 有非空 source.kind（宿主 30+ 处读它）`,
+      typeof kind === 'string' && kind.length > 0, String(kind));
+    if (expectV4) {
+      // V4：kind 必须是 `plugin:<包名>`，且**不能有** plugin 字段
+      check(`注入消息[${i}] V4：kind 形如 \`plugin:<包名>\``, typeof kind === 'string' && kind.startsWith('plugin:'), String(kind));
+      check(`注入消息[${i}] V4：**没有** plugin 字段（官方 rewritePluginSource 会删掉）`, !('plugin' in (m?.source ?? {})), JSON.stringify(m?.source));
+    } else {
+      // V3：旧包装
+      check(`注入消息[${i}] V3：kind==='plugin' 且带 plugin 字段`,
+        kind === 'plugin' && typeof m?.source?.plugin === 'string', JSON.stringify(m?.source));
+    }
     check(`注入消息[${i}] content 是数组且首块为 text（官方形态）`,
       Array.isArray(m?.content) && m.content[0]?.type === 'text' && typeof m.content[0]?.text === 'string',
       JSON.stringify(m?.content)?.slice(0, 100));
     check(`注入消息[${i}] 有 role=user`, m?.role === 'user', String(m?.role));
     check(`注入消息[${i}] 有 id`, typeof m?.id === 'string' && m.id.length > 0, String(m?.id));
+  }
+  // **跨版本不变量**：裸 `plugin` 只在 V3 合法
+  if (expectV4) {
+    check('**V4 不变量**：注入消息里不出现裸 kind=`plugin`（0.2.0 会硬拒）',
+      injected.every((m) => m?.source?.kind !== 'plugin'),
+      JSON.stringify(injected.map((m) => m?.source)));
   }
   // 反向：不许有"没有 source"的消息混进来
   const noSource = (full?.messages ?? []).filter((m) => m && (m.source === undefined || m.source === null));

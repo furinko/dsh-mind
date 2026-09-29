@@ -401,6 +401,33 @@ if (upstream) {
   check('⑯ 失败清单可读（空 = 全部就位）', Array.isArray(upstream.upstreamFailures));
 }
 
+// ── ⑰ 注入消息的 source 形态适配（message-source.js）────────────────────────
+// 两次实机翻车的判据：① 缺 source ⇒ undefined.kind；② V3 的 kind:'plugin' 在 V4 被拒。
+const msgSource = loaded['lib/message-source.js'];
+if (msgSource) {
+  check('⑰ V4 判定：0.2.0-rc.1 ⇒ true', msgSource.usesProducerOwnedSource('0.2.0-rc.1') === true);
+  check('⑰ V4 判定：0.3.0 ⇒ true', msgSource.usesProducerOwnedSource('0.3.0') === true);
+  check('⑰ V4 判定：1.0.0 ⇒ true', msgSource.usesProducerOwnedSource('1.0.0') === true);
+  check('⑰ V3 判定：0.1.5-rc.2 ⇒ false', msgSource.usesProducerOwnedSource('0.1.5-rc.2') === false);
+  check('⑰ V3 判定：0.1.7-alpha.2 ⇒ false', msgSource.usesProducerOwnedSource('0.1.7-alpha.2') === false);
+  // 反例：取不到版本 ⇒ **取 V4**（宽容度不对称：V4 对 kind:'plugin' 硬拒，V3 对 plugin:<名> 无害）
+  check('⑰ 反例：版本取不到 ⇒ 取 V4（损失更小的一侧）', msgSource.usesProducerOwnedSource(null) === true);
+  check('⑰ 反例：版本串乱码 ⇒ 取 V4', msgSource.usesProducerOwnedSource('garbage') === true);
+
+  const v4 = msgSource.pluginSource('dsh-mind-inject', 'instructions', '0.2.0-rc.1');
+  check('⑰ V4 形态：kind = `plugin:<包名>`', v4.kind === 'plugin:dsh-mind-inject', JSON.stringify(v4));
+  check('⑰ V4 形态：**必须没有** plugin 字段（官方 rewritePluginSource 会删掉它）',
+    !('plugin' in v4), JSON.stringify(v4));
+  check('⑰ V4 形态：form 保留', v4.form === 'instructions');
+
+  const v3 = msgSource.pluginSource('dsh-mind-inject', 'instructions', '0.1.5-rc.2');
+  check('⑰ V3 形态：kind = plugin 且带 plugin 字段',
+    v3.kind === 'plugin' && v3.plugin === 'dsh-mind-inject' && v3.form === 'instructions', JSON.stringify(v3));
+
+  // 反例：V4 形态**绝不能**等于 V3 的 kind（那正是被 V4 拒的那个值）
+  check('⑰ 反例：V4 的 kind 不等于 `plugin`（等于就被 V4 拒）', v4.kind !== 'plugin');
+}
+
 // ── ⑨ 护栏判定（guard.js）—— 纯函数，直接喂用例 ─────────────────────────────
 const guard = loaded['lib/host/guard.js'];
 const connect = loaded['lib/host/connect.js'];
