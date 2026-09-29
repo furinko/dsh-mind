@@ -1,0 +1,18 @@
+# 依赖
+node_modules/
+
+# 运行时数据（本地生成的，不入库）
+.profile/
+.mind-data/
+mind-data/
+mind-private/
+*.log
+
+# 编辑/系统
+.DS_Store
+Thumbs.db
+*.bak
+*.bak-*
+
+# 参考副本（重写期间的旧代码，不随包分发）
+_reference/

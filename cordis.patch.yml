@@ -1,0 +1,47 @@
+# dsh-mind bundle patch —— 心智插件自带的装载层。
+#
+# 装法：把本包加进某个 profile 的 dependencies + bundles，或 `dsh plugin --profile <名> add <本包>`。
+#
+# 纪律：**下面每一行都必须有对应的 package.json exports**。
+#   漏 exports ⇒ 宿主按包子路径加载时 ESM 直接拒收 ⇒ **后端启动即崩**（有过两次先例）。
+
+- insert:
+    # R0 宪法注入：每会话首步注入 SOUL + AGENTS 全文。
+    # 同时负责**首启自举**（本机无固件时从包内 firmware/ 落地一份）。
+    - id: dsh-mind-inject
+      name: dsh-mind/host/inject
+
+    # R1 上工召回：每会话首步装配"该带上的记忆"（项目进度/待办 + L3 记忆 + 教训 + 偏好 + 人设卡）。
+    - id: dsh-mind-recall
+      name: dsh-mind/host/recall
+
+    # 「接入心智」每会话开关：关闭则注入/召回/护栏都跳过（默认接入）。
+    - id: dsh-mind-connect
+      name: dsh-mind/host/connect
+
+    # 写前护栏：隐私红线（出厂区不写凭据）+ 自我修改门禁（高危文件需放行）+ 未接入禁写。
+    # **只拦不注入**，fail-open；`pwsh`/`node` 写文件不经此处（已诚实标注）。
+    - id: dsh-mind-guard
+      name: dsh-mind/host/guard
+
+    # Skill 关键词触发：命中卡片 frontmatter 的 contract.triggers ⇒ 注入一张方法论卡片。
+    # **只扫心智自己的四区**（出厂/私有 × Skill/Exp），不碰官方 `skills/`。
+    - id: dsh-mind-skill-loader
+      name: dsh-mind/host/skill-loader
+
+    # 压缩留痕：订阅 compaction/*，把此前静默的上下文压缩写成一行审计。
+    - id: dsh-mind-compaction-log
+      name: dsh-mind/host/compaction-log
+
+    # 情绪状态：**每轮**注入一条「当前情绪 + 客观成因」。只改语气、不改判断。
+    - id: dsh-mind-mood
+      name: dsh-mind/host/mood
+
+    # 会话预算哨兵：上下文过长时提醒换新会话（只在 turn/end 评估，绝不打断回合）。
+    - id: dsh-mind-session-budget
+      name: dsh-mind/host/session-budget
+
+    # 角色卡 → 独立 persona 子代理：卡正文=成员系统提示词，卡 tools/model 收窄能力面与路由。
+    # 三把工具（role_list/role_spawn/role_send）+ **执行期闸**（防"成员再起成员"）。
+    - id: dsh-mind-agent-roles
+      name: dsh-mind/host/agent-roles

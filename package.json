@@ -1,0 +1,51 @@
+{
+  "name": "dsh-mind",
+  "version": "0.1.0",
+  "description": "A portable mind for DeepSeek Harness: constitution injection, boot recall, write guardrails, skill triggers, and a factory firmware that seeds itself on first run.",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./paths": "./lib/paths.js",
+    "./bootstrap": "./lib/bootstrap.js",
+    "./search": "./lib/search.js",
+    "./host/inject": "./lib/host/inject.js",
+    "./host/recall": "./lib/host/recall.js",
+    "./host/connect": "./lib/host/connect.js",
+    "./host/guard": "./lib/host/guard.js",
+    "./host/skill-loader": "./lib/host/skill-loader.js",
+    "./host/compaction-log": "./lib/host/compaction-log.js",
+    "./host/mood": "./lib/host/mood.js",
+    "./host/session-budget": "./lib/host/session-budget.js",
+    "./host/agent-roles": "./lib/host/agent-roles.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "lib/",
+    "firmware/",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "selftest": "node test/selftest.mjs"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.2 <5",
+    "@deepseek-ai/dsh": ">=0.1.5-rc.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh": {
+      "optional": true
+    }
+  }
+}
