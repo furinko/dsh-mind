@@ -1,6 +1,6 @@
 {
   "name": "dsh-mind",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "A portable mind for DeepSeek Harness: constitution injection, boot recall, write guardrails, skill triggers, and a factory firmware that seeds itself on first run.",
   "license": "MIT",
   "private": true,
