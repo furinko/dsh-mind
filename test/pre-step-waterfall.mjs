@@ -12,7 +12,9 @@
 // 用法：node test/pre-step-waterfall.mjs
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -20,27 +22,85 @@ const PKG = resolve(HERE, '..');
 
 // ── 让 `hostImport` 能解析上游：把 `process.argv[1]` 指到**宿主入口**────────────
 // 上游 `createUserMessage` 是构造注入消息的必要条件；解析不到 ⇒ 本测试无从验形态。
-// 查找顺序：显式环境变量 > `$DSH_HOME` 下的 dsh CLI > 从包根往上找。
-// **找不到就响亮跳过**（不静默当通过，Invariants #14）。
-function findHostEntry() {
+//
+// ⚠️ 2026-09-29 补：**真实客户端的宿主包在 `app.asar` 里**，普通 node 解析不到
+//   （实测 `createRequire(asar 入口).resolve('@deepseek-ai/dsh-llm')` ⇒ MODULE_NOT_FOUND），
+//   于是这条"最贵的判据"长期在默认环境下被**响亮跳过**。
+//   解法：**用客户端自己的 Electron node 模式**（`ELECTRON_RUN_AS_NODE=1`）重跑本文件——
+//   Electron 内置 asar 支持，同一个基准就能解析到宿主包（实测 resolved ✅）。
+//   优先级：显式 env > `$DSH_HOME` 的 dsh CLI > 包根上溯 > 客户端 asar 内宿主入口。
+
+/** 宿主入口候选（判据＝**能不能从这个基准解析到上游**，不是路径存在与否 —— asar 需穿透）。 */
+function hostCandidates() {
+  const out = [];
   const explicit = process.env.DSH_MIND_TEST_HOST;
-  if (explicit && existsSync(explicit)) return explicit;
+  if (explicit) out.push(explicit);
   const dshHome = process.env.DSH_HOME;
-  if (dshHome) {
-    const p = join(dshHome, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
-    if (existsSync(p)) return p;
-  }
+  if (dshHome) out.push(join(dshHome, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'));
   let cur = PKG;
   for (let i = 0; i < 6; i += 1) {
-    const p = join(cur, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
-    if (existsSync(p)) return p;
+    out.push(join(cur, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'));
     const parent = dirname(cur);
     if (parent === cur) break;
     cur = parent;
   }
+  // 官方客户端的宿主入口（在 app.asar 内；只有 Electron node 模式能解析）
+  out.push(join(PKG, '..', 'resources', 'app.asar', 'dsh', 'node_modules',
+    '@deepseek-ai', 'dsh-desktop-host', 'lib', 'index.js'));
+  return out;
+}
+
+/** 该路径能否作为解析基准（能解析到 `@deepseek-ai/dsh-llm` ⇒ 注入形态可验）。 */
+function usableAsBase(p) {
+  if (!p) return false;
+  try {
+    createRequire(p).resolve('@deepseek-ai/dsh-llm');
+    return true;
+  } catch { return false; }
+}
+
+function findHostEntry() {
+  for (const c of hostCandidates()) if (usableAsBase(c)) return c;
   return null;
 }
-const hostEntry = findHostEntry();
+
+/** 客户端可执行文件（判据：同级有 `resources/app.asar`）。 */
+function findClientExe() {
+  const root = resolve(PKG, '..');
+  if (!existsSync(join(root, 'resources', 'app.asar'))) return null;
+  try {
+    for (const e of readdirSync(root)) {
+      if (!e.toLowerCase().endsWith('.exe')) continue;
+      if (/^uninstall/i.test(e)) continue;
+      return join(root, e);
+    }
+  } catch { /* 读不到目录 ⇒ 无客户端 */ }
+  return null;
+}
+
+let hostEntry = findHostEntry();
+
+// 普通 node 解析不到宿主上游，但本机有客户端 ⇒ 用 Electron node 模式自举重跑
+// （`stdio: 'inherit'`：沙箱下管道捕获会 EPERM，且要保留彩色/流式输出）。
+if (!hostEntry && !process.env.DSH_MIND_WF_RELAUNCHED) {
+  const exe = findClientExe();
+  const asarEntry = hostCandidates().at(-1);
+  if (exe) {
+    console.log('普通 node 解析不到宿主上游（宿主包在 app.asar 内）');
+    console.log(`⇒ 用客户端 Electron node 模式重跑：${exe}\n`);
+    const r = spawnSync(exe, [fileURLToPath(import.meta.url)], {
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        DSH_MIND_WF_RELAUNCHED: '1',
+        DSH_MIND_TEST_HOST: asarEntry,
+      },
+    });
+    process.exit(typeof r.status === 'number' ? r.status : 1);
+  }
+}
+
 const REAL_ARGV1 = process.argv[1];
 if (hostEntry) {
   process.argv[1] = hostEntry;   // host-resolve 以此为解析基准
@@ -97,10 +157,14 @@ function fakeCtx(extra = {}) {
 }
 
 const tmp = mkdtempSync(join(tmpdir(), 'dshmind-wf-'));
-const ENV_KEYS = ['MIND_HOME', 'DSH_HOME', 'DSH_PROFILE_DIR', 'MIND_PROFILE_DIR'];
+// ⚠️ `MIND_MARKET_DIR` 必须在册并指到临时根（2026-09-29 修）：本文件会**真跑 apply**，
+//    而 `mark()` 落 `profileDir()/.dsh-market` —— 只隔离 MIND_HOME 的话，marker 会写到
+//    **真实用户目录**（实测：跑一次就改写 `~/.dsh/profiles/dshome/.dsh-market/` 的三处留痕）。
+const ENV_KEYS = ['MIND_HOME', 'DSH_HOME', 'DSH_PROFILE_DIR', 'MIND_PROFILE_DIR', 'MIND_MARKET_DIR'];
 const saved = {}; for (const k of ENV_KEYS) saved[k] = process.env[k];
 for (const k of ENV_KEYS) delete process.env[k];
 process.env.MIND_HOME = tmp;
+process.env.MIND_MARKET_DIR = join(tmp, '.dsh-market');
 
 try {
   // 造最小私有区（让 recall 有东西可读，走"真注入"路径）
