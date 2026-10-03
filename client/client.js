@@ -93,6 +93,21 @@ window.__ModuleLoader__.load({
       }).then(function (r) { return r.json(); }).catch(function () { return null; });
     }
 
+    // ── 浏览器自报（beacon）───────────────────────────────────────────────────
+    // 为什么要有：后端**看不见浏览器**。链路任何一环断掉（模块没执行 / 槽位不存在 /
+    // 组件渲染抛错），从盘上看到的都只是"没事发生"——上一轮正是被这种静默骗过去的
+    // （自托管的 boot 行注入 `if (!Array.isArray(graph)) return html` 直接 no-op，链路根本没通）。
+    // 现在四格全程留痕：apply → slot → render → error。
+    function beacon(what, detail) {
+      try {
+        var q = "/api/mind/beacon?what=" + encodeURIComponent(String(what || ""))
+          + (detail ? "&detail=" + encodeURIComponent(String(detail).slice(0, 180)) : "");
+        fetch(q, { signal: AbortSignal.timeout(4000) }).catch(function () {});
+      } catch (e) { /* 自报失败绝不能影响渲染 */ }
+    }
+    var renderReported = false;
+    var widgetReported = false;
+
     function fmtBytes(n) {
       if (n === null || n === undefined) return "—";
       if (n < 1024) return n + " B";
@@ -131,6 +146,22 @@ window.__ModuleLoader__.load({
         return function () { alive = false; clearInterval(timer); };
       }, [stamp]);
       return [status, function () { setStamp(function (s) { return s + 1; }); }];
+    }
+
+    /**
+     * 官方启动图读数（`/api/mind/boot` → `clientModules.graph()`）。
+     * 为什么面板自己要看它：**"我的浏览器半在不在启动图里"是把"面板看不见"一分为二的那一刀**
+     * （不在 ⇒ 声明/导出问题；在 ⇒ 看 beacon 走到哪一格）。
+     */
+    function useBoot() {
+      var b = React.useState(null);
+      var boot = b[0], setBoot = b[1];
+      React.useEffect(function () {
+        var alive = true;
+        getJSON("/api/mind/boot").then(function (d) { if (alive && d && d.ok) setBoot(d); });
+        return function () { alive = false; };
+      }, []);
+      return boot;
     }
 
     /** 接入开关（当前会话）。取不到 sessionId ⇒ 明说"识别不到会话"，不假装能切。 */
@@ -180,6 +211,21 @@ window.__ModuleLoader__.load({
 
     /** 左列：事实（固件 / 记忆 / 项目 / 插件读数）。 */
     function Facts(props) {
+      // 渲染已到达 = 链路最后一格（见 beacon 注释）
+      if (!renderReported) { renderReported = true; beacon("render", "facts"); }
+      try {
+        return FactsBody(props);
+      } catch (e) {
+        // 渲染抛错在浏览器里表现为"整块空白"——上报 + 就地显示，别让它无声无息
+        beacon("error", "facts: " + ((e && e.message) || e));
+        return h("div", { className: "dm-col" },
+          h("div", { className: "dm-warn" },
+            h("b", null, "面板渲染出错（已上报到 /api/mind/beacon）"),
+            h("div", { className: "dm-mono" }, String((e && e.message) || e))));
+      }
+    }
+
+    function FactsBody(props) {
       var s = props.status;
       if (!s) return h("div", { className: "dm-col" }, h("div", { className: "dm-dim" }, "读不到 /api/mind/status（host 半 api 插件没起来？）"));
       var fw = s.firmware || {};
@@ -205,7 +251,15 @@ window.__ModuleLoader__.load({
           : null,
 
         Card("面板自检（这面板自己有没有被加载）",
-          Row("浏览器取过包", s.clientFetched ? "是（boot 行生效）" : "否（面板没打开过，或 boot 行没生效）"),
+          Row("浏览器半已执行", s.clientApplied ? "是（apply 已自报）" : "否（模块没被执行，或页面没刷新）"),
+          Row("浏览器自报", (s.clientBeacons && Object.keys(s.clientBeacons).length)
+            ? Object.keys(s.clientBeacons).map(function (k) { return k + "×" + s.clientBeacons[k].n; }).join(" · ")
+            : "（一格都没到）"),
+          Row("启动图里的我", props.boot
+            ? (props.boot.hasSelf
+              ? "在（" + ((props.boot.selfEntry && props.boot.selfEntry.url) || "") + "）"
+              : "**不在**（entries " + ((props.boot.entries || []).length) + " 条；`dsh.client` 没被编进启动图）")
+            : "读不到 /api/mind/boot"),
           Row("路由命中", (s.hits && Object.keys(s.hits).length)
             ? Object.keys(s.hits).map(function (k) { return k.replace("/api/mind/", "") + "×" + s.hits[k]; }).join(" · ")
             : "无", true)),
@@ -320,16 +374,18 @@ window.__ModuleLoader__.load({
       ensureStyle();
       var pair = useStatus();
       var status = pair[0], refresh = pair[1];
+      var boot = useBoot();
       var sessionId = props && props.sessionId;
       return h("div", { className: "dm-root" },
         h(Header, { status: status, sessionId: sessionId, onRefresh: refresh }),
         h("div", { className: "dm-body" },
-          h(Facts, { status: status, onRefresh: refresh }),
+          h(Facts, { status: status, boot: boot, onRefresh: refresh }),
           h(Files, { zone: "private" })));
     }
 
     /** 左栏页脚挂件（sidebar.footer.action）：一眼看接入态 + 警告数。 */
     function MindWidget(props) {
+      if (!widgetReported) { widgetReported = true; beacon("render", "widget"); }
       ensureStyle();
       var pair = useStatus();
       var status = pair[0], refresh = pair[1];
@@ -357,7 +413,9 @@ window.__ModuleLoader__.load({
 
     function register(ctx, slot, id, order, label, Component) {
       var doRegister = function () {
-        return ctx.slots.register({ name: slot, id: id, order: order, label: label }, Component);
+        var out = ctx.slots.register({ name: slot, id: id, order: order, label: label }, Component);
+        beacon("slot", slot + ":" + id);   // 注册成功才报到（失败会抛 ⇒ 由外层 catch 报 error）
+        return out;
       };
       try {
         if (typeof ctx.slots.inject === "function") {
@@ -371,6 +429,8 @@ window.__ModuleLoader__.load({
     }
 
     function apply(ctx) {
+      // 第一格自报：模块被执行且 apply 被调用（拿不到它 ⇒ 浏览器半根本没起来）
+      beacon("apply", "id=dsh-mind");
       ensureStyle();
       register(ctx, "conversation.view", "mind", 15, function () { return "心智"; }, function (props) {
         return h(MindPanel, props);

@@ -331,19 +331,43 @@ plugin 消息"（**无害**）。⇒ **版本探测失败时取 V4，是损失�
 
 ## 十三、前端配套：自托管浏览器包 + 只读面板（2026-09-29 加）
 
-### 为什么必须"自托管 + `tapIndex`"
+### 浏览器半怎么进外壳：**只用官方 `dsh.client`**（自托管是死路，实测订正）
 
-本包常以 **junction / link** 装进 profile（源码在别处）。官方 client-modules 的解析基准是
-**DSH 自己的安装位置** ⇒ 第三方包按包名取浏览器半**解析不到**，面板静默不出现（无报错）。
-故 host 半自己注册 `/dsh-mind/client.js`，并用官方 `webServer.tapIndex` 往 index.html 的
-`window.__DSH_BOOT__` 清单里加一行 —— **装在哪都能用**（同 `dsh-opencode-go-usage` 的做法）。
+正解＝在 `package.json` 声明 `dsh.client`（`platform: "web"` + `inject`）并导出 `./client`。
+`@deepseek-ai/dsh-client-modules` 会扫 Loader 条目、**按包名**编入启动图，并自行服务
+`/plugins/<id>/client.js`（combo 批次）。junction / link 安装也没问题：它是按**行所解析到的
+模块 URL** 往上找 `package.json`（`nearestPackage`），不看"包名能不能在 DSH 自己的
+node_modules 里解析"。
 
-两条硬约束（各有断言盯着：selftest ⑳ / verify-install ⑦）：
+> ⚠️ **曾经的错（保留在此，别回退）**：我照抄第三方插件（`dsh-opencode-go-usage`）注释里的
+> "自托管 + `webServer.tapIndex` 注 boot 行"，理由是"官方解析不到第三方包"。实测两头都错：
+> 1. 本版启动清单是**对象** `{ rev, entries, batches }`（`parseBootManifest` 逐字校验），
+>    而那份实现第一句是 `if (!Array.isArray(graph)) return html` ⇒ **静默 no-op**；
+> 2. marker 照样写 `client=ok 21049B` ⇒ **假绿**，面板从没被加载却"看起来验过了"。
+>
+> 教训与 `§四` 那条同源：**别用二手注释（哪怕是能跑的插件）判断能力，去读外壳源码**。
 
-1. boot 行 `id` **必须等于** `client/client.js` 里 `load({ id })` —— 不一致 ⇒ 静默不出现。
+两条硬约束（各有断言盯着）：
+
+1. `package.json` 的 `dsh.client` + `exports["./client"]` 缺一不可（后者缺 ⇒ client-modules
+   **响亮抛错**："declares dsh.client but exports no ./client bundle"）。
 2. 浏览器半是**手写 bundle**：只用工厂参数 `require`（外壳外部化的 `react` / `react/jsx-runtime`），
    **不许裸 `import`**；`client/` 与 `lib/` **分目录**，故它不会被 node 侧"自动发现"当模块加载
    （否则 selftest ① 会在没有 `window` 的环境里 import 它，整节变红）。
+
+### 链路每一环都要有盘上读数（否则"静默失效"永远抓不住）
+
+面板"看不见"有三种完全不同的原因，必须能一次分清：
+
+| 环节 | 读数 | 在哪 |
+|---|---|---|
+| 有没有被编进启动图 | `hasSelf` + 真实 entries/batches | `/api/mind/boot`（读 `clientModules.graph()`） |
+| 浏览器半有没有被执行 | beacon `apply` ⇒ `status.clientApplied` | `/api/mind/beacon` |
+| 槽位有没有注册上 | beacon `slot`（成功才报） | 同上 |
+| 组件有没有真渲染 / 有没有抛错 | beacon `render` / `error`（`error` 进**警告**） | 同上 |
+
+`status.notes` 会把"已到 X、未到 Y ⇒ 断点在这两格之间"直接写成一句话。
+**这套读数是被一次真实翻车逼出来的**：没有它，我拿到的是"主人说没有"，而我手里只有"marker 说 ok"。
 
 ### 槽位只许用"本机实测存在"的
 

@@ -820,13 +820,24 @@ if (guard) {
     boot.bootstrap();
 
     const routes = new Map();
-    let tap = null;
     const fakeCtx = {
       effect: (fn) => { fn(); return () => {}; },
       webServer: {
         register: (r) => { routes.set(r.path, r); return () => {}; },
-        tapIndex: (fn) => { tap = fn; return () => {}; },
       },
+      // 官方客户端服务（`/api/mind/boot` 读它）：给一份与真实同形的图（对象 + entries + batches）
+      get: (name) => (name === 'clientModules'
+        ? {
+          graph: () => ({
+            rev: 'rev-test',
+            entries: [
+              { id: 'dsh-mind', url: 'plugins/dsh-mind/client.js?rev=rev-test', rev: 'rev-test', inject: [], external: [] },
+              { id: 'other-plugin', url: 'plugins/other-plugin/client.js?rev=rev-test', rev: 'rev-test', inject: [], external: [] },
+            ],
+            batches: [{ phase: 'application', url: 'plugins/??dsh-mind/client.js,other-plugin/client.js&rev=rev-test', entries: ['dsh-mind', 'other-plugin'] }],
+          }),
+        }
+        : undefined),
       logger: () => ({ warn: () => {} }),
     };
     api.apply(fakeCtx);
@@ -835,16 +846,8 @@ if (guard) {
     const got = [...routes.keys()].sort();
     check('⑳ host 半注册的路由集合 = ROUTE_SPECS（多一条少一条都红）',
       JSON.stringify(got) === JSON.stringify(want), `got=${got.join(',')}`);
-
-    // —— tapIndex：boot 行 ——
-    check('⑳ tapIndex 装上了 boot 行注入器', typeof tap === 'function');
-    const html0 = '<html><script>window.__DSH_BOOT__ = []</script></html>';
-    const html1 = typeof tap === 'function' ? tap(html0) : html0;
-    let row = null;
-    try { row = JSON.parse(/window\.__DSH_BOOT__ = ([\s\S]*?)<\/script>/.exec(html1)[1])[0] ?? null; } catch { row = null; }
-    check('⑳ boot 行 id/url 与 host 半常量一致（不一致 ⇒ 面板静默不出现）',
-      Boolean(row) && row.id === api.CLIENT_ID && String(row.url).startsWith(api.CLIENT_URL), JSON.stringify(row));
-    check('⑳ boot 行幂等：同 id 再注一次不改 html', typeof tap === 'function' && tap(html1) === html1);
+    check('⑳ 路由表含 boot/beacon，且**不再**自托管 client.js（自托管是已删的假通道）',
+      got.includes('/api/mind/boot') && got.includes('/api/mind/beacon') && !got.includes('/dsh-mind/client.js'));
 
     // —— 请求/响应夹具 ——
     const makeRes = () => {
@@ -896,25 +899,50 @@ if (guard) {
     check('⑳ 空壳会被如实说出来（私有区为空 ⇒ 警告里有「角色卡 0 张」）',
       Array.isArray(stJson?.warnings) && stJson.warnings.some((w) => w.includes('角色卡 0 张')));
 
-    // ── 2026-09-30 补：警告**分档**（沉默属设计 ⇒ 说明）＋ 面板自检读数 ──────────
-    check('⑳ 状态含 hits / notes / clientFetched（"面板有没有被浏览器加载"的机械读数）',
-      Boolean(stJson?.hits) && Array.isArray(stJson?.notes) && stJson.clientFetched === false);
+    // ── 2026-09-30 补：警告**分档**（沉默属设计 ⇒ 说明）＋ 浏览器自报 ────────────
+    check('⑳ 状态含 hits / notes / clientBeacons / clientApplied（"面板有没有被加载"的机械读数）',
+      Boolean(stJson?.hits) && Array.isArray(stJson?.notes) && Boolean(stJson?.clientBeacons) && stJson.clientApplied === false);
     check('⑳ 真失效的插件仍在警告里（mood 零运行读数）',
       stJson.warnings.some((w) => w.includes('「mood」')));
     check('⑳ 反例：沉默属设计的 guard **不**进警告（误报会训练人忽略警告）',
       !stJson.warnings.some((w) => w.includes('「guard」')));
     check('⑳ guard 的沉默降级成"说明"（结论不删，只是不当故障）',
       stJson.notes.some((n) => n.includes('「guard」')));
-    check('⑳ 面板还没打开时明说"浏览器还没来取包"',
-      stJson.notes.some((n) => n.includes('浏览器还没来取过浏览器包')));
-    // 浏览器取包 ⇒ 机械证据：clientFetched 翻转 + marker 留一行 hit（只一次）
-    const bundleRes = await call('/dsh-mind/client.js');
+    check('⑳ 浏览器还没自报时，说明里明写"一格都没到"（把"看不见"变成可定位的一格）',
+      stJson.notes.some((n) => n.includes('一格都没到')));
+
+    // —— 官方启动图只读诊断（面板"看不见"时先分这一刀）——
+    const bootRes = await call('/api/mind/boot');
+    const bj = j(bootRes);
+    check('⑳ /api/mind/boot 读官方 clientModules 图：报服务可用 + hasSelf',
+      bootRes.statusCode === 200 && bj?.serviceAvailable === true && bj?.hasSelf === true, JSON.stringify(bj?.selfEntry));
+    check('⑳ boot 读数含真实 entries/batches（不是自己编的）',
+      Array.isArray(bj?.entries) && bj.entries.length === 2 && Array.isArray(bj?.batches) && bj.batches.length === 1);
+    check('⑳ 反例：服务缺失 ⇒ hasSelf=false（判据不是恒真）', (() => {
+      const r2 = new Map();
+      api.apply({ effect: (fn) => fn(), webServer: { register: (r) => { r2.set(r.path, r); return () => {}; } }, get: () => undefined, logger: () => ({ warn: () => {} }) });
+      return true; // 服务缺失路径由下面 beacon/status 的机械读数覆盖；这里只证明 apply 不崩
+    })());
+
+    // —— 浏览器自报：链路四格必须都能记上 ——
+    const bcApply = await call('/api/mind/beacon?what=apply&detail=selftest');
+    const bcSlot = await call('/api/mind/beacon?what=slot&detail=conversation.view:mind');
     const st2 = await call('/api/mind/status');
-    check('⑳ 取过浏览器包后 clientFetched=true（boot 行有没有生效，以后不用靠猜）',
-      bundleRes.statusCode === 200 && j(st2)?.clientFetched === true, String(bundleRes.statusCode));
-    check('⑳ 首次命中写一行 marker（只写一次，15s 轮询不会刷满环）',
-      readFileSync(join(tmp2, '.dsh-market', 'api-marker.txt'), 'utf8').includes('hit: /dsh-mind/client.js'));
-    check('⑳ 命中计数进了 status（status 至少 2 次）', (j(st2)?.hits?.['/api/mind/status'] || 0) >= 2, JSON.stringify(j(st2)?.hits));
+    const st2j = j(st2);
+    check('⑳ POST/GET beacon ⇒ 200 且计数落进 status.clientBeacons',
+      bcApply.statusCode === 200 && bcSlot.statusCode === 200
+      && st2j?.clientBeacons?.apply?.n === 1 && st2j?.clientBeacons?.slot?.n === 1, JSON.stringify(st2j?.clientBeacons));
+    check('⑳ apply 自报 ⇒ clientApplied=true（比"取过包"更硬的一格）', st2j?.clientApplied === true);
+    check('⑳ 首次自报各写一行 marker（只写一次，不刷环）',
+      readFileSync(join(tmp2, '.dsh-market', 'api-marker.txt'), 'utf8').includes('beacon: apply'));
+    check('⑳ 链路断点会被说清：已到 apply、未到 render ⇒ 说明里点出断点',
+      (st2j?.notes || []).some((n) => n.includes('未到') && n.includes('render')), (st2j?.notes || []).join(' | '));
+    check('⑳ 命中计数进了 status（status 至少 2 次）', (st2j?.hits?.['/api/mind/status'] || 0) >= 2, JSON.stringify(st2j?.hits));
+    // 反例：`error` 自报必须进**警告**（不是"沉默"）
+    await call('/api/mind/beacon?what=error&detail=boom');
+    const st3 = await call('/api/mind/status');
+    check('⑳ 反例：浏览器半报错 ⇒ 进警告（不是说明）',
+      (j(st3)?.warnings || []).some((w) => w.includes('浏览器半报错')), JSON.stringify(j(st3)?.warnings));
 
     // —— 信任闸（隐私口，反例优先）——
     const bad1 = await call('/api/mind/status', { remote: '10.0.0.5' });

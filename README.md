@@ -107,25 +107,33 @@ dsh plugin --profile <你的profile> add file:../path/to/dsh-mind
 
 ## 前端配套（面板）
 
-**装完重启后端即可看到**（浏览器半随包喂给外壳，不需要构建步骤）：
+**装完重启后端 + 刷新页面即可看到**（不需要构建步骤）：
 
 - 对话区顶部多一个 **「心智」视图**（与「轨迹」同级）：状态卡 + 只读文件浏览
 - 侧栏页脚多一个 **「心智」挂件**：圆点＝本会话接没接入；角标＝实况警告条数；点按切换接入态
+
+浏览器半走**官方通道**：`package.json` 的 `dsh.client` 由 `dsh-client-modules` 扫描 →
+自动编入启动图 → 自行服务 `/plugins/dsh-mind/client.js`（combo 批次）。
+**本包不自己造通道**（曾经自托管 + `tapIndex` 注 boot 行，在本版外壳上是静默 no-op——
+启动清单是对象 `{rev, entries, batches}`，不是数组；详见 `docs/DESIGN.md §十三`）。
 
 数据全部走**宿主同源只读路由**（浏览器不碰文件系统）：
 
 | 路由 | 用途 |
 |---|---|
-| `GET /api/mind/status` | 固件就位 / R0·R1 注入读数 / 私有区统计 / **每个插件的运行读数** / 实况警告 |
+| `GET /api/mind/status` | 固件就位 / R0·R1 注入读数 / 私有区统计 / **每个插件的运行读数** / 警告与说明 / 浏览器自报 |
 | `GET /api/mind/tree?zone=private\|mind` | 可读文件清单（`.md/.json/.txt/.yml`） |
 | `GET /api/mind/file?zone=&rel=` | 读一个文件（128 KB 截断；目录穿越挡死） |
 | `GET/POST /api/mind/connect` | 读/写「接入心智」开关（**逻辑仍在 `connect.js`**，此处只转发） |
+| `GET /api/mind/boot` | **只读诊断**：官方启动图里有没有我（`hasSelf` + 真实 entries/batches） |
+| `GET /api/mind/beacon?what=&detail=` | **浏览器自报**：apply → slot → render → error 走到哪一格 |
 
 **信任闸**：只服务 loopback 同源请求（`isTrustedLocalRequest`）。无 `Origin` 时它**要求**
 `Sec-Fetch-Site: same-origin|none` ⇒ 浏览器天然通过，**裸 curl 要自己带头**：
 
 ```bash
 curl -H 'Sec-Fetch-Site: same-origin' http://127.0.0.1:19387/api/mind/status
+curl -H 'Sec-Fetch-Site: same-origin' http://127.0.0.1:19387/api/mind/boot   # hasSelf 应是 true
 ```
 
 ---
@@ -133,7 +141,7 @@ curl -H 'Sec-Fetch-Site: same-origin' http://127.0.0.1:19387/api/mind/status
 ## 自检
 
 ```bash
-node test/selftest.mjs                            # 220 项（含反例；前端配套在 ⑳、签名防回退在 ㉑）
+node test/selftest.mjs                            # 224 项（含反例；前端配套在 ⑳、签名防回退在 ㉑）
 node test/pre-step-waterfall.mjs                  # 28 项注入形态契约（自动找客户端，见下）
 node scripts/verify-dsh-mind-install.mjs <profileDir>   # 20 项真装验收
 ```
