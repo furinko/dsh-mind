@@ -117,6 +117,11 @@ dsh plugin --profile <你的profile> add file:../path/to/dsh-mind
 **本包不自己造通道**（曾经自托管 + `tapIndex` 注 boot 行，在本版外壳上是静默 no-op——
 启动清单是对象 `{rev, entries, batches}`，不是数组；详见 `docs/DESIGN.md §十三`）。
 
+> ⚠️ **安装前提（缺了面板永不出现，而且零报错）**：`cordis.patch.yml` 里必须有**一行裸包名**
+> （`name: dsh-mind`）。官方扫描器 `exactPackageSpecifier` 只认不含 `/` 的名字去判"属于哪个包"，
+> 子路径行（`dsh-mind/host/xxx`）会被直接跳过 ⇒ `dsh.client` 永不被扫描。自测 ⑳ 与真装 ③
+> 各钉了一条判据；诊断口 `/api/mind/boot` 的 `hasSelf` 可直接确认。
+
 数据全部走**宿主同源只读路由**（浏览器不碰文件系统）：
 
 | 路由 | 用途 |
@@ -141,9 +146,9 @@ curl -H 'Sec-Fetch-Site: same-origin' http://127.0.0.1:19387/api/mind/boot   # h
 ## 自检
 
 ```bash
-node test/selftest.mjs                            # 224 项（含反例；前端配套在 ⑳、签名防回退在 ㉑）
+node test/selftest.mjs                            # 227 项（含反例；前端配套在 ⑳、签名防回退在 ㉑）
 node test/pre-step-waterfall.mjs                  # 28 项注入形态契约（自动找客户端，见下）
-node scripts/verify-dsh-mind-install.mjs <profileDir>   # 20 项真装验收
+node scripts/verify-dsh-mind-install.mjs <profileDir>   # 21 项真装验收
 ```
 
 > 契约测试要验**注入形态**，必须有**宿主入口**。客户端宿主包在 `app.asar` 内，普通 node 解析不到 ⇒

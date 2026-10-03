@@ -339,6 +339,27 @@ plugin 消息"（**无害**）。⇒ **版本探测失败时取 V4，是损失�
 模块 URL** 往上找 `package.json`（`nearestPackage`），不看"包名能不能在 DSH 自己的
 node_modules 里解析"。
 
+### ⚠️ 入场券：启动行必须是**裸包名**（2026-10-04 实测，最贵的一条）
+
+扫描器判"这条 Loader 行属于哪个包"用的是 `exactPackageSpecifier`：
+
+```js
+return specifier.length > 0 && !specifier.includes("/") && !specifier.includes(":") ? specifier : void 0;
+```
+
+**不含 `/` 才算包名**。本包十行原本全是子路径（`dsh-mind/host/inject`…）⇒ 全部被判"不是包行"
+⇒ `locatePkgJson` 早早 `return void 0` ⇒ `dsh.client` **永不被扫描**。
+
+代价的形态极坏：**面板一片空白，而宿主、marker、自测全绿**——只有
+`/api/mind/boot` 的 `hasSelf=false`（75 条官方 entry，就是没有我）能看出来。
+对照组一眼可见：能用的第三方客户端插件（`dsh-context`、`dsh-opencode-go-usage`）
+行名都是**裸包名**，`dsh-context` 的注释还写明了这个分工（"这行把包 main 当 host 半，
+`dsh.client` 再把 `./client` 当浏览器半"）。
+
+⇒ 修法：加一行 `- id: dsh-mind / name: dsh-mind`（挂包 main），且**包根必须是合法 plugin**
+（空模块会判 "invalid plugin"，故 `lib/index.js` 挂了一个只留一行痕的空 `apply`）。
+自测 ⑳ 钉三条（含"文件里确实还有子路径行"的反例，防"恰好全裸"），真装 ③ 钉一条。
+
 > ⚠️ **曾经的错（保留在此，别回退）**：我照抄第三方插件（`dsh-opencode-go-usage`）注释里的
 > "自托管 + `webServer.tapIndex` 注 boot 行"，理由是"官方解析不到第三方包"。实测两头都错：
 > 1. 本版启动清单是**对象** `{ rev, entries, batches }`（`parseBootManifest` 逐字校验），
@@ -346,6 +367,8 @@ node_modules 里解析"。
 > 2. marker 照样写 `client=ok 21049B` ⇒ **假绿**，面板从没被加载却"看起来验过了"。
 >
 > 教训与 `§四` 那条同源：**别用二手注释（哪怕是能跑的插件）判断能力，去读外壳源码**。
+> 以及一条更狠的：**"我做了 X"和"X 生效了"之间必须有一格盘上读数**——`hasSelf` / beacon
+> 就是为此存在的（见下节）。
 
 两条硬约束（各有断言盯着）：
 

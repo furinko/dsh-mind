@@ -145,10 +145,11 @@ try {
   const names = [...patch.matchAll(/^\s*name:\s*(\S+)/gm)].map((m) => m[1]);
   check(`④ patch 有 ${rows.length} 行、每行都有 name`, rows.length === names.length && rows.length > 0);
 
-  // 每行的 `name: <pkg>/<subpath>` 必须在 exports 里有对应键
+  // 每行的 `name: <pkg>/<subpath>` 必须在 exports 里有对应键；
+  // **裸包名行**（`name: dsh-mind`）对应根导出 `.`（客户端扫描只认这一种行名，见 ⑳）。
   const missing = [];
   for (const n of names) {
-    const sub = n.replace(/^dsh-mind\//, './');
+    const sub = n === pj.name ? '.' : n.replace(/^dsh-mind\//, './');
     if (pj.exports[sub] === undefined) missing.push(`${n} → exports["${sub}"]`);
   }
   check('④ 每个插件行都有对应 exports（漏 = 启动崩）', missing.length === 0, missing.join('; '));
@@ -848,6 +849,18 @@ if (guard) {
       JSON.stringify(got) === JSON.stringify(want), `got=${got.join(',')}`);
     check('⑳ 路由表含 boot/beacon，且**不再**自托管 client.js（自托管是已删的假通道）',
       got.includes('/api/mind/boot') && got.includes('/api/mind/beacon') && !got.includes('/dsh-mind/client.js'));
+
+    // ── 官方扫描的**入场券**：启动行必须是裸包名（2026-10-04 实测：缺它面板永不出现）──
+    //     `dsh-client-modules` 的 `exactPackageSpecifier` 只认不含 "/" 的名字去判"属于哪个包"；
+    //     十行全写成子路径 ⇒ `dsh.client` 永不被扫描 ⇒ 浏览器半不进启动图（实测 hasSelf=false）。
+    const patchSrc = readFileSync(join(PKG, 'cordis.patch.yml'), 'utf8');
+    const patchNames = [...patchSrc.matchAll(/^\s*name:\s*['"]?([^\s'"]+)['"]?\s*$/gm)].map((m) => m[1]);
+    check('⑳ cordis.patch.yml 含**裸包名**行（客户端扫描只认它）',
+      patchNames.includes('dsh-mind'), patchNames.join(', '));
+    check('⑳ 反例：同一文件里确实还有子路径行 ⇒ 裸包名行是刻意加的，不是"恰好全裸"',
+      patchNames.some((n) => n.includes('/')));
+    check('⑳ 裸包名行解析到的包根是**合法 plugin**（否则宿主挂载即报 invalid plugin）',
+      typeof loaded['lib/index.js']?.apply === 'function');
 
     // —— 请求/响应夹具 ——
     const makeRes = () => {

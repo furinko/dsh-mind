@@ -4,8 +4,20 @@
 #
 # 纪律：**下面每一行都必须有对应的 package.json exports**。
 #   漏 exports ⇒ 宿主按包子路径加载时 ESM 直接拒收 ⇒ **后端启动即崩**（有过两次先例）。
+#
+# ⚠️ 第二条纪律（2026-10-04 实测补）：**必须有一行是"裸包名"**（`name: dsh-mind`）。
+#   官方客户端扫描器只认不含 `/` 的裸包名来判"这个模块属于哪个包"；
+#   十行全写成子路径 ⇒ `dsh.client` 永不被扫描 ⇒ 浏览器半不进启动图、面板空白且**零报错**。
 
 - insert:
+    # ⚠️ **这一行不许删**（缺它前端配套永远不生效）：
+    #   官方 `dsh-client-modules` 的 `exactPackageSpecifier` 只认不含 `/` 的裸包名；
+    #   本行把包 main（`lib/index.js`）当 host 半挂上，客户端那边才由 `dsh.client`
+    #   把 `./client` 编进启动图（`dsh-context` / `dsh-opencode-go-usage` 的行名同样是裸包名）。
+    #   实测代价：缺它 ⇒ `/api/mind/boot` 的 `hasSelf=false`（75 条官方 entry，就是没有我）。
+    - id: dsh-mind
+      name: dsh-mind
+
     # R0 宪法注入：每会话首步注入 SOUL + AGENTS 全文。
     # 同时负责**首启自举**（本机无固件时从包内 firmware/ 落地一份）。
     - id: dsh-mind-inject

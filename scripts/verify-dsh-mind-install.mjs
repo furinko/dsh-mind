@@ -23,6 +23,7 @@ const check = (name, ok, detail = '') => {
 
 /** patch 行 id → 包内子路径（与 package.json exports 的键一致）。 */
 const SUBPATH = {
+  'dsh-mind': '.',
   'dsh-mind-inject': 'host/inject',
   'dsh-mind-recall': 'host/recall',
   'dsh-mind-connect': 'host/connect',
@@ -35,6 +36,8 @@ const SUBPATH = {
   'dsh-mind-api': 'host/api',
 };
 const ROWS = Object.keys(SUBPATH);
+/** 子路径 → exports 键（根是 `.`，其余是 `./<子路径>`）。 */
+const exportKey = (sub) => (sub === '.' ? '.' : `./${sub}`);
 
 console.log(`== dsh-mind 真装验收（profile: ${profileDir}）==`);
 
@@ -49,8 +52,8 @@ if (!existsSync(pkgDir)) {
 const pj = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'));
 const missing = [];
 for (const row of ROWS) {
-  const rel = pj.exports?.[`./${SUBPATH[row]}`];
-  if (rel === undefined) { missing.push(`${row}: exports 缺 ./${SUBPATH[row]}`); continue; }
+  const rel = pj.exports?.[exportKey(SUBPATH[row])];
+  if (rel === undefined) { missing.push(`${row}: exports 缺 ${exportKey(SUBPATH[row])}`); continue; }
   if (!existsSync(join(pkgDir, String(rel).split('/').join(sep)))) missing.push(`${row}: ${rel} 不存在`);
 }
 check(`② ${ROWS.length} 个插件子路径都能解析到实体（漏 exports = 启动崩）`, missing.length === 0, missing.join('; '));
@@ -58,9 +61,14 @@ check(`② ${ROWS.length} 个插件子路径都能解析到实体（漏 exports 
 // ── ③ patch 行与 exports 一一对应 ────────────────────────────────────────────
 const patch = readFileSync(join(pkgDir, 'cordis.patch.yml'), 'utf8');
 const patchIds = [...patch.matchAll(/^\s*-\s*id:\s*(\S+)/gm)].map((m) => m[1]);
-const notInExports = patchIds.filter((id) => pj.exports?.[`./${SUBPATH[id]}`] === undefined);
+const patchNames = [...patch.matchAll(/^\s*name:\s*['"]?([^\s'"]+)['"]?\s*$/gm)].map((m) => m[1]);
+const notInExports = patchIds.filter((id) => pj.exports?.[exportKey(SUBPATH[id])] === undefined);
 check(`③ patch 的 ${patchIds.length} 行都有对应 exports`, notInExports.length === 0, notInExports.join(', '));
 check('③ patch 行数 = 预期插件数', patchIds.length === ROWS.length, `${patchIds.length} vs ${ROWS.length}`);
+// 客户端扫描器只认**裸包名**的行（`exactPackageSpecifier`：不含 "/" 才当包名）——
+// 缺这一行 ⇒ `dsh.client` 不被扫描 ⇒ 浏览器半不进启动图、面板空白且零报错（实测）。
+check('③ patch 含**裸包名**行（客户端扫描只认它；缺 ⇒ 前端配套永不生效）',
+  patchNames.some((n) => n === pj.name && !n.includes('/')), patchNames.join(', '));
 
 // ── ④ 固件随包（files 白名单生效）────────────────────────────────────────────
 const fw = join(pkgDir, 'firmware');
