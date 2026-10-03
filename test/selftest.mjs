@@ -958,12 +958,27 @@ if (guard) {
       (j(st3)?.warnings || []).some((w) => w.includes('浏览器半报错')), JSON.stringify(j(st3)?.warnings));
 
     // —— 信任闸（隐私口，反例优先）——
+    // ② **桌面壳转发形态必须先过**：Electron 的 `forwardWebRequest` 会删掉
+    //    `origin` / `sec-fetch-site`（源码逐字），上一版闸要求"无 Origin 必须有 same-origin"
+    //    ⇒ 官方客户端面板**全部 403**（症状：面板画得出、每格写"读不到"、marker 无痕）。
+    const shellShape = await call('/api/mind/status', { headers: { 'sec-fetch-site': undefined } });
+    check('⑳ 桌面壳转发形态（无 Origin / 无 Sec-Fetch-Site）⇒ 200（不是 403）',
+      shellShape.statusCode === 200, String(shellShape.statusCode));
+    const shellOrigin = await call('/api/mind/status', { headers: { origin: 'dsh-app://app', 'sec-fetch-site': undefined } });
+    check('⑳ 桌面壳 scheme（Origin: dsh-app://app）⇒ 200', shellOrigin.statusCode === 200, String(shellOrigin.statusCode));
+    check('⑳ 闸的判定留痕（每种请求形态一行，挡错人时不再是"盘上无痕"）',
+      (st2j?.requestShapes || []).some((s) => s.includes('=> allow')), JSON.stringify(st2j?.requestShapes));
+
     const bad1 = await call('/api/mind/status', { remote: '10.0.0.5' });
     check('⑳ 反例：非 loopback 来源 ⇒ 403', bad1.statusCode === 403, String(bad1.statusCode));
-    const bad2 = await call('/api/mind/status', { host: 'evil.example.com' });
+    const bad2 = await call('/api/mind/status', { host: 'evil.example.com', headers: { origin: 'http://evil.example.com' } });
     check('⑳ 反例：Host 非 loopback（DNS rebinding）⇒ 403', bad2.statusCode === 403, String(bad2.statusCode));
     const bad3 = await call('/api/mind/status', { headers: { 'sec-fetch-site': 'cross-site' } });
     check('⑳ 反例：跨站 fetch ⇒ 403', bad3.statusCode === 403, String(bad3.statusCode));
+    const bad4 = await call('/api/mind/status', { headers: { origin: 'https://evil.example.com' } });
+    check('⑳ 反例：本机浏览器里的跨站 Origin ⇒ 403', bad4.statusCode === 403, String(bad4.statusCode));
+    const bad5 = await call('/api/mind/status', { headers: { origin: 'file://' } });
+    check('⑳ 反例：file:// origin ⇒ 403', bad5.statusCode === 403, String(bad5.statusCode));
 
     // —— 只读文件口：穿越必须挡死，正例必须能读 ——
     const esc = await call('/api/mind/file?zone=private&rel=' + encodeURIComponent('../../../etc/passwd'));

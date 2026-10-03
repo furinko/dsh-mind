@@ -404,11 +404,34 @@ return specifier.length > 0 && !specifier.includes("/") && !specifier.includes("
 没有裁决机制就没有裁决面板；记忆/待办增删不在本包（`§一`）。所以面板只做**"把盘上的事实读给人看"**，
 唯一写口是 `connect.js` 那个开关——而且**转发而非复制**判据（两处各写一份必然漂移）。
 
-### 信任闸的严格度：裸 `curl` 会被 403
+### 信任闸：**判据不许比现实严一档**（2026-10-04 实测）
 
-判据照完整版（loopback 地址 + loopback Host + 非 `cross-site` + `Origin` 同源）。无 `Origin` 时
-**要求** `Sec-Fetch-Site: same-origin|none` ⇒ 浏览器同源 `fetch` 天然带上，`curl` 必须自己加头。
-这是**有意**的（少一个头就少一道防 DNS-rebinding 的闸），不是坏了。
+官方桌面壳的页面跑在**自定义协议** `dsh-app://app` 上（渲染进程带
+`--standard-schemes=dsh-app --fetch-schemes=dsh-app`）。面板发出的 `/api/mind/*` 请求由 Electron
+主进程的 `forwardWebRequest()` 转发给本机 web 服务器，而它**转发前显式删头**：
+
+```js
+for (const name of ["host", "origin", "cookie", "sec-fetch-site"]) headers.delete(name);
+headers.set("cookie", cookie);                // 只补回它自己签发的 cookie
+const response = await fetch(target, init);   // Host 由 fetch 自动补成 127.0.0.1:<port>
+```
+
+⇒ **到达插件的请求：没有 `Origin`、也没有 `Sec-Fetch-Site`。**
+
+我上一版闸写的是"无 `Origin` ⇒ 必须有 `Sec-Fetch-Site: same-origin|none`"（那是 `dsh web`
+直连形态）⇒ 官方客户端面板**每一个请求都 403**。症状极坏：面板画得出来，但每格都写"读不到"，
+而 marker 里**一条 `hit:` 都没有**（命中记在闸之后）⇒ 盘上无痕、只能靠读 Electron 源码才找得到。
+
+**修法与纪律**：
+
+- 无 `Origin` + loopback + 非 `cross-site` ⇒ **放行**（桌面壳形态）
+- 带 `Origin` ⇒ 仍必须与本机同源或 `dsh-app://app`（挡住本机浏览器里的恶意页）
+- **判定本身也留痕**：`noteRequestShape()` 把首次见到的每种形态写一行 marker
+  （`req: host=… origin=… site=… remote=… => allow|DENY`），并进 `status.requestShapes`
+  —— 闸挡错人时不再"盘上无痕"
+
+残留风险（诚实标注）：老浏览器不发 `Sec-Fetch-*`，其**跨站导航**能打到只读口；
+但导航响应攻击者读不到（无 CORS），写口（POST）需要 JSON + 非跨站 ⇒ 不构成实际通道。
 
 ### "挂载 ≠ 生效"要看得见
 

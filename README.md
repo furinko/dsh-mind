@@ -133,12 +133,16 @@ dsh plugin --profile <你的profile> add file:../path/to/dsh-mind
 | `GET /api/mind/boot` | **只读诊断**：官方启动图里有没有我（`hasSelf` + 真实 entries/batches） |
 | `GET /api/mind/beacon?what=&detail=` | **浏览器自报**：apply → slot → render → error 走到哪一格 |
 
-**信任闸**：只服务 loopback 同源请求（`isTrustedLocalRequest`）。无 `Origin` 时它**要求**
-`Sec-Fetch-Site: same-origin|none` ⇒ 浏览器天然通过，**裸 curl 要自己带头**：
+**信任闸**：只服务 loopback 请求，并拒绝跨站。**两种客户端形态都必须过**：
+
+- **浏览器直连**（`dsh web` / 本机 curl）：带 `Origin` 时必须与本机同源；不带 `Origin` 时要求
+  `Sec-Fetch-Site: same-origin|none`
+- **官方桌面壳**（页面跑在 `dsh-app://app`）：Electron 转发前**会删掉** `Origin`/`Sec-Fetch-Site`
+  （源码逐字，见 `docs/DESIGN.md §十三`）⇒ 这一形态按"loopback + 非跨站"直接放行
 
 ```bash
-curl -H 'Sec-Fetch-Site: same-origin' http://127.0.0.1:19387/api/mind/status
-curl -H 'Sec-Fetch-Site: same-origin' http://127.0.0.1:19387/api/mind/boot   # hasSelf 应是 true
+curl http://127.0.0.1:19387/api/mind/status    # 本机 curl 无 Origin ⇒ 放行
+curl http://127.0.0.1:19387/api/mind/boot      # hasSelf 应是 true
 ```
 
 ---
@@ -146,7 +150,7 @@ curl -H 'Sec-Fetch-Site: same-origin' http://127.0.0.1:19387/api/mind/boot   # h
 ## 自检
 
 ```bash
-node test/selftest.mjs                            # 227 项（含反例；前端配套在 ⑳、签名防回退在 ㉑）
+node test/selftest.mjs                            # 232 项（含反例；前端配套在 ⑳、签名防回退在 ㉑）
 node test/pre-step-waterfall.mjs                  # 28 项注入形态契约（自动找客户端，见下）
 node scripts/verify-dsh-mind-install.mjs <profileDir>   # 21 项真装验收
 ```
