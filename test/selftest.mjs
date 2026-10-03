@@ -305,6 +305,20 @@ if (compactionLog) {
         /\|\s*时间\s*\|\s*会话\s*\|\s*事件\s*\|\s*compactionId\s*\|\s*turn\s*\|\s*释放 token\s*\|\s*结果\s*\|/.test(txt2));
       check('⑪ 结果列落「成功」/「失败」而不是空', /成功|失败/.test(txt2));
       check('⑪ turn 缺失记 manual（手动 /compact 的区分维度）', txt2.includes('manual'));
+
+      // ── 2026-09-30 修：**宿主形态 `(session, event)` 必须被吃到** ─────────────
+      // 这是真机缺陷的回归钉：签名单参时 `h(session, event)` 让 `ev.type` 恒 undefined
+      // ⇒ 压缩从不落痕、文件从不生成，而 marker 只有 apply 行（假绿）。
+      const before = readFileSync(f, 'utf8').split('\n').filter(Boolean).length;
+      h({ id: 'host-sess', header: { id: 'host-sess' } }, { type: 'compaction/prune', data: { compactionId: 'h1', turn: 9 } });
+      const txt3 = readFileSync(f, 'utf8');
+      check('⑪ 宿主形态 (session, event) 也落行（session 只从第一参取）',
+        txt3.split('\n').filter(Boolean).length > before && txt3.includes('host-sess'), `before=${before}`);
+      // 反例：拿不到 session ⇒ 会话列记 `unknown`（**不编一个 id 出来**）
+      h({}, { type: 'compaction/prune', data: { compactionId: 'h2' } });
+      const h2line = readFileSync(f, 'utf8').split('\n').find((l) => l.includes('h2')) || '';
+      check('⑪ 反例：session 取不到 ⇒ 会话列记 unknown（不编 id）',
+        h2line.includes('| unknown |'), h2line.slice(0, 120));
     }
   } finally { rmSync(tmp, { recursive: true, force: true }); }
 }
@@ -334,6 +348,28 @@ if (mood) {
     mood.effectiveLevel({ level: 'bristle', at: now2 - 6 * 60 * 1000 }, now2) === 'down');
   check('⑫ 衰减：炸毛 20 分钟后 ⇒ 如常',
     mood.effectiveLevel({ level: 'bristle', at: now2 - 20 * 60 * 1000 }, now2) === 'ok');
+
+  // ── 2026-09-30 修：宿主形态 `(session, event)` 必须折叠进状态 ───────────────
+  // 真机缺陷的回归钉：签名单参时这里恒 null（⇒ 情绪永不注入，marker 只有 apply 行）。
+  const t3 = mkdtempSync(join(tmpdir(), 'dshmind-mood-'));
+  try {
+    setEnv({ MIND_HOME: t3 });
+    const mh = [];
+    mood.apply({ on: (e, fn) => mh.push([e, fn]), logger: () => ({ warn: () => {} }) });
+    const mEv = mh.find(([e]) => e === 'session/event')?.[1];
+    check('⑫ apply 订阅了 session/event 与 agent/pre-step',
+      typeof mEv === 'function' && mh.some(([e]) => e === 'agent/pre-step'));
+    mEv?.({ id: 'host-m' }, { type: 'tool/result', data: { isError: true } });
+    check('⑫ 宿主形态 (session, event) ⇒ 折叠成"蔫"',
+      mood.moodStateOf('host-m')?.level === 'down', JSON.stringify(mood.moodStateOf('host-m')));
+    // 反例：第一参没有 session ⇒ 不折叠（判定只认宿主形态的 session，不是 event 里瞎猜）
+    mEv?.({}, { type: 'tool/result', data: { isError: true } });
+    check('⑫ 反例：拿不到 session ⇒ 不折叠（不编 key）', mood.moodStateOf('undefined') === null);
+    // disposed 也要认宿主形态
+    const mDis = mh.find(([e]) => e === 'session/disposed')?.[1];
+    mDis?.({ id: 'host-m' });
+    check('⑫ session/disposed 用宿主形态清状态', mood.moodStateOf('host-m') === null);
+  } finally { rmSync(t3, { recursive: true, force: true }); }
 }
 
 // ── ⑬ 会话预算（session-budget.js）──────────────────────────────────────────
@@ -384,6 +420,17 @@ if (budget) {
     const skips = mkTxt.split('skip: subagent').length - 1;
     check('⑬ subagent 会话不注入（marker 留痕 skip: subagent）', skips === 1, `出现 ${skips} 次`);
     check('⑬ 反例：主会话那次**不**带 subagent 留痕（判据不是恒真）', skips === 1, `出现 ${skips} 次`);
+
+    // ── 2026-09-30 修：宿主形态 `(session, event)` 必须被吃到 ─────────────────
+    // 真机缺陷的回归钉：签名单参时 `ev.type` 恒 undefined ⇒ 预算从不评估（marker 只有 apply 行）。
+    seen = 'none';
+    ev2({ id: 'host-b', header: { id: 'host-b' } }, { type: 'turn/end', data: { events: [] } });
+    check('⑬ 宿主形态 (session, event) ⇒ measure 收到 session（单参签名下恒 none）',
+      seen !== 'none' && seen?.header?.id === 'host-b', seen === 'none' ? 'none' : JSON.stringify(seen?.header));
+    // 反例：拿不到 session ⇒ 不评估（不编一个 key 出来）
+    seen = 'none';
+    ev2({ type: 'turn/end', data: { events: [] } });
+    check('⑬ 反例：单参事件对象且无 session ⇒ 不评估', seen === 'none');
   } finally { rmSync(t2, { recursive: true, force: true }); }
 }
 
@@ -758,6 +805,271 @@ if (guard) {
     check('⑨ hasSecrets：PEM 块 ⇒ true', guard.hasSecrets('-----BEGIN RSA PRIVATE KEY-----\nx') === true);
     check('⑨ 反例：hasSecrets 空内容 ⇒ false', guard.hasSecrets('') === false);
   } finally { rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// ── ⑳ 前端配套（host API 契约 + 浏览器半结构）────────────────────────────────
+// 为什么单列一整节：浏览器半**不可能被 node 直接 import**（它依赖 `window`），host 半的路由
+// 也只在真 webServer 上才被调用 ⇒ 这里是它们唯一能被断言的地方。
+// 判据两条都配了反例：① 路由/槽位**集合**（多一个少一个都红）；② 信任闸与目录穿越（隐私口）。
+{
+  const api = loaded['lib/host/api.js'];
+  const tmp2 = mkdtempSync(join(tmpdir(), 'dshmind-api-'));
+  try {
+    // 隔离根 + 让固件就位（状态口才有确定读数）
+    setEnv({ MIND_HOME: tmp2 });
+    boot.bootstrap();
+
+    const routes = new Map();
+    let tap = null;
+    const fakeCtx = {
+      effect: (fn) => { fn(); return () => {}; },
+      webServer: {
+        register: (r) => { routes.set(r.path, r); return () => {}; },
+        tapIndex: (fn) => { tap = fn; return () => {}; },
+      },
+      logger: () => ({ warn: () => {} }),
+    };
+    api.apply(fakeCtx);
+
+    const want = api.ROUTE_SPECS.map((r) => r.path).sort();
+    const got = [...routes.keys()].sort();
+    check('⑳ host 半注册的路由集合 = ROUTE_SPECS（多一条少一条都红）',
+      JSON.stringify(got) === JSON.stringify(want), `got=${got.join(',')}`);
+
+    // —— tapIndex：boot 行 ——
+    check('⑳ tapIndex 装上了 boot 行注入器', typeof tap === 'function');
+    const html0 = '<html><script>window.__DSH_BOOT__ = []</script></html>';
+    const html1 = typeof tap === 'function' ? tap(html0) : html0;
+    let row = null;
+    try { row = JSON.parse(/window\.__DSH_BOOT__ = ([\s\S]*?)<\/script>/.exec(html1)[1])[0] ?? null; } catch { row = null; }
+    check('⑳ boot 行 id/url 与 host 半常量一致（不一致 ⇒ 面板静默不出现）',
+      Boolean(row) && row.id === api.CLIENT_ID && String(row.url).startsWith(api.CLIENT_URL), JSON.stringify(row));
+    check('⑳ boot 行幂等：同 id 再注一次不改 html', typeof tap === 'function' && tap(html1) === html1);
+
+    // —— 请求/响应夹具 ——
+    const makeRes = () => {
+      const res = { statusCode: 200, headers: {}, body: '', done: false };
+      res.setHeader = (k, v) => { res.headers[String(k).toLowerCase()] = v; };
+      res.end = (b) => { res.body = b === undefined ? '' : String(b); res.done = true; };
+      return res;
+    };
+    const makeReq = ({ method = 'GET', url = '/', body = null, remote = '127.0.0.1', host = '127.0.0.1:19387', headers = {} } = {}) => {
+      const hs = { data: [], end: [], error: [] };
+      const req = {
+        method,
+        url,
+        socket: { remoteAddress: remote },
+        // ⚠️ 真实浏览器同源 fetch 必带 `sec-fetch-site`（Electron/Chromium 皆然）；
+        //    信任闸照完整版判据**要求**它（无 Origin 时必须 same-origin/none）⇒ 夹具必须带上，
+        //    否则连正例都会被 403 —— 那正是"闸在工作"的证明（另见下面三条反例）。
+        headers: Object.assign({ host, 'sec-fetch-site': 'same-origin' }, headers),
+        on(ev, fn) { (hs[ev] ||= []).push(fn); return req; },
+        destroy() {},
+      };
+      // 监听器装好之后才投喂（readJsonBody 是"先注册、后收数据"的写法）
+      setTimeout(() => {
+        if (body !== null) { const buf = Buffer.from(JSON.stringify(body)); for (const f of hs.data) f(buf); }
+        for (const f of hs.end) f();
+      }, 0);
+      return req;
+    };
+    const call = async (path, opts = {}) => {
+      // 路由表按**路径**登记，查询串留给 `new URL(req.url, …)` ⇒ 查表只取 `?` 之前那段
+      const r = routes.get(path.split('?')[0]);
+      if (!r) return { statusCode: 404, body: '' };
+      const res = makeRes();
+      await r.handler(makeReq(Object.assign({ url: path }, opts)), res);
+      return res;
+    };
+    const j = (res) => { try { return JSON.parse(res.body); } catch { return null; } };
+
+    // —— 状态口 ——
+    const st = await call('/api/mind/status');
+    const stJson = j(st);
+    check('⑳ GET /api/mind/status ⇒ 200 且 ok', st.statusCode === 200 && stJson?.ok === true, String(st.body).slice(0, 120));
+    check('⑳ 状态含 paths/firmware/vault/markers/live/warnings 六格',
+      Boolean(stJson?.paths && stJson?.firmware && stJson?.vault && stJson?.markers && stJson?.live && Array.isArray(stJson?.warnings)));
+    check(`⑳ marker 读数 = MARKERS 名单（${api.MARKERS.length} 个，与实装插件对齐）`,
+      Array.isArray(stJson?.markers) && stJson.markers.length === api.MARKERS.length
+      && stJson.markers.some((m) => m.name === 'api' && m.runtime >= 0));
+    check('⑳ 固件就位读数正确（临时根刚自举 ⇒ ready）', stJson?.firmware?.ready === true);
+    check('⑳ 空壳会被如实说出来（私有区为空 ⇒ 警告里有「角色卡 0 张」）',
+      Array.isArray(stJson?.warnings) && stJson.warnings.some((w) => w.includes('角色卡 0 张')));
+
+    // ── 2026-09-30 补：警告**分档**（沉默属设计 ⇒ 说明）＋ 面板自检读数 ──────────
+    check('⑳ 状态含 hits / notes / clientFetched（"面板有没有被浏览器加载"的机械读数）',
+      Boolean(stJson?.hits) && Array.isArray(stJson?.notes) && stJson.clientFetched === false);
+    check('⑳ 真失效的插件仍在警告里（mood 零运行读数）',
+      stJson.warnings.some((w) => w.includes('「mood」')));
+    check('⑳ 反例：沉默属设计的 guard **不**进警告（误报会训练人忽略警告）',
+      !stJson.warnings.some((w) => w.includes('「guard」')));
+    check('⑳ guard 的沉默降级成"说明"（结论不删，只是不当故障）',
+      stJson.notes.some((n) => n.includes('「guard」')));
+    check('⑳ 面板还没打开时明说"浏览器还没来取包"',
+      stJson.notes.some((n) => n.includes('浏览器还没来取过浏览器包')));
+    // 浏览器取包 ⇒ 机械证据：clientFetched 翻转 + marker 留一行 hit（只一次）
+    const bundleRes = await call('/dsh-mind/client.js');
+    const st2 = await call('/api/mind/status');
+    check('⑳ 取过浏览器包后 clientFetched=true（boot 行有没有生效，以后不用靠猜）',
+      bundleRes.statusCode === 200 && j(st2)?.clientFetched === true, String(bundleRes.statusCode));
+    check('⑳ 首次命中写一行 marker（只写一次，15s 轮询不会刷满环）',
+      readFileSync(join(tmp2, '.dsh-market', 'api-marker.txt'), 'utf8').includes('hit: /dsh-mind/client.js'));
+    check('⑳ 命中计数进了 status（status 至少 2 次）', (j(st2)?.hits?.['/api/mind/status'] || 0) >= 2, JSON.stringify(j(st2)?.hits));
+
+    // —— 信任闸（隐私口，反例优先）——
+    const bad1 = await call('/api/mind/status', { remote: '10.0.0.5' });
+    check('⑳ 反例：非 loopback 来源 ⇒ 403', bad1.statusCode === 403, String(bad1.statusCode));
+    const bad2 = await call('/api/mind/status', { host: 'evil.example.com' });
+    check('⑳ 反例：Host 非 loopback（DNS rebinding）⇒ 403', bad2.statusCode === 403, String(bad2.statusCode));
+    const bad3 = await call('/api/mind/status', { headers: { 'sec-fetch-site': 'cross-site' } });
+    check('⑳ 反例：跨站 fetch ⇒ 403', bad3.statusCode === 403, String(bad3.statusCode));
+
+    // —— 只读文件口：穿越必须挡死，正例必须能读 ——
+    const esc = await call('/api/mind/file?zone=private&rel=' + encodeURIComponent('../../../etc/passwd'));
+    check('⑳ 反例：目录穿越 ⇒ 400', esc.statusCode === 400 && j(esc)?.ok === false, String(j(esc)?.error));
+    const esc2 = await call('/api/mind/file?zone=private&rel=' + encodeURIComponent('..\\..\\..\\windows\\win.ini'));
+    check('⑳ 反例：反斜杠穿越 ⇒ 400', esc2.statusCode === 400);
+    const esc3 = await call('/api/mind/file?zone=nope&rel=a.md');
+    check('⑳ 反例：未知 zone ⇒ 400', esc3.statusCode === 400);
+    const esc4 = await call('/api/mind/file?zone=private&rel=' + encodeURIComponent('C:\\Windows\\win.ini'));
+    check('⑳ 反例：绝对路径 ⇒ 400', esc4.statusCode === 400);
+    const esc5 = await call('/api/mind/file?zone=private&rel=README.bin');
+    check('⑳ 反例：非白名单扩展名 ⇒ 400', esc5.statusCode === 400);
+    mkdirSync(join(tmp2, 'mind-private', 'L1'), { recursive: true });
+    writeFileSync(join(tmp2, 'mind-private', 'L1', 'Learn.md'), '- [2026-09-29] 正例\n', 'utf8');
+    const okRead = await call('/api/mind/file?zone=private&rel=' + encodeURIComponent('L1/Learn.md'));
+    check('⑳ 正例：私有区里的 .md 读得回（否则上面那批反例是恒绿）',
+      okRead.statusCode === 200 && (j(okRead)?.text || '').includes('正例'), String(okRead.body).slice(0, 120));
+
+    // —— 开关往返（逻辑仍在 connect.js，这里验的是转发面）——
+    const offRes = await call('/api/mind/connect', { method: 'POST', url: '/api/mind/connect', body: { session: 'api-sess', enabled: false } });
+    check('⑳ POST 关闭 ⇒ enabled=false 且列出该会话',
+      offRes.statusCode === 200 && j(offRes)?.enabled === false && (j(offRes)?.offSessions || []).includes('api-sess'), String(offRes.body).slice(0, 160));
+    const getRes = await call('/api/mind/connect?session=api-sess');
+    check('⑳ GET 读回关闭态', j(getRes)?.enabled === false);
+    const onRes = await call('/api/mind/connect', { method: 'POST', url: '/api/mind/connect', body: { session: 'api-sess', enabled: true } });
+    check('⑳ POST 接回 ⇒ enabled=true', j(onRes)?.enabled === true);
+    const noSess = await call('/api/mind/connect', { method: 'POST', url: '/api/mind/connect', body: { enabled: false } });
+    check('⑳ 反例：缺 session ⇒ 400（不能把"关心智"广播到所有会话）', noSess.statusCode === 400, String(noSess.body).slice(0, 120));
+    const putRes = await call('/api/mind/connect', { method: 'PUT', url: '/api/mind/connect' });
+    check('⑳ 反例：PUT ⇒ 405', putRes.statusCode === 405, String(putRes.statusCode));
+
+    // —— 宿主没有 tapIndex（老版本）⇒ 不崩（fail-open）——
+    let crashed = false;
+    try {
+      api.apply({ effect: (fn) => { fn(); }, webServer: { register: () => () => {} }, logger: () => ({ warn: () => {} }) });
+    } catch { crashed = true; }
+    check('⑳ 反例：宿主没有 tapIndex ⇒ apply 不抛（面板不可用，但插件照加载）', crashed === false);
+
+    // —— 浏览器半：形态 + 槽位集合 ——
+    const clientSrc = readFileSync(join(PKG, 'client', 'client.js'), 'utf8');
+    let def = null;
+    new Function('window', clientSrc)({ __ModuleLoader__: { load: (d) => { def = d; } } });
+    check('⑳ 浏览器半是合法 JS 且形态正确（id=dsh-mind）', Boolean(def) && def.id === 'dsh-mind' && typeof def.factory === 'function');
+    const stubReact = {
+      createElement: () => null,
+      Fragment: Symbol('Fragment'),
+      useState: (v) => [v, () => {}],
+      useEffect: () => {},
+      useRef: (v) => ({ current: v }),
+      useMemo: (f) => f(),
+    };
+    const stubRequire = (m) => (m === 'react' ? stubReact : { jsx: () => null, jsxs: () => null, Fragment: stubReact.Fragment });
+    const clientExports = def.factory(stubRequire);
+    check('⑳ 工厂导出 apply/inject（外壳按这两个名字挂载）',
+      typeof clientExports.apply === 'function' && Array.isArray(clientExports.inject));
+    check('⑳ inject 只声明 slots（多声明 ⇒ 缺该服务的 profile 里整插件静默不激活）',
+      clientExports.inject.length === 1 && clientExports.inject[0] === 'slots', JSON.stringify(clientExports.inject));
+    check('⑳ 浏览器半不用裸 import（工厂模式只许 require 外壳外部化的模块）',
+      !/^\s*import\s/m.test(clientSrc));
+    check('⑳ host 半的浏览器包路径指向随包文件（不在 lib/ 下，故不进 node 侧自动发现）',
+      existsSync(api.CLIENT_FILE) && api.CLIENT_FILE.split(sep).slice(-2).join('/') === 'client/client.js', api.CLIENT_FILE);
+
+    // 槽位白名单＝**本机实测存在**的那些（见 client/client.js 头部；凭记忆加槽位 = 面板静默不出现）
+    const KNOWN_SLOTS = [
+      'conversation.view', 'sidebar.footer.action', 'settings.plugin.item',
+      'plugins.bundle.config', 'settings.section', 'conversation.input.overlay',
+      'conversation.input.left', 'conversation.session.header.utilities',
+      'sidebar.right.pane.tab', 'shell.overlay', 'conversation.chat.assistant-actions',
+    ];
+    const regs = [];
+    clientExports.apply({
+      effect: (fn) => { fn(); return () => {}; },
+      slots: {
+        inject: (_slot, fn) => { fn(); return () => {}; },
+        register: (opts) => { regs.push(opts); return () => {}; },
+      },
+      logger: () => ({ warn: () => {} }),
+    });
+    const ids = regs.map((r) => `${r.name}:${r.id}`).sort();
+    check('⑳ 真跑 apply ⇒ 注册 conversation.view:mind 与 sidebar.footer.action:mind-connect',
+      ids.includes('conversation.view:mind') && ids.includes('sidebar.footer.action:mind-connect'), ids.join(' '));
+    const unknown = regs.filter((r) => !KNOWN_SLOTS.includes(r.name)).map((r) => r.name);
+    check('⑳ 槽位名都在白名单内（打错一个字母就静默失效，本条挡它）',
+      regs.length >= 2 && unknown.length === 0, unknown.join(', '));
+    check('⑳ 反例：白名单确实能判红（`converstion.view` 不在名单内）', !KNOWN_SLOTS.includes('converstion.view'));
+
+    // —— 渲染冒烟：拿**真 status JSON** 把面板组件跑一遍 ——
+    // 为什么值得单列：渲染期抛错在浏览器里表现为"整块空白"，最难在重启后定位。
+    // 假 React：createElement 记录调用（不产真 vnode），hooks 只回初值。
+    const tree = [];
+    const smokeReact = {
+      createElement: (type, props, ...kids) => { tree.push({ type: typeof type === 'function' ? type.name : type, props }); return { type, props, kids }; },
+      Fragment: Symbol('Fragment'),
+      useState: (v) => [v, () => {}],
+      useEffect: () => {},
+      useRef: (v) => ({ current: v }),
+      useMemo: (f) => f(),
+    };
+    const smokeRequire = (m) => (m === 'react' ? smokeReact : { jsx: () => null, jsxs: () => null, Fragment: smokeReact.Fragment });
+    const smoke = def.factory(smokeRequire).__internals;
+    check('⑳ 浏览器半暴露测试缝 __internals（组件能被渲染冒烟覆盖）', Boolean(smoke && smoke.Facts && smoke.MindPanel));
+    const render = (name, fn) => {
+      try { fn(); return true; } catch (e) { return `${e?.name}: ${e?.message}`; }
+    };
+    const r1 = render('Facts(真 status)', () => smoke.Facts({ status: stJson }));
+    check('⑳ 用真 status JSON 渲染 Facts 不抛（host 给的字段名与面板读的字段名对得上）', r1 === true, String(r1));
+    const r2 = render('Facts(null)', () => smoke.Facts({ status: null }));
+    check('⑳ 反例：status 为 null（host 半没起来）也不抛，只显示"读不到"', r2 === true, String(r2));
+    const r3 = render('MindPanel', () => smoke.MindPanel({ sessionId: 'api-sess' }));
+    check('⑳ MindPanel 渲染不抛', r3 === true, String(r3));
+    const r4 = render('MindWidget', () => smoke.MindWidget({ sessionId: 'api-sess' }));
+    check('⑳ 页脚挂件渲染不抛（无 status 时也要能画出来）', r4 === true, String(r4));
+    check('⑳ 渲染确实走到了子组件（不是"因为到处 return null 而假绿"）', tree.length > 0, `createElement ${tree.length} 次`);
+  } finally {
+    restoreEnv();
+    rmSync(tmp2, { recursive: true, force: true });
+  }
+}
+
+// ── ㉑ 防回退：三处 `session/event` 处理器只许走共享归一化 ─────────────────────
+// 为什么单列一节：这条缺陷的形态是**静默**的（marker 里只有 `apply:` 行、纯函数判据全绿），
+// 所以除了行为断言（⑪/⑫/⑬ 各加了一条"宿主形态"），还要有一条**结构性**判据钉住签名——
+// 让"改回单参 payload"这件事立刻变红，而不是等真机上再空转几天。
+{
+  const se = loaded['lib/host/session-event.js'];
+  check('㉑ session-event.js 可加载且导出两个纯函数',
+    typeof se?.splitSessionEvent === 'function' && typeof se?.sessionIdOf === 'function');
+  const host = se.splitSessionEvent({ id: 'x', header: { id: 'x' } }, { type: 't' });
+  check('㉑ 宿主形态优先：第一参当 session、第二参当 event',
+    host.session?.id === 'x' && host.event?.type === 't');
+  const single = se.splitSessionEvent({ event: { type: 't' }, sessionId: 'y' });
+  check('㉑ 单参载荷仍兼容（老宿主/夹具）：事件与 sessionId 都取到',
+    single.event?.type === 't' && single.session?.id === 'y');
+  check('㉑ sessionIdOf：id 优先 / 兜 header.id / 取不到给空串（不编 id）',
+    se.sessionIdOf({ id: 'a' }) === 'a' && se.sessionIdOf({ header: { id: 'b' } }) === 'b'
+    && se.sessionIdOf({}) === '' && se.sessionIdOf(null) === '');
+
+  const users = ['lib/host/mood.js', 'lib/host/session-budget.js', 'lib/host/compaction-log.js'];
+  const src = users.map((f) => [f, readFileSync(join(PKG, f), 'utf8')]);
+  const notUsing = src.filter(([, s]) => !s.includes("from './session-event.js'")).map(([f]) => f);
+  check('㉑ 三个插件都 import 共享归一化（各写一份必然漂移）', notUsing.length === 0, notUsing.join(', '));
+  const backslid = src.filter(([, s]) => /ctx\.on\('session\/event',\s*\(payload\)/.test(s)).map(([f]) => f);
+  check('㉑ 反例：单参签名 `(payload)` 不许再出现（改回去 ⇒ 本条变红）', backslid.length === 0, backslid.join(', '));
+  const legacy = src.filter(([, s]) => s.includes('payload?.event ?? payload')).map(([f]) => f);
+  check('㉑ 三个插件都不再留 `payload?.event ?? payload` 兜底（那是错签名的痕迹）', legacy.length === 0, legacy.join(', '));
+  check('㉑ 反例：结构性判据确实能变红（伪造一段单参签名会被正则抓到）',
+    /ctx\.on\('session\/event',\s*\(payload\)/.test("ctx.on('session/event', (payload) => {})"));
 }
 
 restoreEnv();

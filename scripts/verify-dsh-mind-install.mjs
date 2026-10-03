@@ -32,6 +32,7 @@ const SUBPATH = {
   'dsh-mind-mood': 'host/mood',
   'dsh-mind-session-budget': 'host/session-budget',
   'dsh-mind-agent-roles': 'host/agent-roles',
+  'dsh-mind-api': 'host/api',
 };
 const ROWS = Object.keys(SUBPATH);
 
@@ -88,6 +89,29 @@ try {
 
 // ── ⑥ 反例：错的子路径必须解析失败（证明 ② 不是恒绿）────────────────────────
 check('⑥ 反例：不存在的 exports 键 ⇒ 检查能变红', pj.exports['./host/no-such'] === undefined);
+
+// ── ⑦ 前端配套：浏览器半随包 + id 与 host 半对得上 ───────────────────────────
+// 为什么必须验：浏览器半是**手写 bundle**，装到别处才发现"漏进 files 白名单"或
+// "boot 行 id 与 load({id}) 不一致"时，面板会静默不出现（无报错）。这两条都是静默失败。
+const clientRel = pj.exports?.['./client'];
+check('⑦ exports 有 ./client（外壳按子路径取浏览器半）', typeof clientRel === 'string', String(clientRel));
+const clientPath = clientRel ? join(pkgDir, String(clientRel).split('/').join(sep)) : '';
+check('⑦ 浏览器半随包（`files` 白名单含 client/）', Boolean(clientPath) && existsSync(clientPath), clientPath);
+if (clientPath && existsSync(clientPath)) {
+  const src = readFileSync(clientPath, 'utf8');
+  check('⑦ 浏览器半是官方 `__ModuleLoader__.load` 形态', src.includes('window.__ModuleLoader__.load('));
+  const apiSrc = readFileSync(join(pkgDir, 'lib', 'host', 'api.js'), 'utf8');
+  const hostId = /export const CLIENT_ID = '([^']+)'/.exec(apiSrc)?.[1] ?? '';
+  const clientId = /__ModuleLoader__\.load\(\{\s*\n?\s*id:\s*"([^"]+)"/.exec(src)?.[1] ?? '';
+  check('⑦ boot 行 id = 浏览器半 load id（不一致 ⇒ 面板静默不出现）',
+    Boolean(hostId) && hostId === clientId, `host=${hostId} client=${clientId}`);
+  check('⑦ 浏览器半不用裸 import（工厂模式只许 require 外壳外部化的模块）',
+    !/^\s*import\s/m.test(src));
+}
+check('⑦ package.json 声明了 dsh.client（platform=web）',
+  pj.dsh?.client?.platform === 'web', JSON.stringify(pj.dsh?.client));
+check('⑦ 反例：把浏览器半路径改错 ⇒ 上一格能变红',
+  !existsSync(join(pkgDir, 'client', 'no-such-client.js')));
 
 console.log(`\n${fails.length === 0 ? 'PASS' : 'FAIL'}  ${pass}/${pass + fails.length}`);
 if (fails.length) { console.log('失败项：\n  - ' + fails.join('\n  - ')); process.exit(1); }

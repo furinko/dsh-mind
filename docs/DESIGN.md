@@ -329,4 +329,70 @@ plugin 消息"（**无害**）。⇒ **版本探测失败时取 V4，是损失�
 
 ---
 
+## 十三、前端配套：自托管浏览器包 + 只读面板（2026-09-29 加）
+
+### 为什么必须"自托管 + `tapIndex`"
+
+本包常以 **junction / link** 装进 profile（源码在别处）。官方 client-modules 的解析基准是
+**DSH 自己的安装位置** ⇒ 第三方包按包名取浏览器半**解析不到**，面板静默不出现（无报错）。
+故 host 半自己注册 `/dsh-mind/client.js`，并用官方 `webServer.tapIndex` 往 index.html 的
+`window.__DSH_BOOT__` 清单里加一行 —— **装在哪都能用**（同 `dsh-opencode-go-usage` 的做法）。
+
+两条硬约束（各有断言盯着：selftest ⑳ / verify-install ⑦）：
+
+1. boot 行 `id` **必须等于** `client/client.js` 里 `load({ id })` —— 不一致 ⇒ 静默不出现。
+2. 浏览器半是**手写 bundle**：只用工厂参数 `require`（外壳外部化的 `react` / `react/jsx-runtime`），
+   **不许裸 `import`**；`client/` 与 `lib/` **分目录**，故它不会被 node 侧"自动发现"当模块加载
+   （否则 selftest ① 会在没有 `window` 的环境里 import 它，整节变红）。
+
+### 槽位只许用"本机实测存在"的
+
+面板挂 `conversation.view`（顶级视图）+ `sidebar.footer.action`（页脚挂件）——两个槽位在本机
+**已装插件**（`dsh-context` / `dsh-opencode-go-usage`）里都在用。**凭记忆写槽位名 = 面板静默失效**，
+故 selftest 把"注册到的槽位名 ⊆ 白名单"做成断言，并配一条反例（拼错的 `converstion.view` 会红）。
+
+### 为什么只有"只读 + 一个开关"
+
+面板容易越想越大（图谱、待办增删、待裁决卡）。本包**不做**：`guard` 没有放行通道（`§七`），
+没有裁决机制就没有裁决面板；记忆/待办增删不在本包（`§一`）。所以面板只做**"把盘上的事实读给人看"**，
+唯一写口是 `connect.js` 那个开关——而且**转发而非复制**判据（两处各写一份必然漂移）。
+
+### 信任闸的严格度：裸 `curl` 会被 403
+
+判据照完整版（loopback 地址 + loopback Host + 非 `cross-site` + `Origin` 同源）。无 `Origin` 时
+**要求** `Sec-Fetch-Site: same-origin|none` ⇒ 浏览器同源 `fetch` 天然带上，`curl` 必须自己加头。
+这是**有意**的（少一个头就少一道防 DNS-rebinding 的闸），不是坏了。
+
+### "挂载 ≠ 生效"要看得见
+
+marker 环里 `apply:` 开头的行只证明**挂载**。面板把每个插件的**运行读数**（非 `apply:` 行数）
+单列一格，为 0 时给出"自挂载后没有任何运行读数"的警告 —— 2026-09-29 正是靠这类读数定位到
+`mood` / `session-budget` / `compaction-log` 三个插件在真宿主上**从未生效**。
+
+**同日修掉（2026-09-30）**：根因是 `session/event` 回调签名——宿主传 `(session, event)` 两个位置
+参数，本包写成单参 payload ⇒ 事件恒 `undefined` ⇒ 三处全部提前 return。修法：抽
+`lib/host/session-event.js` **一处**归一化（宿主形态优先，兼容单参老写法：session 可能挂在
+`event` 上），三个插件共用；selftest ⑪/⑫/⑬ 各加一条**按宿主形态**的行为断言，㉑ 再钉一条
+**结构性**判据（谁把签名改回 `(payload)` 立刻变红）。教训与 `§十一` 同族：**判据与实现同错 =
+双向空转**，纯函数自测看不见运行期契约。
+
+**顺带收口一个盲区**：面板"有没有被浏览器加载"过去只能靠人眼。现在 `/dsh-mind/client.js` 与
+`/api/mind/*` 每次命中都在内存记账，`status` 给出 `hits` / `clientFetched`，**首次**命中写一行
+marker ⇒ 这条链以后可机械验收（轮询不会刷满 marker 环）。
+
+### 沉默要分档（误报比不报更糟）
+
+v1 一律按"零运行读数 ⇒ 警告"报，于是 `guard` 被误报——它只在**拦截**时留痕，"没拦过"是正常态。
+现在 `SILENT_BY_DESIGN`（`connect` / `api` / `guard`）降级为**说明**（结论不删，只不当故障），
+其余插件的沉默仍是**警告**（`mood` 那类"每轮都该留痕却没有"才是真的坏）。
+
+### 测试的"客户端发现"不许假设包躺着的位置
+
+`test/pre-step-waterfall.mjs` 原来只认 `resolve(PKG,'..')/resources/app.asar`（源码住在客户端目录
+里时的布局）。源码搬到 `~/.dsh/plugins/dsh-mind` 之后 ⇒ 找不到客户端 ⇒ 不重跑 Electron node 模式
+⇒ "最贵的判据"被跳过并记 FAIL ⇒ **`npm test` 假红**。现在按判据找：`DSH_CLIENT_DIR` → 同级旧布局
+→ 各盘根下名字含 `Harness` 的目录（1 层有界）。**没有把任何一台机器的绝对路径写进仓库**。
+
+---
+
 _本文是现行文档：与实测不符即缺陷。_

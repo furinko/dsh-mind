@@ -45,8 +45,7 @@ function hostCandidates() {
     cur = parent;
   }
   // 官方客户端的宿主入口（在 app.asar 内；只有 Electron node 模式能解析）
-  out.push(join(PKG, '..', 'resources', 'app.asar', 'dsh', 'node_modules',
-    '@deepseek-ai', 'dsh-desktop-host', 'lib', 'index.js'));
+  for (const root of clientRoots()) out.push(asarHostEntry(root));
   return out;
 }
 
@@ -64,17 +63,50 @@ function findHostEntry() {
   return null;
 }
 
-/** 客户端可执行文件（判据：同级有 `resources/app.asar`）。 */
-function findClientExe() {
-  const root = resolve(PKG, '..');
-  if (!existsSync(join(root, 'resources', 'app.asar'))) return null;
-  try {
-    for (const e of readdirSync(root)) {
-      if (!e.toLowerCase().endsWith('.exe')) continue;
-      if (/^uninstall/i.test(e)) continue;
-      return join(root, e);
+/** 客户端根候选（**按判据找，不写死某台机器的路径**）：
+ *   ① 显式 env `DSH_CLIENT_DIR`
+ *   ② 与包同级的旧布局（`<pkg>/../resources/app.asar`——源码曾住在客户端目录里）
+ *   ③ 各盘根下**名字含 Harness** 的目录（产品名，1 层有界；官方客户端默认装这里）
+ *
+ *  ⚠️ 为什么补 ③（2026-09-30）：源码从 `D:\DeepSeek_harness_desktop\dsh-mind` 挪到
+ *  `C:\...\.dsh\plugins\dsh-mind` 之后，② 再也找不到客户端 ⇒ 找不到客户端可执行文件 ⇒
+ *  不重跑 Electron 模式 ⇒ "最贵的判据"被响亮跳过并记 FAIL ⇒ `npm test` **假红**。
+ *  真实缺陷是"发现逻辑假设包躺在客户端里"，不是"断言过不去"（见 README 自检一节）。 */
+function clientRoots() {
+  const out = [];
+  const explicit = process.env.DSH_CLIENT_DIR;
+  if (explicit) out.push(explicit);
+  out.push(resolve(PKG, '..'));
+  for (const letter of 'CDEFGHIJKLMNOPQRSTUVWXYZ') {
+    const root = `${letter}:\\`;
+    let entries;
+    try { entries = readdirSync(root, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      if (!e.isDirectory() || !/harness/i.test(e.name)) continue;
+      out.push(join(root, e.name));
     }
-  } catch { /* 读不到目录 ⇒ 无客户端 */ }
+  }
+  return out;
+}
+
+/** 客户端内宿主入口（只有 Electron node 模式能穿透 asar 解析）。 */
+function asarHostEntry(clientRoot) {
+  return join(clientRoot, 'resources', 'app.asar', 'dsh', 'node_modules',
+    '@deepseek-ai', 'dsh-desktop-host', 'lib', 'index.js');
+}
+
+/** 客户端可执行文件（判据：同级有 `resources/app.asar`，且不是卸载器）。 */
+function findClientExe() {
+  for (const root of clientRoots()) {
+    if (!existsSync(join(root, 'resources', 'app.asar'))) continue;
+    try {
+      for (const e of readdirSync(root)) {
+        if (!e.toLowerCase().endsWith('.exe')) continue;
+        if (/^uninstall/i.test(e)) continue;
+        return join(root, e);
+      }
+    } catch { /* 读不到目录 ⇒ 试下一个候选 */ }
+  }
   return null;
 }
 
@@ -84,7 +116,8 @@ let hostEntry = findHostEntry();
 // （`stdio: 'inherit'`：沙箱下管道捕获会 EPERM，且要保留彩色/流式输出）。
 if (!hostEntry && !process.env.DSH_MIND_WF_RELAUNCHED) {
   const exe = findClientExe();
-  const asarEntry = hostCandidates().at(-1);
+  // 用**找到的那个客户端**的 asar 入口（不再假定"包旁边就是客户端"，见 clientRoots 注释）
+  const asarEntry = exe ? asarHostEntry(dirname(exe)) : hostCandidates().at(-1);
   if (exe) {
     console.log('普通 node 解析不到宿主上游（宿主包在 app.asar 内）');
     console.log(`⇒ 用客户端 Electron node 模式重跑：${exe}\n`);

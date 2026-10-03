@@ -45,3 +45,9 @@
     # 三把工具（role_list/role_spawn/role_send）+ **执行期闸**（防"成员再起成员"）。
     - id: dsh-mind-agent-roles
       name: dsh-mind/host/agent-roles
+
+    # 前端配套（host 半）：只读状态 API（/api/mind/status·tree·file）+ 接入开关转发
+    # （/api/mind/connect）+ 自托管浏览器包（/dsh-mind/client.js + boot 行）。
+    # **只读 + 一个开关写口**，无裁决/放行入口（本包 guard 没有放行通道）。
+    - id: dsh-mind-api
+      name: dsh-mind/host/api

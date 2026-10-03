@@ -23,15 +23,24 @@
     "./host/mood": "./lib/host/mood.js",
     "./host/session-budget": "./lib/host/session-budget.js",
     "./host/agent-roles": "./lib/host/agent-roles.js",
+    "./host/api": "./lib/host/api.js",
+    "./client": "./client/client.js",
     "./package.json": "./package.json"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime"
+      ]
     }
   },
   "files": [
     "lib/",
+    "client/",
     "firmware/",
     "cordis.patch.yml",
     "README.md"
