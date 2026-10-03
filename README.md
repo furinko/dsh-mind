@@ -109,7 +109,10 @@ dsh plugin --profile <你的profile> add file:../path/to/dsh-mind
 
 **装完重启后端 + 刷新页面即可看到**（不需要构建步骤）：
 
-- 对话区顶部多一个 **「心智」视图**（与「轨迹」同级）：状态卡 + 只读文件浏览
+- 对话区顶部多一个 **「心智」视图**（与「轨迹」同级），视图内两种模式：
+  - **图谱**（默认）：知识网络——**文件为点、正文里真写了的 `.md` 引用为线**；点一个点看它的
+    进出引用与正文，右侧同时列出"病"（指向不存在文件的引用 / 同名多份因而没连线的引用）
+  - **数字**：状态卡（固件/注入读数/私有区/项目/插件运行读数）+ 只读文件浏览
 - 侧栏页脚多一个 **「心智」挂件**：圆点＝本会话接没接入；角标＝实况警告条数；点按切换接入态
 
 浏览器半走**官方通道**：`package.json` 的 `dsh.client` 由 `dsh-client-modules` 扫描 →
@@ -129,6 +132,7 @@ dsh plugin --profile <你的profile> add file:../path/to/dsh-mind
 | `GET /api/mind/status` | 固件就位 / R0·R1 注入读数 / 私有区统计 / **每个插件的运行读数** / 警告与说明 / 浏览器自报 |
 | `GET /api/mind/tree?zone=private\|mind` | 可读文件清单（`.md/.json/.txt/.yml`） |
 | `GET /api/mind/file?zone=&rel=` | 读一个文件（128 KB 截断；目录穿越挡死） |
+| `GET /api/mind/graph` | **图谱**：把两个 zone 的正文关系读成 `nodes/edges` + 悬空/歧义/孤岛点名（单独一口：它要读全部正文，成本只在打开图谱时付） |
 | `GET/POST /api/mind/connect` | 读/写「接入心智」开关（**逻辑仍在 `connect.js`**，此处只转发） |
 | `GET /api/mind/boot` | **只读诊断**：官方启动图里有没有我（`hasSelf` + 真实 entries/batches） |
 | `GET /api/mind/beacon?what=&detail=` | **浏览器自报**：apply → slot → render → error 走到哪一格 |
@@ -143,14 +147,33 @@ dsh plugin --profile <你的profile> add file:../path/to/dsh-mind
 ```bash
 curl http://127.0.0.1:19387/api/mind/status    # 本机 curl 无 Origin ⇒ 放行
 curl http://127.0.0.1:19387/api/mind/boot      # hasSelf 应是 true
+curl http://127.0.0.1:19387/api/mind/graph     # 图谱：nodes/edges/dangling/ambiguous/isolated
 ```
+
+### 图谱读什么（以及它**不**做什么）
+
+关系判据全在 `lib/host/graph.js`（**纯函数**，可单测、有反例）。三条硬规矩：
+
+1. **线只有一种来源**：文件正文里出现的、**能解析到盘上真实文件**的 `.md` 引用。
+   一切"我觉得这两个东西有关系"的推断都不画——**图上编出来的关系没人能核对**。
+2. **指不到实体 = 不算边，点名进 `dangling`**，并按目标归组（同一个缺件被十几个文件引用 ⇒ 一行，
+   不是十几行）。清单里带三类标注：`真缺件` / `指向包内·别处` / `模板占位`。
+3. **同名多份 = 不猜**：`project.md` 这种在两个项目下都有的名字，引用它时**不连线**，进 `ambiguous`
+   点名。猜错等于在图上编关系。
+
+另外两条口径：`TRASH/`（自我修改前的快照暂存区）**不进图**——它是旧副本，画进去会变成
+"同名两份 + 假孤岛"；孤岛只**点名**不**下结论**（`SOUL.md` 这种"被注入而不被正文引用"的件，
+天生度为 0，它不是死件）。
+
+> **图谱能一眼看出的病**：悬空引用（首次干跑就抓到：十几个 L1 件引用 `mind\L1\changelog-L1.md`，
+> 而盘上不存在）、同名歧义、孤岛。这些都是**读数**，不是判断——面板只把名字列出来，判由人下。
 
 ---
 
 ## 自检
 
 ```bash
-node test/selftest.mjs                            # 232 项（含反例；前端配套在 ⑳、签名防回退在 ㉑）
+node test/selftest.mjs                            # 263 项（含反例；前端配套在 ⑳、签名防回退在 ㉑、图谱在 ㉒）
 node test/pre-step-waterfall.mjs                  # 28 项注入形态契约（自动找客户端，见下）
 node scripts/verify-dsh-mind-install.mjs <profileDir>   # 21 项真装验收
 ```
