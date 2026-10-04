@@ -778,6 +778,22 @@ window.__ModuleLoader__.load({
         return data ? layoutGraph(data.nodes, layers, { project: project }) : null;
       }, [data, project]);
 
+      // ── 图谱自报第二格（`beacon: graph`）：渲染完成后把**几何真值**报给后端 ──────────
+      // 为什么加：面板"好不好看"只能人眼看，但"画出来没有 / 画了几条带 / 几张卡 / 多高"
+      // **是可机器核的**。第一版只报了 `render graph`（到没到渲染这一步）⇒ "渲染成功但布局
+      // 塌成 0 高、卡片叠在一起"这类仍只能靠盯屏幕。这一格把那段也变成读数。
+      // 浏览器半是热更的（宿主按内容散列服务 bundle）⇒ 加这条**不需要重启后端**。
+      React.useEffect(function () {
+        if (!data || !laid || !laid.bands.length) return;
+        var labels = laid.bands.map(function (b) { return b.label; }).join("|").slice(0, 96);
+        beacon("graph", "bands=" + laid.bands.length
+          + " cards=" + Object.keys(laid.pos).length
+          + " edges=" + data.edges.length
+          + " w=" + laid.width + " h=" + laid.height
+          + " card0=" + ((data.nodes[0] && data.nodes[0].label) || "?")
+          + " :: " + labels);
+      }, [data]);
+
       // 拖拽平移：直接改滚动容器的 scrollLeft/Top（不进 React 状态 ⇒ 不抖）；
       // 位移超过 4px 就记一笔 `movedRef`，避免"拖完手一松就顺手选中了一张卡"。
       var dragRef = React.useRef(null);

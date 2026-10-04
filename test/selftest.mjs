@@ -1344,6 +1344,12 @@ if (guard) {
         && typeof smoke2.layoutGraph === 'function' && typeof smoke2.textWidth === 'function'));
     check('㉒ textWidth 在没有 canvas 的 node 侧也能估宽（否则布局根本测不了）',
       smoke2.textWidth('abcd') > 0 && smoke2.textWidth('中文中文') > smoke2.textWidth('abcd'));
+    // 结构性判据（假 React 下 useEffect 是空跑，行为观察不到 ⇒ 按本仓惯例钉源码）：
+    // 图谱要报**两格**——`render graph`（走到渲染）+ `graph` 几何（几条带/几张卡/多高）。
+    // 只有第一格时，"渲染成功但布局塌成 0 高、卡片叠在一起"仍然只能靠盯屏幕。
+    check('㉒ 图谱自报两格：`render graph` + `graph` 几何真值（后者让"画出来没有"也可机器核）',
+      clientSrc2.includes('beacon("render", "graph")') && clientSrc2.includes('beacon("graph", "bands="'),
+      '客户端源码里少了自报');
 
     const laid1 = smoke2.layoutGraph(g.nodes, g.layers, {});
     const laid2 = smoke2.layoutGraph(g.nodes, g.layers, {});
