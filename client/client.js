@@ -7,12 +7,18 @@
 //
 // ── 装在哪两处（都在本机实测存在的槽位上，别凭记忆加）─────────────────────────
 //   · `conversation.view`（id=`mind`）—— 对话/轨迹同级的**顶级视图**：完整面板
+//     （视图内两种模式：**图谱**＝分层色带知识地图〔默认〕 / **数字**＝读数卡 + 文件浏览）
 //   · `sidebar.footer.action` —— 左栏页脚挂件：一眼看到"接没接入 + 几个警告"
 //   槽位不存在时注册会一直挂起（官方语义），不报错；`slots.inject` 不可用时退回 `effect`。
 //
 // ── 数据从哪来（同源 loopback，host 半 `lib/host/api.js`）─────────────────────
-//   GET /api/mind/status · /api/mind/tree?zone= · /api/mind/file?zone=&rel= · /api/mind/connect
+//   GET /api/mind/status · /api/mind/tree?zone= · /api/mind/file?zone=&rel=
+//     · /api/mind/graph[?project=] · /api/mind/connect
 //   浏览器**不碰文件系统**：所有事实由 host 半读成 JSON，隐私边界只有一条。
+//
+// ⚠️ **浏览器半是热更的，host 半不是**：外壳按内容散列服务本文件（rev 变即换代码），
+//    而 host 插件要重启才换。所以「前端已是新版、后端还是旧形状」这个窗口期**真实存在**——
+//    图谱那一格会明说"宿主半还是旧版（没 layers）⇒ 重启后端再看"，而不是画出半张图让人猜。
 //
 // ── 边界（诚实标注）──────────────────────────────────────────────────────────
 //   本面板**只读 + 一个接入开关**。没有裁决/放行入口（本包 guard 没有放行通道），
@@ -75,10 +81,12 @@ window.__ModuleLoader__.load({
         ".dm-badge{margin-left:auto;font-size:10.5px;padding:0 6px;border-radius:99px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}",
         ".dm-mode{display:flex;gap:4px;margin-left:2px}",
         ".dm-mode .dm-btn{height:24px;padding:0 9px;font-size:11.5px}",
-        ".dm-col-graph{padding:8px;overflow:hidden;display:flex;min-height:360px}",
-        ".dm-graph-wrap{flex:1 1 0;min-width:0;position:relative;display:flex}",
-        ".dm-graph{flex:1 1 auto;width:100%;height:100%;min-height:0;display:block;touch-action:none}",
-        ".dm-legend{position:absolute;left:6px;bottom:6px;display:flex;gap:9px;align-items:center;font-size:10.5px;color:var(--dsw-alias-label-tertiary);background:var(--dsw-alias-bg-layer-2,rgba(255,255,255,.72));border:1px solid var(--dsw-alias-border-l1);padding:2px 8px;border-radius:8px;pointer-events:none;flex-wrap:wrap;max-width:96%}",
+        ".dm-col-graph{padding:8px;overflow:hidden;display:flex;flex-direction:column;min-height:360px}",
+        ".dm-tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:0 2px 8px;flex:none}",
+        ".dm-input{box-sizing:border-box;height:24px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;width:168px}",
+        ".dm-graph-scroll{flex:1 1 0;min-height:0;overflow:auto;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-2,transparent)}",
+        ".dm-graph{display:block;touch-action:none}",
+        ".dm-legend{display:flex;gap:9px;align-items:center;font-size:10.5px;color:var(--dsw-alias-label-tertiary);background:var(--dsw-alias-bg-layer-2,rgba(255,255,255,.72));border:1px solid var(--dsw-alias-border-l1);padding:3px 8px;border-radius:8px;flex-wrap:wrap;margin-top:8px}",
         ".dm-sw{display:inline-block;width:7px;height:7px;border-radius:99px;margin-right:4px;vertical-align:middle}",
         ".dm-dise{display:flex;gap:6px;align-items:baseline;padding:3px 0;font-size:11.5px;line-height:17px;border-bottom:1px dashed var(--dsw-alias-border-l1)}",
         ".dm-dise:last-child{border-bottom:none}",
@@ -396,263 +404,335 @@ window.__ModuleLoader__.load({
           : null);
     }
 
-    // ══ 心智图谱（知识网络）═══════════════════════════════════════════════════
+    // ══ 心智图谱（分层色带 + 卡片流式布局）══════════════════════════════════════
     //
-    // ── 画的是什么（**不许编关系**）───────────────────────────────────────────
-    //   圆点 = 盘上真实存在的文件；线 = 正文里**真写了**的 `.md` 引用。
-    //   关系判据全在 host 半 `lib/host/graph.js`（纯函数、有反例测试）——
-    //   浏览器这层**不做任何推断**，只负责"把 JSON 画出来 + 让人能核对"。
-    //   于是每个点都能点开看原文、每条病都能看到"谁引用的"。
+    // ── 为什么推倒重画（2026-10-04 主人："不好，你参考DSHOME的图谱呗"）───────────
+    //   v1 是**力导向圆点图**：45 个点、211 条边，其中 `Tree.md` 一张索引表刷出 32 条
+    //   "我列了你"的边 ⇒ 枢纽全由排版决定、与语义无关，看着就是一团毛线。
+    //   参考实现（`E:\DSHOME\packages\dshome-mind`，「🐳 心智图谱」）根本不是这么画的：
+    //     · **分层色带**：L0→L3 自上而下一条条半透明色带，层标题在带左上
+    //     · **卡片流式排布**：层内节点是矩形卡片，从左到右摆、超宽换行——是"结构化地图"，
+    //       不是弹簧网；层数/节点数涨上去也照样能读
+    //     · **边是贝塞尔曲线**，画在卡片**下层**，只连 `related`/`tags`/`topic`（语义边）
+    //   ⇒ 本层照这套画。布局是**确定性**的（无随机、无迭代），所以可截图比对、可复现。
     //
-    // ── 布局为什么自己写、且**不依赖容器尺寸** ────────────────────────────────
-    //   ① 不引第三方图库：本包是"手写 bundle 无构建步骤"，加依赖等于加一次构建。
-    //   ② 坐标一律算在**固定 1000×700 的逻辑空间**里，SVG 用 viewBox +
-    //      `preserveAspectRatio` 自适应 ⇒ 容器怎么变都不需要重算，
-    //      也就没有"缓存键漏了某个输入导致永不更新"那一类坑（视觉交付的经典坑）。
-    //   ③ 初始位置由 **id 的确定性哈希**给出（不用 Math.random）⇒ 同一份数据每次
-    //      布局一致：可截图比对、可复现，不会"刷新一次一个样"。
+    // ── 两条硬约束（都来自参考实现的翻车记录）──────────────────────────────────
+    //   ① 层表**不许两边各写一份**：参考实现里客户端 `LAYER_ORDER` 漏登记一个层 id ⇒
+    //      布局不给它排位 ⇒ 渲染时读 `p.x` 抛 TypeError ⇒ **整块图谱白屏**（其后的节点全不画）。
+    //      现在层表由**宿主**随图数据一起下发（`data.layers`），客户端只消费 ⇒ 这一类缺陷
+    //      在结构上不可能发生（`FALLBACK_LAYERS` 只服务"老宿主没给"的退化场景）。
+    //   ② 面板**必须锁进可视高度**（页内自己滚、页面不滚）：整页滚是 chat 视图的官方模式，
+    //      面板不是。所以画布外层是 `overflow:auto` 的滚动容器，高度由 flex 锁死。
+    //
+    // ── 交互（对齐参考实现）────────────────────────────────────────────────────
+    //   点卡片＝选中（描边）→ 右列出详情；悬停＝高亮该卡 + 它的边加粗提亮；
+    //   搜索＝按 label/rel 淡化未命中；拖空白＝平移；＋/－＝缩放；项目钮＝切换 L3 项目记忆视角。
 
-    var GW = 1000, GH = 700;
-    var LAYER_COLOR = { L0: "#d9483b", L1: "#4D6BFE", L2: "#1e9e73", L3: "#8a8f98", other: "#b8860b" };
-    var LAYER_NAME = { L0: "宪法", L1: "规则", L2: "技能", L3: "记忆", other: "根/其它" };
+    // 画布常量（照抄参考实现的量纲：1240 宽、卡片 36 高、单行 17、带间 34）
+    var CANVAS_W = 1240, NODE_H = 36, LINE_H = 17, MAX_NODE_W = 230;
+    var ROW_GAP = 12, LAYER_GAP = 34, LAYER_TITLE_H = 34, SIDE_PAD = 24, NODE_GAP = 14;
+    var FONT = "12.5px system-ui,-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif";
 
-    /** 字符串 → [0,1) 的确定性伪随机（FNV-1a）。 */
-    function hash01(s) {
-      var h = 2166136261;
-      for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h * 16777619) >>> 0; }
-      return (h % 10000) / 10000;
-    }
+    /** 退化兜底：宿主没下发 `layers` 时用（正常路径永远走宿主那份，见上面约束 ①）。 */
+    var FALLBACK_LAYERS = [
+      { id: "L0", label: "L0 宪法", color: "#8b5cf6" },
+      { id: "L1", label: "L1 规则", color: "#4D6BFE" },
+      { id: "L2S", label: "L2 技能", color: "#10b981" },
+      { id: "L2E", label: "L2 经验", color: "#14b8a6" },
+      { id: "AG", label: "角色卡", color: "#a78bfa" },
+      { id: "L3I", label: "L3 记忆", color: "#f97316" },
+      { id: "L3P", label: "项目记忆", color: "#ef4444" },
+      { id: "L3H", label: "L3 历史", color: "#f59e0b" },
+      { id: "TR", label: "回收站", color: "#64748b" },
+      { id: "TK", label: "任务缓冲", color: "#ec4899" },
+      { id: "OT", label: "其他（非标路径）", color: "#94a3b8" },
+    ];
 
-    function nodeRadius(n) { return 3.4 + 1.55 * Math.sqrt(Math.max(0, n.deg || 0)); }
-
-    /**
-     * 力导向布局（同步跑完）。三股力：节点互斥 / 边当弹簧 / 向心。
-     * 收尾做一次**自动适配**：把结果缩放到画布内 ⇒ 常量调得不准也不会画出界。
-     */
-    function computeGraphLayout(nodes, edges) {
-      var list = Array.isArray(nodes) ? nodes : [];
-      var idx = {};
-      for (var i = 0; i < list.length; i++) idx[list[i].id] = i;
-      var pos = list.map(function (n) {
-        var layer = ["L0", "L1", "L2", "L3", "other"].indexOf(n.layer);
-        var ang = hash01(n.id) * Math.PI * 2;
-        var rad = 70 + (layer < 0 ? 4 : layer) * 110;
-        return { x: GW / 2 + Math.cos(ang) * rad, y: GH / 2 + Math.sin(ang) * rad, vx: 0, vy: 0, r: nodeRadius(n) };
-      });
-      var link = [];
-      var es = Array.isArray(edges) ? edges : [];
-      for (var e = 0; e < es.length; e++) {
-        var a = idx[es[e].from], b = idx[es[e].to];
-        if (a !== undefined && b !== undefined) link.push([a, b]);
-      }
-
-      var K_REP = 5200, K_SPRING = 0.03, REST = 95, DAMP = 0.8, CENTER = 0.008;
-      for (var t = 0; t < 500; t++) {
-        var p, q, j;
-        for (i = 0; i < pos.length; i++) { pos[i].fx = 0; pos[i].fy = 0; }
-        for (i = 0; i < pos.length; i++) {
-          for (j = i + 1; j < pos.length; j++) {
-            p = pos[i]; q = pos[j];
-            var dx = q.x - p.x, dy = q.y - p.y;
-            var d2 = dx * dx + dy * dy; if (d2 < 1) d2 = 1;
-            var d = Math.sqrt(d2);
-            var f = K_REP / d2;
-            var ux = dx / d, uy = dy / d;
-            p.fx -= ux * f; p.fy -= uy * f;
-            q.fx += ux * f; q.fy += uy * f;
+    // ── 文字量宽（决定卡片宽与折行）──────────────────────────────────────────
+    // 浏览器里用 canvas 精确测（中英混排不出界）；**没有 canvas 时必须退回估算**——
+    // 否则 node 侧的自测根本跑不了布局，而"布局"恰恰是最该被测的一段（白屏族）。
+    var textCtx = null, textCtxTried = false;
+    function textWidth(s) {
+      var str = String(s == null ? "" : s);
+      if (!textCtxTried) {
+        textCtxTried = true;
+        try {
+          if (typeof document !== "undefined" && document.createElement) {
+            textCtx = document.createElement("canvas").getContext("2d");
+            textCtx.font = FONT;
           }
-        }
-        for (var l = 0; l < link.length; l++) {
-          p = pos[link[l][0]]; q = pos[link[l][1]];
-          var sdx = q.x - p.x, sdy = q.y - p.y;
-          var sd = Math.sqrt(sdx * sdx + sdy * sdy) || 1;
-          var sf = (sd - REST) * K_SPRING;
-          var sx = sdx / sd * sf, sy = sdy / sd * sf;
-          p.fx += sx; p.fy += sy; q.fx -= sx; q.fy -= sy;
-        }
-        for (i = 0; i < pos.length; i++) {
-          p = pos[i];
-          p.fx += (GW / 2 - p.x) * CENTER;
-          p.fy += (GH / 2 - p.y) * CENTER;
-          p.vx = (p.vx + p.fx) * DAMP; p.vy = (p.vy + p.fy) * DAMP;
-          p.x += p.vx; p.y += p.vy;
-        }
+        } catch (e) { textCtx = null; }
       }
-
-      var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-      for (i = 0; i < pos.length; i++) {
-        if (pos[i].x < minX) minX = pos[i].x;
-        if (pos[i].x > maxX) maxX = pos[i].x;
-        if (pos[i].y < minY) minY = pos[i].y;
-        if (pos[i].y > maxY) maxY = pos[i].y;
+      if (textCtx) {
+        try { return textCtx.measureText(str).width; } catch (e) { /* 落到估算 */ }
       }
-      if (!pos.length || !isFinite(minX)) return pos;
-      var w = Math.max(1, maxX - minX), h = Math.max(1, maxY - minY);
-      var s = Math.min((GW - 90) / w, (GH - 90) / h);
-      var ox = (GW - w * s) / 2 - minX * s, oy = (GH - h * s) / 2 - minY * s;
-      for (i = 0; i < pos.length; i++) { pos[i].x = pos[i].x * s + ox; pos[i].y = pos[i].y * s + oy; pos[i].r = pos[i].r * Math.max(0.85, Math.min(1.6, s)); }
-      return pos;
+      var w = 0;
+      for (var i = 0; i < str.length; i++) w += str.charCodeAt(i) > 0x2e80 ? 12.5 : 6.6;
+      return w;
     }
-
-    function GraphLegend() {
-      return h("div", { className: "dm-legend" },
-        ["L0", "L1", "L2", "L3", "other"].map(function (k) {
-          return h("span", { key: k },
-            h("i", { className: "dm-sw", style: { background: LAYER_COLOR[k] } }),
-            LAYER_NAME[k]);
-        }));
+    function nodeWidth(label) {
+      return Math.max(120, Math.min(MAX_NODE_W, 34 + textWidth(label) + 28));
     }
-
-    /** 一条"病"：引用指向盘上没有的东西（按目标归组，count 是引用处数）。 */
-    function DiseaseRow(props) {
-      var d = props.d;
-      var why = d.why === "missing" ? "真缺件" : (d.why === "package" ? "指向包内/别处" : "模板占位");
-      return h("div", { className: "dm-dise" },
-        h("span", { className: "dm-why" + (d.why === "missing" ? " missing" : "") }, why),
-        h("span", { className: "dm-dise-k" }, d.target),
-        h("span", { className: "dm-dise-n" }, d.count + " 处"));
+    function splitLines(text, maxW) {
+      var out = [], cur = "", chars = Array.from(String(text));
+      for (var i = 0; i < chars.length; i++) {
+        var test = cur + chars[i];
+        if (textWidth(test) > maxW && cur !== "") { out.push(cur); cur = chars[i]; }
+        else cur = test;
+      }
+      if (cur !== "") out.push(cur);
+      return out.length ? out : [String(text)];
+    }
+    function nodeLines(label, w, pad) {
+      var avail = w - pad - 4;
+      return textWidth(label) > avail ? splitLines(label, avail) : [label];
     }
 
     /**
-     * 画布（**纯展示**：给定 data + 算好的坐标就画出来）。
+     * 分层色带 + 卡片流式布局（**纯函数、确定性**）。
      *
-     * 为什么从 GraphBody 里抽出来：GraphBody 挂着 hooks，假 React 只能看到"建图中…"那一支
-     * ⇒ 画线/画点这段代码在 node 侧永远不被执行，而"渲染期抛错 = 整块空白"正是最难查的一类。
-     * 抽成无 hooks 的纯组件后，自测能拿**真 graph JSON** 直接渲染它（见 selftest ㉒）。
+     * 返回 `{ pos, bands, width, height }`：
+     *   · `pos[id] = {x,y,w,h,lines,tx}` —— 卡片左上角与折行结果
+     *   · `bands[]  = {top,bottom,label,color}` —— 色带矩形（含层标题）
+     * 排布规则：层内按「出厂在前、再按 label 中文序」排；从左到右摆，超出画布宽就换行；
+     * `L3P`（项目记忆）**按项目拆子段**（"项目记忆 · 各项目名"），避免多项目混成一排。
      */
-    function GraphCanvas(props) {
-      var data = props.data, pos = props.pos;
-      var nodes = data.nodes || [];
-      var isolated = {};
-      for (var k = 0; k < (data.isolated || []).length; k++) isolated[data.isolated[k]] = true;
-      var sel = props.sel, hover = props.hover;
-      var hot = {};
-      if (sel) {
-        hot[sel] = true;
-        for (var e = 0; e < data.edges.length; e++) {
-          if (data.edges[e].from === sel) hot[data.edges[e].to] = true;
-          if (data.edges[e].to === sel) hot[data.edges[e].from] = true;
-        }
+    function layoutGraph(nodes, layers, opts) {
+      var list = Array.isArray(nodes) ? nodes : [];
+      var table = (Array.isArray(layers) && layers.length) ? layers : FALLBACK_LAYERS;
+      var projectMode = opts && opts.project;
+      var byLayer = {};
+      list.forEach(function (n) { (byLayer[n.layer] = byLayer[n.layer] || []).push(n); });
+      function sortNode(a, b) {
+        if (a.zone !== b.zone) return a.zone === "mind" ? -1 : 1;
+        return String(a.label).localeCompare(String(b.label), "zh");
       }
-      var at = {};
-      for (var i = 0; i < nodes.length; i++) at[nodes[i].id] = pos[i];
+      var groups = [];
+      table.forEach(function (lay) {
+        var arr = byLayer[lay.id] || [];
+        if (!arr.length) return;
+        if (lay.id === "L3P" && !projectMode) {
+          var byP = {};
+          arr.forEach(function (n) { (byP[n.project || "?"] = byP[n.project || "?"] || []).push(n); });
+          Object.keys(byP).sort(function (a, b) { return a.localeCompare(b, "zh"); }).forEach(function (p) {
+            byP[p].sort(sortNode);
+            groups.push({ label: lay.label + " · " + p, color: lay.color, nodes: byP[p] });
+          });
+        } else {
+          arr.sort(sortNode);
+          groups.push({ label: lay.label, color: lay.color, nodes: arr });
+        }
+      });
 
-      var lines = data.edges.map(function (ed, ei) {
-        var a = at[ed.from], b = at[ed.to];
-        if (!a || !b) return null;
-        var isHot = Boolean(sel) && (ed.from === sel || ed.to === sel);
-        return h("line", {
-          key: "e" + ei, x1: a.x, y1: a.y, x2: b.x, y2: b.y,
+      var pos = {}, bands = [], yCursor = 20, maxRight = 0;
+      groups.forEach(function (grp) {
+        var top = yCursor;
+        yCursor += LAYER_TITLE_H;
+        var x = SIDE_PAD, lineBottom = yCursor;
+        grp.nodes.forEach(function (n) {
+          var pad = (n.zone === "private" ? 30 : 14) + 8;
+          var w = Math.min(MAX_NODE_W, nodeWidth(n.label));
+          var lines = nodeLines(n.label, w, pad);
+          var h = lines.length > 1 ? 12 + lines.length * LINE_H : NODE_H;
+          if (x + w > CANVAS_W - SIDE_PAD) { x = SIDE_PAD; yCursor = lineBottom + ROW_GAP; }
+          pos[n.id] = { x: x, y: yCursor, w: w, h: h, lines: lines, tx: pad - 8 };
+          lineBottom = Math.max(lineBottom, yCursor + h);
+          maxRight = Math.max(maxRight, x + w);
+          x += w + NODE_GAP;
+        });
+        yCursor = lineBottom + LAYER_GAP;
+        bands.push({ top: top, bottom: lineBottom + 8, color: grp.color, label: grp.label });
+      });
+
+      return {
+        pos: pos,
+        bands: bands,
+        width: Math.max(CANVAS_W, maxRight + SIDE_PAD),
+        height: yCursor + 10,
+      };
+    }
+
+    var EDGE_COLOR = { related: "#10b981", tags: "#f59e0b", topic: "#8b5cf6" };
+    var EDGE_NAME = { related: "关联 related", tags: "同标签 tags", topic: "同主题 topic" };
+
+    function svgText(props, children) { return h("text", props, children); }
+
+    /** 画布（**纯展示**：给 data + 布局就画出来；可供 node 侧渲染冒烟）。 */
+    function GraphCanvas(props) {
+      var data = props.data, laid = props.laid, sel = props.sel, hover = props.hover, q = props.q;
+      var zoom = props.zoom, nodes = data.nodes || [], edges = data.edges || [];
+      var pos = laid.pos;
+      var idSet = {};
+      nodes.forEach(function (n) { idSet[n.id] = n; });
+
+      var ql = String(q || "").toLowerCase();
+      function hit(n) {
+        if (!ql) return true;
+        return String(n.label).toLowerCase().indexOf(ql) >= 0 || String(n.rel).toLowerCase().indexOf(ql) >= 0;
+      }
+      var bands = laid.bands.map(function (b, i) {
+        return h("g", { key: "b" + i },
+          h("rect", {
+            x: 8, y: b.top - 8, width: laid.width - 16, height: b.bottom - b.top + 8, rx: 12,
+            style: { fill: b.color, fillOpacity: 0.05 },
+          }),
+          h("text", { x: 18, y: b.top + 6, style: { fontSize: "12px", fontWeight: 700, fill: b.color } }, b.label),
+          h("circle", { cx: laid.width - 22, cy: b.top + 1, r: 3, style: { fill: b.color, opacity: 0.4 } }));
+      });
+
+      var paths = edges.map(function (e, i) {
+        var a = pos[e.source], b = pos[e.target];
+        if (!a || !b) return null;                       // 兜底：位置缺失也不许整块炸
+        var ax = a.x + a.w / 2, ay = a.y + a.h / 2;
+        var bx = b.x + b.w / 2, by = b.y + b.h / 2;
+        var my = (ay + by) / 2;
+        var d = "M " + ax + " " + ay + " C " + ax + " " + my + ", " + bx + " " + my + ", " + bx + " " + by;
+        var lit = hover && (e.source === hover || e.target === hover);
+        var on = (!ql) || (hit(idSet[e.source] || {}) && hit(idSet[e.target] || {}));
+        return h("path", {
+          key: "e" + i, d: d, fill: "none",
           style: {
-            stroke: isHot ? "#4D6BFE" : "var(--dsw-alias-border-l2)",
-            strokeWidth: isHot ? 1.5 : 0.7,
-            opacity: sel && !isHot ? 0.25 : 0.9,
+            stroke: EDGE_COLOR[e.type] || "#10b981",
+            strokeWidth: lit ? 2.4 : 1.4,
+            strokeOpacity: !on ? 0.08 : (lit ? 0.95 : 0.4),
           },
         });
       }).filter(Boolean);
 
-      var dots = nodes.map(function (n, ni) {
-        var p = pos[ni];
+      var cards = nodes.map(function (n) {
+        var p = pos[n.id];
+        if (!p) return null;                             // 层表漏登记时的兜底（参考实现的教训）
+        var priv = n.zone === "private";
         var isSel = sel === n.id;
-        var isIso = Boolean(isolated[n.id]);
-        return h("circle", {
-          key: "n" + ni, cx: p.x, cy: p.y, r: p.r,
-          onClick: function () { props.onSel(isSel ? null : n.id); },
-          onMouseEnter: function () { if (props.onHover) props.onHover(n.id); },
-          onMouseLeave: function () { if (props.onHover) props.onHover(null); },
-          style: {
-            // 颜色**走内联 style**，不赌 CSS 选择器（2026-10-03 的教训：选择器不匹配时静默失效）
-            fill: isIso ? "none" : (LAYER_COLOR[n.layer] || LAYER_COLOR.other),
-            stroke: isIso ? "#d9483b" : (isSel ? "#111" : "var(--dsw-alias-bg-base,#fff)"),
-            strokeWidth: isSel ? 2.2 : 1,
-            strokeDasharray: isIso ? "2 2" : null,
-            opacity: sel && !hot[n.id] ? 0.35 : 1,
-            cursor: "pointer",
-          },
-        }, h("title", null, n.id + "　度 " + n.deg));
-      });
-
-      var labels = nodes.map(function (n, ni) {
-        if (n.deg < 3 && sel !== n.id && hover !== n.id) return null;
-        var p = pos[ni];
-        return h("text", {
-          key: "t" + ni, x: p.x + p.r + 3, y: p.y + 3.2,
-          style: { fontSize: "9.5px", fill: "var(--dsw-alias-label-secondary)", pointerEvents: "none" },
-        }, n.label);
+        var on = hit(n);
+        return h("g", {
+          key: n.id,
+          transform: "translate(" + p.x + "," + p.y + ")",
+          style: { cursor: "pointer", opacity: on ? 1 : 0.12 },
+          onClick: function () { props.onPick(n.id); },
+          onMouseEnter: function () { props.onHover(n.id); },
+          onMouseLeave: function () { props.onHover(null); },
+        },
+          h("rect", {
+            x: 0, y: 0, width: p.w, height: p.h, rx: 9,
+            style: {
+              fill: priv ? n.color + "1f" : "var(--dsw-alias-bg-layer-2,#ffffff)",
+              stroke: isSel ? "#111" : (priv ? n.color : "var(--dsw-alias-border-l2,#d3dcea)"),
+              strokeWidth: isSel ? 2 : (priv ? 1.1 : 1),
+              strokeDasharray: priv ? "4 3" : null,
+            },
+          }),
+          h("rect", { x: 0, y: 7, width: 4, height: Math.max(4, p.h - 14), rx: 2, style: { fill: n.color } }),
+          priv ? svgText({ x: 12, y: 23, style: { fontSize: "11px" } }, "🔒") : null,
+          svgText({ y: p.lines.length === 1 ? 23 : (p.h - p.lines.length * LINE_H) / 2 + 13, style: { fontSize: "12.5px", fill: "var(--dsw-alias-label-primary,#1a2233)" } },
+            p.lines.map(function (ln, li) { return h("tspan", { key: li, x: p.tx, dy: li === 0 ? 0 : LINE_H }, ln); })),
+          h("title", null, (priv ? "🔒 " : "") + n.rel));
       }).filter(Boolean);
 
-      return h("div", { className: "dm-col dm-col-graph" },
-        h("div", { className: "dm-graph-wrap" },
-          h("svg", { className: "dm-graph", viewBox: "0 0 " + GW + " " + GH, preserveAspectRatio: "xMidYMid meet" },
-            lines, dots, labels),
-          h(GraphLegend)));
+      var w = laid.width * zoom, hh = laid.height * zoom;
+      return h("div", { className: "dm-graph-scroll", ref: props.scrollRef,
+        onMouseDown: props.onPanStart, onMouseMove: props.onPanMove, onMouseUp: props.onPanEnd,
+        onMouseLeave: props.onPanEnd,
+        style: { cursor: props.panning ? "grabbing" : "grab" } },
+        h("svg", {
+          className: "dm-graph", viewBox: "0 0 " + laid.width + " " + laid.height,
+          width: w, height: hh, style: { minWidth: w + "px", display: "block" },
+        }, bands, paths, cards));
     }
 
-    function GraphSide(props) {
-      var g = props.data, sel = props.sel, onSel = props.onSel;
+    /** 一条读数行（详情/读数卡共用）。 */
+    function GraphLegend(props) {
+      var table = props.layers || FALLBACK_LAYERS;
+      return h("div", { className: "dm-legend" },
+        table.filter(function (l) { return props.used && props.used[l.id]; }).map(function (l) {
+          return h("span", { key: l.id },
+            h("i", { className: "dm-sw", style: { background: l.color } }), l.label);
+        }),
+        h("span", { key: "__edge" }, h("i", { className: "dm-sw", style: { background: "#10b981" } }), "related"),
+        h("span", { key: "__edge2" }, h("i", { className: "dm-sw", style: { background: "#f59e0b" } }), "tags"));
+    }
+
+    function GraphDetail(props) {
+      var data = props.data, sel = props.sel, onSel = props.onSel, text = props.text;
       var node = null;
-      for (var i = 0; i < g.nodes.length; i++) if (g.nodes[i].id === sel) node = g.nodes[i];
-
-      if (node) {
-        var outs = g.edges.filter(function (e) { return e.from === node.id; }).map(function (e) { return e.to; });
-        var ins = g.edges.filter(function (e) { return e.to === node.id; }).map(function (e) { return e.from; });
-        var nb = function (id) {
-          return h("button", { key: id, className: "dm-nbr", onClick: function () { onSel(id); } }, id);
-        };
-        return h("div", { className: "dm-col" },
-          h("button", { className: "dm-btn", onClick: function () { onSel(null); } }, "← 返回清单"),
-          h("div", { className: "dm-card", style: { marginTop: "8px" } },
-            h("div", { className: "dm-card-title" }, "节点"),
-            Row("id", node.id, true),
-            Row("层", (node.layer || "other") + "（" + (LAYER_NAME[node.layer] || "其它") + "）"),
-            Row("大小", fmtBytes(node.bytes), true),
-            Row("度", "总 " + node.deg + " · 进 " + node.inDeg + " · 出 " + node.outDeg),
-            h("div", { style: { marginTop: "6px" } },
-              h("button", {
-                className: "dm-btn",
-                onClick: function () {
-                  getJSON("/api/mind/file?zone=" + node.zone + "&rel=" + encodeURIComponent(node.rel)).then(function (d) {
-                    props.onText(d && d.ok ? { rel: node.rel, text: d.text, bytes: d.bytes, truncated: d.truncated } : { rel: node.rel, text: "（读不到：" + ((d && d.error) || "未知") + "）" });
-                  });
-                }
-              }, "读正文"))),
-          outs.length ? Card("它引用谁（" + outs.length + "）", outs.map(nb)) : null,
-          ins.length ? Card("谁引用它（" + ins.length + "）", ins.map(nb)) : null,
-          props.text
-            ? h("div", { className: "dm-card" },
-              h("div", { className: "dm-card-title" }, props.text.rel + " · " + fmtBytes(props.text.bytes) + (props.text.truncated ? "（已截断）" : "")),
-              h("pre", { className: "dm-pre" }, props.text.text))
-            : null);
+      for (var i = 0; i < data.nodes.length; i++) if (data.nodes[i].id === sel) node = data.nodes[i];
+      if (!node) return null;
+      var outs = data.edges.filter(function (e) { return e.source === node.id; });
+      var ins = data.edges.filter(function (e) { return e.target === node.id; });
+      var byId = {};
+      data.nodes.forEach(function (n) { byId[n.id] = n; });
+      function nbr(id, type) {
+        var t = byId[id];
+        return h("button", { key: type + id, className: "dm-nbr", onClick: function () { onSel(id); } },
+          h("span", { className: "dm-why", style: { borderColor: EDGE_COLOR[type], color: EDGE_COLOR[type] } }, type),
+          " " + (t ? t.label : id));
       }
-
       return h("div", { className: "dm-col" },
-        Card("图读数（全部来自盘上读数，非估算）",
+        h("button", { className: "dm-btn", onClick: function () { onSel(null); } }, "← 返回读数"),
+        h("div", { className: "dm-card", style: { marginTop: "8px" } },
+          h("div", { className: "dm-card-title" }, node.label),
+          Row("层", node.layerLabel + "（" + node.layer + "）"),
+          Row("区", node.zone === "private" ? "私有区 🔒" : "出厂区"),
+          Row("路径", node.rel, true),
+          Row("大小", fmtBytes(node.bytes), true),
+          Row("度", String(node.deg)),
+          h("div", { style: { marginTop: "6px" } },
+            h("button", {
+              className: "dm-btn",
+              onClick: function () {
+                getJSON("/api/mind/file?zone=" + node.zone + "&rel=" + encodeURIComponent(node.rel)).then(function (d) {
+                  props.onText(d && d.ok
+                    ? { rel: node.rel, text: d.text, bytes: d.bytes, truncated: d.truncated }
+                    : { rel: node.rel, text: "（读不到：" + ((d && d.error) || "未知") + "）" });
+                });
+              },
+            }, "读正文"))),
+        outs.length ? Card("它关联谁（" + outs.length + "）", outs.map(function (e) { return nbr(e.target, e.type); })) : null,
+        ins.length ? Card("谁关联它（" + ins.length + "）", ins.map(function (e) { return nbr(e.source, e.type); })) : null,
+        text ? h("div", { className: "dm-card" },
+          h("div", { className: "dm-card-title" }, text.rel + " · " + fmtBytes(text.bytes) + (text.truncated ? "（已截断）" : "")),
+          h("pre", { className: "dm-pre" }, text.text)) : null);
+    }
+
+    /** 右列（未选中时＝读数 + 枢纽 + 孤点 + related 落空清单）。 */
+    function GraphSide(props) {
+      var g = props.data;
+      var used = g.stats.byLayer || {};
+      var nodes = g.nodes;
+      return h("div", { className: "dm-col" },
+        Card("图读数（全部来自盘上读数）",
           Row("节点 / 边", g.stats.nodes + " / " + g.stats.edges),
-          Row("扫了 / 跳过", g.stats.filesScanned + " 件 / " + g.stats.skippedFiles + " 件（TRASH 与超限）"),
+          Row("边按来源", "related " + (g.stats.byType.related || 0) + " · tags " + (g.stats.byType.tags || 0) + " · topic " + (g.stats.byType.topic || 0)),
+          Row("边密度", g.stats.edgePerNode + " 条/点（参考实现约 1.1）"),
+          Row("有 frontmatter", g.stats.withFm + " / " + g.stats.nodes + " 张"),
+          Row("孤点（度为 0）", g.stats.isolated + " 张"),
+          Row("related 指不到盘上", g.stats.relatedMiss + " 条"),
+          Row("扫了 / 跳过", g.stats.filesScanned + " 件 / " + g.stats.skippedFiles + " 件（索引件·归档副本）"),
           Row("读了", fmtBytes(g.stats.bytesRead), true),
-          Row("孤岛（一根线都没有）", g.stats.isolated + " 个" + (g.stats.isolated ? "（见下）" : "")),
-          g.stats.truncated ? Row("⚠️ 有文件超限未读", "计数已如实标出", false) : null),
-        Card("枢纽（度 = 进 + 出）",
+          g.stats.truncated ? Row("⚠️ 有文件超限未读", "计数已如实标出") : null),
+        Card("枢纽（度 = related 进 + 出）",
           g.stats.hubs.map(function (hb) {
-            return h("button", { key: hb.id, className: "dm-nbr", onClick: function () { onSel(hb.id); } },
-              hb.id + "　度 " + hb.deg);
+            return h("button", { key: hb.id, className: "dm-nbr", onClick: function () { props.onSel(hb.id); } },
+              hb.label + "　度 " + hb.deg);
           })),
-        g.isolated.length
-          ? Card("孤岛（没人引用它、它也没引用别人）",
-            g.isolated.map(function (id) { return h("button", { key: id, className: "dm-nbr", onClick: function () { onSel(id); } }, id); }))
-          : null,
-        Card("病 · 引用指向盘上没有的东西（" + g.stats.danglingRefs + " 处 / " + g.stats.dangling + " 个目标）",
-          g.dangling.length ? g.dangling.map(function (d, i) { return h(DiseaseRow, { key: i, d: d }); })
-            : h("div", { className: "dm-dim" }, "没有悬空引用")),
-        g.ambiguous.length
-          ? Card("歧义 · 同名多份 ⇒ 不连线（" + g.stats.ambiguous + " 个目标）",
-            g.ambiguous.map(function (a, i) {
-              return h("div", { className: "dm-dise", key: i },
-                h("span", { className: "dm-why" }, "同名 " + a.candidates + " 份"),
-                h("span", { className: "dm-dise-k" }, a.target),
-                h("span", { className: "dm-dise-n" }, a.count + " 处"));
-            }))
-          : null);
+        g.isolated.length ? Card("孤点（没有任何 related/tags/topic 连它）",
+          g.isolated.map(function (id) {
+            var n = null;
+            for (var i = 0; i < nodes.length; i++) if (nodes[i].id === id) n = nodes[i];
+            return h("button", { key: id, className: "dm-nbr", onClick: function () { props.onSel(id); } },
+              h("span", { className: "dm-why" }, n ? n.layer : "?"), " " + (n ? n.label : id));
+          })) : null,
+        g.relatedMiss.length ? Card("related 没连上的（" + g.relatedMiss.length + " 条：名字指不清 "
+          + ((g.stats.relatedMissByWhy && g.stats.relatedMissByWhy.ambiguous) || 0)
+          + " · 盘上没这件 " + ((g.stats.relatedMissByWhy && g.stats.relatedMissByWhy.missing) || 0) + "）",
+          g.relatedMiss.slice(0, 12).map(function (m, i) {
+            return h("div", { className: "dm-dise", key: i },
+              h("span", { className: "dm-why" + (m.why === "ambiguous" ? " missing" : "") },
+                m.why === "ambiguous" ? "同名 " + m.candidates + " 份" : "缺件"),
+              h("span", { className: "dm-dise-k" }, m.target),
+              h("span", { className: "dm-dise-n" }, String(m.from).split(":")[1]));
+          })) : null,
+        GraphLegend({ layers: g.layers, used: used }));
     }
 
     /** 图谱主体（渲染期抛错由外层 GraphView 兜住并上报）。 */
@@ -663,39 +743,102 @@ window.__ModuleLoader__.load({
       var err = es[0], setErr = es[1];
       var ss = React.useState(null);
       var sel = ss[0], setSel = ss[1];
-      var ts = React.useState(null);
-      var text = ts[0], setText = ts[1];
+      var qs = React.useState("");
+      var q = qs[0], setQ = qs[1];
       var hs = React.useState(null);
       var hover = hs[0], setHover = hs[1];
+      var zs = React.useState(1);
+      var zoom = zs[0], setZoom = zs[1];
+      var ps = React.useState("");
+      var project = ps[0], setProject = ps[1];
+      var ts = React.useState(null);
+      var text = ts[0], setText = ts[1];
+      var pn = React.useState(false);
+      var panning = pn[0], setPanning = pn[1];
 
       React.useEffect(function () {
         var alive = true;
-        getJSON("/api/mind/graph").then(function (d) {
+        var url = "/api/mind/graph" + (project ? "?project=" + encodeURIComponent(project) : "");
+        getJSON(url).then(function (d) {
           if (!alive) return;
-          if (d && d.ok) { setData(d); setErr(null); }
-          else { setErr("读不到 /api/mind/graph（host 半 api 插件没起来，或这条路被闸挡了）"); }
+          if (d && d.ok && !Array.isArray(d.layers)) {
+            // 浏览器半是热更的（宿主按内容散列服务 bundle），但 host 半要重启才换代码
+            // ⇒ 会出现"前端已是新版、后端还是旧形状"的窗口期。**明说**，别画出一张半张图让人猜。
+            setErr("宿主半还是旧版（图谱数据里没有 layers）⇒ 重启后端再看；浏览器半已是新版。");
+            return;
+          }
+          if (d && d.ok) { setData(d); setErr(null); setSel(null); setText(null); }
+          else setErr("读不到 /api/mind/graph（host 半 api 插件没起来，或这条路被闸挡了）");
         });
         return function () { alive = false; };
-      }, [props.stamp]);
+      }, [props.stamp, project]);
 
-      var nodes = data ? data.nodes : [];
-      var pos = React.useMemo(function () { return data ? computeGraphLayout(nodes, data.edges) : null; }, [data]);
+      var layers = data && Array.isArray(data.layers) && data.layers.length ? data.layers : FALLBACK_LAYERS;
+      var laid = React.useMemo(function () {
+        return data ? layoutGraph(data.nodes, layers, { project: project }) : null;
+      }, [data, project]);
+
+      // 拖拽平移：直接改滚动容器的 scrollLeft/Top（不进 React 状态 ⇒ 不抖）；
+      // 位移超过 4px 就记一笔 `movedRef`，避免"拖完手一松就顺手选中了一张卡"。
+      var dragRef = React.useRef(null);
+      var scrollRef = React.useRef(null);
+      var movedRef = React.useRef(false);
+      function panStart(e) {
+        if (!scrollRef.current || (e && e.button !== undefined && e.button !== 0)) return;
+        dragRef.current = { x: e.clientX, y: e.clientY, sl: scrollRef.current.scrollLeft, st: scrollRef.current.scrollTop };
+        movedRef.current = false;
+        setPanning(true);
+      }
+      function panMove(e) {
+        var d = dragRef.current;
+        if (!d || !scrollRef.current) return;
+        var dx = e.clientX - d.x, dy = e.clientY - d.y;
+        if (Math.abs(dx) + Math.abs(dy) > 4) movedRef.current = true;
+        scrollRef.current.scrollLeft = d.sl - dx;
+        scrollRef.current.scrollTop = d.st - dy;
+      }
+      function panEnd() { dragRef.current = null; setPanning(false); }
+      function pick(id) { if (movedRef.current) return; setSel(id); setText(null); }
 
       if (err) {
         return h("div", { className: "dm-body" },
           h("div", { className: "dm-col" }, h("div", { className: "dm-warn" }, h("b", null, err))),
           h("div", { className: "dm-col" }));
       }
-      if (!data || !pos) {
+      if (!data || !laid) {
         return h("div", { className: "dm-body" },
           h("div", { className: "dm-col" }, h("div", { className: "dm-dim" }, "建图中…（要读全部正文，本机约几十毫秒）")),
           h("div", { className: "dm-col" }));
       }
 
-      var pick = function (id) { setSel(id); setText(null); };
+      var used = data.stats.byLayer || {};
       return h("div", { className: "dm-body" },
-        h(GraphCanvas, { data: data, pos: pos, sel: sel, hover: hover, onSel: pick, onHover: setHover }),
-        h(GraphSide, { data: data, sel: sel, onSel: pick, text: text, onText: setText }));
+        h("div", { className: "dm-col dm-col-graph" },
+          h("div", { className: "dm-tools" },
+            h("input", {
+              className: "dm-input", placeholder: "搜标题 / 路径…", value: q,
+              onChange: function (e) { setQ(e.target.value); },
+            }),
+            h("button", { className: "dm-btn" + (project ? "" : " on"), onClick: function () { setProject(""); } }, "全部"),
+            (data.projects || []).map(function (p) {
+              return h("button", {
+                key: p, className: "dm-btn" + (project === p ? " on" : ""),
+                title: "只看「" + p + "」的项目记忆（其余项目记忆离线，底座照常在场）",
+                onClick: function () { setProject(p); },
+              }, p);
+            }),
+            h("span", { style: { flex: "1 1 auto" } }),
+            h("button", { className: "dm-btn", onClick: function () { setZoom(function (z) { return Math.max(0.5, Number((z - 0.15).toFixed(2))); }); } }, "−"),
+            h("span", { className: "dm-dim", style: { fontSize: "11px", minWidth: "38px", textAlign: "center" } }, Math.round(zoom * 100) + "%"),
+            h("button", { className: "dm-btn", onClick: function () { setZoom(function (z) { return Math.min(2.5, Number((z + 0.15).toFixed(2))); }); } }, "＋"),
+            h("span", { className: "dm-stat" }, data.stats.nodes + " 点 · " + data.stats.edges + " 边" + (project ? " · 只看 " + project : ""))),
+          h(GraphCanvas, {
+            data: data, laid: laid, sel: sel, hover: hover, q: q, zoom: zoom,
+            panning: panning, onPick: pick, onHover: setHover,
+            scrollRef: scrollRef, onPanStart: panStart, onPanMove: panMove, onPanEnd: panEnd,
+          })),
+        sel ? h(GraphDetail, { data: data, sel: sel, onSel: pick, text: text, onText: setText })
+          : h(GraphSide, { data: data, onSel: pick }));
     }
 
     /** 图谱外壳：兜渲染期异常（在浏览器里表现为"整块空白"，最难事后定位）。 */
@@ -805,7 +948,8 @@ window.__ModuleLoader__.load({
       // 图谱的可单测面：布局是纯函数（同样的输入必须给出同样的坐标），
       // 组件面交给"真 status/graph JSON 渲染不抛"那条冒烟
       GraphView: GraphView, GraphBody: GraphBody, GraphSide: GraphSide, GraphCanvas: GraphCanvas,
-      computeGraphLayout: computeGraphLayout, LAYER_COLOR: LAYER_COLOR,
+      GraphDetail: GraphDetail, layoutGraph: layoutGraph, textWidth: textWidth,
+      FALLBACK_LAYERS: FALLBACK_LAYERS, nodeWidth: nodeWidth,
     };
     return module.exports;
   }

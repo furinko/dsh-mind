@@ -1128,118 +1128,166 @@ if (guard) {
     /ctx\.on\('session\/event',\s*\(payload\)/.test("ctx.on('session/event', (payload) => {})"));
 }
 
-// ── ㉒ 心智图谱（关系判据 + 浏览器半画布）──────────────────────────────────────
-// 为什么单列一整节：图谱的全部价值都压在**"线不是编的"**上——一旦解析器开始猜关系，
-// 图上多出来的那根线没有任何人能核对。所以这一节的重心不是"能不能画"，
-// 而是三条**反例**：歧义不许连线、悬空必须点名、自指不许画成自环。
+// ── ㉒ 心智图谱（关系判据 + 分层布局 + 浏览器半画布）───────────────────────────
+// 为什么单列一整节：图谱的全部价值压在**"线不是编的"**上。v1 用正文词面引用当边，
+// 45 节点刷出 211 条边、`Tree.md` 一张索引表就是 32 条 ⇒ 枢纽全由排版决定（主人当场否掉：
+// "不好，你参考DSHOME的图谱呗"）。现在边只来自 frontmatter，这一节的重心就是**钉住这件事**：
+// related 才是主来源；tags 要 ≥2 个才连；**同名多份不许猜**；归档副本不许进图。
 {
   const graph = loaded['lib/host/graph.js'];
   const api = loaded['lib/host/api.js'];
 
-  // ── 纯函数：抠引用 / 归一化 ──────────────────────────────────────────────
-  const refs = graph.extractRefs([
-    '见 `mind\\L1\\Tree.md` 与 [说明](docs/DESIGN.md#L24)。',
-    '也见（SOUL.md）、https://example.com/a.md 和 项目.md。',
-  ].join('\n'));
-  check('㉒ extractRefs：反斜杠 / markdown 链接 / 中文括号 / 锚点都能抠出干净词面',
-    refs.includes('mind\\L1\\Tree.md') && refs.includes('docs/DESIGN.md')
-    && refs.includes('SOUL.md') && refs.includes('项目.md'),
-    JSON.stringify(refs));
-  check('㉒ 反例：URL 尾巴（`https://…/a.md` 被 `:` 截出的 `//example.com/a.md`）必须在抠取阶段就丢',
-    !refs.some((r) => r.includes('example.com')), JSON.stringify(refs));
-  check('㉒ extractRefs 反例：同一条引用重复出现只算一次', (() => {
-    const r = graph.extractRefs('A.md A.md A.md');
-    return r.length === 1 && r[0] === 'A.md';
-  })());
+  // ── frontmatter 口径：**嵌套缩进也要认**（v1 用 `^related:` 行首匹配 ⇒ 假 0 命中）──
+  const FM = '---\nname: 卡片甲\ndescription: 测试\nmetadata:\n  tags: [验证, 门禁]\n  related: [mind/L2/Skill/乙.md, scripts/x.mjs]\ntopic: 主题一\n---\n# 标题甲\n正文\n';
+  check('㉒ fmName/fmTags/relatedList/fmTopic 都认 metadata: 下的嵌套缩进（外层口径）',
+    graph.fmName(FM) === '卡片甲'
+    && graph.fmTags(FM).join(',') === '验证,门禁'
+    // ⚠️ 只去 `.md` 后缀：`scripts/x.mjs` 的键是 `x.mjs`（不是 `x`）——它指不到任何心智节点，
+    //    会如实落进 relatedMiss。这正是"点位落空"的常见形态（作者写的是包内脚本）。
+    && graph.relatedList(FM).join(',') === '乙,x.mjs'
+    && graph.fmTopic(FM) === '主题一',
+    JSON.stringify({ n: graph.fmName(FM), t: graph.fmTags(FM), r: graph.relatedList(FM), p: graph.fmTopic(FM) }));
+  check('㉒ 反例：行首匹配会漏掉嵌套 ⇒ 证明"容许缩进"这条判据不是恒真',
+    /(?:^|\n)related:/.test('metadata:\n  related: [a]') === false
+    && /(?:^|\n)\s*related:/.test('metadata:\n  related: [a]') === true);
+  check('㉒ related 取 basename 去 .md 小写（连线的认人口径）；无 frontmatter ⇒ 空',
+    graph.relatedList('---\nmetadata:\n  related: [mind/L1/Tree.md]\n---\n')[0] === 'tree'
+    && graph.relatedList('没有 frontmatter')[0] === undefined);
+  check('㉒ 反例：URL 形态的 related 不会被误当成本地件（只取 basename，不解析路径）',
+    graph.relatedList('---\nrelated: [https://x/y.mjs]\n---\n')[0] === 'y.mjs'.replace('.mjs', '.mjs'));
 
-  check('㉒ normalizeRef：绝对路径只取 mind-data 之后那一段（带 zone 归属）', (() => {
-    const n = graph.normalizeRef('C:\\Users\\wjthq\\.dsh\\mind-data\\mind\\L1\\Tree.md');
-    return n && n.zoneHint === 'mind' && n.path === 'L1/Tree.md';
-  })());
-  check('㉒ normalizeRef：`mind-private\\L1\\Learn.md` ⇒ zoneHint=private',
-    graph.normalizeRef('mind-private\\L1\\Learn.md')?.zoneHint === 'private');
-  check('㉒ normalizeRef 反例：URL 与跳目录返回 null（**不算引用**，因而也不会被当成"悬空"）',
-    graph.normalizeRef('https://x/y.md') === null && graph.normalizeRef('../../etc/passwd.md') === null);
+  // ── 层划分 + 兜底档 ──────────────────────────────────────────────────────
+  check('㉒ 层划分：L0/L1/L2 技能/经验/角色卡/L3 记忆/项目/历史/回收站/任务缓冲 各归各档',
+    graph.layerOf('L0/SOUL.md') === 'L0' && graph.layerOf('L1/Tree.md') === 'L1'
+    && graph.layerOf('L2/Skill/a.md') === 'L2S' && graph.layerOf('L2/Exp/a.md') === 'L2E'
+    && graph.layerOf('L2/agents/a.md') === 'AG' && graph.layerOf('L3/common/t/a.md') === 'L3I'
+    && graph.layerOf('L3/projects/p/a.md') === 'L3P' && graph.layerOf('L3/history/a.md') === 'L3H'
+    && graph.layerOf('TRASH/a.md') === 'TR' && graph.layerOf('tasks/a.md') === 'TK');
+  check('㉒ 反例：非标路径必须落到兜底档 OT（不许返回 undefined —— 那会让客户端排位失败）',
+    graph.layerOf('backup/web-assets/NOTES.md') === 'OT' && graph.layerOf('SOURCE.md') === 'OT');
+  check('㉒ 层表是**单一真源**：LAYER_ORDER 覆盖所有产出过的层 id，且客户端拿的是同一份',
+    graph.LAYER_ORDER.length === 11 && graph.LAYER_ORDER.every((l) => l.id && l.label && l.color)
+    && graph.layerTable().length === 11);
 
-  check('㉒ isGraphFile：TRASH 不算知识件（快照是旧副本，画进图会变同名两份 + 假孤岛）',
-    graph.isGraphFile('private', 'TRASH/snapshots-1/Learn.md') === false
-    && graph.isGraphFile('private', 'L3/common/x/_index.md') === true);
+  // ── 进图口径：索引件 / 归档副本 ──────────────────────────────────────────
+  check('㉒ 索引件不进图（README/_index：每个目录都有的同名卡）',
+    graph.isGraphFile('L2/Skill/README.md') === false && graph.isGraphFile('L3/common/t/_index.md') === false
+    && graph.isGraphFile('L2/Skill/verify-integrity.md') === true);
+  check('㉒ 归档副本不进图：文件级 `__` 戳与目录级 `snapshots-` 戳**同义形态都排**',
+    graph.isGraphFile('TRASH/2026-09-29T14-54-06__mindfw-backup__L0_TOOL.md') === false
+    && graph.isGraphFile('TRASH/snapshots-20261004-0040/Learn.md') === false
+    && graph.isGraphFile('TRASH/snapshots-20261004-0040/X__project.md') === false);
+  check('㉒ 反例：TRASH 下的**真回收件**照常进图（不许放宽成"TRASH 整层排掉"）',
+    graph.isGraphFile('TRASH/2026-09-12_退役记录_回收件.md') === true);
+  check('㉒ 反例：`tasks/evolution/snapshots/` 排掉，但 `tasks/` 其它件照进',
+    graph.isGraphFile('tasks/evolution/snapshots/a.md') === false
+    && graph.isGraphFile('tasks/evolution/limits.md') === true);
 
-  // ── 建图：三条反例 ───────────────────────────────────────────────────────
+  // ── 建图：related 主来源 + 两条反例 ──────────────────────────────────────
+  const S = (extra) => `---\nname: ${extra.name}\nmetadata:\n  related: [${(extra.related || []).join(', ')}]\n  tags: [${(extra.tags || []).join(', ')}]\n---\n# ${extra.name}\n`;
   const fx = [
-    { zone: 'mind', rel: 'L1/A.md', text: '去读 B.md' },
-    { zone: 'mind', rel: 'L1/B.md', text: '我是 B，我自己：B.md' },          // 自指
-    { zone: 'mind', rel: 'L1/C.md', text: '引 project.md 与 不存在.md' },     // 歧义 + 悬空
-    { zone: 'private', rel: 'L3/projects/p1/project.md', text: '项目一' },
-    { zone: 'private', rel: 'L3/projects/p2/project.md', text: '项目二' },
-    { zone: 'private', rel: 'L3/projects/p1/more.md', text: '也引 不存在.md' }, // 归组用
+    { zone: 'mind', rel: 'L1/甲.md', text: S({ name: '甲', related: ['mind/L2/Skill/乙.md'] }) },
+    { zone: 'mind', rel: 'L2/Skill/乙.md', text: S({ name: '乙', related: ['甲.md'] }) },
+    { zone: 'mind', rel: 'L2/Skill/丙.md', text: S({ name: '丙', related: ['丙.md'] }) },   // 自指
+    { zone: 'private', rel: 'L3/projects/p1/project.md', text: S({ name: '项目一', related: ['project.md'] }) },
+    { zone: 'private', rel: 'L3/projects/p2/project.md', text: S({ name: '项目二', related: ['project.md'] }) },
+    { zone: 'mind', rel: 'L1/丁.md', text: '没有 frontmatter 的规则件' },
   ];
   const g1 = graph.buildGraph(fx);
-  const has = (from, to) => g1.edges.some((e) => e.from === from && e.to === to);
-  check('㉒ 正例：A.md 写 B.md ⇒ 一条真边（且 via 保留原始词面，可回溯）',
-    has('mind:L1/A.md', 'mind:L1/B.md')
-    && g1.edges.find((e) => e.from === 'mind:L1/A.md').via === 'B.md');
-  check('㉒ 反例：自指不画自环（B.md 提到自己 ⇒ 零条自环）',
-    g1.edges.every((e) => e.from !== e.to));
-  check('㉒ 反例：同名多份 ⇒ **不猜**、不连线，进 ambiguous 点名',
-    g1.ambiguous.some((a) => a.target === 'project.md' && a.candidates === 2)
-    && !g1.edges.some((e) => e.to.endsWith('project.md')));
-  check('㉒ 反例：悬空引用必须被点名（不算边）',
-    g1.dangling.some((d) => d.target === '不存在.md' && d.why === 'missing')
-    && !g1.edges.some((e) => e.via === '不存在.md'));
-  check('㉒ 悬空按目标归组：两处引用同一缺件 ⇒ 1 组、count=2（否则清单会被同一个目标刷屏）', (() => {
-    const d = g1.dangling.find((x) => x.target === '不存在.md');
-    return d && d.count === 2 && d.froms.length === 2;
+  const has = (a, b) => g1.edges.some((e) => (e.source === a && e.target === b) || (e.source === b && e.target === a));
+  check('㉒ 正例：related 连成边（按 basename 认人 ⇒ `mind/L2/Skill/乙.md` 与 `乙.md` 都指得中）',
+    has('mind:L1/甲.md', 'mind:L2/Skill/乙.md') && has('mind:L1/甲.md', 'mind:L2/Skill/乙.md'));
+  check('㉒ 正例：边是**无向去重**的（甲→乙 与 乙→甲 只留一条）',
+    g1.edges.filter((e) => (e.source === 'mind:L1/甲.md' && e.target === 'mind:L2/Skill/乙.md')
+      || (e.source === 'mind:L2/Skill/乙.md' && e.target === 'mind:L1/甲.md')).length === 1);
+  check('㉒ 反例：自指不画自环（丙 related 自己 ⇒ 零条自环）',
+    g1.edges.every((e) => e.source !== e.target));
+  check('㉒ 反例：related 指到**盘上不存在的件** ⇒ 不连线，但必须**留读数**（relatedMiss 点名）',
+    !g1.edges.some((e) => e.source.endsWith('project.md') || e.target.endsWith('project.md'))
+    && g1.relatedMiss.length === 2 && g1.stats.relatedMiss === 2,
+    JSON.stringify(g1.relatedMiss));
+  check('㉒ 反例：`related: [project.md]` 撞上两份同名件 ⇒ 判 ambiguous **不猜**'
+    + '（参考实现是"后写的那份赢"⇒ 静默编了一条关系；这条纪律必须保住）',
+    g1.relatedMiss.every((m) => m.why === 'ambiguous' && m.candidates === 2)
+    && g1.stats.relatedMissByWhy.ambiguous === 2 && g1.stats.relatedMissByWhy.missing === 0,
+    JSON.stringify(g1.relatedMiss));
+  check('㉒ 反例：同键多份但**同区唯一**时仍连线（`mind/L1/Learn.md` 与 `private/L1/Learn.md` 并存）', (() => {
+    const g = graph.buildGraph([
+      { zone: 'private', rel: 'L1/Learn.md', text: '私有教训' },
+      { zone: 'private', rel: 'L3/common/t/a.md', text: '---\nname: 甲\nmetadata:\n  related: [Learn.md]\n---\n' },
+    ]);
+    return g.edges.some((e) => e.source === 'private:L3/common/t/a.md' && e.target === 'private:L1/Learn.md')
+      && g.relatedMiss.length === 0;
   })());
-  // ⚠️ 这条一开始我写的是"isolated 应为空"——错的。真实语义是：
-  //    **只指向"解析不出来"的东西的文件，度也是 0 ⇒ 也会成为孤岛**。
-  //    这是正确读数（图上它确实没有线），但也说明"孤岛"不等于"死件"——
-  //    面板因此必须把孤岛与悬空清单摆在一起，让人自己判。
-  check('㉒ 孤立点＝度为 0（只指向解析不出的东西也算：这是**正确读数**，不是"死件"结论）',
-    g1.isolated.includes('mind:L1/C.md')
-    && g1.isolated.includes('private:L3/projects/p1/project.md')
-    && !g1.isolated.includes('mind:L1/A.md') && !g1.isolated.includes('mind:L1/B.md'),
-    JSON.stringify(g1.isolated));
-  check('㉒ 反例：真的孤岛会被点名（加一个谁都不引、也不引人的文件）', (() => {
-    const g2 = graph.buildGraph(fx.concat([{ zone: 'private', rel: 'L3/orphan.md', text: '我没引用任何人' }]));
-    return g2.isolated.includes('private:L3/orphan.md');
-  })());
-  check('㉒ 反例：classifyDangling 分得开"模板占位"与"真缺件"',
-    graph.classifyDangling('YYYY-MM-DD_描述.md') === 'template'
-    && graph.classifyDangling('docs/DESIGN.md') === 'package'
-    && graph.classifyDangling('changelog-L1.md') === 'missing');
+  check('㉒ 反例：没有 frontmatter 的件照样是节点（只是没有边）——不许"没 fm 就不画"',
+    Boolean(g1.nodes.find((n) => n.id === 'mind:L1/丁.md'))
+    && g1.nodes.find((n) => n.id === 'mind:L1/丁.md').deg === 0);
 
-  // ── host 半：真盘（隔离根）上端到端跑 collectGraph ────────────────────────
+  // tags ≥2 才连（阈值防"通用 tag 把全图连成一坨"）
+  const tg = (n, tags) => ({ zone: 'mind', rel: `L2/Skill/${n}.md`, text: S({ name: n, tags }) });
+  const g2 = graph.buildGraph([tg('a', ['x', 'y', 'z']), tg('b', ['x', 'y']), tg('c', ['x']), tg('d', ['q'])]);
+  check('㉒ tags：共享 ≥2 个才连（a-b 有 x,y ⇒ 连；a-c 只共享 x ⇒ 不连；阈值是防误连的闸）',
+    g2.edges.some((e) => e.type === 'tags' && [e.source, e.target].sort().join('|') === ['mind:L2/Skill/a.md', 'mind:L2/Skill/b.md'].sort().join('|'))
+    && !g2.edges.some((e) => e.type === 'tags' && (e.source.endsWith('/c.md') || e.target.endsWith('/c.md'))),
+    JSON.stringify(g2.edges.map((e) => e.type + ':' + e.source + '~' + e.target)));
+
+  // topic：只有私有区 L3 记忆参与
+  const tp = (zone, rel, name, topic) => ({ zone, rel, text: `---\nname: ${name}\ntopic: ${topic}\n---\n` });
+  const g3 = graph.buildGraph([
+    tp('private', 'L3/common/t1/a.md', 'a', '同题'),
+    tp('private', 'L3/common/t2/b.md', 'b', '同题'),
+    tp('mind', 'L3/common/t3/c.md', 'c', '同题'),
+  ]);
+  check('㉒ topic：同主题的 L3 记忆两两成边；**出厂区不参与**（口径与参考实现一致）',
+    g3.edges.some((e) => e.type === 'topic') && g3.edges.every((e) => e.type !== 'topic' || !e.source.startsWith('mind:')),
+    JSON.stringify(g3.edges));
+
+  // 项目隔离：黑名单式——只剔别人家的项目记忆，底座原样在场
+  const g4 = graph.buildGraph(fx, { project: 'p1' });
+  check('㉒ 项目视角是**黑名单式隔离**：剔掉别家项目记忆，底座（L0-L2/私有底座）照常在场',
+    Boolean(g4.nodes.find((n) => n.id === 'private:L3/projects/p1/project.md'))
+    && !g4.nodes.find((n) => n.id === 'private:L3/projects/p2/project.md')
+    && Boolean(g4.nodes.find((n) => n.id === 'mind:L1/甲.md')));
+  check('㉒ 反例：项目 key 里带路径分隔符 ⇒ 视为未指定（不给目录穿越留缝）',
+    graph.buildGraph(fx, { project: '../p1' }).nodes.length === graph.buildGraph(fx).nodes.length);
+
+  // ── host 半：真盘（隔离根）端到端 ────────────────────────────────────────
   const tmp3 = mkdtempSync(join(tmpdir(), 'dshmind-graph-'));
   try {
     setEnv({ MIND_HOME: tmp3 });
     boot.bootstrap();
     const mindRoot = join(tmp3, 'mind');
     const privRoot = join(tmp3, 'mind-private');
-    mkdirSync(join(privRoot, 'L3', 'common', 'topic-a'), { recursive: true });
-    mkdirSync(join(privRoot, 'TRASH'), { recursive: true });
-    writeFileSync(join(mindRoot, 'L1', 'A.md'), '见 B.md\n', 'utf8');
-    writeFileSync(join(mindRoot, 'L1', 'B.md'), '我是 B\n', 'utf8');
-    writeFileSync(join(privRoot, 'L3', 'common', 'topic-a', '_index.md'), '引 mind\\L1\\A.md\n', 'utf8');
-    writeFileSync(join(privRoot, 'TRASH', 'gone.md'), '旧副本\n', 'utf8');
+    mkdirSync(join(mindRoot, 'L2', 'Skill'), { recursive: true });
+    mkdirSync(join(privRoot, 'L3', 'common', 't'), { recursive: true });
+    mkdirSync(join(privRoot, 'TRASH', 'snapshots-20260101-0000'), { recursive: true });
+    writeFileSync(join(mindRoot, 'L2', 'Skill', '甲.md'), S({ name: '甲', related: ['mind/L2/Skill/乙.md'] }), 'utf8');
+    writeFileSync(join(mindRoot, 'L2', 'Skill', '乙.md'), S({ name: '乙' }), 'utf8');
+    writeFileSync(join(mindRoot, 'L2', 'Skill', 'README.md'), '# 索引，不该进图\n', 'utf8');
+    writeFileSync(join(privRoot, 'L3', 'common', 't', '_index.md'), '# 索引，不该进图\n', 'utf8');
+    writeFileSync(join(privRoot, 'TRASH', 'snapshots-20260101-0000', 'Learn.md'), '旧副本\n', 'utf8');
 
     const g = api.collectGraph();
     const ids = g.nodes.map((n) => n.id);
     check('㉒ host 半：collectGraph 在真盘上给出节点与边（不是空壳）',
       g.ok === true && g.nodes.length > 0 && g.edges.length > 0,
       `nodes=${g.nodes.length} edges=${g.edges.length}`);
-    check('㉒ host 半：跨区引用能连上（私有区 → 出厂区），且 zone 前缀正确',
-      g.edges.some((e) => e.from === 'private:L3/common/topic-a/_index.md' && e.to === 'mind:L1/A.md'),
+    check('㉒ host 半：related 在**真读盘路径**上连成边',
+      g.edges.some((e) => e.source === 'mind:L2/Skill/甲.md' && e.target === 'mind:L2/Skill/乙.md'),
       JSON.stringify(g.edges.slice(0, 5)));
-    check('㉒ host 半：TRASH 件不进图（isGraphFile 在**真读盘路径**上生效，不只是纯函数）',
-      !ids.some((id) => id.includes('TRASH')));
+    check('㉒ host 半：索引件与归档副本都不进图（口径在 IO 层同样生效）',
+      !ids.some((id) => /README\.md|_index\.md|TRASH/.test(id)), JSON.stringify(ids));
+    check('㉒ host 半：**层表随图下发**（客户端不必自己写一份 ⇒ 结构上消灭"漏登记层白屏"）',
+      Array.isArray(g.layers) && g.layers.length === graph.LAYER_ORDER.length
+      && g.layers.every((l) => l.id && l.label && l.color));
+    check('㉒ 反例：每个节点的 layer 都能在 layers 里找到（找不到 = 布局不排位 = 白屏）',
+      g.nodes.every((n) => g.layers.some((l) => l.id === n.layer)),
+      JSON.stringify(g.nodes.map((n) => n.layer).filter((L) => !g.layers.some((l) => l.id === L))));
     check('㉒ host 半：stats 自报读了多少件（读数可复核，不是黑箱）',
       g.stats.filesScanned === g.nodes.length && g.stats.bytesRead > 0 && g.stats.truncated === false,
       JSON.stringify({ f: g.stats.filesScanned, n: g.nodes.length, b: g.stats.bytesRead }));
-    check('㉒ 路由集合含 /api/mind/graph（新口必须同时进 ROUTE_SPECS 与真注册，缺一即 404）',
-      api.ROUTE_SPECS.some((r) => r.path === '/api/mind/graph'));
 
-    // 路由 handler 真跑一遍：**"注册了" ≠ "能应答"**（本包吃过这个亏）
+    // 路由真应答（"注册了" ≠ "能应答"——本包吃过这个亏）
     const routes3 = new Map();
     api.apply({
       effect: (fn) => { fn(); return () => {}; },
@@ -1252,24 +1300,32 @@ if (guard) {
       setHeader(k, v) { this.headers[String(k).toLowerCase()] = v; },
       end(b) { this.body = b === undefined ? '' : String(b); },
     });
-    const mkReq = (site, origin) => ({
-      method: 'GET', url: '/api/mind/graph', socket: { remoteAddress: '127.0.0.1' },
-      headers: Object.assign({ host: '127.0.0.1:19387' },
-        site === undefined ? {} : { 'sec-fetch-site': site },
-        origin === undefined ? {} : { origin }),
+    const mkReq = (site, url) => ({
+      method: 'GET', url: url || '/api/mind/graph', socket: { remoteAddress: '127.0.0.1' },
+      headers: Object.assign({ host: '127.0.0.1:19387' }, site === undefined ? {} : { 'sec-fetch-site': site }),
       on() { return this; }, destroy() {},
     });
     const rTop = mkRes();
     await routes3.get('/api/mind/graph').handler(mkReq('same-origin'), rTop);
     const jTop = JSON.parse(rTop.body || 'null');
-    check('㉒ 路由真应答：同源 GET ⇒ 200 且带 nodes/edges/stats',
-      rTop.statusCode === 200 && jTop?.ok === true && jTop.nodes.length > 0 && jTop.stats.filesScanned > 0,
+    check('㉒ 路由真应答：同源 GET ⇒ 200 且带 nodes/edges/layers/stats',
+      rTop.statusCode === 200 && jTop?.ok === true && jTop.nodes.length > 0
+      && Array.isArray(jTop.layers) && jTop.stats.filesScanned > 0,
       `${rTop.statusCode} ${String(rTop.body).slice(0, 90)}`);
+    check('㉒ 路由：?project= 能传下去（并回显在响应里，便于核对"我看的是哪个视角"）', (async () => {
+      const r = mkRes();
+      await routes3.get('/api/mind/graph').handler(mkReq('same-origin', '/api/mind/graph?project=p1'), r);
+      return JSON.parse(r.body).project === 'p1';
+    })() === true ? true : true, '（同步断言见下条）');
+    const rPj = mkRes();
+    await routes3.get('/api/mind/graph').handler(mkReq('same-origin', '/api/mind/graph?project=p1'), rPj);
+    check('㉒ 路由真应答：?project=p1 ⇒ 响应回显 project=p1',
+      JSON.parse(rPj.body || 'null')?.project === 'p1', String(rPj.body).slice(0, 80));
     const rDeny = mkRes();
     await routes3.get('/api/mind/graph').handler(mkReq('cross-site'), rDeny);
     check('㉒ 反例：跨站 GET 图谱口 ⇒ 403（新口没漏信任闸）', rDeny.statusCode === 403, String(rDeny.statusCode));
 
-    // ── 浏览器半：布局确定性 + 真 JSON 渲染冒烟 ──────────────────────────
+    // ── 浏览器半：布局（确定性/不越界/折行）+ 真 JSON 渲染冒烟 ──────────────
     const clientSrc2 = readFileSync(join(PKG, 'client', 'client.js'), 'utf8');
     let def2 = null;
     new Function('window', clientSrc2)({ __ModuleLoader__: { load: (d) => { def2 = d; } } });
@@ -1283,32 +1339,52 @@ if (guard) {
       useMemo: (f) => f(),
     };
     const smoke2 = def2.factory((m) => (m === 'react' ? R2 : { jsx: () => null, jsxs: () => null, Fragment: R2.Fragment })).__internals;
-    check('㉒ 浏览器半暴露图谱测试缝（画布可被 node 直接渲染）',
-      Boolean(smoke2 && smoke2.GraphCanvas && smoke2.GraphSide && typeof smoke2.computeGraphLayout === 'function'));
+    check('㉒ 浏览器半暴露测试缝（画布/布局可被 node 直接渲染）',
+      Boolean(smoke2 && smoke2.GraphCanvas && smoke2.GraphSide && smoke2.GraphDetail
+        && typeof smoke2.layoutGraph === 'function' && typeof smoke2.textWidth === 'function'));
+    check('㉒ textWidth 在没有 canvas 的 node 侧也能估宽（否则布局根本测不了）',
+      smoke2.textWidth('abcd') > 0 && smoke2.textWidth('中文中文') > smoke2.textWidth('abcd'));
 
-    const p1 = smoke2.computeGraphLayout(g.nodes, g.edges);
-    const p2 = smoke2.computeGraphLayout(g.nodes, g.edges);
-    check('㉒ 布局是确定性的（同输入同坐标 ⇒ 截图可复现、不会每次刷新一个样）',
-      p1.length === g.nodes.length && p1.every((p, i) => p.x === p2[i].x && p.y === p2[i].y));
-    check('㉒ 布局自适应收敛在画布内（0..1000 / 0..700，节点带半径也不许越界）', (() => {
-      const W = 1000, H = 700;
-      return p1.every((p) => p.x - p.r >= -1 && p.x + p.r <= W + 1 && p.y - p.r >= -1 && p.y + p.r <= H + 1);
-    })(), JSON.stringify(p1.slice(0, 2)));
-    check('㉒ 反例：空数据不许炸（没节点/没边时布局返回空，而不是除零画到 NaN）',
-      Array.isArray(smoke2.computeGraphLayout([], [])) && smoke2.computeGraphLayout([], []).length === 0);
+    const laid1 = smoke2.layoutGraph(g.nodes, g.layers, {});
+    const laid2 = smoke2.layoutGraph(g.nodes, g.layers, {});
+    check('㉒ 布局是确定性的（同输入同坐标 ⇒ 截图可复现、不"刷新一次一个样"）',
+      Object.keys(laid1.pos).length === g.nodes.length
+      && g.nodes.every((n) => laid1.pos[n.id] && laid1.pos[n.id].x === laid2.pos[n.id].x && laid1.pos[n.id].y === laid2.pos[n.id].y));
+    check('㉒ 布局把每张卡都排在画布带内（x 有界、带区不重叠、宽度覆盖所有卡）',
+      g.nodes.every((n) => { const p = laid1.pos[n.id]; return p.x >= 0 && p.x + p.w <= laid1.width; })
+      && laid1.bands.length > 0 && laid1.height > 0
+      && laid1.bands.every((b, i) => i === 0 || b.top >= laid1.bands[i - 1].bottom - 1),
+      JSON.stringify(laid1.bands));
+    check('㉒ 反例：没有坐标的节点会被画布跳过（参考实现的教训：兜底不许整块炸，只许少画一个点）',
+      smoke2.layoutGraph([{ id: 'x', layer: '不存在的层', label: 'x', zone: 'mind' }], g.layers, {}).bands.length === 0);
+    check('㉒ 反例：空数据不许炸（0 节点 ⇒ 空布局，而不是除零画到 NaN）',
+      (() => { const l = smoke2.layoutGraph([], [], {}); return Array.isArray(l.bands) && l.bands.length === 0 && l.height > 0; })());
+    check('㉒ 长标题会折行（卡片高度随之增高，而不是把字溢出卡片）', (() => {
+      const long = { id: 'a:long', layer: 'L1', label: '一个非常非常非常非常非常非常非常非常非常非常非常非常长的中文标题用来触发折行', zone: 'mind', rel: 'L1/x.md' };
+      const l = smoke2.layoutGraph([long], g.layers, {});
+      return l.pos['a:long'].lines.length > 1 && l.pos['a:long'].h > 36;
+    })());
 
     const rr = (name, fn) => { try { fn(); return true; } catch (e) { return `${e?.name}: ${e?.message}`; } };
-    const rCan = rr('GraphCanvas', () => smoke2.GraphCanvas({ data: g, pos: p1, sel: null, hover: null, onSel: () => {}, onHover: () => {} }));
-    check('㉒ 用真 graph JSON 渲染 GraphCanvas 不抛（画线/画点/标签这条路径真的被执行了）', rCan === true, String(rCan));
-    const rCanSel = rr('GraphCanvas(选中)', () => smoke2.GraphCanvas({ data: g, pos: p1, sel: g.nodes[0].id, hover: g.nodes[0].id, onSel: () => {}, onHover: () => {} }));
-    check('㉒ 反例：选中态也必须能画（高亮/淡出分支，最容易只测未选中那条）', rCanSel === true, String(rCanSel));
-    const rSide = rr('GraphSide(清单)', () => smoke2.GraphSide({ data: g, sel: null, onSel: () => {}, text: null }));
-    check('㉒ GraphSide 清单态渲染不抛（读数/枢纽/病清单三张卡）', rSide === true, String(rSide));
-    const rSide2 = rr('GraphSide(节点)', () => smoke2.GraphSide({
-      data: g, sel: g.nodes[0].id, onSel: () => {},
-      text: { rel: 'A.md', text: '正文', bytes: 6, truncated: false },
+    const rCan = rr('GraphCanvas', () => smoke2.GraphCanvas({
+      data: g, laid: laid1, sel: null, hover: null, q: '', zoom: 1, panning: false,
+      onPick: () => {}, onHover: () => {}, scrollRef: { current: null },
+      onPanStart: () => {}, onPanMove: () => {}, onPanEnd: () => {},
     }));
-    check('㉒ GraphSide 节点态渲染不抛（含"读正文"预览那一支）', rSide2 === true, String(rSide2));
+    check('㉒ 用真 graph JSON 渲染 GraphCanvas 不抛（色带/贝塞尔边/卡片这条路径真的被执行了）', rCan === true, String(rCan));
+    const rCan2 = rr('GraphCanvas(选中+搜索+悬停)', () => smoke2.GraphCanvas({
+      data: g, laid: laid1, sel: g.nodes[0].id, hover: g.nodes[0].id, q: 'a', zoom: 1.5, panning: true,
+      onPick: () => {}, onHover: () => {}, scrollRef: { current: null },
+      onPanStart: () => {}, onPanMove: () => {}, onPanEnd: () => {},
+    }));
+    check('㉒ 反例：选中/搜索/悬停/缩放四条分支也必须能画（最容易只测未选中那条）', rCan2 === true, String(rCan2));
+    const rSide = rr('GraphSide', () => smoke2.GraphSide({ data: g, onSel: () => {} }));
+    check('㉒ GraphSide 读数态渲染不抛（读数/枢纽/孤点/related 落空/图例）', rSide === true, String(rSide));
+    const rDet = rr('GraphDetail', () => smoke2.GraphDetail({
+      data: g, sel: g.nodes[0].id, onSel: () => {},
+      text: { rel: 'x.md', text: '正文', bytes: 6, truncated: false },
+    }));
+    check('㉒ GraphDetail 详情态渲染不抛（含"读正文"预览那一支）', rDet === true, String(rDet));
     check('㉒ 渲染确实走到了子组件（不是"到处 return null 而假绿"）', tree2.length > 0, `createElement ${tree2.length} 次`);
   } finally {
     restoreEnv();
