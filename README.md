@@ -178,12 +178,18 @@ curl "http://127.0.0.1:19387/api/mind/graph?project=<项目key>"   # 只看该�
 > `tags` 与 `topic` 边为 0：本机只有 18/38 张卡带 frontmatter，且 L3 记忆文件没有 `topic`。
 > ⇒ **想让图更密，靠的是给文件补 `related`**（这正是参考实现记的"图谱边稀疏"那条债）。
 
+> **怎么核"它真的画出来了"（不必盯屏幕）**：打开图谱后，`/api/mind/status` 的
+> `clientBeacons.graph` 会带上**几何真值**——
+> `bands=8 cards=38 edges=45 w=1240 h=1114 card0=<首张卡名> :: <各色带标题>`。
+> `cards` 必须等于 `nodes`（不等 ⇒ 有层的 id 没被登记、布局没给它排位）；`h` 不许是 0（塌了）。
+> 这一格治的是"渲染成功、但布局是坏的"——那种形态以前只能靠人眼发现。
+
 ---
 
 ## 自检
 
 ```bash
-node test/selftest.mjs                            # 276 项（含反例；前端配套在 ⑳、签名防回退在 ㉑、图谱在 ㉒）
+node test/selftest.mjs                            # 277 项（含反例；前端配套在 ⑳、签名防回退在 ㉑、图谱在 ㉒）
 node test/pre-step-waterfall.mjs                  # 28 项注入形态契约（自动找客户端，见下）
 node scripts/verify-dsh-mind-install.mjs <profileDir>   # 21 项真装验收
 ```
