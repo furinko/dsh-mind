@@ -38,21 +38,18 @@ window.__ModuleLoader__.load({
 
     // ── 样式（注入一次；颜色全走官方 CSS 变量，跟随主题/暗色）─────────────────
     var CSS_ID = "dsh-mind/panel.css";
-    function ensureStyle() {
-      if (typeof document === "undefined") return;
-      if (document.querySelector('style[data-plugin-css="' + CSS_ID + '"]')) return;
-      var tag = document.createElement("style");
-      tag.dataset.plugin = "dsh-mind";
-      tag.dataset.pluginCss = CSS_ID;
-      tag.textContent = [
+    var CSS = [
         ".dm-root{flex:1 1 0;box-sizing:border-box;width:100%;min-height:0;display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:var(--dsw-alias-label-primary)}",
+        // 官方浮层钩子命中时（见 MindPanel 的 data-conversation-composer-overlay）：输入框变成绝对
+        // 定位浮层，其高度由上游写在滚动区变量上 ⇒ 面板底部让出这一段，内容才不被盖住。
+        "[data-conversation-scroll]:has([data-conversation-composer-overlay]) .dm-root{padding-bottom:var(--dsh-composer-height,152px)}",
         ".dm-head{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;flex-wrap:wrap}",
         ".dm-title{font-size:14px;font-weight:700;display:inline-flex;align-items:center;gap:6px}",
         ".dm-stat{font-size:11.5px;color:var(--dsw-alias-label-tertiary);margin-left:auto;white-space:nowrap}",
         ".dm-btn{box-sizing:border-box;height:26px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}",
         ".dm-btn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}",
         ".dm-btn.on{background:var(--dsw-alias-brand-primary,#4D6BFE);border-color:transparent;color:#fff}",
-        ".dm-body{flex:1;min-height:0;display:flex;overflow:hidden;align-items:stretch}",
+        ".dm-body{flex:1;min-height:0;display:flex;overflow:hidden;align-items:stretch;position:relative}",
         ".dm-col{flex:1 1 0;min-width:0;overflow-y:auto;padding:12px 14px 24px}",
         ".dm-col+.dm-col{border-left:1px solid var(--dsw-alias-border-l1);flex:0 1 340px}",
         ".dm-card{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--dsw-alias-bg-layer-2,transparent)}",
@@ -79,15 +76,18 @@ window.__ModuleLoader__.load({
         ".dm-dot{width:8px;height:8px;border-radius:99px;flex:none;background:var(--dsw-alias-state-success-primary,#1e9e73)}",
         ".dm-dot.off{background:var(--dsw-alias-label-tertiary)}",
         ".dm-badge{margin-left:auto;font-size:10.5px;padding:0 6px;border-radius:99px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}",
-        ".dm-mode{display:flex;gap:4px;margin-left:2px}",
-        ".dm-mode .dm-btn{height:24px;padding:0 9px;font-size:11.5px}",
+        ".dm-mode{display:inline-flex;gap:2px;margin-left:2px;background:var(--dsw-alias-border-l1);border-radius:9px;padding:2px}",
+        ".dm-mode .dm-btn{height:24px;padding:0 11px;font-size:11.5px;font-weight:600;border:none;background:transparent;border-radius:7px;color:var(--dsw-alias-label-tertiary)}",
+        ".dm-mode .dm-btn.on{background:var(--dsw-alias-bg-layer-2,#fff);color:var(--dsw-alias-brand-primary,#4D6BFE);box-shadow:0 1px 3px rgba(0,0,0,.1)}",
         ".dm-col-graph{padding:8px;overflow:hidden;display:flex;flex-direction:column;min-height:360px}",
         ".dm-tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:0 2px 8px;flex:none}",
         ".dm-input{box-sizing:border-box;height:24px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;width:168px}",
-        ".dm-graph-scroll{flex:1 1 0;min-height:0;overflow:auto;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-2,transparent)}",
+        ".dm-input:focus{outline:none;border-color:var(--dsw-alias-brand-primary,#4D6BFE);box-shadow:0 0 0 3px rgba(77,107,254,.14)}",
+        ".dm-graph-scroll{flex:1 1 0;min-height:0;overflow:auto;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-2,transparent);cursor:grab}",
+        ".dm-graph-scroll.panning{cursor:grabbing;user-select:none}",
         ".dm-graph{display:block;touch-action:none}",
-        ".dm-legend{display:flex;gap:9px;align-items:center;font-size:10.5px;color:var(--dsw-alias-label-tertiary);background:var(--dsw-alias-bg-layer-2,rgba(255,255,255,.72));border:1px solid var(--dsw-alias-border-l1);padding:3px 8px;border-radius:8px;flex-wrap:wrap;margin-top:8px}",
-        ".dm-sw{display:inline-block;width:7px;height:7px;border-radius:99px;margin-right:4px;vertical-align:middle}",
+        ".dm-legend{display:flex;gap:9px;align-items:center;font-size:10.5px;color:var(--dsw-alias-label-tertiary);background:var(--dsw-alias-bg-layer-2,rgba(255,255,255,.72));border:1px solid var(--dsw-alias-border-l1);padding:3px 8px;border-radius:8px;flex-wrap:wrap;margin-top:0}",
+        ".dm-sw{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px}",
         ".dm-dise{display:flex;gap:6px;align-items:baseline;padding:3px 0;font-size:11.5px;line-height:17px;border-bottom:1px dashed var(--dsw-alias-border-l1)}",
         ".dm-dise:last-child{border-bottom:none}",
         ".dm-dise-k{flex:1 1 auto;min-width:0;word-break:break-all;font-family:Consolas,'Cascadia Mono',monospace}",
@@ -96,10 +96,63 @@ window.__ModuleLoader__.load({
         ".dm-why.missing{border-color:var(--dsw-alias-state-error-primary,#d9483b);color:var(--dsw-alias-state-error-primary,#d9483b)}",
         ".dm-nbr{display:block;width:100%;text-align:left;border:none;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:11.5px;line-height:18px;padding:1px 4px;border-radius:5px;cursor:pointer;word-break:break-all}",
         ".dm-nbr:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}",
+        // 项目切换（对齐参考实现）：项目多时行内横向滚动，不挤搜索框/图例/缩放
+        ".dm-pj{display:inline-flex;align-items:center;gap:4px;flex:0 1 auto;min-width:0;max-width:38%;overflow-x:auto;white-space:nowrap;scrollbar-width:thin}",
+        ".dm-pj::-webkit-scrollbar{height:5px}",
+        ".dm-pj::-webkit-scrollbar-thumb{background:rgba(0,0,0,.16);border-radius:3px}",
+        ".dm-pj::-webkit-scrollbar-track{background:transparent}",
+        ".dm-pj-lab{font-size:10.5px;color:var(--dsw-alias-label-tertiary);margin-right:2px;flex:none}",
+        ".dm-pj button{border:1px solid transparent;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:11.5px;font-weight:600;padding:4px 10px;height:auto;border-radius:99px;cursor:pointer;white-space:nowrap}",
+        ".dm-pj button:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-brand-primary,#4D6BFE)}",
+        ".dm-pj button.on{background:var(--dsw-alias-brand-primary,#4D6BFE);color:#fff;box-shadow:0 1px 3px rgba(0,0,0,.18)}",
+        // 详情浮层（对齐参考实现：浮在图上、不占右列；标题 sticky，✕ 关闭）
+        ".dm-detail{position:absolute;top:10px;right:10px;bottom:10px;width:380px;max-width:min(380px,70%);overflow-y:auto;overflow-x:hidden;border:1px solid var(--dsw-alias-border-l1);border-radius:12px;padding:12px 16px 18px;background:var(--dsw-alias-bg-layer-1,#fbfcfe);box-sizing:border-box;box-shadow:0 6px 24px rgba(0,0,0,.16);z-index:20}",
+        ".dm-detail-head{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;word-break:break-all;position:sticky;top:-12px;z-index:2;background:var(--dsw-alias-bg-layer-1,#fbfcfe);padding:12px 16px 8px;margin:0 -16px 8px}",
+        ".dm-detail-close{margin-left:auto;border:none;background:none;color:var(--dsw-alias-label-tertiary);cursor:pointer;font:inherit;font-size:15px;padding:2px 6px;border-radius:6px;flex:none}",
+        ".dm-detail-close:hover{background:var(--dsw-alias-interactive-bg-hover)}",
+        // frontmatter chips（照参考实现：字段 / 标签 / 关联三种底色分开）
+        ".dm-chips{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}",
+        ".dm-chip{padding:2px 7px;border-radius:99px;font-size:10.5px;background:var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary)}",
+        ".dm-chip-tag{padding:2px 7px;border-radius:99px;font-size:10.5px;background:rgba(77,107,254,.1);color:var(--dsw-alias-brand-primary,#4D6BFE)}",
+        ".dm-chip-link{padding:2px 7px;border-radius:99px;font-size:10.5px;background:rgba(47,191,143,.12);color:#1e9e73}",
+        // 图例改挂工具条：窄屏整块收起（只解释颜色；悬停卡片仍有全路径可查）
+        "@media (max-width:1400px){.dm-legend{display:none!important}}",
         "@media (max-width:1100px){.dm-body{flex-direction:column;overflow:auto}.dm-col{overflow:visible}.dm-col-graph{overflow:visible;min-height:46vh}.dm-col+.dm-col{border-left:none;border-top:1px solid var(--dsw-alias-border-l1);flex:1 1 auto}.dm-list{max-height:32vh}}"
       ].join("");
+
+    function ensureStyle0() {
+      if (typeof document === "undefined") return;
+      if (document.querySelector('style[data-plugin-css="' + CSS_ID + '"]')) return;
+      var tag = document.createElement("style");
+      tag.dataset.plugin = "dsh-mind";
+      tag.dataset.pluginCss = CSS_ID;
+      tag.textContent = CSS;
       document.head.appendChild(tag);
     }
+
+    // ── 样式**常驻守卫**（对齐参考实现，2026-10-05）─────────────────────────────
+    // 病史：注入此前只在 apply / 渲染那一刻跑一次；此后若 <style> 被别人删掉或整批替换
+    // （上游重挂界面、别的插件清 head），**没人再补** ⇒ 面板退回裸样式（外观 + 布局一起掉），
+    // 只有刷新才恢复。现在：head 一有变动就查一次，缺了就补。守卫自身只挂一份。
+    function guardStyle() {
+      try {
+        if (typeof window === "undefined" || typeof document === "undefined") return;
+        var G = window.__dshMindStyleGuard || (window.__dshMindStyleGuard = {});
+        if (G.on) return;
+        G.on = true;
+        var check = function () {
+          try { ensureStyle0(); } catch (e) { /* 补写失败不阻断插件本身 */ }
+        };
+        if (typeof MutationObserver === "function" && document.head) {
+          new MutationObserver(check).observe(document.head, { childList: true });
+        }
+        window.addEventListener("focus", check);
+        document.addEventListener("visibilitychange", check);
+      } catch (e) { /* 守卫失败不阻断插件本身 */ }
+    }
+
+    /** 幂等入口：样式在位 + 守卫挂起（守卫内部同样会补写）。 */
+    function ensureStyle() { ensureStyle0(); guardStyle(); }
 
     // ── 取数（三个口子；失败一律降级成"读不到"，不编数字）───────────────────
     function getJSON(url) {
@@ -155,6 +208,99 @@ window.__ModuleLoader__.load({
         children);
     }
 
+    /**
+     * 视图高度锁（对齐参考实现的 `fitViewport`，2026-10-05）。
+     * 为什么需要：chat 视图"整页滚"是官方模式，面板不是——面板必须锁进会话滚动区的**可视高度**。
+     * 首选官方钩子（MindPanel 根挂 `data-conversation-composer-overlay`：上游随即把 viewArea 锁成
+     * `flex:1 1 0 / overflow:hidden`、输入框改绝对定位浮层）；钩子没命中时才写兜底内联值。
+     * ⚠️ 兜底写 `flex`（= flex-basis）而不是 `height`：主轴上 flex-basis 压过 height，
+     *    写 height 从未生效（参考实现的历史坑）。
+     */
+    function useFitViewport(ref) {
+      React.useEffect(function () {
+        var host = ref && ref.current;
+        if (!host || typeof window === "undefined") return undefined;
+        function findScroller() {
+          var direct = host.closest ? host.closest("[data-conversation-scroll]") : null;
+          if (direct) return direct;
+          var best = null, up = host.parentElement;
+          while (up && up !== document.body) {
+            var ov = getComputedStyle(up).overflowY;
+            if ((ov === "auto" || ov === "scroll") && up.clientHeight > 0 && up.clientHeight <= window.innerHeight + 2) {
+              if (!best || up.clientHeight < best.clientHeight) best = up;
+            }
+            up = up.parentElement;
+          }
+          return best;
+        }
+        // 钩子是否真命中：viewArea（root 的祖先）被上游锁成 overflow:hidden 即生效
+        function overlayEngaged() {
+          var anchor = host.parentElement;
+          var viewArea = anchor && anchor.parentElement;
+          return Boolean(viewArea) && getComputedStyle(viewArea).overflowY === "hidden";
+        }
+        var lastSb = null;
+        var ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(apply) : null;
+        function apply() {
+          try {
+            var sb = findScroller();
+            if (sb && overlayEngaged()) { host.style.flex = ""; host.style.height = ""; return; }
+            if (sb) {
+              var seat = sb.querySelector("[data-composer-seat]");
+              var seatH = seat ? seat.offsetHeight : 0;      // 输入框在滚动流里 ⇒ 必须让出这段
+              host.style.flex = "0 0 " + Math.max(320, sb.clientHeight - seatH - 16) + "px";
+              host.style.height = "";
+              if (lastSb !== sb) { lastSb = sb; if (ro) { try { ro.observe(sb); ro.observe(seat); } catch (e) {} } }
+            } else {
+              host.style.flex = "0 0 " + Math.max(380, (window.innerHeight || 900) - 260) + "px";
+              host.style.height = "";
+            }
+          } catch (e) { /* 量不到就不写，交给 CSS */ }
+        }
+        apply();
+        var t1 = setTimeout(apply, 120), t2 = setTimeout(apply, 500);   // 初次测量可能早于会话区排版
+        var sessionRoot = host.closest ? host.closest("[data-phase]") : null;
+        if (ro && sessionRoot) { try { ro.observe(sessionRoot); } catch (e) {} }
+        window.addEventListener("resize", apply);
+        return function () {
+          clearTimeout(t1); clearTimeout(t2);
+          if (ro) ro.disconnect();
+          window.removeEventListener("resize", apply);
+        };
+      }, []);
+    }
+
+    /** frontmatter 轻解析（详情 chips 用；照参考实现的口径，只取展示型字段）。 */
+    function parseFrontmatter(text) {
+      var meta = {};
+      var m = /^---\n([\s\S]*?)\n---/.exec(String(text || ""));
+      if (!m) return meta;
+      m[1].split("\n").forEach(function (line) {
+        var i = line.indexOf(":");
+        if (i <= 0) return;
+        var k = line.slice(0, i).trim();
+        var v = line.slice(i + 1).trim().replace(/^['"]|['"]$/g, "").slice(0, 120);
+        if (k === "name" || k === "version" || k === "author" || k === "license" || k === "description") meta[k] = v;
+      });
+      var tags = /^[ \t]*tags:\s*\[([^\]]*)\]/m.exec(m[1]);
+      if (tags) meta.tags = tags[1].split(",").map(function (t) { return t.trim().replace(/['"\[\]]/g, ""); }).filter(Boolean);
+      var related = /^[ \t]*related:\s*\[([^\]]*)\]/m.exec(m[1]);
+      if (related) meta.related = related[1].split(",").map(function (t) { return t.trim().replace(/['"\[\]]/g, ""); }).filter(Boolean);
+      return meta;
+    }
+
+    /** 详情头部 chips：字段 / #标签 / 🔗关联 三种底色分开（对齐参考实现）。 */
+    function MetaChips(text) {
+      var meta = parseFrontmatter(text);
+      var out = [];
+      ["name", "version", "author", "license", "description"].forEach(function (k) {
+        if (meta[k]) out.push(h("span", { className: "dm-chip", key: k }, k + ": " + meta[k]));
+      });
+      (meta.tags || []).forEach(function (t, i) { out.push(h("span", { className: "dm-chip-tag", key: "t" + i }, "#" + t)); });
+      (meta.related || []).forEach(function (t, i) { out.push(h("span", { className: "dm-chip-link", key: "r" + i }, "🔗 " + t)); });
+      return out.length ? h("div", { className: "dm-chips" }, out) : null;
+    }
+
     /** 状态拉取 + 轮询（面板打开时 15s 一次；关掉即停）。 */
     function useStatus() {
       var st = React.useState(null);
@@ -188,13 +334,18 @@ window.__ModuleLoader__.load({
       return boot;
     }
 
-    /** 接入开关（当前会话）。取不到 sessionId ⇒ 明说"识别不到会话"，不假装能切。 */
-    function ConnectSwitch(props) {
+    /**
+     * 接入开关（**会话输入区**，对齐参考实现：挂 `conversation.input.left`＝权限选择器右边）。
+     * 为什么从面板头部挪走：开关是"本会话"级动作，贴着输入框才每次对话都够得着；
+     * 面板头部那格留给视图自身的操作（图谱/数字、刷新）。
+     * 取不到 sessionId ⇒ 禁用并明说，不假装能切。
+     */
+    function InputConnect(props) {
       var sessionId = props && props.sessionId;
       var st = React.useState(null);
       var state = st[0], setState = st[1];
-      var busySt = React.useState(false);
-      var busy = busySt[0], setBusy = busySt[1];
+      var bs = React.useState(false);
+      var busy = bs[0], setBusy = bs[1];
       React.useEffect(function () {
         if (!sessionId) return undefined;
         var alive = true;
@@ -202,27 +353,56 @@ window.__ModuleLoader__.load({
           .then(function (d) { if (alive && d && d.ok) setState(d); });
         return function () { alive = false; };
       }, [sessionId]);
-      if (!sessionId) {
-        return h("span", { className: "dm-dim", title: "本视图没拿到会话 id" }, "会话未识别");
-      }
       var on = !state || state.enabled !== false;
-      var label = on ? "已接入心智" : "已关闭心智";
+      var usable = Boolean(sessionId) && !busy;
       function toggle() {
-        if (busy) return;
+        if (!usable) return;
         setBusy(true);
         postJSON("/api/mind/connect", { session: sessionId, enabled: !on })
           .then(function (d) { if (d && d.ok) setState(d); })
           .then(function () { setBusy(false); });
       }
-      return h("button", {
-        className: "dm-btn" + (on ? " on" : ""),
-        onClick: toggle,
-        disabled: busy,
-        title: on ? "点按＝本会话不再注入宪法/召回/护栏" : "点按＝本会话重新接入心智"
-      }, label);
+      var W = 34, H = 20, K = 16, PAD = 2;
+      // ⚠️ onClick 只挂在按钮上（外层 div 不挂）：两层都挂会让一次点按翻转两次
+      return h("div", {
+        className: "dm-connect",
+        "data-mind-connect": on ? "on" : "off",
+        title: !sessionId ? "本会话没拿到会话 id，开关不可用"
+          : (on ? "已接入心智 · 点按＝本会话不再注入宪法/召回/护栏"
+                : "未接入心智 · 点按＝本会话重新接入心智"),
+        style: {
+          display: "inline-flex", alignItems: "center", gap: "6px", height: "28px",
+          padding: "0 6px", borderRadius: "8px", boxSizing: "border-box",
+          cursor: usable ? "pointer" : "default", opacity: usable ? 1 : 0.6, userSelect: "none",
+        },
+      },
+        h("button", {
+          type: "button", role: "switch", "aria-checked": on, "aria-label": "接入心智",
+          disabled: !usable, onClick: toggle,
+          style: {
+            position: "relative", boxSizing: "border-box", width: W + "px", height: H + "px",
+            padding: 0, border: "none", borderRadius: "999px", flex: "none",
+            background: on ? "var(--dsw-alias-brand-primary,#4D6BFE)" : "var(--dsw-alias-border-l2,rgba(127,127,127,.22))",
+            cursor: "inherit", transition: "background 150ms ease",
+          },
+        }, h("span", {
+          style: {
+            position: "absolute", top: PAD + "px", left: (on ? W - K - PAD : PAD) + "px",
+            width: K + "px", height: K + "px", borderRadius: "999px", boxSizing: "border-box",
+            background: on ? "#fff" : "var(--dsw-alias-label-tertiary,#9aa0a6)",
+            boxShadow: "0 1px 2px rgba(0,0,0,.28)", transition: "left 150ms ease",
+          },
+        })),
+        h("span", {
+          style: {
+            fontSize: "11px", lineHeight: "20px", whiteSpace: "nowrap", flex: "none",
+            color: on ? "var(--dsw-alias-label-primary)" : "var(--dsw-alias-label-tertiary)",
+            transition: "color 150ms ease",
+          },
+        }, "心智"));
     }
 
-    /** 顶部：标题 + **图谱/数字**切换 + 开关 + 刷新 + 数据根。 */
+    /** 顶部：标题 + **图谱/数字**切换 + 刷新 + 更新时刻。 */
     function Header(props) {
       var s = props.status;
       return h("div", { className: "dm-head" },
@@ -238,7 +418,6 @@ window.__ModuleLoader__.load({
             onClick: function () { if (props.onMode) props.onMode("facts"); },
             title: "读数面板：固件/记忆/项目/插件运行读数 + 文件浏览",
           }, "数字")),
-        h(ConnectSwitch, { sessionId: props.sessionId }),
         h("button", { className: "dm-btn", onClick: props.onRefresh }, "刷新"),
         h("span", { className: "dm-stat" },
           s ? ("更新 " + fmtTime(s.at) + " · 关闭中的会话 " + s.connect.offCount) : "读取中…"));
@@ -604,11 +783,18 @@ window.__ModuleLoader__.load({
         if (!p) return null;                             // 层表漏登记时的兜底（参考实现的教训）
         var priv = n.zone === "private";
         var isSel = sel === n.id;
+        var isHover = hover === n.id;
         var on = hit(n);
         return h("g", {
           key: n.id,
+          "data-node": "1",                                  // 空白判定的唯一例外标记（见 GraphBody.onBackground）
           transform: "translate(" + p.x + "," + p.y + ")",
-          style: { cursor: "pointer", opacity: on ? 1 : 0.12 },
+          style: {
+            cursor: "pointer",
+            opacity: on ? 1 : 0.12,
+            // 悬停光晕（对齐参考实现：描边 + drop-shadow，其余节点保持原样）
+            filter: isHover ? "drop-shadow(0 1px 6px rgba(77,107,254,.45))" : null,
+          },
           onClick: function () { props.onPick(n.id); },
           onMouseEnter: function () { props.onHover(n.id); },
           onMouseLeave: function () { props.onHover(null); },
@@ -617,9 +803,11 @@ window.__ModuleLoader__.load({
             x: 0, y: 0, width: p.w, height: p.h, rx: 9,
             style: {
               fill: priv ? n.color + "1f" : "var(--dsw-alias-bg-layer-2,#ffffff)",
-              stroke: isSel ? "#111" : (priv ? n.color : "var(--dsw-alias-border-l2,#d3dcea)"),
-              strokeWidth: isSel ? 2 : (priv ? 1.1 : 1),
-              strokeDasharray: priv ? "4 3" : null,
+              // 选中/悬停都用品牌色（旧版写死 #111，暗色主题下与官方强调色脱节）
+              stroke: isSel ? "var(--dsw-alias-brand-primary,#4D6BFE)"
+                : (isHover ? "#4D6BFE" : (priv ? n.color : "var(--dsw-alias-border-l2,#d3dcea)")),
+              strokeWidth: isSel ? 2 : (isHover ? 2.4 : (priv ? 1.1 : 1)),
+              strokeDasharray: priv && !isSel && !isHover ? "4 3" : null,
             },
           }),
           h("rect", { x: 0, y: 7, width: 4, height: Math.max(4, p.h - 14), rx: 2, style: { fill: n.color } }),
@@ -630,10 +818,13 @@ window.__ModuleLoader__.load({
       }).filter(Boolean);
 
       var w = laid.width * zoom, hh = laid.height * zoom;
-      return h("div", { className: "dm-graph-scroll", ref: props.scrollRef,
-        onMouseDown: props.onPanStart, onMouseMove: props.onPanMove, onMouseUp: props.onPanEnd,
-        onMouseLeave: props.onPanEnd,
-        style: { cursor: props.panning ? "grabbing" : "grab" } },
+      // 平移用 **pointer 事件**（对齐参考实现）：mouse 事件在指针移出画布时会断，
+      // 而拖到画布外恰恰是平移最常见的动作。捕获在拖动超过阈值后才取（见 GraphBody.panMove）。
+      return h("div", {
+        className: "dm-graph-scroll" + (props.panning ? " panning" : ""), ref: props.scrollRef,
+        onPointerDown: props.onPanStart, onPointerMove: props.onPanMove,
+        onPointerUp: props.onPanEnd, onPointerCancel: props.onPanEnd,
+      },
         h("svg", {
           className: "dm-graph", viewBox: "0 0 " + laid.width + " " + laid.height,
           width: w, height: hh, style: { minWidth: w + "px", display: "block" },
@@ -652,6 +843,10 @@ window.__ModuleLoader__.load({
         h("span", { key: "__edge2" }, h("i", { className: "dm-sw", style: { background: "#f59e0b" } }), "tags"));
     }
 
+    /**
+     * 详情**浮层**（对齐参考实现：浮在图上、不占右列 ⇒ 右列读数一直看得见）。
+     * 关闭三条路：✕ / 点图谱空白 / 点关联节点（换对象）。标题 sticky，长正文在浮层内滚。
+     */
     function GraphDetail(props) {
       var data = props.data, sel = props.sel, onSel = props.onSel, text = props.text;
       var node = null;
@@ -667,37 +862,28 @@ window.__ModuleLoader__.load({
           h("span", { className: "dm-why", style: { borderColor: EDGE_COLOR[type], color: EDGE_COLOR[type] } }, type),
           " " + (t ? t.label : id));
       }
-      return h("div", { className: "dm-col" },
-        h("button", { className: "dm-btn", onClick: function () { onSel(null); } }, "← 返回读数"),
-        h("div", { className: "dm-card", style: { marginTop: "8px" } },
-          h("div", { className: "dm-card-title" }, node.label),
+      function close() { if (props.onClose) props.onClose(); else onSel(null); }
+      return h("div", { className: "dm-detail" },
+        h("div", { className: "dm-detail-head" },
+          h("span", null, (node.zone === "private" ? "🔒 " : "📄 ") + node.label),
+          h("button", { className: "dm-detail-close", title: "关闭（也可点图谱空白）", onClick: close }, "✕")),
+        h("div", { className: "dm-card" },
           Row("层", node.layerLabel + "（" + node.layer + "）"),
           Row("区", node.zone === "private" ? "私有区 🔒" : "出厂区"),
           Row("路径", node.rel, true),
           Row("大小", fmtBytes(node.bytes), true),
-          Row("度", String(node.deg)),
-          h("div", { style: { marginTop: "6px" } },
-            h("button", {
-              className: "dm-btn",
-              onClick: function () {
-                getJSON("/api/mind/file?zone=" + node.zone + "&rel=" + encodeURIComponent(node.rel)).then(function (d) {
-                  props.onText(d && d.ok
-                    ? { rel: node.rel, text: d.text, bytes: d.bytes, truncated: d.truncated }
-                    : { rel: node.rel, text: "（读不到：" + ((d && d.error) || "未知") + "）" });
-                });
-              },
-            }, "读正文"))),
+          Row("度", String(node.deg))),
         outs.length ? Card("它关联谁（" + outs.length + "）", outs.map(function (e) { return nbr(e.target, e.type); })) : null,
         ins.length ? Card("谁关联它（" + ins.length + "）", ins.map(function (e) { return nbr(e.source, e.type); })) : null,
         text ? h("div", { className: "dm-card" },
           h("div", { className: "dm-card-title" }, text.rel + " · " + fmtBytes(text.bytes) + (text.truncated ? "（已截断）" : "")),
+          MetaChips(text.text),
           h("pre", { className: "dm-pre" }, text.text)) : null);
     }
 
-    /** 右列（未选中时＝读数 + 枢纽 + 孤点 + related 落空清单）。 */
+    /** 右列（读数 + 枢纽 + 孤点 + related 落空清单；图例已挪到工具条，见 GraphBody 的 dm-tools）。 */
     function GraphSide(props) {
       var g = props.data;
-      var used = g.stats.byLayer || {};
       var nodes = g.nodes;
       return h("div", { className: "dm-col" },
         Card("图读数（全部来自盘上读数）",
@@ -731,8 +917,7 @@ window.__ModuleLoader__.load({
                 m.why === "ambiguous" ? "同名 " + m.candidates + " 份" : "缺件"),
               h("span", { className: "dm-dise-k" }, m.target),
               h("span", { className: "dm-dise-n" }, String(m.from).split(":")[1]));
-          })) : null,
-        GraphLegend({ layers: g.layers, used: used }));
+          })) : null);
     }
 
     /** 图谱主体（渲染期抛错由外层 GraphView 兜住并上报）。 */
@@ -755,6 +940,10 @@ window.__ModuleLoader__.load({
       var text = ts[0], setText = ts[1];
       var pn = React.useState(false);
       var panning = pn[0], setPanning = pn[1];
+      // 右列（图读数/枢纽/孤点/落空清单）**默认收起**：它是诊断面，不是每次看图都要占 340px；
+      // 工具条上的「读数」按钮随时展开（主人 2026-10-05：「右半部分是否可以默认收起」）。
+      var so = React.useState(false);
+      var sideOpen = so[0], setSideOpen = so[1];
 
       React.useEffect(function () {
         var alive = true;
@@ -794,27 +983,95 @@ window.__ModuleLoader__.load({
           + " :: " + labels);
       }, [data]);
 
-      // 拖拽平移：直接改滚动容器的 scrollLeft/Top（不进 React 状态 ⇒ 不抖）；
-      // 位移超过 4px 就记一笔 `movedRef`，避免"拖完手一松就顺手选中了一张卡"。
+      // 拖拽平移：直接改滚动容器的 scrollLeft/Top（不进 React 状态 ⇒ 不抖）。
+      // 用 **pointer 事件 + 超阈值才 setPointerCapture**（对齐参考实现）：鼠标事件在指针移出
+      // 画布时会断，而"拖到画布外"恰是平移最常见的一段；捕获后移动事件不再丢。位移超过 4px
+      // 记一笔 `movedRef`，避免"拖完手一松就顺手选中了一张卡 / 被当成空白点击"。
       var dragRef = React.useRef(null);
       var scrollRef = React.useRef(null);
       var movedRef = React.useRef(false);
       function panStart(e) {
         if (!scrollRef.current || (e && e.button !== undefined && e.button !== 0)) return;
-        dragRef.current = { x: e.clientX, y: e.clientY, sl: scrollRef.current.scrollLeft, st: scrollRef.current.scrollTop };
+        dragRef.current = {
+          x: e.clientX, y: e.clientY, pid: e.pointerId, captured: false,
+          sl: scrollRef.current.scrollLeft, st: scrollRef.current.scrollTop,
+        };
         movedRef.current = false;
-        setPanning(true);
+        // 不 preventDefault、不立刻 capture：先让"点击"有机会（阈值到了才算平移）
       }
       function panMove(e) {
         var d = dragRef.current;
         if (!d || !scrollRef.current) return;
         var dx = e.clientX - d.x, dy = e.clientY - d.y;
-        if (Math.abs(dx) + Math.abs(dy) > 4) movedRef.current = true;
+        if (!d.captured) {
+          if (Math.abs(dx) + Math.abs(dy) <= 4) return;
+          d.captured = true;
+          movedRef.current = true;
+          setPanning(true);
+          try { e.currentTarget.setPointerCapture(d.pid); } catch (err) { /* 不支持就不捕获 */ }
+        }
         scrollRef.current.scrollLeft = d.sl - dx;
         scrollRef.current.scrollTop = d.st - dy;
       }
-      function panEnd() { dragRef.current = null; setPanning(false); }
-      function pick(id) { if (movedRef.current) return; setSel(id); setText(null); }
+      function panEnd(e) {
+        var d = dragRef.current;
+        if (d && d.captured && e && e.currentTarget) {
+          try { e.currentTarget.releasePointerCapture(d.pid); } catch (err) { /* 已释放 */ }
+        }
+        dragRef.current = null;
+        setPanning(false);
+      }
+      // 选中即**直接读正文**（主人 2026-10-05：「点击卡片能否直接展示正文」）：
+      // 以前要再点一次浮层里的「读正文」，多一步而且那一步不显眼。
+      // `readSeq` 挡住"连点两张卡、先发的响应后到"造成的错配（旧正文盖新卡）。
+      var readSeq = React.useRef(0);
+      function loadBody(node) {
+        if (!node) return;
+        var seq = ++readSeq.current;
+        setText({ rel: node.rel, text: "读取中…", bytes: node.bytes, truncated: false });
+        getJSON("/api/mind/file?zone=" + node.zone + "&rel=" + encodeURIComponent(node.rel)).then(function (d) {
+          if (seq !== readSeq.current) return;
+          setText(d && d.ok
+            ? { rel: node.rel, text: d.text, bytes: d.bytes, truncated: d.truncated }
+            : { rel: node.rel, text: "（读不到：" + ((d && d.error) || "未知") + "）" });
+        });
+      }
+      function nodeOf(id) {
+        var list = (data && data.nodes) || [];
+        for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+        return null;
+      }
+      function pick(id) {
+        if (movedRef.current) return;
+        setSel(id);
+        setText(null);
+        readSeq.current++;                       // 换了对象 ⇒ 作废在途响应
+        if (id) loadBody(nodeOf(id));
+      }
+      // 点空白/背景板 ⇒ 关浮层（拖拽后的那一下不算）。判定只排除**节点卡片与交互控件**，
+      // 不再按"是不是 <g>"一刀切——色带背景也是 <g>，旧判定把点色带/点边当成"点到东西"而拒绝关闭
+      // （主人 2026-10-05：「点背景板部分应该也可以关闭」）。
+      function onBackground(e) {
+        if (movedRef.current) return;
+        var t = e && e.target;
+        if (t && t.closest && (t.closest("[data-node]") || t.closest("button") || t.closest("input"))) return;
+        if (!sel) return;
+        readSeq.current++;
+        setSel(null); setText(null);
+      }
+      // 项目 pill：多到溢出时把纵向滚轮转成横向滚动（仅在真的溢出时接管，不干扰页面滚动）
+      var pjRef = React.useRef(null);
+      React.useEffect(function () {
+        var el = pjRef.current;
+        if (!el) return undefined;
+        function onWheel(e) {
+          if (el.scrollWidth <= el.clientWidth + 2) return;
+          e.preventDefault();
+          el.scrollLeft += (e.deltaY || e.deltaX || 0);
+        }
+        el.addEventListener("wheel", onWheel, { passive: false });
+        return function () { el.removeEventListener("wheel", onWheel); };
+      }, [data]);
 
       if (err) {
         return h("div", { className: "dm-body" },
@@ -829,32 +1086,44 @@ window.__ModuleLoader__.load({
 
       var used = data.stats.byLayer || {};
       return h("div", { className: "dm-body" },
-        h("div", { className: "dm-col dm-col-graph" },
+        // 空白/背景板的关闭判定挂在这一层（含画布外围留白），不在滚动容器内层：
+        // 点色带、点边、点留白都算"点空白"，只有节点卡片与控件除外（见 onBackground）。
+        h("div", { className: "dm-col dm-col-graph", onClick: onBackground },
           h("div", { className: "dm-tools" },
             h("input", {
               className: "dm-input", placeholder: "搜标题 / 路径…", value: q,
               onChange: function (e) { setQ(e.target.value); },
             }),
-            h("button", { className: "dm-btn" + (project ? "" : " on"), onClick: function () { setProject(""); } }, "全部"),
-            (data.projects || []).map(function (p) {
-              return h("button", {
-                key: p, className: "dm-btn" + (project === p ? " on" : ""),
-                title: "只看「" + p + "」的项目记忆（其余项目记忆离线，底座照常在场）",
-                onClick: function () { setProject(p); },
-              }, p);
-            }),
+            // 项目切换：包进可横向滚动的 pill 容器（项目多时先自己让位，不挤搜索框/图例/缩放）
+            h("div", { className: "dm-pj", ref: pjRef },
+              h("span", { className: "dm-pj-lab" }, "项目"),
+              h("button", { className: project ? "" : "on", onClick: function () { setProject(""); } }, "全部"),
+              (data.projects || []).map(function (p) {
+                return h("button", {
+                  key: p, className: project === p ? "on" : "",
+                  title: "只看「" + p + "」的项目记忆（其余项目记忆离线，底座照常在场）",
+                  onClick: function () { setProject(p); },
+                }, p);
+              })),
             h("span", { style: { flex: "1 1 auto" } }),
+            GraphLegend({ layers: layers, used: used }),
             h("button", { className: "dm-btn", onClick: function () { setZoom(function (z) { return Math.max(0.5, Number((z - 0.15).toFixed(2))); }); } }, "−"),
             h("span", { className: "dm-dim", style: { fontSize: "11px", minWidth: "38px", textAlign: "center" } }, Math.round(zoom * 100) + "%"),
             h("button", { className: "dm-btn", onClick: function () { setZoom(function (z) { return Math.min(2.5, Number((z + 0.15).toFixed(2))); }); } }, "＋"),
+            h("button", {
+              className: "dm-btn" + (sideOpen ? " on" : ""),
+              onClick: function () { setSideOpen(function (v) { return !v; }); },
+              title: sideOpen ? "收起右列读数" : "展开右列读数（图读数 / 枢纽 / 孤点 / related 落空）",
+            }, sideOpen ? "读数 ▸" : "◂ 读数"),
             h("span", { className: "dm-stat" }, data.stats.nodes + " 点 · " + data.stats.edges + " 边" + (project ? " · 只看 " + project : ""))),
           h(GraphCanvas, {
             data: data, laid: laid, sel: sel, hover: hover, q: q, zoom: zoom,
             panning: panning, onPick: pick, onHover: setHover,
             scrollRef: scrollRef, onPanStart: panStart, onPanMove: panMove, onPanEnd: panEnd,
           })),
-        sel ? h(GraphDetail, { data: data, sel: sel, onSel: pick, text: text, onText: setText })
-          : h(GraphSide, { data: data, onSel: pick }));
+        // 右列**默认收起**（诊断面，见上面 sideOpen 注释）；开着时详情浮层叠在图上、不顶掉读数
+        sideOpen ? h(GraphSide, { data: data, onSel: pick }) : null,
+        sel ? h(GraphDetail, { data: data, sel: sel, onSel: pick, text: text }) : null);
     }
 
     /** 图谱外壳：兜渲染期异常（在浏览器里表现为"整块空白"，最难事后定位）。 */
@@ -886,10 +1155,15 @@ window.__ModuleLoader__.load({
       // "读数已更新、图还是旧图"这种自相矛盾的画面）。
       var cs = React.useState(0);
       var stamp = cs[0], setStamp = cs[1];
-      var sessionId = props && props.sessionId;
       function doRefresh() { refresh(); setStamp(function (v) { return v + 1; }); }
-      return h("div", { className: "dm-root" },
-        h(Header, { status: status, sessionId: sessionId, onRefresh: doRefresh, mode: mode, onMode: setMode }),
+      // 视口：根挂官方浮层钩子（`data-conversation-composer-overlay`，官方「轨迹」视图同款）。
+      // 命中后上游把 viewArea 锁成定高 + 输入框改绝对定位浮层 ⇒ 滚动区只剩本面板、整块不再被
+      // 滚走；底部让位交给 CSS 的 `--dsh-composer-height`（见样式表首条）。钩子没命中时
+      // useFitViewport 写兜底 flex-basis。对齐参考实现的 `fitViewport`。
+      var rootRef = React.useRef(null);
+      useFitViewport(rootRef);
+      return h("div", { className: "dm-root", ref: rootRef, "data-conversation-composer-overlay": "" },
+        h(Header, { status: status, onRefresh: doRefresh, mode: mode, onMode: setMode }),
         mode === "graph"
           ? h(GraphView, { stamp: stamp })
           : h("div", { className: "dm-body" },
@@ -943,14 +1217,20 @@ window.__ModuleLoader__.load({
     }
 
     function apply(ctx) {
-      // 第一格自报：模块被执行且 apply 被调用（拿不到它 ⇒ 浏览器半根本没起来）
-      beacon("apply", "id=dsh-mind");
+      // 第一格自报：模块被执行且 apply 被调用（拿不到它 ⇒ 浏览器半根本没起来）。
+      // 末尾的代次标记是给"到底加载的是哪一版"用的：宿主按内容散列换 rev ⇒ 光看 boot 的 rev
+      // 只能证明**服务端**换了包，不能证明**页面**执行了新包（这一步只能由 apply 自报来钉）。
+      beacon("apply", "id=dsh-mind gen=dshome-pass");
       ensureStyle();
       register(ctx, "conversation.view", "mind", 15, function () { return "心智"; }, function (props) {
         return h(MindPanel, props);
       });
       register(ctx, "sidebar.footer.action", "mind-connect", 10, function () { return "心智"; }, function (props) {
         return h(MindWidget, props);
+      });
+      // 接入开关挪到会话输入区（权限选择器右边＝`conversation.input.left`，对齐参考实现的位置）
+      register(ctx, "conversation.input.left", "mind-connect-input", 100, function () { return "心智"; }, function (props) {
+        return h(InputConnect, props);
       });
     }
 
@@ -961,6 +1241,7 @@ window.__ModuleLoader__.load({
     // 而那是最难在重启后定位的一类故障；这里先在 node 里拿假 React 跑一遍）
     exports.__internals = {
       MindPanel: MindPanel, Facts: Facts, Files: Files, MindWidget: MindWidget, Header: Header,
+      InputConnect: InputConnect,
       // 图谱的可单测面：布局是纯函数（同样的输入必须给出同样的坐标），
       // 组件面交给"真 status/graph JSON 渲染不抛"那条冒烟
       GraphView: GraphView, GraphBody: GraphBody, GraphSide: GraphSide, GraphCanvas: GraphCanvas,
