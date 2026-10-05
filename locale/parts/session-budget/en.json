@@ -1,0 +1,5 @@
+{
+  "meta": {
+    "description": "Session budget sentinel: suggests a fresh session when the context grows long; evaluated at turn end, never interrupting a turn."
+  }
+}

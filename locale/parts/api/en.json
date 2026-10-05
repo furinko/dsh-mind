@@ -1,0 +1,5 @@
+{
+  "meta": {
+    "description": "Host half of the front end: read-only status APIs (/api/mind/status, tree, file), the connect-switch relay, and the self-hosted browser bundle."
+  }
+}

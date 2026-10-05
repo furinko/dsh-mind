@@ -1,0 +1,5 @@
+{
+  "meta": {
+    "description": "The per-session \"mind connected\" switch: turning it off skips injection, recall, and guardrails."
+  }
+}

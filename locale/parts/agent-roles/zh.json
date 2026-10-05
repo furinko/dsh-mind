@@ -1,0 +1,5 @@
+{
+  "meta": {
+    "description": "角色卡派成员：卡正文即成员系统提示词，卡上的 tools/model 收窄能力面；提供 role_list / role_spawn / role_send 与执行期闸。"
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "meta": {
+    "description": "Mood state: injects one line of current mood with its factual cause each turn; it changes tone only, never judgement."
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "meta": {
+    "description": "Injects the full constitution (SOUL + AGENTS) into each session's first step and seeds the bundled firmware on first run."
+  }
+}

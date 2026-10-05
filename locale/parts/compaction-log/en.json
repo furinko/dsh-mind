@@ -1,0 +1,5 @@
+{
+  "meta": {
+    "description": "Compaction audit: subscribes to compaction events and writes one audit line per context compaction."
+  }
+}

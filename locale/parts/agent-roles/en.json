@@ -1,0 +1,5 @@
+{
+  "meta": {
+    "description": "Role cards as subagents: the card body is the member's system prompt and its tools/model narrow the capability surface; provides role_list, role_spawn, role_send, and a runtime gate."
+  }
+}

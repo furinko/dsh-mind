@@ -1,0 +1,5 @@
+{
+  "meta": {
+    "description": "Pre-write guardrails: no credentials in the factory zone, high-risk edits need approval, no writes while disconnected; it blocks without injecting and fails open."
+  }
+}
