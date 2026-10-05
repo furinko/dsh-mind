@@ -21,11 +21,13 @@
 | `mood` | **情绪状态**：每轮注入「当前情绪 + 客观成因」。只改语气、不改判断 |
 | `session-budget` | **会话预算哨兵**：上下文过长时提醒换新会话（只在回合结束评估，不打断回合） |
 | `agent-roles` | **角色卡 → 独立 persona 子代理**：卡正文 = 成员系统提示词；三把工具 + 执行期闸 |
-| `api` | **前端配套（host 半）**：只读状态 API（`/api/mind/status · tree · file`）+ 接入开关转发（`/api/mind/connect`）+ 自托管浏览器包 |
+| `api` | **前端配套（host 半）**：只读状态 API（`/api/mind/status · tree · file · graph · guard-decisions · boot · beacon`）+ 接入开关转发（`/api/mind/connect`）+ **人设卡写口**（`/api/mind/persona`） |
 
 **浏览器半**（`client/client.js`，由本包自己喂给外壳）：对话同级多一个「心智」视图 + 侧栏页脚一个挂件——
 看到固件是否就位、R0/R1 注入读数、私有区空不空（角色卡 / 人设卡 / user-rules / L3 / Learn）、
-**每个插件有没有真运行过**（挂载 ≠ 生效，面板把两者分开列）、以及只读文件浏览。**只读 + 一个接入开关**。
+**每个插件有没有真运行过**（挂载 ≠ 生效，面板把两者分开列）、以及只读文件浏览。
+**改人设卡的入口在插件面板**：「插件」→ `dsh-mind` → 配置区（默认只读，点「编辑人设卡」才可改，
+保存前二次确认）。会话里的「心智」视图保持**只读 + 一个接入开关**——看板与写口分两个面。
 
 **不含**：裁决/放行面板（本包 `guard` 没有放行通道，见 `docs/DESIGN.md §七`）、图谱、待办/记忆增删、
 定时任务、主题皮肤、命令面板 —— 前四项源头上就没有对应机制，后三项要么官方已有，要么不属于"心智"。
@@ -134,6 +136,7 @@ dsh plugin --profile <你的profile> add file:../path/to/dsh-mind
 | `GET /api/mind/file?zone=&rel=` | 读一个文件（128 KB 截断；目录穿越挡死） |
 | `GET /api/mind/graph?project=` | **图谱**：节点＝活内容件，边＝frontmatter `related`/`tags`/`topic`；随图下发 `layers`（层表唯一真源）与 `stats`（含孤点/落空读数） |
 | `GET/POST /api/mind/connect` | 读/写「接入心智」开关（**逻辑仍在 `connect.js`**，此处只转发） |
+| `POST /api/mind/persona` | **人设卡写口（全包唯一的文件写面）**：目标写死 `mind-private/L0/人设卡.md`，要求 `confirm:true`（二次确认），再过 `guard.inspect()`（红线硬拒 / 高危档记账）、改前快照到 `tasks/evolution/snapshots/`、`.tmp` + rename 原子写 |
 | `GET /api/mind/boot` | **只读诊断**：官方启动图里有没有我（`hasSelf` + 真实 entries/batches） |
 | `GET /api/mind/beacon?what=&detail=` | **浏览器自报**：apply → slot → render → error 走到哪一格 |
 
@@ -220,7 +223,8 @@ node scripts/verify-dsh-mind-install.mjs <profileDir>   # 21 项真装验收
 ## 边界（诚实标注）
 
 - **护栏不是防伪机制**：它只比批准记录的来源标注，本机进程可绕过。**这道闸靠纪律，不靠机器强校验**。
-- **面板只读**：能看不能改——除了「接入心智」那一个开关。裁决/放行、记忆/待办增删都**没有**入口。
+- **写面只有两处**：会话里的「接入心智」开关，与插件面板的人设卡保存（`POST /api/mind/persona`）。
+  裁决/放行、记忆/待办增删、成员卡**都没有**入口——高危档的放行通道在 `guard` 自己的 approval seam。
 - **shell 写入口未拦**：`pwsh` / `node` 直接写文件不经护栏（内容级判定不现实）⇒ 只留痕、不硬拦。
 - **触发匹配是精确子串**：中文口语变体会漏。这是**有意设计**（防命中自身文件名导致自触发）。
 - **检索用 bigram 词面**，不用向量：词面盲区尚未真咬人，向量会显著加重依赖与成本。

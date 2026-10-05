@@ -5,15 +5,14 @@
 //   `react` / `react/jsx-runtime`）⇒ 本文件不 import 任何东西，全部走工厂参数。
 //   `id` **必须与 host 半 `api.js` 的 `CLIENT_ID` 一致**（boot 行按 id 去重，自测盯着这条）。
 //
-// ── 装在哪两处（都在本机实测存在的槽位上，别凭记忆加）─────────────────────────
+// ── 装在哪（本机实测存在的槽位，别凭记忆加）──────────────────────────────────
 //   · `conversation.view`（id=`mind`）—— 对话/轨迹同级的**顶级视图**：完整面板
 //     （视图内两种模式：**图谱**＝分层色带知识地图〔默认〕 / **数字**＝读数卡 + 文件浏览）
-//   · `sidebar.footer.action` —— 左栏页脚挂件：一眼看到"接没接入 + 几个警告"
 //   槽位不存在时注册会一直挂起（官方语义），不报错；`slots.inject` 不可用时退回 `effect`。
 //
 // ── 数据从哪来（同源 loopback，host 半 `lib/host/api.js`）─────────────────────
 //   GET /api/mind/status · /api/mind/tree?zone= · /api/mind/file?zone=&rel=
-//     · /api/mind/graph[?project=] · /api/mind/connect
+//     · /api/mind/graph[?project=] · /api/mind/guard-decisions[?limit=] · /api/mind/connect
 //   浏览器**不碰文件系统**：所有事实由 host 半读成 JSON，隐私边界只有一条。
 //
 // ⚠️ **浏览器半是热更的，host 半不是**：外壳按内容散列服务本文件（rev 变即换代码），
@@ -21,9 +20,10 @@
 //    图谱那一格会明说"宿主半还是旧版（没 layers）⇒ 重启后端再看"，而不是画出半张图让人猜。
 //
 // ── 边界（诚实标注）──────────────────────────────────────────────────────────
-//   本面板**只读 + 一个接入开关**。没有裁决/放行入口（本包 guard 没有放行通道），
-//   不改记忆/待办（不属本包）。面板里出现的每个数字都直接来自盘上读数——
-//   **空就说空**（空壳时它会明写"0 张角色卡"），不做美化。
+//   本面板**只读 + 一个接入开关**，其中「放行记录」板块是**查看**（读 guard 的判定流水），
+//   不是裁决口：放行与否由 guard 自己的 approval seam 决定（高危档交由宿主弹窗），
+//   面板既不裁决也不放行、不改记忆/待办（不属本包）。面板里出现的每个数字都直接来自盘上
+//   读数——**空就说空**（空壳时它会明写"0 张角色卡"），不做美化。
 
 window.__ModuleLoader__.load({
   id: "dsh-mind",
@@ -66,16 +66,39 @@ window.__ModuleLoader__.load({
         ".dm-dim{color:var(--dsw-alias-label-tertiary)}",
         ".dm-tags{display:flex;flex-wrap:wrap;gap:4px}",
         ".dm-tag{padding:1px 7px;border-radius:99px;font-size:11px;background:var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary)}",
+        // 放行记录：三态徽标各一种底色 —— "被问过才放" / "没人问过就放" / "硬拒" 必须一眼分得开
+        ".dm-by{padding:1px 7px;border-radius:99px;font-size:11px;font-weight:600;white-space:nowrap}",
+        ".dm-by-ask{background:rgba(77,107,254,.12);color:var(--dsw-alias-brand-primary,#4D6BFE)}",
+        ".dm-by-never{background:rgba(240,180,41,.16);color:var(--dsw-alias-state-warn-primary,#b8860b)}",
+        ".dm-by-deny{background:rgba(217,72,59,.14);color:var(--dsw-alias-state-error-primary,#d9483b)}",
+        ".dm-by-unknown{background:var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary)}",
+        // 面板保存（人设卡写口）：与"宿主弹窗放行"分开——点的人是**在界面上按了保存**，
+        // 不是被弹窗问过；混成一种底色就等于抹掉这个区别
+        ".dm-by-panel{background:rgba(47,191,143,.14);color:#1e9e73}",
+        // 人设卡（插件面板的配置区；页面不在 `.dm-root` 里，故样式自带、不依赖会话布局）
+        ".dm-pcard{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:10px 12px;background:var(--dsw-alias-bg-layer-2,transparent);font-size:12.5px;color:var(--dsw-alias-label-primary)}",
+        ".dm-pcard-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}",
+        ".dm-pcard-title{font-size:12px;font-weight:700;color:var(--dsw-alias-label-secondary);letter-spacing:.3px}",
+        ".dm-pcard-meta{font-size:11.5px;color:var(--dsw-alias-label-tertiary)}",
+        ".dm-pcard-acts{margin-left:auto;display:inline-flex;gap:6px}",
+        ".dm-pcard-view{margin:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1,rgba(0,0,0,.02));white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:19px;max-height:46vh;overflow:auto}",
+        ".dm-pcard-ta{box-sizing:border-box;width:100%;min-height:280px;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1,transparent);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:19px;resize:vertical}",
+        ".dm-pcard-ta:focus{outline:none;border-color:var(--dsw-alias-brand-primary,#4D6BFE)}",
+        ".dm-pcard-foot{font-size:11px;color:var(--dsw-alias-label-tertiary);margin-top:6px}",
+        ".dm-pcard-msg{margin-top:8px;font-size:11.5px;line-height:18px;color:var(--dsw-alias-label-secondary);word-break:break-word}",
+        ".dm-pcard-note{margin-top:8px;font-size:11px;line-height:17px;color:var(--dsw-alias-label-tertiary)}",
+        ".dm-gd-list{max-height:46vh;overflow:auto}",
+        ".dm-gd{padding:5px 0;border-bottom:1px dashed var(--dsw-alias-border-l1)}",
+        ".dm-gd:last-child{border-bottom:none}",
+        ".dm-gd-top{display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:11.5px}",
+        ".dm-gd-ts{color:var(--dsw-alias-label-tertiary);flex:none}",
+        ".dm-gd-sub{font-size:11px;line-height:16px;word-break:break-all}",
+        ".dm-gd-why{font-size:11px;line-height:16px;word-break:break-word;color:var(--dsw-alias-label-secondary)}",
         ".dm-list{max-height:56vh;overflow:auto}",
         ".dm-item{display:block;width:100%;text-align:left;border:none;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:20px;padding:3px 6px;border-radius:6px;cursor:pointer;word-break:break-all}",
         ".dm-item:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}",
         ".dm-item.sel{background:rgba(77,107,254,.12);color:var(--dsw-alias-brand-primary,#4D6BFE)}",
         ".dm-pre{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;line-height:1.6;font-family:Consolas,'Cascadia Mono',monospace;color:var(--dsw-alias-label-secondary)}",
-        ".dm-widget{box-sizing:border-box;width:100%;min-width:0;padding:5px 6px 4px;display:flex;align-items:center;gap:6px;border-top:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);cursor:pointer;font-size:12px}",
-        ".dm-widget:hover{background:var(--dsw-alias-interactive-bg-hover)}",
-        ".dm-dot{width:8px;height:8px;border-radius:99px;flex:none;background:var(--dsw-alias-state-success-primary,#1e9e73)}",
-        ".dm-dot.off{background:var(--dsw-alias-label-tertiary)}",
-        ".dm-badge{margin-left:auto;font-size:10.5px;padding:0 6px;border-radius:99px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}",
         ".dm-mode{display:inline-flex;gap:2px;margin-left:2px;background:var(--dsw-alias-border-l1);border-radius:9px;padding:2px}",
         ".dm-mode .dm-btn{height:24px;padding:0 11px;font-size:11.5px;font-weight:600;border:none;background:transparent;border-radius:7px;color:var(--dsw-alias-label-tertiary)}",
         ".dm-mode .dm-btn.on{background:var(--dsw-alias-bg-layer-2,#fff);color:var(--dsw-alias-brand-primary,#4D6BFE);box-shadow:0 1px 3px rgba(0,0,0,.1)}",
@@ -182,8 +205,10 @@ window.__ModuleLoader__.load({
       } catch (e) { /* 自报失败绝不能影响渲染 */ }
     }
     var renderReported = false;
-    var widgetReported = false;
     var graphReported = false;
+
+    // 人设卡编辑（插件面板 → dsh-mind → 配置区）的"渲染到了"自报
+    var personaReported = false;
 
     function fmtBytes(n) {
       if (n === null || n === undefined) return "—";
@@ -532,7 +557,123 @@ window.__ModuleLoader__.load({
                   }
                 }, "接回"));
             })
-            : h("div", { className: "dm-dim" }, "全部会话都接着（默认接入）")));
+            : h("div", { className: "dm-dim" }, "全部会话都接着（默认接入）")),
+
+        // 放行记录（只读）：为什么摆在读数卡**最后**——它是"历史流水"，长度随时间无限长，
+        // 摆前面会把固件/记忆那些"当下状态"挤出屏幕。取数与图谱共用刷新戳（点「刷新」一起重取）。
+        h(GuardDecisions, { stamp: props.stamp }));
+    }
+
+    // ── 放行记录（guard 判定流水的**查看**板块；只读）─────────────────────────
+    //
+    // ── 这一格要让人一眼看懂的就是 `decidedBy` 三态（真源＝host 半 `lib/host/guard.js`）──
+    //   `ask-upstream`    ＝ 已交上游弹窗 ⇒ **有人被问过**才放行
+    //   `policy-never`    ＝ 策略 never：审批服务内部直接返回 rejected 且**不弹窗**
+    //                        ⇒ **没人被问过**就被放行（完全权限预设下的自动放行）
+    //   `guard`           ＝ 红线层硬拒
+    //   `guard(degraded)` ＝ 放行层没挂上 ⇒ 高危档降级硬拒
+    //   `api-panel`       ＝ **面板保存**（人设卡写口 `/api/mind/persona`）：点的人在界面上按了
+    //                        「保存」+ 二次确认 ⇒ 与"被弹窗问过"不是同一件事，单列一种底色
+    //   `unknown`         ＝ 旧记录缺 `decidedBy` ⇒ **不猜**成上面任何一种
+    // `effect` 同理：`ask`＝弹窗 / `allow`＝直接放行；**旧记录没有这个字段 ⇒ 显示"未标注"**，
+    // 绝不按 decidedBy 反推（本机实测：早一轮 guard 写的流水就真的没有 `effect`）。
+    var DECIDED_BY = {
+      "ask-upstream": { label: "已问过→放行", cls: "dm-by-ask" },
+      "policy-never": { label: "没人问过→放行", cls: "dm-by-never" },
+      "guard": { label: "红线硬拒", cls: "dm-by-deny" },
+      "guard(degraded)": { label: "降级硬拒", cls: "dm-by-deny" },
+      "api-panel": { label: "面板保存", cls: "dm-by-panel" },
+      "unknown": { label: "未标注", cls: "dm-by-unknown" }
+    };
+    var TIER_LABEL = { redline: "红线", approval: "高危档" };
+    var EFFECT_LABEL = { ask: "弹窗", allow: "放行" };
+    // 固定展示顺序：三态语义要能**逐条对上**，不按计数排序（否则每次刷新行序都在变）
+    var DECIDED_BY_ORDER = ["ask-upstream", "policy-never", "api-panel", "guard", "guard(degraded)", "unknown"];
+
+    /** 带日期的时刻（记录会跨天，只有 HH:MM:SS 认不出是哪天；时间部分仍复用 fmtTime）。 */
+    function fmtStamp(iso) {
+      if (!iso) return "—";
+      try {
+        return new Date(iso).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" }) + " " + fmtTime(iso);
+      } catch (e) { return String(iso); }
+    }
+
+    /** 路径短尾（`…\\mind\\L1\\HUB.md` ⇒ `L1/HUB.md`）：行内只留能认人的两段，全路径进 title。 */
+    function shortPath(p) {
+      var s = String(p || "");
+      if (!s) return "—";
+      var parts = s.split(/[\\/]/).filter(Boolean);
+      return parts.slice(-2).join("/") || s;
+    }
+
+    /** 摘要（把换行压平再截断）：行内只给一眼，完整原文留在 title 里。 */
+    function clampText(s, n) {
+      var t = String(s || "").replace(/\s+/g, " ").trim();
+      return t.length > n ? t.slice(0, n) + "…" : t;
+    }
+
+    /**
+     * 放行记录**取数**（`/api/mind/guard-decisions`）。
+     * 为什么单独取、不并进 status：那份流水 append-only、只增不减，并进 15s 轮询
+     * ＝"每 15 秒读一次盘"。`stamp` 与图谱共用刷新戳 ⇒ 点「刷新」时两格一起重取。
+     */
+    function GuardDecisions(props) {
+      var st = React.useState(null);
+      var data = st[0], setData = st[1];
+      React.useEffect(function () {
+        var alive = true;
+        getJSON("/api/mind/guard-decisions").then(function (d) { if (alive && d && d.ok) setData(d); });
+        return function () { alive = false; };
+      }, [props && props.stamp]);
+      return GuardDecisionsBody({ data: data });
+    }
+
+    /** 放行记录**渲染**（只吃 `data`，取数在外层 ⇒ node 侧能拿真 JSON 直接渲染冒烟）。 */
+    function GuardDecisionsBody(props) {
+      var d = props && props.data;
+      if (!d) {
+        return Card("放行记录（guard 判定流水 · 只读）",
+          h("div", { className: "dm-dim" }, "读不到 /api/mind/guard-decisions（host 半 api 插件没起来？）"));
+      }
+      var recs = Array.isArray(d.records) ? d.records : [];
+      var counts = d.counts || {};
+      var never = counts["policy-never"] || 0;
+      // children 一律按**变参**给（本文件既有写法）：数组子元素要求每个都带 key，
+      // 而 `Row()` 造出来的元素不带 ⇒ 塞进数组会让 React 在控制台刷 key 警告。
+      return Card("放行记录（guard 判定流水 · 只读）",
+        h("div", null,
+          Row("读到的记录", d.total + " 条" + (d.partial
+            ? "（只读了尾部 " + fmtBytes(d.windowBytes) + "／文件 " + fmtBytes(d.file && d.file.bytes) + " ⇒ 更早的没读）"
+            : "（全量）")),
+          Row("本页显示", recs.length + " 条" + (d.limit ? "（上限 " + d.limit + "）" : "")),
+          Row("坏行", (d.skipped || 0) > 0 ? (d.skipped + " 行（已跳过，未计入）") : "0 行"),
+          never > 0
+            ? Row("提醒", "其中 " + never + " 条是没人被问过就放行的（策略 never 下的自动放行）")
+            : null,
+          h("div", { className: "dm-tags", style: { marginTop: "6px" } },
+            DECIDED_BY_ORDER.filter(function (k) { return counts[k]; }).map(function (k) {
+              return h("span", { key: k, className: "dm-by " + DECIDED_BY[k].cls },
+                DECIDED_BY[k].label + " " + counts[k]);
+            }),
+            recs.length
+              ? null
+              : h("span", { className: "dm-dim", style: { fontSize: "11.5px" } },
+                d.note || "（没有记录：guard 还没判过一次）")),
+          recs.length
+            ? h("div", { className: "dm-gd-list", style: { marginTop: "8px" } }, recs.map(function (r, i) {
+              var by = DECIDED_BY[r && r.decidedBy] || DECIDED_BY.unknown;
+              var path = r && r.path ? String(r.path) : "";
+              return h("div", { className: "dm-gd", key: i, title: path || undefined },
+                h("div", { className: "dm-gd-top" },
+                  h("span", { className: "dm-gd-ts dm-mono" }, fmtStamp(r && r.ts)),
+                  h("span", { className: "dm-tag" }, (r && TIER_LABEL[r.tier]) || "未标注"),
+                  h("span", { className: "dm-by " + by.cls }, by.label),
+                  h("span", { className: "dm-tag" }, "效果：" + ((r && EFFECT_LABEL[r.effect]) || "未标注"))),
+                h("div", { className: "dm-gd-sub dm-mono dm-dim" },
+                  (r && r.tool ? String(r.tool) : "—") + " · " + shortPath(path)),
+                (r && r.reason) ? h("div", { className: "dm-gd-why" }, clampText(r.reason, 96)) : null);
+            }))
+            : null));
     }
 
     /** 右列：文件浏览（只读；左选右看）。 */
@@ -1167,49 +1308,109 @@ window.__ModuleLoader__.load({
         mode === "graph"
           ? h(GraphView, { stamp: stamp })
           : h("div", { className: "dm-body" },
-            h(Facts, { status: status, boot: boot, onRefresh: doRefresh }),
+            h(Facts, { status: status, boot: boot, onRefresh: doRefresh, stamp: stamp }),
             h(Files, { zone: "private" })));
     }
 
-    /** 左栏页脚挂件（sidebar.footer.action）：一眼看接入态 + 警告数。 */
-    function MindWidget(props) {
-      if (!widgetReported) { widgetReported = true; beacon("render", "widget"); }
-      ensureStyle();
-      var pair = useStatus();
-      var status = pair[0], refresh = pair[1];
-      var sessionId = props && props.sessionId;
-      var on = true;
-      if (status && status.connect && sessionId && Array.isArray(status.connect.offSessions)) {
-        on = status.connect.offSessions.indexOf(sessionId) === -1;
+    // ── 人设卡（**修改入口**；插件面板 → dsh-mind → 配置区）────────────────────
+    //
+    // 为什么放插件面板、不放会话里的「心智」视图：「心智」视图是**看板**（只读），而改"我是谁"
+    // 是**全局动作**（不绑会话）⇒ 归插件面板这个全局页；官方给的挂点就是 `plugins.bundle.config`
+    // （以包名为键）。读与写都走**同一条口**（`/api/mind/persona`）：路径不在前端拼——
+    // 拼了就有第二份，改 host 那份路径时面板会静默读空（本仓反复吃亏的"映射没被证明"族）。
+    // 防误改：默认只读，点「编辑」才进编辑态，保存前二次确认（照 DSHOME 同款口径）。
+    function PersonaCard() {
+      var st = React.useState({ state: "loading", text: "", bytes: 0, rel: "", limit: 0 });
+      var cur = st[0], setCur = st[1];
+      var es = React.useState(false);
+      var editing = es[0], setEditing = es[1];
+      var ds = React.useState("");
+      var draft = ds[0], setDraft = ds[1];
+      var ms = React.useState("");
+      var msg = ms[0], setMsg = ms[1];
+
+      function load() {
+        getJSON("/api/mind/persona").then(function (d) {
+          var base = { rel: (d && d.rel) || "", limit: (d && d.limit) || 0 };
+          if (!d || d.ok !== true) { setCur({ state: "error", text: "", bytes: 0, rel: base.rel, limit: base.limit }); return; }
+          if (d.present !== true) { setCur({ state: "absent", text: "", bytes: 0, rel: base.rel, limit: base.limit }); return; }
+          setCur({ state: "present", text: String(d.text || ""), bytes: Number(d.bytes) || 0, rel: base.rel, limit: base.limit });
+        });
       }
-      var warns = status && status.warnings ? status.warnings.length : 0;
-      var title = status
-        ? ("心智：" + (on ? "已接入" : "已关闭") + " · 警告 " + warns + " 条" + (status.live.recallLen === null ? "" : " · 召回 " + status.live.recallLen + "B"))
-        : "心智：读取中…";
-      function click() {
-        if (!sessionId) { refresh(); return; }
-        postJSON("/api/mind/connect", { session: sessionId, enabled: !on }).then(refresh);
+      React.useEffect(function () { load(); }, []);
+
+      // "渲染到了"自报（与其余三个面同口径）：面板没画出来时，从盘上能一眼分清
+      // "槽位注册失败" 与 "注册成功但组件没渲染"。
+      if (!personaReported) { personaReported = true; beacon("render", "persona"); }
+
+      function begin() { setDraft(cur.text || ""); setEditing(true); setMsg(""); }
+      function cancel() { setEditing(false); setMsg(""); }
+      function save() {
+        if (typeof window !== "undefined"
+          && !window.confirm("确定保存对「人设卡」的修改？\n\n保存前会自动做一份改前快照（tasks/evolution/snapshots/）。")) return;
+        postJSON("/api/mind/persona", { text: draft, confirm: true }).then(function (r) {
+          if (r && r.ok === true) {
+            setEditing(false);
+            setMsg("已保存：" + (r.bytes || 0) + " 字节"
+              + (r.snapshot ? "｜改前快照 " + r.snapshot : "（改前无卡 ⇒ 未做快照）")
+              + (r.warning ? "｜⚠️ " + r.warning : ""));
+            load();
+          } else {
+            setMsg("保存失败：" + ((r && r.error) || "读不到返回（后端可能还是旧版 ⇒ 重启后端）"));
+          }
+        });
       }
-      return h("div", { className: "dm-widget", onClick: click, title: title },
-        h("span", { className: "dm-dot" + (on ? "" : " off") }),
-        h("span", null, "心智"),
-        warns > 0 ? h("span", { className: "dm-badge" }, String(warns)) : null);
+
+      return h("div", { className: "dm-pcard" },
+        h("div", { className: "dm-pcard-head" },
+          h("span", { className: "dm-pcard-title" }, "人设卡（性格 / 口癖，本机私密）"),
+          h("span", { className: "dm-pcard-meta" },
+            cur.state === "loading" ? "读取中…"
+              : cur.state === "error" ? "读不到（后端可能还是旧版 ⇒ 重启后端）"
+                : cur.state === "absent" ? "还没有（不建＝干净通用助手）"
+                  : fmtBytes(cur.bytes)),
+          editing
+            ? h("span", { className: "dm-pcard-acts" },
+              h("button", { className: "dm-btn on", onClick: save }, "保存"),
+              h("button", { className: "dm-btn", onClick: cancel }, "取消"))
+            : h("span", { className: "dm-pcard-acts" },
+              h("button", { className: "dm-btn", onClick: begin }, cur.state === "absent" ? "新建人设卡" : "编辑人设卡"),
+              h("button", { className: "dm-btn", onClick: load }, "刷新"))),
+        editing
+          ? h("textarea", {
+            className: "dm-pcard-ta",
+            value: draft,
+            spellCheck: false,
+            onChange: function (e) { setDraft(e.target.value); },
+          })
+          : h("pre", { className: "dm-pcard-view" },
+            cur.state === "present" ? cur.text : (cur.state === "error" ? "（读不到：见上方说明）" : "（空）")),
+        editing ? h("div", { className: "dm-pcard-foot" }, "当前 " + draft.length + " 字符 · 保存为「全文覆盖」（不是追加）") : null,
+        msg ? h("div", { className: "dm-pcard-msg" }, msg) : null,
+        h("div", { className: "dm-pcard-note" },
+          "本机私密（" + (cur.rel || "私有区人设卡") + "），永不推送。改的是「我是谁」：命中护栏高危档——"
+          + "每次保存都写一行放行流水（decidedBy=api-panel），改前自动快照到 tasks/evolution/snapshots/；"
+          + (cur.limit ? "召回只取前 " + cur.limit + " 字符，超出时保存会当场报警。" : "")));
     }
 
     // ── 插件体（槽位注册；槽位缺失只会挂起，不报错）───────────────────────────
     var inject = ["slots"];
 
-    function register(ctx, slot, id, order, label, Component) {
+    function register(ctx, slot, opts, Component) {
+      var o = opts || {};
+      // 槽位 id：列表/详情类槽位用它；`key` 只给按键查表的槽位（插件面板的
+      // `plugins.bundle.config` 以**包名**为键，官方 `configLedgerSource` 只认 `options.key`）。
+      var tag = slot + ":" + (o.key || o.id);
       var doRegister = function () {
-        var out = ctx.slots.register({ name: slot, id: id, order: order, label: label }, Component);
-        beacon("slot", slot + ":" + id);   // 注册成功才报到（失败会抛 ⇒ 由外层 catch 报 error）
+        var out = ctx.slots.register({ name: slot, id: o.id, order: o.order, label: o.label, key: o.key }, Component);
+        beacon("slot", tag);   // 注册成功才报到（失败会抛 ⇒ 由外层 catch 报 error）
         return out;
       };
       try {
         if (typeof ctx.slots.inject === "function") {
-          ctx.effect(function () { return ctx.slots.inject(slot, doRegister); }, "dsh-mind: " + id);
+          ctx.effect(function () { return ctx.slots.inject(slot, doRegister); }, "dsh-mind: " + tag);
         } else {
-          ctx.effect(doRegister, "dsh-mind: " + id);
+          ctx.effect(doRegister, "dsh-mind: " + tag);
         }
       } catch (e) {
         if (typeof console !== "undefined") console.warn("dsh-mind: 槽位注册失败", slot, e);
@@ -1222,15 +1423,17 @@ window.__ModuleLoader__.load({
       // 只能证明**服务端**换了包，不能证明**页面**执行了新包（这一步只能由 apply 自报来钉）。
       beacon("apply", "id=dsh-mind gen=dshome-pass");
       ensureStyle();
-      register(ctx, "conversation.view", "mind", 15, function () { return "心智"; }, function (props) {
+      register(ctx, "conversation.view", { id: "mind", order: 15, label: function () { return "心智"; } }, function (props) {
         return h(MindPanel, props);
       });
-      register(ctx, "sidebar.footer.action", "mind-connect", 10, function () { return "心智"; }, function (props) {
-        return h(MindWidget, props);
-      });
       // 接入开关挪到会话输入区（权限选择器右边＝`conversation.input.left`，对齐参考实现的位置）
-      register(ctx, "conversation.input.left", "mind-connect-input", 100, function () { return "心智"; }, function (props) {
+      register(ctx, "conversation.input.left", { id: "mind-connect-input", order: 100, label: function () { return "心智"; } }, function (props) {
         return h(InputConnect, props);
+      });
+      // 人设卡的**修改入口**在插件面板（「插件」→ dsh-mind → 配置区）：该槽位按键查表 ⇒ 传 key
+      // （＝包名；官方那张"这个组合包有没有配置"的账本只认 `options.key`）。
+      register(ctx, "plugins.bundle.config", { id: "mind-persona", key: "dsh-mind" }, function () {
+        return h(PersonaCard, null);
       });
     }
 
@@ -1240,8 +1443,11 @@ window.__ModuleLoader__.load({
     // 测试缝（selftest ⑳ 用**真实 status JSON** 渲染一遍这些组件——渲染期抛错会让面板整块空白，
     // 而那是最难在重启后定位的一类故障；这里先在 node 里拿假 React 跑一遍）
     exports.__internals = {
-      MindPanel: MindPanel, Facts: Facts, Files: Files, MindWidget: MindWidget, Header: Header,
-      InputConnect: InputConnect,
+      MindPanel: MindPanel, Facts: Facts, Files: Files, Header: Header,
+      InputConnect: InputConnect, PersonaCard: PersonaCard,
+      // 放行记录的可单测面：`GuardDecisionsBody` 是纯的（只吃 data）⇒ 拿真 JSON 直接渲染；
+      // `GuardDecisions`（取数壳）另测"读不到"那一支。三态徽标的映射也钉住，防有人改错标签。
+      GuardDecisions: GuardDecisions, GuardDecisionsBody: GuardDecisionsBody, DECIDED_BY: DECIDED_BY,
       // 图谱的可单测面：布局是纯函数（同样的输入必须给出同样的坐标），
       // 组件面交给"真 status/graph JSON 渲染不抛"那条冒烟
       GraphView: GraphView, GraphBody: GraphBody, GraphSide: GraphSide, GraphCanvas: GraphCanvas,

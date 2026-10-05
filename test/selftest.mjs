@@ -808,10 +808,100 @@ if (guard) {
   } finally { rmSync(tmp, { recursive: true, force: true }); }
 }
 
+// ── ⑯ 护栏两档与放行层（guard.js 的 apply）—— 2026-10-05 改造的回归钉 ──────────
+// 为什么单独立块：**此前 apply 零用例**，而这次改的正是"闸挂在哪一层"。挂错层的后果不是
+// 报错，而是**静默放宽**（高危档再无机器闸）——只能靠真 apply + 真调用钉住，读代码看不出来。
+if (guard) {
+  /** 忠实模拟宿主：`tools.guard` 读 `this.layers`；`tools/pre-execute` 是可 await 的瀑布。 */
+  const buildFake = ({ withOn = true, approval = { effectivePolicy: () => 'ask' } } = {}) => {
+    const pre = [];
+    const guards = [];
+    const ctx = {
+      logger: () => ({ warn: () => {} }),
+      get: (n) => (n === 'approval' ? approval : undefined),
+      tools: {
+        layers: [],
+        guard(fn) { if (!Array.isArray(this.layers)) throw new Error("reading 'layers'"); guards.push(fn); return fn; },
+      },
+    };
+    if (withOn) ctx.on = (e, fn) => { if (e === 'tools/pre-execute') pre.push(fn); return fn; };
+    guard.apply(ctx);
+    return { pre, guards };
+  };
+  const execArg = (p, name = 'edit') => ({ name, arguments: { file_path: p }, agent: { session: { header: { id: 's' } } } });
+  const allow = async () => ({ kind: 'allow' });
+  const marker = () => readFileSync(join(tmp, '.dsh-market', 'guard-marker.txt'), 'utf8');
+
+  const tmp = mkdtempSync(join(tmpdir(), 'dshmind-guard2-'));
+  try {
+    setEnv({ MIND_HOME: tmp });
+    const highRisk = join(tmp, 'mind', 'L0', 'SOUL.md');
+    const fwSoul = join(PKG, 'firmware', 'L0', 'SOUL.md');
+    const plain = join(tmp, 'mind', 'L1', 'Tree.md');
+    const credExec = { name: 'write', arguments: { file_path: plain, content: 'api_key = sk-abcdef123456' }, agent: { session: { header: { id: 's' } } } };
+
+    // 分层判据本身：高危档 vs 红线档
+    check('⑯ inspect：高危档 = approval（可放行一次）', guard.inspect({ tool: 'edit', path: highRisk, sessionId: 's' })?.tier === 'approval');
+    check('⑯ inspect：凭据入出厂区 = redline（不可放行）',
+      guard.inspect({ tool: 'write', path: plain, content: 'api_key = sk-abcdef123456', sessionId: 's' })?.tier === 'redline');
+    check('⑯ 反例：放行路径不产 tier（不误伤）', guard.inspect({ tool: 'edit', path: plain, sessionId: 's' }) === undefined);
+
+    {
+      const { pre, guards } = buildFake();
+      check('⑯ 两层都装上（pre-execute + guard）', pre.length === 1 && guards.length === 1, `pre=${pre.length} guard=${guards.length}`);
+      check('⑯ 挂载自报点明放行层在场（报绿要指明是哪个面）', marker().includes('approvalLayer=true'), marker().trim().split('\n').pop());
+      check('⑯ 放行层在场 ⇒ 红线层对高危档**不出手**（否则上游批准会被自己否掉）',
+        guards[0](execArg(highRisk)) === undefined);
+      check('⑯ 反例：红线档仍由 guard 层硬拒（凭据入出厂区不可放行）',
+        typeof guards[0](credExec) === 'string');
+
+      const out = await pre[0](execArg(highRisk), allow);
+      check('⑯ 高危档 ⇒ 交上游 ask（kind=ask）', out?.kind === 'ask', JSON.stringify(out)?.slice(0, 90));
+      check('⑯ ask 带 reason + 中英 displayReason（弹窗要看得懂）',
+        typeof out?.reason === 'string' && typeof out?.displayReason?.zh === 'string' && typeof out?.displayReason?.en === 'string');
+      check('⑯ 包内固件真源同档（approval，不是 redline）', (await pre[0](execArg(fwSoul), allow))?.kind === 'ask');
+      check('⑯ 反例：非高危路径 ⇒ 原样透传下游（不打扰主人）', (await pre[0](execArg(plain), allow))?.kind === 'allow');
+      check('⑯ 反例：下游已拒 ⇒ 原样返回，**不**去 ask（不拿弹窗覆盖既有拒绝）',
+        (await pre[0](execArg(highRisk), async () => ({ kind: 'deny', reason: 'downstream' })))?.kind === 'deny');
+
+      const log = readFileSync(join(tmp, '.dsh-market', 'guard-decisions.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+      check('⑯ 留痕：ask 一笔带 tier/decidedBy（可核，不是黑箱）',
+        log.some((r) => r.tier === 'approval' && r.decidedBy === 'ask-upstream'));
+      check('⑯ 反例：红线档不与 ask 混淆（decidedBy=guard）', log.some((r) => r.tier === 'redline' && r.decidedBy === 'guard'));
+    }
+
+    // 策略 `never`（完全权限预设）⇒ **自动放行高危档**——主人点选语义："完全权限默认放行心智修改"。
+    // 判据三态：不弹窗（不制造"没人被问过"的拒绝假陈述）/ 真放行 / 留痕可分辨。
+    {
+      const { pre, guards } = buildFake({ approval: { effectivePolicy: () => 'never' } });
+      const out = await pre[0](execArg(highRisk), allow);
+      check('⑯ 反例：策略 never ⇒ 不弹窗（不制造"用户拒绝"这种没人被问过的假陈述）', out?.kind !== 'ask');
+      check('⑯ never（完全权限）⇒ **自动放行**高危档（主人点选：完全权限放行心智修改）', out?.kind === 'allow');
+      check('⑯ 反例：never 时**红线档仍硬拒**（放行只放宽高危档，绝不放宽红线）',
+        typeof guards[0](credExec) === 'string');
+      const raw = readFileSync(join(tmp, '.dsh-market', 'guard-decisions.jsonl'), 'utf8');
+      check('⑯ never 的留痕单列且带 effect（decidedBy=policy-never + effect=allow ⇒ 事后能分辨"没问过但放行"）',
+        raw.includes('"decidedBy":"policy-never"') && raw.includes('"effect":"allow"'));
+      check('⑯ ask 分支的留痕带 effect=ask（两种分岔在流水里可机器区分）', raw.includes('"effect":"ask"'));
+    }
+
+    // 🔴 降级不放宽：拿不到 pre-execute 挂载点 ⇒ 高危档退回硬拒（而不是静默放开）
+    {
+      const { guards } = buildFake({ withOn: false });
+      check('⑯ 降级不放宽：pre-execute 挂不上 ⇒ 高危档退回 guard 硬拒',
+        typeof guards[0](execArg(highRisk)) === 'string');
+      check('⑯ 降级自报（marker 里 approvalLayer=false，不假装有放行层）', marker().includes('approvalLayer=false'));
+    }
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+}
+
 // ── ⑳ 前端配套（host API 契约 + 浏览器半结构）────────────────────────────────
 // 为什么单列一整节：浏览器半**不可能被 node 直接 import**（它依赖 `window`），host 半的路由
 // 也只在真 webServer 上才被调用 ⇒ 这里是它们唯一能被断言的地方。
 // 判据两条都配了反例：① 路由/槽位**集合**（多一个少一个都红）；② 信任闸与目录穿越（隐私口）。
+// 2026-10-05 补：放行记录口（`/api/mind/guard-decisions`）也在这里测——复用本节的宿主桩与
+// 请求夹具，不另起一套（另起就会养出第二份"闸有没有生效"的判据）。它额外钉住**只读**：
+// 路由跑完流水文件必须字节不变。
 {
   const api = loaded['lib/host/api.js'];
   const tmp2 = mkdtempSync(join(tmpdir(), 'dshmind-api-'));
@@ -1010,6 +1100,150 @@ if (guard) {
     const putRes = await call('/api/mind/connect', { method: 'PUT', url: '/api/mind/connect' });
     check('⑳ 反例：PUT ⇒ 405', putRes.statusCode === 405, String(putRes.statusCode));
 
+    // —— 放行记录（guard 判定流水的**只读**口）——
+    // 为什么在这一节测：这套"真 webServer 桩 + 请求夹具 + 隔离根（tmp2）"已经端着，
+    // 新口复用，不另造宿主桩。四条判据按"反例优先"排：文件不存在 / 坏行 / 跨站 / 只读。
+    const gdDir = join(tmp2, '.dsh-market');
+    const gdPath = join(gdDir, 'guard-decisions.jsonl');
+    mkdirSync(gdDir, { recursive: true });
+
+    // ① 反例：文件不存在 ⇒ 空结果 + note，**不是** 500、更不是抛错
+    const gdNone = await call('/api/mind/guard-decisions');
+    const gdNoneJ = j(gdNone);
+    check('⑳ 反例：流水文件不存在 ⇒ 200 / ok:true / total:0 / 带 note（不是 500、不抛）',
+      gdNone.statusCode === 200 && gdNoneJ?.ok === true && gdNoneJ.total === 0
+      && Array.isArray(gdNoneJ.records) && gdNoneJ.records.length === 0
+      && typeof gdNoneJ.note === 'string' && gdNoneJ.note.length > 0,
+      `${gdNone.statusCode} ${String(gdNone.body).slice(0, 140)}`);
+    check('⑳ 流水口给的路径来自 paths.js 的 marketDir()（不自拼路径 ⇒ 换 profile 不错位）',
+      gdNoneJ?.path === join(paths.marketDir(), 'guard-decisions.jsonl'), String(gdNoneJ?.path));
+    check('⑳ 反例：读不存在的流水**不顺手建一个**（只读口不许留下写副作用）', !existsSync(gdPath));
+
+    // ② 真写一份流水：四种 decidedBy 语义 + 一条坏行 + 一条缺字段的旧记录
+    const gdOf = (o) => JSON.stringify(o);
+    writeFileSync(gdPath, [
+      gdOf({ ts: '2026-10-05T12:40:14.948Z', tool: 'write', path: 'X:\\mind\\L1\\HUB.md', reason: '高危自我修改：改的是宪法/规则', tier: 'approval', session: 's1', decidedBy: 'ask-upstream', effect: 'ask' }),
+      gdOf({ ts: '2026-10-05T12:41:00.000Z', tool: 'edit', path: 'X:\\mind\\L1\\Memory.md', reason: '高危自我修改：改的是宪法/规则', tier: 'approval', session: 's1', decidedBy: 'policy-never', effect: 'allow' }),
+      gdOf({ ts: '2026-10-05T12:42:00.000Z', tool: 'write', path: 'X:\\mind\\L0\\SOUL.md', reason: '隐私红线：出厂区不写凭据', tier: 'redline', session: 's2', decidedBy: 'guard' }),
+      gdOf({ ts: '2026-10-05T12:43:00.000Z', tool: 'write', path: 'X:\\mind\\L1\\HUB.md', reason: '高危自我修改：改的是宪法/规则', tier: 'approval', session: 's2', decidedBy: 'guard(degraded)' }),
+      '这一行不是 JSON（坏行）',
+      gdOf({ ts: '2026-10-05T12:44:00.000Z', tool: 'write', path: 'X:\\mind\\L1\\Tree.md', reason: '上一版 guard 写的记录：没有 decidedBy / effect' }),
+    ].join('\n') + '\n', 'utf8');
+    const gdBefore = readFileSync(gdPath);
+
+    const gdRes = await call('/api/mind/guard-decisions');
+    const gd = j(gdRes);
+    check('⑳ 放行记录口真应答：200，且 decidedBy 三态各自可数（面板靠它分"问过/没人问过/硬拒"）',
+      gdRes.statusCode === 200 && gd?.ok === true && gd.total === 5 && gd.records.length === 5
+      && gd.counts['ask-upstream'] === 1 && gd.counts['policy-never'] === 1
+      && gd.counts.guard === 1 && gd.counts['guard(degraded)'] === 1 && gd.counts.unknown === 1,
+      JSON.stringify(gd?.counts));
+    check('⑳ 反例：坏行被跳过但**计数**（skipped=1，不静默丢）', gd?.skipped === 1, String(gd?.skipped));
+    check('⑳ counts 只统计返回的 records（sum(counts) === records.length，数字可复核）',
+      Object.values(gd.counts).reduce((a, b) => a + b, 0) === gd.records.length);
+    check('⑳ 旧记录缺字段原样出来（缺 effect ⇒ 面板显示"未标注"，**不许猜**）',
+      gd.records[4]?.decidedBy === undefined && gd.records[4]?.effect === undefined
+      && gd.records[4].reason.includes('上一版'), JSON.stringify(gd.records[4]));
+    check('⑳ 顺序＝写入顺序（面板倒过来就是"最新在最上"）',
+      gd.records[0].ts < gd.records[gd.records.length - 1].ts);
+
+    const gdL2 = j(await call('/api/mind/guard-decisions?limit=2'));
+    check('⑳ ?limit=2 取的是**尾部**两条（最新的），total 仍报窗口内全量 5',
+      gdL2.records.length === 2 && gdL2.total === 5 && gdL2.records[1].ts === '2026-10-05T12:44:00.000Z',
+      JSON.stringify(gdL2.records.map((r) => r.ts)));
+    check('⑳ 反例：?limit=0 ⇒ 夹到 1（不是"返回全部"、也不是 0 条）',
+      j(await call('/api/mind/guard-decisions?limit=0')).limit === 1);
+    check('⑳ 反例：?limit=99999 ⇒ 夹到 1000（不能被浏览器牵着读个没完）',
+      j(await call('/api/mind/guard-decisions?limit=99999')).limit === 1000);
+    check('⑳ 反例：?limit=abc ⇒ 回落默认 200（不 NaN、不返回空）',
+      j(await call('/api/mind/guard-decisions?limit=abc')).limit === 200);
+
+    const gdDeny = await call('/api/mind/guard-decisions', { headers: { 'sec-fetch-site': 'cross-site' } });
+    check('⑳ 反例：跨站 GET 放行记录口 ⇒ 403（新口没漏信任闸）', gdDeny.statusCode === 403, String(gdDeny.statusCode));
+    const gdFar = await call('/api/mind/guard-decisions', { remote: '10.0.0.5' });
+    check('⑳ 反例：非 loopback 来源 ⇒ 403', gdFar.statusCode === 403, String(gdFar.statusCode));
+
+    const gdAfter = readFileSync(gdPath);
+    check('⑳ 只读：路由跑完（含 ?limit= 与 403 那几次）流水文件**字节完全不变**',
+      gdBefore.length === gdAfter.length && gdBefore.equals(gdAfter), `${gdBefore.length} -> ${gdAfter.length}`);
+
+    // ③ 尾部读取：文件远大于尾窗 ⇒ 只回尾部，且 `partial` 明说"更早的没读"（不假装全量）
+    const gdBigLines = [];
+    for (let i = 0; i < 4000; i += 1) {
+      gdBigLines.push(gdOf({
+        ts: `2026-10-05T00:${String(Math.floor(i / 60) % 60).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}.000Z`,
+        tool: 'write', path: `X:\\mind\\L2\\Skill\\f${i}.md`, reason: `第 ${i} 条（把文件撑到远大于尾窗）`,
+        tier: 'approval', decidedBy: 'policy-never', effect: 'allow', seq: i,
+      }));
+    }
+    writeFileSync(gdPath, gdBigLines.join('\n') + '\n', 'utf8');
+    const gdBig = j(await call('/api/mind/guard-decisions?limit=1000'));
+    check('⑳ 大文件只读尾部：partial=true、file.bytes > windowBytes、最后一条＝刚写的第 3999 条',
+      gdBig.partial === true && gdBig.file.bytes > gdBig.windowBytes && gdBig.total < 4000
+      && gdBig.records[gdBig.records.length - 1].seq === 3999,
+      JSON.stringify({ total: gdBig.total, win: gdBig.windowBytes, bytes: gdBig.file.bytes }));
+    check('⑳ 尾部读取：最早那批（seq=0）**不在**结果里 ⇒ 证明读的是尾不是头',
+      !gdBig.records.some((r) => r.seq === 0) && gdBig.records[0].seq > 100
+      && gdBig.records.length === Math.min(1000, gdBig.total), JSON.stringify({ first: gdBig.records[0].seq }));
+    check('⑳ 反例：从中间截起的**半截首行**被丢掉 ⇒ skipped 仍为 0（它是"没读完"，不是"坏行"）',
+      gdBig.skipped === 0, String(gdBig.skipped));
+
+    // —— 人设卡写口（**全包唯一的文件写面**）——
+    // 放在放行记录那批**之后**：这里会真写一行流水（`recordDecision`），
+    // 而上面有一条"只读口不许顺手建流水文件"的断言（`!existsSync(gdPath)`）必须先跑。
+    const personaPath = join(tmp2, 'mind-private', 'L0', '人设卡.md');
+    const getEmpty = j(await call('/api/mind/persona'));
+    check('⑳ 读口空态：还没卡 ⇒ 200 / present:false（"还没有"与"读不到"分开报，不许混成一句假陈述）',
+      getEmpty?.ok === true && getEmpty.present === false && getEmpty.rel === paths.PERSONA_REL
+      && getEmpty.limit === paths.PERSONA_CHARS, JSON.stringify(getEmpty));
+    const noConfirm = await call('/api/mind/persona', { method: 'POST', url: '/api/mind/persona', body: { text: '# 人设\n甲\n' } });
+    check('⑳ 反例：缺二次确认 ⇒ 400（二次确认服务端也认，不靠 UI 的确认框）',
+      noConfirm.statusCode === 400 && !existsSync(personaPath), String(noConfirm.body).slice(0, 140));
+    const putWrite = await call('/api/mind/persona', { method: 'PUT', url: '/api/mind/persona' });
+    check('⑳ 反例：PUT ⇒ 405（只认 GET/POST）', putWrite.statusCode === 405, String(putWrite.statusCode));
+    const emptyWrite = await call('/api/mind/persona', { method: 'POST', url: '/api/mind/persona', body: { text: '   ', confirm: true } });
+    check('⑳ 反例：空内容 ⇒ 400 且**不落盘**', emptyWrite.statusCode === 400 && !existsSync(personaPath), String(emptyWrite.body).slice(0, 140));
+    const overWrite = await call('/api/mind/persona', { method: 'POST', url: '/api/mind/persona', body: { text: 'x'.repeat(20001), confirm: true } });
+    check('⑳ 反例：超上限 ⇒ 413（防一次误粘把注入件撑大）', overWrite.statusCode === 413, String(overWrite.body).slice(0, 140));
+
+    const write1 = await call('/api/mind/persona', { method: 'POST', url: '/api/mind/persona', body: { text: '# 人设\n第一版\n', confirm: true } });
+    const write1J = j(write1);
+    check('⑳ 正例：写口 200 且文件真落盘、字节数与内容都对',
+      write1.statusCode === 200 && write1J?.ok === true && write1J.bytes > 0
+      && readFileSync(personaPath, 'utf8').includes('第一版'), String(write1.body).slice(0, 160));
+    check('⑳ 首次写（改前无卡）⇒ 不产生快照、不留 .tmp 残骸（原子写的证据）',
+      write1J?.snapshot === '' && !existsSync(personaPath + '.tmp'), JSON.stringify(write1J));
+    const getCard = j(await call('/api/mind/persona'));
+    check('⑳ 读口有卡：正文 + rel + limit 齐（前端按返回字段渲染，不自己拼路径/常数）',
+      getCard?.ok === true && getCard.present === true && getCard.text.includes('第一版')
+      && getCard.rel === paths.PERSONA_REL && getCard.limit === paths.PERSONA_CHARS, String(getCard?.text).slice(0, 80));
+
+    const write2 = await call('/api/mind/persona', { method: 'POST', url: '/api/mind/persona', body: { text: '# 人设\n第二版\n', confirm: true } });
+    const write2J = j(write2);
+    const snapPath = write2J?.snapshot ? join(tmp2, 'mind-private', 'tasks', 'evolution', 'snapshots', write2J.snapshot) : '';
+    check('⑳ 覆盖写 ⇒ 旧版先快照（`tasks/evolution/snapshots/` + 既有命名），且快照内容＝旧版',
+      Boolean(write2J?.snapshot) && write2J.snapshot.includes('__panel-persona-edit__')
+      && existsSync(snapPath) && readFileSync(snapPath, 'utf8').includes('第一版'), String(write2J?.snapshot));
+    check('⑳ 写口留痕：decidedBy=api-panel + tier=approval（与"被弹窗问过"分得开）',
+      readFileSync(gdPath, 'utf8').includes('"decidedBy":"api-panel"')
+      && readFileSync(gdPath, 'utf8').includes('"tier":"approval"'));
+    check('⑳ 写口只认一个目标：路径来自 paths.js 的单件口径（`PERSONA_REL`）',
+      readFileSync(personaPath, 'utf8').includes('第二版')
+      && paths.PERSONA_REL === 'L0/人设卡.md' && paths.PERSONA_CHARS > 0);
+    const warnWrite = j(await call('/api/mind/persona', {
+      method: 'POST', url: '/api/mind/persona',
+      body: { text: 'x'.repeat(paths.PERSONA_CHARS + 500), confirm: true },
+    }));
+    check('⑳ 超召回上限 ⇒ 保存成功但**当场报警**（不许让面板以为整张卡都生效了）',
+      warnWrite?.ok === true && typeof warnWrite.warning === 'string' && warnWrite.warning.length > 0
+      && warnWrite.limit === paths.PERSONA_CHARS, String(warnWrite?.warning).slice(0, 120));
+    const deniedWrite = await call('/api/mind/persona', {
+      method: 'POST', url: '/api/mind/persona', headers: { 'sec-fetch-site': 'cross-site' },
+      body: { text: '甲', confirm: true },
+    });
+    check('⑳ 反例：跨站请求 ⇒ 被信任闸挡住（写口不能比读口松）',
+      deniedWrite.statusCode === 403, String(deniedWrite.statusCode));
+
     // —— 宿主没有 tapIndex（老版本）⇒ 不崩（fail-open）——
     let crashed = false;
     try {
@@ -1038,6 +1272,8 @@ if (guard) {
       clientExports.inject.length === 1 && clientExports.inject[0] === 'slots', JSON.stringify(clientExports.inject));
     check('⑳ 浏览器半不用裸 import（工厂模式只许 require 外壳外部化的模块）',
       !/^\s*import\s/m.test(clientSrc));
+    check('⑳ 前端不拼人设卡路径（路径只在 host 的 `paths.js` 一份 ⇒ 改路径不会变成"静默读空"）',
+      !clientSrc.includes('人设卡.md'));
     check('⑳ host 半的浏览器包路径指向随包文件（不在 lib/ 下，故不进 node 侧自动发现）',
       existsSync(api.CLIENT_FILE) && api.CLIENT_FILE.split(sep).slice(-2).join('/') === 'client/client.js', api.CLIENT_FILE);
 
@@ -1058,12 +1294,17 @@ if (guard) {
       logger: () => ({ warn: () => {} }),
     });
     const ids = regs.map((r) => `${r.name}:${r.id}`).sort();
-    check('⑳ 真跑 apply ⇒ 注册 conversation.view:mind 与 sidebar.footer.action:mind-connect',
-      ids.includes('conversation.view:mind') && ids.includes('sidebar.footer.action:mind-connect'), ids.join(' '));
+    check('⑳ 真跑 apply ⇒ 注册 conversation.view:mind 与 conversation.input.left:mind-connect-input',
+      ids.includes('conversation.view:mind') && ids.includes('conversation.input.left:mind-connect-input'), ids.join(' '));
+    check('⑳ 页脚挂件已移除（2026-10-06：与输入区开关功能重复，且挂件常驻＝15s 轮询不停；接入态只留输入区一处）',
+      !ids.includes('sidebar.footer.action:mind-connect'), ids.join(' '));
     const unknown = regs.filter((r) => !KNOWN_SLOTS.includes(r.name)).map((r) => r.name);
     check('⑳ 槽位名都在白名单内（打错一个字母就静默失效，本条挡它）',
       regs.length >= 2 && unknown.length === 0, unknown.join(', '));
     check('⑳ 反例：白名单确实能判红（`converstion.view` 不在名单内）', !KNOWN_SLOTS.includes('converstion.view'));
+    const panelReg = regs.find((r) => r.name === 'plugins.bundle.config');
+    check('⑳ 人设卡写口挂在插件面板（`plugins.bundle.config` + key=包名：官方账本只认 `options.key`）',
+      panelReg?.key === 'dsh-mind', JSON.stringify(panelReg ?? null));
 
     // —— 渲染冒烟：拿**真 status JSON** 把面板组件跑一遍 ——
     // 为什么值得单列：渲染期抛错在浏览器里表现为"整块空白"，最难在重启后定位。
@@ -1089,9 +1330,38 @@ if (guard) {
     check('⑳ 反例：status 为 null（host 半没起来）也不抛，只显示"读不到"', r2 === true, String(r2));
     const r3 = render('MindPanel', () => smoke.MindPanel({ sessionId: 'api-sess' }));
     check('⑳ MindPanel 渲染不抛', r3 === true, String(r3));
-    const r4 = render('MindWidget', () => smoke.MindWidget({ sessionId: 'api-sess' }));
-    check('⑳ 页脚挂件渲染不抛（无 status 时也要能画出来）', r4 === true, String(r4));
+    const rP = render('PersonaCard', () => smoke.PersonaCard({}));
+    check('⑳ 人设卡编辑页渲染不抛（插件面板那一格；渲染抛错＝整块空白）', rP === true, String(rP));
     check('⑳ 渲染确实走到了子组件（不是"因为到处 return null 而假绿"）', tree.length > 0, `createElement ${tree.length} 次`);
+
+    // —— 放行记录板块（浏览器半）：拿**真** guard-decisions JSON 渲染一遍 ——
+    // 与上面 Facts 同理：渲染期抛错在浏览器里表现为"整块空白"，先在 node 里冒烟一遍。
+    check('⑳ 放行记录板块暴露测试缝（渲染面 + 三态映射都可断言）',
+      Boolean(smoke.GuardDecisions && smoke.GuardDecisionsBody && smoke.DECIDED_BY
+        && smoke.DECIDED_BY['policy-never'] && smoke.DECIDED_BY['ask-upstream']
+        && smoke.DECIDED_BY.guard && smoke.DECIDED_BY['guard(degraded)'] && smoke.DECIDED_BY.unknown));
+    check('⑳ 三态徽标**不同色**（"没人被问过"不许与"已交上游弹窗"同色 ⇒ 一眼看得出）',
+      smoke.DECIDED_BY['policy-never'].cls !== smoke.DECIDED_BY['ask-upstream'].cls
+      && smoke.DECIDED_BY['policy-never'].cls === 'dm-by-never',
+      JSON.stringify([smoke.DECIDED_BY['policy-never'].cls, smoke.DECIDED_BY['ask-upstream'].cls]));
+    check('⑳ 面板保存（`api-panel`）单列一种底色 ⇒ 与"被弹窗问过"分得开，且已进展示顺序表',
+      smoke.DECIDED_BY['api-panel'] && smoke.DECIDED_BY['api-panel'].cls === 'dm-by-panel'
+      && smoke.DECIDED_BY['api-panel'].cls !== smoke.DECIDED_BY['ask-upstream'].cls,
+      JSON.stringify(smoke.DECIDED_BY['api-panel'] ?? null));
+    const rGd = render('GuardDecisionsBody(真流水)', () => smoke.GuardDecisionsBody({ data: gd }));
+    check('⑳ 用真流水 JSON 渲染板块不抛（tier/三态/effect/路径/摘要那条路径真被执行）', rGd === true, String(rGd));
+    const rGdBig = render('GuardDecisionsBody(尾部截断)', () => smoke.GuardDecisionsBody({ data: gdBig }));
+    check('⑳ 反例：partial（只读了尾部）也能画，不抛', rGdBig === true, String(rGdBig));
+    const rGdNull = render('GuardDecisionsBody(null)', () => smoke.GuardDecisionsBody({ data: null }));
+    check('⑳ 反例：读不到流水 ⇒ 只写"读不到"，不抛', rGdNull === true, String(rGdNull));
+    const rGdEmpty = render('GuardDecisionsBody(空)', () => smoke.GuardDecisionsBody({ data: gdNoneJ }));
+    check('⑳ 反例：空流水（total=0 / records=[]）不抛，并把 note 显出来', rGdEmpty === true, String(rGdEmpty));
+    const rGdShell = render('GuardDecisions(取数壳)', () => smoke.GuardDecisions({ stamp: 0 }));
+    check('⑳ 取数壳也能画（假 React 下没拿到数据 ⇒ 走"读不到"那一支）', rGdShell === true, String(rGdShell));
+    check('⑳ 板块**真接进了面板**（Facts 的渲染树里出现 GuardDecisions ⇒ 不是没人调的残骸）',
+      tree.some((t) => t.type === 'GuardDecisions'));
+    check('⑳ 反例：三态映射判据能变红（把 policy-never 写成"已问过"的底色就会被上面抓到）',
+      smoke.DECIDED_BY['policy-never'].cls !== 'dm-by-ask');
   } finally {
     restoreEnv();
     rmSync(tmp2, { recursive: true, force: true });

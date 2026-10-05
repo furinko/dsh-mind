@@ -12,7 +12,7 @@
 |---|---|---|---|---|
 | todo | `mind-private\L3\projects\<项目>\project.md`「下一步」（**体系主线档**；key＝本机仓库目录名） | 需要/要求/该做/计划 | `/api/mind/todos` 读写 | status / priority / source / promotedFrom |
 | progress | `mind-private\L3\projects\<项目>\project.md`「进度状态」（同主线档） | 现状/阶段/到哪一步 | `/api/mind/read`?zone=private（读 project.md）或 mind-prime | phase / health / updated |
-| suggestion | 待裁决的"动作/修改/评估产出"（`mind-private\tasks\approvals.json`——guard 护栏写入 + 面板裁决） | 建议/可改/改进点/需放行的动作 | 经护栏面板 ✓/✗ 裁决〔⚠️ **本包无面板、无放行通道**——见下方实况标注〕 | 薄字段（开放标签）：id / kind(action·edit·delete) / path / op / reason / status(pending·approved) / requestedAt / decidedAt / decidedBy |
+| suggestion | 待裁决的"动作/修改/评估产出"（`mind-private\tasks\approvals.json`——guard 护栏写入 + 面板裁决） | 建议/可改/改进点/需放行的动作 | 经护栏面板 ✓/✗ 裁决〔⚠️ **本包无自家面板**：高危档经**宿主审批弹窗**放行一次、不落卡片——见下方实况标注〕 | 薄字段（开放标签）：id / kind(action·edit·delete) / path / op / reason / status(pending·approved) / requestedAt / decidedAt / decidedBy |
 | memory | 记忆层三区：`L3\common\<主题>\`（通用）+ `L3\projects\<项目>\知识\<主题>\`（专属）+ 各目录 `_index` | 教训/偏好/跨会话记忆 | `/api/mind/search` + `/api/mind/dup-check` | kind / importance / scope / topic / project / tags |
 | skill | `mind\L2\Skill\<id>.md` + `_index` | 怎么做/能力/流程/积木 | 关键词触发加载 | name / version / triggers / inputs / outputs |
 
@@ -26,9 +26,10 @@
 > （完整版为 `dshome-mind-guard` 插件）——它**不是**抽象的"建议流"，而是**真实在跑的裁决闭环**：
 >
 > ⚠️ **本包实况（2026-09-29 加，防"规则比机制宽"）**：本包（`dsh-mind`）的护栏是 `lib/host/guard.js`，
-> **只有"拦"、没有放行通道**——不写也不读 `approvals.json`、没有面板、不接上游 `approval` 服务。
-> ⇒ 本包里 **suggestion 概念没有落地机制**：下面这套"产生→裁决→消费"属完整版；本包遇到高危拦截即终局拒绝，
-> 按 `Ritual §四` 的「本包护栏能力边界」处置（停下说明，等主人放行后由主人动手）。
+> **分两档处置**（2026-10-05 改造）：① **红线档**（未接入心智 / 凭据入出厂区）**硬拒、不可放行**；② **高危自我修改档**经**宿主审批弹窗**放行一次（宿主 `tools/pre-execute` 的 `{kind:'ask'}` → `approval` seam）。
+> **仍不写不读 `approvals.json`、不自建面板**——放行界面是宿主 UI，卡片式"待裁决 / 额度"流程属完整版。
+> ⇒ 本包里 **suggestion 的"自家卡片裁决"这一支仍未落地**：下面这套"产生→裁决→消费"属完整版；本包高危拦截的出口＝**宿主放行**（处置随策略分岔：`ask`＝弹窗放行一次；`never`＝**自动放行**——"完全权限默认放行心智修改"），
+> 按 `Ritual §四` 的「本包护栏能力边界」处置。
 > 同理，`/api/mind/*` 那几条写接口也**不在本包**（面板属完整版，本包按 `docs\DESIGN.md §一` 有意不做）。
 > - **产生**：改"自我类高危文件"（L0 纪律 / L1 规则）时护栏真拦 → 写一条 `approvals.json` 待裁决（kind=action，status=pending，含 path/op/reason 摘要）；
 > - **裁决**：用户在「心智 → 动作放行」面板 ✓ 放行（→approved）或 ✗ 拒绝（不入 TRASH——被拦的本就是未落盘改动，拒绝即不落盘）；
