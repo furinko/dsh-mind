@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="心智 · 数字组织">
+  <!-- 八件基础设施围成一圈，中心是唯一判定点：一眼看出「一个入口、八件支撑」。 -->
+  <defs>
+    <linearGradient id="mind-ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4C6EF5"/>
+      <stop offset="1" stop-color="#9775FA"/>
+    </linearGradient>
+  </defs>
+  <circle cx="32" cy="32" r="30" fill="none" stroke="url(#mind-ring)" stroke-width="2.5" opacity="0.55"/>
+  <g fill="currentColor" opacity="0.75">
+    <circle cx="32" cy="6" r="3"/>
+    <circle cx="50.4" cy="13.6" r="3"/>
+    <circle cx="58" cy="32" r="3"/>
+    <circle cx="50.4" cy="50.4" r="3"/>
+    <circle cx="32" cy="58" r="3"/>
+    <circle cx="13.6" cy="50.4" r="3"/>
+    <circle cx="6" cy="32" r="3"/>
+    <circle cx="13.6" cy="13.6" r="3"/>
+  </g>
+  <g stroke="url(#mind-ring)" stroke-width="2" stroke-linecap="round" opacity="0.5">
+    <path d="M32 9v14M50 16.4 40.6 25.8M55 32H46M50 47.6 40.6 38.2M32 55V46M14 47.6l9.4-9.4M9 32h9M14 16.4l9.4 9.4"/>
+  </g>
+  <circle cx="32" cy="32" r="9.5" fill="url(#mind-ring)"/>
+  <path d="M28.4 32.6l2.6 2.6 4.8-5.2" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

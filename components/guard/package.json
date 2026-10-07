@@ -1,0 +1,31 @@
+{
+  "name": "dsh-mind-guard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "心智 · 数字组织 —— 安全类组件：四道封闭探针、探针见红自动回滚到全绿最近一版、条款级升级合并的裁决面",
+  "license": "MIT",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "meta": {
+    "title": "心智 · 安全类",
+    "description": "看住机制本身：四道封闭探针、自动回滚、升级挂起 diff 的裁决。"
+  },
+  "files": [
+    "lib"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": ">=0.1.5-rc.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh": {
+      "optional": true
+    }
+  }
+}

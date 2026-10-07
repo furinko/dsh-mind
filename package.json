@@ -1,0 +1,67 @@
+{
+  "name": "dsh-mind",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "心智 · 数字组织 —— 一张插件卡，三个组件：内核 / 安全类 / 看板",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dsh-bundle",
+    "deepseek-harness",
+    "digital-organization",
+    "governance",
+    "policy-engine",
+    "audit"
+  ],
+  "license": "MIT",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./locale/zh.json": "./locale/zh.json",
+    "./locale/en.json": "./locale/en.json",
+    "./icon.svg": "./icon.svg"
+  },
+  "meta": {
+    "title": "心智 · 数字组织",
+    "description": "数字组织的治理内核：策略引擎 · 任务图 · 消息总线 · 能力库 · 记忆服务 · 审计日志 · 角色注册表 · 共享工作台"
+  },
+  "icon": "./icon.svg",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "dsh-mind-kernel": "link:./components/kernel",
+    "dsh-mind-guard": "link:./components/guard",
+    "dsh-mind-board": "link:./components/board"
+  },
+  "files": [
+    "lib",
+    "src",
+    "mind",
+    "locale",
+    "icon.svg",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node test/preflight.mjs && node --test \"test/*.test.js\"",
+    "preflight": "node test/preflight.mjs"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": ">=0.1.5-rc.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh": {
+      "optional": true
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "name": "dsh-mind-board",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "心智 · 数字组织 —— 看板组件：主内容区独立面板 + 左侧边栏下方入口",
+  "license": "MIT",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "meta": {
+    "title": "心智 · 看板",
+    "description": "把组织当前状态给人看：待你决定（首屏）· 会审（独立答案 / 分歧清单 / 零分歧告警）· 任务图 · 分级审计流 · 状态条。"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [],
+      "immediately": true
+    }
+  },
+  "files": [
+    "lib"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": ">=0.1.5-rc.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh": {
+      "optional": true
+    }
+  }
+}

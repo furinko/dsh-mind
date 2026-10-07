@@ -1,0 +1,27 @@
+# dsh-mind 自带的装载层。
+#
+# **一张插件卡，三个组件。** 插件列表里出现的是本包（一张卡）；
+# 卡片下面「包含的组件」是这三行，每行一个独立包、一个独立开关。
+#
+# 所以本包自己**不插行**（它只提供那张卡、共享库 `src/`、出厂区 `mind/` 与动作表）；
+# 三个组件包写在本包 package.json 的 `dependencies` 里，于是 pnpm 会把它们装进
+# profile 的 node_modules，这三行的 `name` 才解析得到。
+# profile 的 `dsh.profile.bundles` 里**只写本包**——写全三个就会变成三张卡，
+# 而那样「组件」就退回成了「三个插件」。
+#
+# 关掉一行 = 那个包不进 roster = 它的工具 / 命令 / 浏览器半区一起消失：
+#   关 dsh-mind-guard → 没有探针与升级运维，判定与记账照常
+#   关 dsh-mind-board → 没有面板与侧边栏入口，组织照常跑
+# 内核那一行没有开关：关掉它，这张卡就只剩一个空壳。
+
+- insert:
+    - id: dsh-mind-kernel
+      name: dsh-mind-kernel
+
+    - id: dsh-mind-guard
+      name: dsh-mind-guard
+      config:
+        开机自检: true
+
+    - id: dsh-mind-board
+      name: dsh-mind-board
