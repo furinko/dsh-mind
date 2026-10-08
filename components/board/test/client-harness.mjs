@@ -209,6 +209,7 @@ export function findAllByClass(tree, token) {
 
 /** 某个元素子树里的文本（配合 findAllByClass 做「这场会审里有什么」的断言）。 */
 export function textOf(node) {
+  if (node === null || node === undefined) return '';
   return collect(node, { skipStyle: true }).text;
 }
 
@@ -674,6 +675,21 @@ export function legacyBoolView(值) {
 export function noDecisionView() {
   const view = sampleView();
   view.待你决定 = [];
+  return view;
+}
+
+/**
+ * **半数缺数据**的状态条视图（Batch 9 用）：项目键 / 生成时刻 / 介`入度 / 探针 都缺，
+ * 只留闸与失联。用来验"没数据的地方不留空壳、不画光秃秃的 `—`"。
+ */
+export function 半数缺数据的视图() {
+  const view = sampleView();
+  delete view.项目;
+  view.生成于 = null;
+  const 状态条 = Object.assign({}, view.状态条);
+  delete 状态条.介入度;
+  delete 状态条.探针;
+  view.状态条 = 状态条;
   return view;
 }
 
@@ -1846,16 +1862,29 @@ export async function runHarness() {
     /** 状态条每一格：键 → 该格渲染出的文本（探针要靠这张表眼检排版）。 */
     const 状态条各格 = (tree) => findAllByClass(tree, 'dshmind-readout').map((el) => {
       const 键 = (findAllByClass(el, 'dshmind-readoutKey')[0] || { props: {} });
+      const 值 = textOf(findAllByClass(el, 'dshmind-readoutVal')[0]).trim();
+      const 注 = textOf(findAllByClass(el, 'dshmind-readoutNote')[0]).replace(/\s+/g, ' ').trim();
       return {
         键: textOf(键).trim(),
-        文本: textOf(el).replace(/\s+/g, ' ').trim(),
+        值: 值,
+        注: 注,
+        // 整格文本（键 + 值 + 注，换行分隔）—— 老断言用惯了这个形状，别让它们失明。
+        文本: [textOf(键).trim(), 值, 注].filter(Boolean).join('\n'),
+        告警: String(el.props.className).indexOf('dshmind-readoutAlarm') >= 0,
         元素: el,
       };
     });
 
-    const 状态render = async (view) => {
+    /**
+     * 渲染面板并等数据到位。
+     * @param {object} view 投影
+     * @param {boolean} [注入空壳] 是否打开"故障注入"（让面板故意多渲染一个没数据的格）
+     */
+    const 状态render = async (view, 注入空壳, 注入破折号) => {
       const spy = makeRemote(() => okReply(view));
       const b = boot({ store, services: Object.assign(session(), { remote: spy.remote }) });
+      if (注入空壳) b.loaded.win.__dshMindInjectEmptySlot = true;
+      if (注入破折号) b.loaded.win.__dshMindInjectDashSlot = true;
       const r = mountDashboard(b);
       r.flush();
       await settle();
@@ -1936,13 +1965,126 @@ export async function runHarness() {
       && String(项目格.元素.props.className) === String(时刻格.元素.props.className),
       '⑦ 项目键与生成时刻两格用同一套类名（列宽口径一致）',
       JSON.stringify([项目格 && 项目格.元素.props.className, 时刻格 && 时刻格.元素.props.className])));
-    // 自适应：状态条用 auto-fit 网格（窄面板自动减列），值可换行。
+    // 自适应 + **没有空轨道**（Batch 9：网格换成 flex-wrap —— `auto-fit` 的空轨道就是"空位突兀"的来源）。
     const 面板源码 = readFileSync(CLIENT_PATH, 'utf8');
-    passed.push(check(/\.dshmind-readouts\{display:grid;grid-template-columns:repeat\(auto-fit,minmax\(\d+px,1fr\)\)/.test(面板源码),
-      '⑤ 状态条是 auto-fit 自适应网格（窄面板自动减列，不是固定 5~6 列）'));
+    passed.push(check(/\.dshmind-readouts\{display:flex;flex-wrap:wrap/.test(面板源码),
+      '⑤ 状态条是 flex-wrap（没有"轨道"概念 ⇒ 排不满也不会画出空框）'));
+    passed.push(check(!/\.dshmind-readouts\{display:grid/.test(面板源码),
+      '⑤ 状态条不再是 auto-fit 网格（那是空轨道的来源）'));
+    passed.push(check(/\.dshmind-readout\{[^}]*flex:1 1 \d+px/.test(面板源码),
+      '⑤ 每格自适应宽度（`flex:1 1 <basis>`）'));
     passed.push(check(/\.dshmind-readoutVal\{[^}]*overflow-wrap:anywhere/.test(面板源码)
       && !/\.dshmind-readoutVal\{[^}]*text-overflow:ellipsis/.test(面板源码),
       '⑤ 值的样式是"可换行"而不是"裁切"（无 text-overflow:ellipsis）'));
+
+    // ═══ Batch 9 · 状态条"空位" + 审计框可滚动 ═══
+    //
+    // 主人看过真机：「还可以，就是空位的地方不好看，比较突兀」＋「审计流那个框不能滚动」。
+    // 两个成因分别钉住：①`auto-fit` 的空轨道会被画上外观 ②值为 `—` 的空格照样占位。
+
+    // ① **带壳的元素数 === 有内容的格数**（不许存在"有壳没内容"的格）。
+    //    旧版：格子的壳来自容器背景 + `gap:1px` 露的缝 ⇒ 空轨道也长成一个方框。
+    //
+    // ⚠️ 这两条（① 与 ②）守的是**防御性守卫**：Batch 9 之后每个调用点都给得出真值或一句人话，
+    //    所以它们**没有活的触发者**——真值改变不了它们（我试过：把守卫拆了也不红）。
+    //    于是一起用**故障注入**把退化形态造出来验：面板读 `window.__dshMindInjectEmptySlot === true`
+    //    时会故意多渲染一个"没数据的格"。**没有反例 = 没验过**，这一笔就是那个反例。
+    for (const 场景 of [
+      { name: '常态', view: sampleView() },
+      { name: '半数缺数据', view: 半数缺数据的视图() },
+    ]) {
+      const r = await 状态render(场景.view);
+      const 格 = findAllByClass(r.tree, 'dshmind-readout');
+      const 空壳 = 格.filter((el) => {
+        // ⚠️ 判据是**「除了键以外的内容」**：格子总是有键（那是标签，不是内容。
+        //    第一版只算「整格文本去掉空白/破折号」，于是"只剩一个键"的退化格子会被算成"有内容"
+        //    ⇒ 变异（让没内容的格照样画壳）不红。现在把键去掉再判。
+        const 键文本 = textOf(findAllByClass(el, 'dshmind-readoutKey')[0]);
+        const 其余 = textOf(el).replace(键文本, '');
+        return 其余.replace(/[\s—–-]/g, '').length === 0;
+      });
+      passed.push(check(格.length > 0, '① ' + 场景.name + '：状态条确实渲染了格子', String(格.length)));
+      passed.push(check(空壳.length === 0,
+        '① ' + 场景.name + '：**没有"有壳没内容"的格**（带壳元素数 === 有内容的格数）',
+        JSON.stringify(空壳.map((el) => textOf(el)))));
+      r.unmount();
+    }
+    // **反例（证据）**：故意注入一个"没数据的格" ⇒ 同一把尺子必须数得出来。
+    // 数不出来就说明上面那条是空转的（"没有反例 = 没验过"）。
+    {
+      const 注入 = await 状态render(sampleView(), true);
+      const 空壳 = findAllByClass(注入.tree, 'dshmind-readout').filter((el) => {
+        const 键文本 = textOf(findAllByClass(el, 'dshmind-readoutKey')[0]);
+        return textOf(el).replace(键文本, '').replace(/[\s—–-]/g, '').length === 0;
+      });
+      passed.push(check(空壳.length === 1,
+        '① 反例：故意注入一个"没数据的格" ⇒ 判据必须**数得出来**（否则这条是空转）',
+        JSON.stringify(空壳.map((el) => textOf(el)))));
+      注入.unmount();
+    }
+
+    // ② 状态条里**不许出现空的 `—` 格**：无数据的格要么有说明文字、要么不渲染。
+    const 缺数据面板 = await 状态render(半数缺数据的视图());
+    const 缺数据各格 = 状态条各格(缺数据面板.tree);
+    passed.push(check(缺数据各格.every((g) => g.值.replace(/[\s—–-]/g, '').length > 0),
+      '② 每一格的值都不是光秃秃的 `—`（无数据就不渲染 / 有说明文字）',
+      JSON.stringify(缺数据各格.map((g) => g.键 + '=' + g.值))));
+    // **反例（证据）**：故意注入一个"值为 `—`"的格 ⇒ 同一把尺子必须**看得出它不合格**。
+    // 这条是"② 那条判据真在算"的证据 —— 没有它，② 就只是"碰巧数据里没有破折号"。
+    {
+      const 注入 = await 状态render(sampleView(), false, true);
+      const 破折号格 = 状态条各格(注入.tree).filter((g) => g.值.replace(/[\s—–-]/g, '') === '');
+      passed.push(check(破折号格.length === 1,
+        '② 反例：故意注入一个"值为 —"的格 ⇒ 判据必须**认得出它**（否则这条是空转）',
+        JSON.stringify(破折号格.map((g) => g.键 + '=' + g.值))));
+      注入.unmount();
+    }
+    // 整格不出现也接受：探针没结论时那一格必须消失。
+    const 缺探针 = sampleView();
+    缺探针.状态条 = Object.assign({}, 缺探针.状态条);
+    delete 缺探针.状态条.探针;
+    const 缺探针面板 = await 状态render(缺探针);
+    passed.push(check(!状态条各格(缺探针面板.tree).some((g) => g.键 === '安全类探针'),
+      '② 探针没数据时**整格不渲染**（不是留一个写着"—"的格子）'));
+    缺探针面板.unmount();
+    缺数据面板.unmount();
+
+    // ④ 审计列表容器**可滚动**（样式源里有 max-height + overflow-y:auto）。
+    passed.push(check(/\.dshmind-auditScroll\{[^}]*max-height:[^;}]+/.test(面板源码),
+      '④ 审计容器有 max-height（超高的内容不会把面板撑长）'));
+    passed.push(check(/\.dshmind-auditScroll\{[^}]*overflow-y:auto/.test(面板源码),
+      '④ 审计容器 overflow-y:auto —— **框内可滚**（Batch 9 后半的硬要求）'));
+    passed.push(check(/\.dshmind-auditScroll\{[^}]*scrollbar-width:thin/.test(面板源码),
+      '④ 滚动条可见（让人知道能滚，`scrollbar-width:thin`）'));
+
+    // ⑤ **渲染出的审计行数 === 投影给的行数**（不许静默裁掉、不许渲染了却不可达）。
+    {
+      const 多行 = sampleView();
+      // 造一份"条数明显超可视高度"的投影（40 条，超过 AUDIT_LIMIT=20 ⇒ 也要如实说明）。
+      const 基 = 多行.审计尾[0];
+      多行.审计尾 = Array.from({ length: 40 }, (_, i) => Object.assign({}, 基, { seq: i + 1 }));
+      const r = await 状态render(多行);
+      const 行 = findAllByClass(r.tree, 'dshmind-auditRow');
+      const 应渲染 = Math.min(40, 20); // AUDIT_LIMIT
+      passed.push(check(行.length === 应渲染,
+        '⑤ 审计行**渲染数 === 该列出的行数**（'+应渲染+' 条，不静默裁掉）', String(行.length)));
+      const 滚动容器 = findAllByClass(r.tree, 'dshmind-auditScroll')[0];
+      passed.push(check(!!滚动容器 && findAllByClass(滚动容器, 'dshmind-auditRow').length === 行.length,
+        '⑤ 渲染出的行**全部落在滚动容器里**（渲染了却不可达 ＝ 等于没渲染）',
+        String(滚动容器 ? findAllByClass(滚动容器, 'dshmind-auditRow').length : -1)));
+      const 文本 = collect(r.tree, { skipStyle: true }).text;
+      passed.push(check(文本.indexOf('投影共 40 条') >= 0 && 文本.indexOf('另有 20 条') >= 0,
+        '⑤ 框尾如实说清「投影共 40 条 / 另有 20 条未列出」（不是静默截断）', 文本.slice(-160)));
+      r.unmount();
+    }
+    // 行数没超上限时：如实说"已全部列出"。
+    {
+      const r = await 状态render(sampleView());
+      const 文本 = collect(r.tree, { skipStyle: true }).text;
+      passed.push(check(文本.indexOf('投影共 4 条，已全部列出') >= 0,
+        '⑤ 不超上限时明说「已全部列出」', 文本.slice(-160)));
+      r.unmount();
+    }
   }
 
   //

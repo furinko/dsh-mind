@@ -553,9 +553,23 @@ window.__ModuleLoader__.load({
       //     配合 `overflow-wrap:anywhere` 长文案自己换行（不再需要横向截断）。
       //  3. **告警底色贴合内容**：底色只染「值那一小块」（`width:fit-content`），
       //     不再铺满整格/整列（旧版底色比内容宽一大截）。
-      '.dshmind-readouts{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:1px;',
-      'background:var(--dsw-alias-border-l1,#0000001f)}',
-      '.dshmind-readout{background:var(--dsw-alias-bg-layer-1,#fff);padding:10px 14px;min-width:0}',
+      // ── 状态条（Batch 8 排版 / **Batch 9 治"空位"**）──────────────────────
+      // 历史与理由，一条都别删（每条都是真机上挑出来的）：
+      //  · Batch 8-1 **值不许被裁**：`nowrap` + `ellipsis` 把「已关闭（不判定失联）」裁成
+      //    「已关闭（不判定失」——现在值可换行（`overflow-wrap:anywhere`）。
+      //  · Batch 8-2 **告警底色贴合内容**：底色只染「值那一小块」（`width:fit-content`）。
+      //  · **Batch 9 空位**（主人：「空位的地方不好看，比较突兀」）：
+      //    旧版是 `repeat(auto-fit,minmax(190px,1fr))` —— `auto-fit` 会把**空轨道**也画上外观
+      //    （格子的底/边来自 `.dshmind-readouts` 的背景色被 `gap:1px` 露出的缝），
+      //    于是 5 格排进 6 列时末尾那块是**一个空洞的方框**。
+      //    现在改 **`flex-wrap`**：没有"轨道"这个概念 ⇒ 排不满只是右边留白，
+      //    **不会再画出任何空框**。分隔感改由每格自己的边框提供。
+      '.dshmind-readouts{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;background:transparent}',
+      // 每格自己画壳（底色 + 边框 + 圆角）。壳**只在真有内容的格上**：
+      // 没内容的格压根不渲染 —— `readout()` 里 `没内容就不画壳`。
+      '.dshmind-readout{box-sizing:border-box;flex:1 1 190px;min-width:150px;max-width:100%;',
+      'background:var(--dsw-alias-bg-layer-1,#fff);padding:10px 14px;',
+      'border:.5px solid var(--dsw-alias-border-l1,#0000001f);border-radius:var(--dsw-radius-md,8px)}',
       '.dshmind-readoutKey{color:var(--dsw-alias-label-tertiary,#81858c);font-size:11px;letter-spacing:.04em}',
       // 键在下、值在上：值可以换行，**永不 `text-overflow:ellipsis`**（裁切会把话说不全）。
       '.dshmind-readoutVal{margin-top:3px;font-size:14px;font-weight:600;line-height:20px;',
@@ -660,7 +674,18 @@ window.__ModuleLoader__.load({
       '.dshmind-chips{display:flex;gap:4px;flex-wrap:wrap}',
 
       // 审计流
-      '.dshmind-audit{display:flex;flex-direction:column;gap:1px}',
+      // **可滚动**（Batch 9 后半，主人：「审计流那个框不能滚动」）：
+      // 旧版没有 `max-height`/`overflow` ⇒ 行一多就把面板撑长（或在外层被裁），**框内滚不动**。
+      // 现在：列表容器给 `max-height` + `overflow-y:auto`，超出的行**框内可滚到**（不裁、不可达）。
+      // 滚动条给足可见度（`scrollbar-width/color` 是标准属性；`::-webkit-*` 管 WebKit 内核），
+      // 并在框尾垫一点内边距，免得最后一行贴着边框像被切掉。
+      '.dshmind-auditScroll{max-height:340px;overflow-y:auto;overscroll-behavior:contain;',
+      'scrollbar-width:thin;scrollbar-color:var(--dsw-alias-border-l3,#00000024) transparent;padding-right:2px}',
+      '.dshmind-auditScroll::-webkit-scrollbar{width:9px}',
+      '.dshmind-auditScroll::-webkit-scrollbar-thumb{border-radius:5px;',
+      'background:var(--dsw-alias-border-l3,#00000024)}',
+      '.dshmind-auditScroll::-webkit-scrollbar-track{background:transparent}',
+      '.dshmind-audit{display:flex;flex-direction:column;gap:1px;padding-bottom:2px}',
       '.dshmind-auditRow{display:grid;grid-template-columns:88px 78px 1fr 150px;gap:10px;align-items:baseline;',
       'padding:6px 10px;background:var(--dsw-alias-bg-layer-2,#fff);font-size:12px;border-left:2px solid transparent}',
       '.dshmind-auditFull{border-left-color:var(--dsw-alias-state-error-primary,#d54941)}',
@@ -670,6 +695,9 @@ window.__ModuleLoader__.load({
       '.dshmind-auditAction{font-weight:500;overflow-wrap:anywhere}',
       '.dshmind-auditWho{color:var(--dsw-alias-label-tertiary,#81858c);font-size:11px;overflow:hidden;',
       'text-overflow:ellipsis;white-space:nowrap}',
+      // 框尾那句说明：告诉人"能滚"以及"投影里一共多少条"（不是静默截断）。
+      '.dshmind-auditHint{margin-top:6px;font-size:11px;line-height:16px;',
+      'color:var(--dsw-alias-label-caption,#adb2b8)}',
 
       // 公告条
       '.dshmind-notice{display:flex;gap:8px;align-items:flex-start;padding:9px 14px;font-size:12px;',
@@ -940,26 +968,36 @@ window.__ModuleLoader__.load({
       ]);
     }
     /**
-     * 一格读数：**键在上、值在下**（Batch 8 改的排版）。
+     * 一格读数：**键在上、值在下**。
      *
-     * 为什么从「左键右值」改成堆叠：旧版是一个 `repeat(auto-fit,minmax(150px,1fr))` 的网格，
-     * 每格 150px 起 —— 真机上窄面板里「已关闭（不判定失联）」被**裁成「已关闭（不判定失」**，
-     * 因为值是 `white-space:nowrap` + `text-overflow:ellipsis`（为"一行好看"牺牲了完整性）。
-     * 堆叠之后：键占一行、值占一行，值可以**换行**，窄面板下也不会被裁。
+     * 三条规矩（每条都是真机上挑出来的）：
+     *  1. **值可换行、不裁切**（Batch 8）：旧版 `nowrap` + `ellipsis` 会把「已关闭（不判定失联）」
+     *     裁成「已关闭（不判定失」——为了"一行好看"牺牲了完整性。
+     *  2. **壳只在有内容的格上**（**Batch 9**）：`没内容就不画壳` —— 旧版 `auto-fit` 网格会给
+     *     空轨道也画上底色/边框，排不满时末尾就是一块空洞的方框（主人说的"空位突兀"）。
+     *     现在：没有值就**整格不渲染**，不留"壳"。
+     *  3. **值不许是光秃秃的 `—`**（Batch 9）：没有值就**不画这一格**（不占位置、不留空框）。
      *
-     * `alarm` 不再染整格背景（旧版底色会铺满整列、比内容宽一大截），而是染**值那一小块**：
-     * 底色由 `.dshmind-readoutVal` 自己 `width:fit-content` 决定 ⇒ **贴合内容**。
+     * `alarm` 只染**值那一小块**（底色贴合内容，不铺满整列）。
      *
      * @param {string} key 键
      * @param {string|null} value 纯文本值（`node` 为空时用它）
      * @param {*} [node] 自定义值节点
      * @param {boolean} [alarm] 是否进告警色（闸不在位 / 已失联 / 已关闭）
      * @param {*} [note] 格内附注（换行的次要读数；紧贴这一格，不横跨整行）
+     * @param {boolean} [允许空壳] **仅用于故障注入**（默认关，生产永远走 `false`）：为真时"没内容也照样画壳"
+     * @returns {*} 有内容才返回元素；**没内容返回 `null`**（调用方照旧 `.filter(Boolean)`）
      */
-    function readout(key, value, node, alarm, note) {
+    function readout(key, value, node, alarm, note, 允许空壳) {
+      var 内容 = node || value;
+      // 「没内容」= 没给 `node` 也没给值，或者给的是空串 / 破折号占位。
+      // 破折号也算"没内容"：那是"这一格没东西"的记法，而 Batch 9 的规矩是**不占位置**。
+      var 有内容 = !(内容 === null || 内容 === undefined
+        || (typeof 内容 === 'string' && (内容.trim() === '' || 内容.trim() === '—' || 内容.trim() === '-')));
+      if (!有内容 && 允许空壳 !== true) return null;
       return h('div', { className: 'dshmind-readout' + (alarm ? ' dshmind-readoutAlarm' : '') }, [
         h('div', { className: 'dshmind-readoutKey' }, key),
-        h('div', { className: 'dshmind-readoutVal' }, node || value),
+        h('div', { className: 'dshmind-readoutVal' }, 内容),
         note ? h('div', { className: 'dshmind-readoutNote' }, note) : null,
       ].filter(Boolean));
     }
@@ -1489,6 +1527,8 @@ window.__ModuleLoader__.load({
       var 待你决定 = view ? view.待你决定 : [];
       var 会审 = view ? view.会审 : [];
       var audit = view ? view.审计尾.slice(-AUDIT_LIMIT).reverse() : [];
+      // 投影里**一共**多少条（用来在框尾说清"看不全是因为投影只有这些/还有多少没列"）。
+      var 审计总条数 = view ? view.审计尾.length : 0;
       var boundReadOnly = view ? boolOf(firstOf(view.边界, ['只读', 'readonly'])) : null;
       // 闸不在位 / 已失联 / 已关闭是「现在能不能干活」的事：确定的不良态才告警，
       // `未知`（宿主没给）不当成故障，也不当成正常。
@@ -1499,6 +1539,9 @@ window.__ModuleLoader__.load({
       var 探针有结论 = !!probe && (probe.状态 !== '未知' || probe.见红.length > 0 || probe.恒红 || probe.恒绿);
       var 失联详情 = bar ? bar.失联详情 : 失联详情Of(null);
       var lostAlarm = !!bar && (失联态 === '已失联' || 失联态 === '已关闭');
+      /** 故障注入开关（只在测试/探针里打开；见下面状态条那两笔）。 */
+      var 注入空壳格 = typeof window !== 'undefined' && window && window.__dshMindInjectEmptySlot === true;
+      var 注入破折号格 = typeof window !== 'undefined' && window && window.__dshMindInjectDashSlot === true;
 
       var children = [
         h('style', { key: 'dshmind-css' }, CSS),
@@ -1535,8 +1578,10 @@ window.__ModuleLoader__.load({
             ]),
           ]),
           h('div', { key: 'ro', className: 'dshmind-readouts' }, [
-            readout('项目键', view ? view.项目 : '—'),
-            readout('生成时刻', view ? shortTime(view.生成于) || '—' : '—'),
+            // Batch 9 规矩：**没数据的格不出现**（不占位置、不留空框、不给光秃秃的 `—`）。
+            // 有数据但读不出时给一句人话（「未接入」/「宿主没给」），而不是破折号。
+            readout('项目键', view ? view.项目 : '未接入'),
+            readout('生成时刻', view ? (shortTime(view.生成于) || '宿主没给') : '未接入'),
             readout('策略引擎闸', null, h('span', { className: 'dshmind-dot-line' }, [
               dot(!gate ? GREY : gate.在位 === true ? GREEN : gate.在位 === false ? RED : GREY),
               h('span', { key: 'v' }, !gate ? '未接入' : gate.在位 === true ? '闸在位' : gate.在位 === false ? '闸不在位' : '未知'),
@@ -1549,10 +1594,12 @@ window.__ModuleLoader__.load({
             // 旧版画成 4 个 chip（零参与 / 事后抽检 / 变更预审 / 逐条审批），选中那个上色 ——
             // 那是**只读投影**，4 个看着能点的小方块会让人以为能点（Batch 8 主人提的第 4 条）。
             // 现在：一个值 + 旁边一句"（四档之一）"，不带边框、不带背景、不带光标、不可聚焦。
-            readout('介入度档位', null, h('span', { className: 'dshmind-valueLine' }, [
-              h('span', { key: 'v' }, bar ? bar.介入度 : '未接入'),
-              bar ? h('span', { key: 'h', className: 'dshmind-valueNote' }, '四档之一（只读）') : null,
-            ].filter(Boolean))),
+            readout('介入度档位', null, bar
+              ? h('span', { className: 'dshmind-valueLine' }, [
+                  h('span', { key: 'v' }, bar.介入度),
+                  h('span', { key: 'h', className: 'dshmind-valueNote' }, '四档之一（只读）'),
+                ])
+              : null),
             // 失联那一格四态四样。**`已关闭` 绝不许给绿点**：开关被关掉不是「主权者一直在」，
             // 但也不是失联 —— 所以它拿告警色 + 明说「不判定失联」，与「在位」「已失联」都长得不一样。
             // `未知` 照旧是灰点 + 未接入：宿主没给 ≠ 正常。
@@ -1579,21 +1626,30 @@ window.__ModuleLoader__.load({
                       : null,
                   ].filter(Boolean))
                 : null),
-            // 安全类探针：**没数据时给一句人话**（"未跑过"），不留一个空白大框。
-            // 旧版这一格右边一整块空白 —— 版面上看起来像"坏了"（Batch 8 主人提的第 3 条）。
-            // ⚠️ 「没数据」的判据不是 `!probe`：`normalizeView` 总会造一个探针袋（缺了就是
-            //    `状态:'未知'` + 没见红），所以这里认「没有结论」= 状态未知且没有见红/恒红/恒绿。
-            readout('安全类探针', null, h('span', { className: 'dshmind-dot-line' }, [
-              dot(!probe ? GREY : probe.见红.length ? RED : probe.状态 === '正常' || probe.状态 === '绿' ? GREEN : GREY),
-              h('span', { key: 'v' }, probe ? probe.状态 : '未跑过'),
-              probe && probe.见红.length ? h('span', { key: 'r' }, '见红：' + probe.见红.join('、')) : null,
-              probe && probe.恒红 ? badge('恒红警报', 'red') : null,
-              probe && probe.恒绿 ? badge('恒绿警报', 'warn') : null,
-            ].filter(Boolean)), false,
-              !探针有结论
-                ? h('span', { key: 'note', className: 'dshmind-readoutNote' }, '这一块没有快照（宿主没给探针读数）')
-                : null),
-          ]),
+            // 安全类探针：**没数据就整格不出现**（Batch 9 主人倾向的"没数据就别占位置"）。
+            // 「没数据」的判据不是 `!probe`：`normalizeView` 总会造一个探针袋（缺了就是
+            // `状态:'未知'` + 没见红），所以这里认「没有结论」= 状态未知且没有见红/恒红/恒绿。
+            探针有结论
+              ? readout('安全类探针', null, h('span', { className: 'dshmind-dot-line' }, [
+                  dot(probe.见红.length ? RED : probe.状态 === '正常' || probe.状态 === '绿' ? GREEN : GREY),
+                  h('span', { key: 'v' }, probe.状态),
+                  probe.见红.length ? h('span', { key: 'r' }, '见红：' + probe.见红.join('、')) : null,
+                  probe.恒红 ? badge('恒红警报', 'red') : null,
+                  probe.恒绿 ? badge('恒绿警报', 'warn') : null,
+                ].filter(Boolean)))
+              : null,
+            // **故障注入**（Batch 9 交付物 4）：探针那一格的"退化形态"。
+            // 那两个"没内容就不画壳"的守卫现在没有活的触发者，断言也就无从变红；
+            // 留这一笔是为了让探针/门禁能**故意**把退化形态造出来（没有反例 = 没验过）。
+            //  ① 空壳格：`允许空壳` 为真 ⇒ 没内容也画壳（用来验"不许有壳没内容"那条判据真在算）。
+            注入空壳格
+              ? readout('（故障注入：没数据的格）', null, null, false, null, true)
+              : null,
+            //  ② 破折号值：把 `—` 当值传进去，且绕过守卫 ⇒ 验"值不许是光秃秃的 `—`"那条判据。
+            注入破折号格
+              ? readout('（故障注入：破折号值）', '—', null, false, null, true)
+              : null,
+          ].filter(Boolean)),
         ]),
 
         // ① 待你决定 —— 排在最前：这是主子唯一必须看的一块（§7 唯一点名要投影的清单）
@@ -1734,24 +1790,36 @@ window.__ModuleLoader__.load({
           ]),
 
         // ④ 审计流
-        section(4, '审计流', '只增的事实记录 · 写入无条件',
-          audit.length ? '末 ' + audit.length + ' 条' : '',
+        // **别静默截断**（Batch 9）：`AUDIT_LIMIT` 只是"一次渲染多少行"的上限，
+        // 超出时必须**看得出来**（那句「投影共 N 条」）并且**框内滚得到**（`.dshmind-auditScroll`）。
+        section(4, '审计流', '只增的事实记录 · 写入无条件 · 框内可滚动',
+          audit.length ? '末 ' + audit.length + ' 条' + (审计总条数 > audit.length ? ' / 共 ' + 审计总条数 : '') : '',
           audit.length
-            ? h('div', { className: 'dshmind-audit' }, audit.map(function (row, index) {
-                var grade = auditGrade(row);
-                var alarm = boolOf(firstOf(row, ['告警', 'alarm'])) === true;
-                return h('div', { key: 'a' + index, className: 'dshmind-auditRow ' + auditClass(row) }, [
-                  h('span', { key: 't', className: 'dshmind-mono', style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary,#81858c)' } },
-                    shortTime(firstOf(row, ['时间', 'at', 'time'])) || '—'),
-                  h('span', { key: 'g', style: { fontSize: 11 } }, grade),
-                  h('span', { key: 'a', className: 'dshmind-auditAction' }, [
-                    alarm ? h('span', { key: 'x', style: { color: RED, marginRight: 4 } }, '⚑') : null,
-                    line(firstOf(row, ['动作', 'action']), '未命名动作'),
-                    line(firstOf(row, ['结果', 'result'])) ? h('span', { key: 'r', style: { color: 'var(--dsw-alias-label-tertiary,#81858c)' } }, ' · ' + line(firstOf(row, ['结果', 'result']))) : null,
-                  ].filter(Boolean)),
-                  h('span', { key: 'w', className: 'dshmind-auditWho', title: actorOf(row) }, actorOf(row)),
-                ]);
-              }))
+            ? [
+                // 滚动容器：内容高过 `max-height` 时**框内滚**（不裁、不可达的代名词就是没有它）。
+                h('div', { key: 'scroll', className: 'dshmind-auditScroll' },
+                  h('div', { className: 'dshmind-audit' }, audit.map(function (row, index) {
+                    var grade = auditGrade(row);
+                    var alarm = boolOf(firstOf(row, ['告警', 'alarm'])) === true;
+                    return h('div', { key: 'a' + index, className: 'dshmind-auditRow ' + auditClass(row) }, [
+                      h('span', { key: 't', className: 'dshmind-mono', style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary,#81858c)' } },
+                        shortTime(firstOf(row, ['时间', 'at', 'time'])) || '—'),
+                      h('span', { key: 'g', style: { fontSize: 11 } }, grade),
+                      h('span', { key: 'a', className: 'dshmind-auditAction' }, [
+                        alarm ? h('span', { key: 'x', style: { color: RED, marginRight: 4 } }, '⚑') : null,
+                        line(firstOf(row, ['动作', 'action']), '未命名动作'),
+                        line(firstOf(row, ['结果', 'result'])) ? h('span', { key: 'r', style: { color: 'var(--dsw-alias-label-tertiary,#81858c)' } }, ' · ' + line(firstOf(row, ['结果', 'result']))) : null,
+                      ].filter(Boolean)),
+                      h('span', { key: 'w', className: 'dshmind-auditWho', title: actorOf(row) }, actorOf(row)),
+                    ]);
+                  }))),
+                // 框尾说明：有多少条、看不全就去滚（不让人猜是不是被裁了）。
+                审计总条数 > audit.length
+                  ? h('div', { key: 'hint', className: 'dshmind-auditHint' },
+                      '另有 ' + (审计总条数 - audit.length) + ' 条未在此列出（投影共 ' + 审计总条数 + ' 条）；框内可滚动查看已列出的 ' + audit.length + ' 条。')
+                  : h('div', { key: 'hint', className: 'dshmind-auditHint' },
+                      '投影共 ' + 审计总条数 + ' 条，已全部列出；框内可滚动。'),
+              ]
             : h('div', { className: 'dshmind-empty' }, '审计尾为空 —— 没有事实记录，或工作台投影未附带审计尾。')),
 
         // 页脚：只读边界与命令回显
