@@ -1,4 +1,4 @@
-﻿# dsh-mind · 心智 · 数字组织
+# dsh-mind · 心智 · 数字组织
 
 《心智 · 数字组织设计 v1.5》的**可执行实现**。**一张插件卡，三个组件**。
 
@@ -15,10 +15,12 @@
 ```
 dsh-mind/                        ← 插件列表里的那张卡（不插自己的行）
   cordis.patch.yml                 insert 三行：内核 / 安全类 / 看板
-  package.json                     dependencies: 三个组件包（link:）
+  package.json                     dependencies: 三个组件包（link:，包内有效）
   src/                             八件基础设施实现（组件用相对路径引它）
   mind/                            出厂区：宪章 / 法律 / 编制 / 岗位卡 / 出厂能力库 / 默认值
   lib/actions.js                   动作表（内核组件用）
+  scripts/verify-profile-install.mjs  安装自检（防「组件静默不装」）
+  scripts/install-into-profile.mjs    一键装进 profile（幂等 + 装完自动验收）
   components/
     kernel/   dsh-mind-kernel      内核组件
     guard/    dsh-mind-guard       安全类组件
@@ -44,11 +46,9 @@ dsh-mind/                        ← 插件列表里的那张卡（不插自己�
 3. **主面不吞异常**。工具注册不上就等于组件没生效，必须让装载如实失败；
    只有次要面（命令、提示段）才降级为告警。吞掉主面只会得到一个「看起来装好了」的假象。
 
-安装就是装这一个 bundle（三个组件包是它的依赖，会被装成**普通依赖**而不是 profile 层）：
-
-```powershell
-dsh plugin --profile desktop add %DSH_HOME%\plugins\dsh-mind
-```
+安装 = **四个包都写进 profile 的 `dependencies`**（`dsh-mind` + 三个组件包），
+`dsh.profile.bundles` 里**只加 `dsh-mind`**。为什么是四行而不是一行，见 [安装](#安装)——
+`link:` 不解析目标包的 `dependencies`，只写一行会得到「组件静默不装」。
 
 ---
 
@@ -150,22 +150,137 @@ upgrade_compare · upgrade_resolve · upgrade_withdraw
 
 ## 安装
 
-```powershell
-dsh plugin --profile desktop add %DSH_HOME%\plugins\dsh-mind
+**装法（本机实测可行）**：把**四个包**都写进 profile 的 `dependencies`，`dsh.profile.bundles` 里
+**只加 `dsh-mind`**，然后在 profile 目录里 `pnpm install`，再重启客户端。
+（想省事就跳到下面的「一键装」——那段手工编辑已经固化成脚本，并自带验收闸。）
+
+`<profileDir>/package.json`（本机是 `C:\Users\kuro\.dsh\profiles\desktop\package.json`，
+只列与本插件相关的行，其余依赖照旧保留）：
+
+```json
+{
+  "dependencies": {
+    "dsh-mind": "link:E:/dsh-mind",
+    "dsh-mind-kernel": "link:E:/dsh-mind/components/kernel",
+    "dsh-mind-guard": "link:E:/dsh-mind/components/guard",
+    "dsh-mind-board": "link:E:/dsh-mind/components/board"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "……其它 bundle 照旧……",
+        "dsh-mind"
+      ]
+    }
+  }
+}
 ```
 
-装完是**一行**；组件的启停写在那一行的 `config.components` 里（见上）。
-或手工把包加进 profile 的 `dependencies`（`link:` 指向本目录）与 `dsh.profile.bundles`，然后重启。
-本插件**零依赖**：不 import 任何 `@deepseek-ai/*`，因此不会被出厂包的解析规则挡住。
+### 为什么必须写四行，而不是一行
+
+- **`link:` 是纯符号链接协议，pnpm 不解析目标包的 `dependencies`。** 本包 `package.json` 里的
+  `"dsh-mind-kernel": "link:./components/kernel"` 这种**相对 link** 因此**在 profile 层完全不生效**。
+- **实测**：profile 里只写 `"dsh-mind": "link:E:/dsh-mind"` + bundles 加 `dsh-mind`，
+  `pnpm install` 之后**三个组件包一个都没进 profile 的 `node_modules`**。
+- 而 `cordis.patch.yml` 的 `insert` 三行是按 **profile 的 `node_modules`** 解析 `name` 的
+  （profile 目录是 baseUrl 锚点）。解析不到就是**静默不装**：不报错、卡还在、组件没了——
+  只有用到的时候才发现。所以组件依赖必须在 profile 层**再显式写一遍**。
+- 试过 `"dsh-mind": "portal:E:/dsh-mind"`（想让 pnpm 顺带解析依赖）：该 pnpm 构建直接报
+  `ERR_PNPM_SPEC_NOT_SUPPORTED_BY_ANY_RESOLVER`，**不可用**。
+
+### 为什么三个组件不能进 `dsh.profile.bundles`
+
+`bundles` 是**插件卡的名单**：每条 = 一张卡 + 一层 patch。三个都写进去就变成**三张卡**，
+而「组件」的定义恰恰是**那张卡下面的行**（一行一个包、一个独立开关）。
+三个组件行的来源是 `dsh-mind` 自己的 `cordis.patch.yml`，不是 bundles——
+bundles 里写 `dsh-mind` 一项就够。
+
+### 一键装（推荐）：`scripts/install-into-profile.mjs`
+
+```powershell
+node E:\dsh-mind\scripts\install-into-profile.mjs %USERPROFILE%\.dsh\profiles\desktop
+node E:\dsh-mind\scripts\install-into-profile.mjs %USERPROFILE%\.dsh\profiles\desktop --dry-run   # 只看要改什么
+```
+
+它做的事（**幂等**，可反复跑）：
+
+1. 读 `<profileDir>/package.json`；
+2. `dependencies` 补上四行（`link:` 指向本仓库与三个组件；写法已正确就不动，写法不对就改正并打印 `旧 → 新`）；
+3. `dsh.profile.bundles` 确保有 `dsh-mind`，并确保三个组件**不在**其中（在就移除并明确告知——那是「三张卡」的错误形态）；
+4. 有改动时**先备份**成同目录的 `package.json.bak-install-<时间戳>`，再写；
+5. 在 `<profileDir>` 里跑 `pnpm install`。pnpm 探测顺序：`--pnpm` 参数 → 环境变量 `DSH_MIND_PNPM` / `DSH_PNPM`
+   → PATH 上的 `pnpm` → 官方桌面客户端自带的 `resources/runtime/pnpm/bin/pnpm.mjs`（用当前 node 跑）。
+   每个候选都**先试跑 `--version`**（探测到 ≠ 能用），第一个成功的胜出；
+   全都探测不到就**明确报错**并给出可粘贴的手工命令，**不假装成功**；
+6. 最后跑 `verify-profile-install.mjs <profileDir>` 当**验收闸**：自检非 0 ⇒ 本脚本也非 0。
+
+硬边界：**不会**替你猜或创建 profile（无参数 / 不是 profile 目录 = exit 2）；
+**不重启、不杀死、不启动任何客户端进程**——改完**需要你自己重启客户端**才生效。
+
+### 装完必须自检（防「静默不装」）
+
+```powershell
+node E:\dsh-mind\scripts\verify-profile-install.mjs %USERPROFILE%\.dsh\profiles\desktop
+```
+
+逐条检查：profile 的四个依赖在不在 · `bundles` 是不是只写了 `dsh-mind` · 四个包在
+`node_modules` 里解析得到吗 · `cordis.patch.yml` 的**三条 insert 行齐不齐**（少一行也红，缺哪一行点名）
+且每条 `name` 解析得到吗 · 出厂区 `mind/` 必备目录件齐不齐。全过 exit 0，任一条红 exit 1 并逐条说明。
+脚本自己也带反例测试：`node scripts/verify-profile-install.mjs --selftest`。
+
+### `dsh plugin --profile desktop add …`：**实测它不会替本包装组件**
+
+```powershell
+dsh plugin --profile desktop add E:\dsh-mind     # 通用形式：add <本仓库路径>
+```
+
+它是 `pnpm add` 的**薄转发**（读官方 `@deepseek-ai/dsh` 的 `lib/plugin-*.js`：在 profile 目录里跑 pnpm，
+再按「已装且声明 `dsh.bundle` 的依赖」重建 `bundles`）。**实测（隔离的临时 profile，desktop 全程未被碰）**：
+
+```
+$ DSH_HOME=C:\Users\kuro\.dsh node E:\DSHOME\node_modules\@deepseek-ai\dsh\lib\bin.js `
+      plugin --profile zz-probe add E:\dsh-mind
+dsh: initialized profile zz-probe at C:\Users\kuro\.dsh\profiles\zz-probe
+dependencies:
++ dsh-mind link:E:/dsh-mind
+Already up to date
+Done in 425ms using pnpm v10.34.5          ← exit=0
+```
+
+它写出的 profile 只有**一行依赖**（`"dsh-mind": "link:E:/dsh-mind"`），装出来的 `node_modules` 里
+`dsh-mind*` 相关的**只有 `dsh-mind` 一个，三个组件一个都没有** ⇒ 照它装就是**组件静默不装**。
+另外两个实测事实：它会 `initialized profile`（**会替你创建 profile 目录**），
+并给 `bundles` 加上 `@deepseek-ai/dsh-base`。
+
+所以两条出路：
+
+1. **用它装完，再手工补三行**（三个组件的 `link:` 依赖）——就是上面那份 `package.json` 片段；
+2. **直接用一键脚本**（上一节），它把四行一次写好，并且装完自动验收。
+
+装完是**一张卡**，三个组件是那张卡下面的三行，各有独立开关（关一行 = 那个包不进 roster，
+它的工具 / 命令 / 界面一起消失）；每行的 `config` 是各组件自己的（如安全类那一行的 `开机自检`），
+**不是**卡上的 `config.components`。运行时不 import 任何 `@deepseek-ai/*`，
+因此不会被出厂包的解析规则挡住（`peerDependencies` 里的 `@deepseek-ai/dsh` 是 optional，只作版本声明）。
 
 ## 验证
 
 ```powershell
-cd %DSH_HOME%\plugins\dsh-mind
-npm test                       # preflight 门禁 + 101 条用例（组件 / 策略 / 流程 / 安全 / 对象 / 宿主）
-node test/client-harness.mjs   # 看板：104 条行为断言
-node --test test/client.test.js # 看板：5 条结构断言
+cd E:\dsh-mind
+npm test                                             # preflight 门禁 + 内核用例 86 条
+node components/board/test/client-harness.mjs        # 看板：123 条行为断言
+node --test components/board/test/client.test.js     # 看板：6 条结构断言
 ```
+
+数字口径（哪个脚本产出哪个数，本机实测 exit=0）：
+
+| 数 | 产出者 | 怎么看 |
+|---|---|---|
+| **86** | `node --test "test/*.test.js"`（`npm test` 的后半段） | `ℹ tests 86` / `ℹ pass 86` / `ℹ fail 0` |
+| **123** | `components/board/test/client-harness.mjs` 自己打印 | 末行 `client-harness: 123 条断言全部通过` |
+| **6** | `node --test components/board/test/client.test.js` | `ℹ tests 6` / `ℹ pass 6` / `ℹ fail 0` |
+
+**这两个看板脚本在 `components/board/test/` 下**（不在根 `test/`）——
+写成 `node test/client-harness.mjs` 会 MODULE_NOT_FOUND。
 
 `preflight` 是门禁：出厂件结构、岗位卡的能力引用、**组件名册与装载行配置对得上**、
 清单里每个被引用的路径都在 `exports` 里、`client.js` 的经典脚本约束、
