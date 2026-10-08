@@ -206,6 +206,8 @@ export async function seedIdentity(privateRoot, options = {}) {
   const doc = {
     members: options.members ?? {
       'member-a': { id: 'member-a', 岗位: '插件工程', 代: 1, status: '在岗' },
+      // member-b：测试里第二个成员实例（会审/任务流用）；B1 起 成员身份必须登记才过闸。
+      'member-b': { id: 'member-b', 岗位: '插件工程', 代: 1, status: '在岗' },
       lead: { id: 'lead', 岗位: 'Lead', 代: 1, status: '在岗' },
       reviewer: { id: 'reviewer', 岗位: '复核员', 代: 1, status: '在岗' },
     },

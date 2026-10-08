@@ -347,6 +347,18 @@ export class PolicyEngine {
         howToChange: '由主权者在身份档案中登记该主体，或改用已登记的身份。',
       });
     }
+    // 身份档案接入判定（§12.2：身份停用/删除时判定必须有确定答案）。
+    // 只查 成员/复核者：它们的权来自注册表里的**实例**，封存即失权；
+    // 主权者/出厂作者/系统/Lead 是结构性身份，不挂在实例账上。
+    if (subject.kind === '成员' || subject.kind === '复核者') {
+      const 状态 = identityStatus(this, subject.id);
+      if (状态.status !== '在岗') {
+        return deny('宪章 身份停用 = 最严（§12.2）', 状态.reason, {
+          requireAuthority: '主权者',
+          howToChange: `由 Lead 在角色注册表登记/恢复该实例（registry_assign / registry_restore），或改用在岗身份执行。当前状态：${状态.status}。`,
+        });
+      }
+    }
     if (!ACTIONS.includes(action)) {
       return deny(ALWAYS_INVARIANTS, `未知动作：${String(action)}。策略引擎不做默认放行。`, {
         requireAuthority: '宪章',
@@ -572,11 +584,11 @@ export class PolicyEngine {
     return null;
   }
 
-  /** 撤回名单命中（只挡新写入，不删卡）。 */
+  /** 撤回名单命中（只挡新写入，不删卡）。对象被撤回 ⇒ 挡；主体自身被撤回 ⇒ 也挡。 */
   #isDenied(subject, target) {
     if (subject.kind === '主权者') return false;
     const list = this.state.identity?.denylist ?? [];
-    return list.some((entry) => entry.id === target.id);
+    return list.some((entry) => entry.id === target.id || entry.id === subject.id);
   }
 
   // ── 加载 ────────────────────────────────────────────────────────────────────

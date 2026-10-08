@@ -491,7 +491,12 @@ export function fold(rows) {
   const states = [];
   for (const row of rows) {
     if (isStateRow(row)) states.push(row);
-    else if (row.id) entries.set(row.id, { ...row, 状态: row.状态 ?? '有效', 历史: [] });
+    else if (row.id) {
+      const prev = entries.get(row.id);
+      // 同 id 的条目行显式合并（E1）：晋升会在跨项目账里追一条同 id 副本，
+      // 直接 set 会让后读的项目账原件覆盖掉晋升副本 ⇒ 岗位标签在默认视图里静默丢失。
+      entries.set(row.id, prev ? mergeEntryRows(prev, row) : { ...row, 状态: row.状态 ?? '有效', 历史: [] });
+    }
   }
   for (const state of states.sort((a, b) => String(a.追于).localeCompare(String(b.追于)))) {
     const entry = entries.get(state.指向);
@@ -504,6 +509,20 @@ export function fold(rows) {
     else if (state.追加 === '物理删除') entry.状态 = '物理删除';
   }
   return [...entries.values()];
+}
+
+/**
+ * 同 id 的两份条目行合成一份（E1）。带岗位标签的那份（晋升副本）优先，
+ * 它缺的键从另一份补——两份正文本来就该一致，差异只在 归属/岗位/跨项目判定。
+ * @param {object} a @param {object} b
+ */
+function mergeEntryRows(a, b) {
+  const [win, lose] = b.岗位 && !a.岗位 ? [b, a] : [a, b];
+  return {
+    ...lose,
+    ...Object.fromEntries(Object.entries(win).filter(([, v]) => v !== undefined && v !== null)),
+    账本出现于: [...new Set([...(a.账本出现于 ?? []), ...(b.账本出现于 ?? []), a.归属, b.归属])].filter(Boolean),
+  };
 }
 
 /**

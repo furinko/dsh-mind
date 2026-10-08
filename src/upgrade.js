@@ -11,7 +11,7 @@
  *   两边改了同一条     → 挂起（摆 diff 给主权者选）
  *   安全类            → 强制替换，不可协商
  */
-import { readJsonOrNull, readTextOrNull, atomicWrite, listFiles } from './kernel/fsx.js';
+import { readJsonOrNull, readTextOrNull, atomicWrite, listFiles, ensureDirPath } from './kernel/fsx.js';
 import { InvalidBody } from './kernel/errors.js';
 import { digest, splitClauses } from './kernel/text.js';
 import { RULE_FILES } from './paths.js';
@@ -208,6 +208,14 @@ export class UpgradeManager {
     const id = `${对象}-${digest(row.条款).slice(0, 8)}`;
     const existing = await readJsonOrNull(this.layout.pendingFile(id));
     if (existing && !existing.已裁决 && !existing.已撤回) return;
+    // 已裁决/已撤回的同 id 挂起项不许被覆盖重写（F3）：裁决历史丢失 = 队列永不收敛。
+    // 旧档案挪进 history/ 子目录（pending() 只扫顶层，不会把历史当新挂起读回来）。
+    if (existing) {
+      const historyDir = `${this.layout.pendingDir()}/history`;
+      await ensureDirPath(historyDir);
+      const 戳 = this.clock.iso().replace(/[:.]/g, '');
+      await atomicWrite(`${historyDir}/${id}--${existing.已裁决 ? '已裁决' : '已撤回'}--${戳}.json`, `${JSON.stringify(existing, null, 2)}\n`);
+    }
     await atomicWrite(
       this.layout.pendingFile(id),
       `${JSON.stringify(

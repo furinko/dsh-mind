@@ -209,8 +209,11 @@ export class Org {
  */
 export function subjectFor(spec) {
   const 实例 = spec.实例 ?? spec.岗位 ?? 'unknown';
+  // 岗位先于根会话标记：带岗位的会话就是该岗位的成员/复核者，
+  // 不能因为「宿主把根会话标记也传了」就被回填成 Lead（B3：成员 kind 构造不出来）。
   if (spec.岗位 === '复核员') return { id: 实例, kind: '复核者', roleId: '复核员' };
-  if (spec.岗位 === 'Lead' || spec.根会话 === true) return { id: 实例 === 'unknown' ? 'lead' : 实例, kind: 'Lead', roleId: spec.岗位 ?? 'Lead' };
+  if (spec.岗位 === 'Lead') return { id: 实例 === 'unknown' ? 'lead' : 实例, kind: 'Lead', roleId: 'Lead' };
   if (spec.岗位) return { id: 实例, kind: '成员', roleId: spec.岗位 };
+  if (spec.根会话 === true) return { id: 实例 === 'unknown' ? 'lead' : 实例, kind: 'Lead', roleId: 'Lead' };
   return { id: 实例, kind: '成员', roleId: '未登记' };
 }

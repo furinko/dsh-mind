@@ -304,7 +304,11 @@ export class RoleRegistry {
     };
   }
 
-  /** @param {(current: object) => object} apply */
+  /**
+   * @param {(current: object) => object} apply
+   * 写完身份档案后立即 `policy.reload()`：判定读的是加载时的快照，
+   * 不重载的话「封存实例照常全权 / 失联冻得住解不开」都会发生（B2）。
+   */
   async #mutateIdentity(apply) {
     const file = this.layout.identityFile();
     let result;
@@ -313,6 +317,7 @@ export class RoleRegistry {
       result = apply(current);
       await atomicWrite(file, `${JSON.stringify(result, null, 2)}\n`);
     });
+    await this.policy.reload();
     return result;
   }
 }

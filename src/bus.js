@@ -86,7 +86,14 @@ export class MessageBus {
    */
   async read(query) {
     const rows = await readJsonl(this.layout.busThread(query.项目, query.线程));
-    let out = rows;
+    // 只增账按 id 折叠成当前视图（E2）：投递是追加一条同 id 新行，
+    // 不折的话一条消息出现两行、「未投递」查询永远命中旧行，状态机不生效。
+    const folded = new Map();
+    for (const row of rows) {
+      const prev = folded.get(row.id);
+      if (!prev || String(row.追加于 ?? '') >= String(prev.追加于 ?? '')) folded.set(row.id, row);
+    }
+    let out = [...folded.values()];
     if (query.收件) out = out.filter((row) => row.收件?.includes(query.收件));
     if (query.未投递 === true) out = out.filter((row) => row.状态 === '暂不投递');
     if (query.未投递 === false) out = out.filter((row) => row.状态 === '已投递');
@@ -112,9 +119,12 @@ export class MessageBus {
       context: {},
     });
     // 只增：投递动作也是一条新记录（同 id 的最新状态生效），历史那条「暂不投递」不动。
-    await appendLines(this.layout.busThread(spec.项目, spec.线程), [
-      { ...target, 状态: '已投递', 投递于: this.clock.iso(), 记录: '投递动作' },
-    ]);
+    // 写入与 send 同一把线程锁：不锁的话并发投递会在 send 的写窗口外落行。
+    await withLock(`${this.layout.busThread(spec.项目, spec.线程)}.lock`, async () => {
+      await appendLines(this.layout.busThread(spec.项目, spec.线程), [
+        { ...target, 状态: '已投递', 投递于: this.clock.iso(), 记录: '投递动作' },
+      ]);
+    });
     await this.audit.append({
       动作: '状态变更',
       主体: spec.subject,

@@ -9,7 +9,7 @@
  *  3. **归档 takes precedence over 状态** —— §7 明确「不承担回滚、不做状态」，
  *     所以这里没有任何 `update`/`delete` 方法，将来也不加。
  */
-import { appendLines, atomicWrite, ensureDirPath, listFiles, readJsonl, readJsonOrNull } from './kernel/fsx.js';
+import { appendLines, atomicWrite, ensureDirPath, listFiles, readJsonl, readJsonOrNull, withLock } from './kernel/fsx.js';
 import { chainHash } from './kernel/text.js';
 import { monthKey } from './kernel/time.js';
 
@@ -68,29 +68,36 @@ export class AuditLog {
     const at = this.clock.iso();
     const month = monthKey(at);
     const file = this.layout.auditLog(month);
-    const prev = await this.#chainTail(month);
-    const record = {
-      seq: this.#nextSeq(month),
-      时间: at,
-      主体: normalizeActor(entry.主体),
-      动作: entry.动作,
-      对象: typeof entry.对象 === 'object' && entry.对象 !== null ? entry.对象 : { id: entry.对象 ?? null },
-      依据: entry.依据 ?? '',
-      结果: entry.结果 ?? '记',
-      档位: entry.档位 ?? this.gradeOf(entry.动作),
-      项目: entry.项目 ?? null,
-      轮: entry.轮 ?? null,
-      告警: entry.告警 === true,
-      详情: entry.详情 ?? {},
-      prev,
-    };
-    const hash = chainHash(prev, { ...record, hash: undefined });
-    const stored = { ...record, hash };
-    await appendLines(file, [stored]);
-    this._chain.set(month, { seq: record.seq, hash });
-    await this.#writeAnchor(month, { seq: record.seq, hash, at });
-    if (stored.告警) this.onAlarm({ month, ...stored });
-    return { seq: record.seq, hash, 时间: at, 月: month };
+    // 「读尾→算 seq→追加→写 anchor」必须整体在锁内（E3）：
+    // 并发追加会算出同 seq 同 prev 的两行 ⇒ 链 fork，verify() 把正常并发误判成篡改。
+    // fsx.js 头注释自称「读-改-写一律走 withLock」，审计此前恰好没走。
+    return withLock(`${file}.lock`, async () => {
+      // 锁内必须重读真源（fresh）：内存链尾缓存只被「自己的追加」更新，
+      // 别的写者在锁外推进过的账，缓存看不见 ⇒ 同 seq 同 prev 的 fork 行。
+      const prev = await this.#chainTail(month, { fresh: true });
+      const record = {
+        seq: this.#nextSeq(month),
+        时间: at,
+        主体: normalizeActor(entry.主体),
+        动作: entry.动作,
+        对象: typeof entry.对象 === 'object' && entry.对象 !== null ? entry.对象 : { id: entry.对象 ?? null },
+        依据: entry.依据 ?? '',
+        结果: entry.结果 ?? '记',
+        档位: entry.档位 ?? this.gradeOf(entry.动作),
+        项目: entry.项目 ?? null,
+        轮: entry.轮 ?? null,
+        告警: entry.告警 === true,
+        详情: entry.详情 ?? {},
+        prev,
+      };
+      const hash = chainHash(prev, { ...record, hash: undefined });
+      const stored = { ...record, hash };
+      await appendLines(file, [stored]);
+      this._chain.set(month, { seq: record.seq, hash });
+      await this.#writeAnchor(month, { seq: record.seq, hash, at });
+      if (stored.告警) this.onAlarm({ month, ...stored });
+      return { seq: record.seq, hash, 时间: at, 月: month };
+    });
   }
 
   /**
@@ -162,10 +169,16 @@ export class AuditLog {
     });
   }
 
-  /** @param {string} month */
-  async #chainTail(month) {
-    const cached = this._chain.get(month);
-    if (cached) return cached.hash;
+  /**
+   * @param {string} month
+   * @param {{ fresh?: boolean }} [options] `fresh: true` 跳过内存缓存直接读盘——
+   * 追加临界区里必须用它：缓存只反映「自己写过的尾巴」，多写者场景下信缓存就 fork。
+   */
+  async #chainTail(month, options = {}) {
+    if (!options.fresh) {
+      const cached = this._chain.get(month);
+      if (cached) return cached.hash;
+    }
     const anchor = await readJsonOrNull(this.layout.auditAnchor(month));
     if (anchor?.hash) {
       this._chain.set(month, anchor);

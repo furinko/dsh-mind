@@ -144,16 +144,18 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
     assert.equal(f.policy.healthy, false);
   });
 
-  it('探针红 ⇒ 自动回滚到「全绿的最近一版」，而不是紧邻上一版', async () => {
+  it('探针红 ⇒ 定位「全绿的最近一版」并入账；制品未定义前不假装执行过（F2）', async () => {
     const snapshots = await readdir(f.layout.probeSnapshotDir());
     assert.ok(snapshots.length >= 3);
     const result = await probes.autoRollback();
-    assert.equal(result.执行, true);
+    assert.equal(result.执行, false, '回滚制品未定义：只有定位，没有执行面');
+    assert.equal(result.已定位, true);
     assert.equal(result.目标版本, 'mech-1', '跨过见红的 mech-2/mech-3，回到全绿的最近一版');
     const rows = await f.audit.read({});
     const 回滚 = rows.filter((r) => r.动作 === '自动回滚');
     assert.ok(回滚.length >= 1, '无条件入账');
-    assert.match(String(回滚.at(-1).详情.定性), /无条件执行/);
+    assert.match(String(回滚.at(-1).结果), /已定位回滚目标 mech-1.*待执行/);
+    assert.doesNotMatch(String(回滚.at(-1).结果), /mech-\d+ → mech-\d+/, '不许再写「x → y」这种像真回滚过的口径');
   });
 
   it('探针健康：恒红与恒绿都要报警', async () => {
