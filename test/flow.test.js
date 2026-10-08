@@ -14,6 +14,7 @@ import { ReviewProtocol } from '../src/review.js';
 import { buildIndex, formatMiss, runRegression, search } from '../src/retrieval.js';
 import { Denied, InvalidBody } from '../src/kernel/errors.js';
 import { readJsonl } from '../src/kernel/fsx.js';
+import { Clock } from '../src/kernel/time.js';
 
 /** @type {Awaited<ReturnType<typeof makeFixture>>} */
 let f;
@@ -207,6 +208,70 @@ describe('主干环路', () => {
     }
     const 检索 = await memory.query({ 类: ['知识'], 项目: P, 文本: '兼容回退' });
     assert.equal(检索.命中.length, 0, '删除后不许还能搜到');
+  });
+
+  it('记忆：id 与审计里都不许含正文（删得掉的前提）', async () => {
+    // id 会进每一条审计记录的 `对象.id`，而审计只增、撤不回。
+    // 正文一旦折进 id，`purge` 就永远删不干净 —— 这是「物理删除」能不能成立的前提。
+    const 标记 = 'zzmark';
+    const entry = await memory.remember({ subject: LEAD, 类: '经历', 内容: `${标记} 敏感标题不允许进 id`, 来源: '测试' });
+    assert.ok(!entry.id.includes(标记), `id 不许含正文：${entry.id}`);
+
+    // 人可读的标题仍在，只是搬到了字段里（它是账本的一行，purge 能连带抹掉）
+    const row = (await readJsonl(f.layout.memoryLog('跨项目', '经历'))).find((r) => r.id === entry.id);
+    assert.equal(row.标题, `${标记} 敏感标题不允许进 id`, '标题要另存字段，好让人还认得出这条');
+    assert.equal(row.内容, `${标记} 敏感标题不允许进 id`);
+
+    // 审计里出现这个 id 的每一笔，都不许带正文
+    const rows = await f.audit.read({});
+    const 相关 = rows.filter((r) => r.对象?.id === entry.id);
+    assert.ok(相关.length > 0, '前置：这条记忆至少有一笔审计');
+    for (const r of 相关) {
+      assert.ok(!JSON.stringify(r).includes(标记), `审计不许带正文：${JSON.stringify(r)}`);
+    }
+
+    // 真的删掉之后，账本与审计合起来也搜不到那个标记
+    await memory.purge(entry.id, { subject: SOVEREIGN, 理由: '这是敏感数据，必须清掉' });
+    const 账本 = await readJsonl(f.layout.memoryLog('跨项目', '经历'));
+    assert.ok(!账本.some((r) => r.id === entry.id), '账本里不许留');
+    const 事后 = await f.audit.read({});
+    assert.equal(事后.filter((r) => JSON.stringify(r).includes(标记)).length, 0, '审计里也不许留正文标记');
+  });
+
+  it('记忆：同一毫秒内同主体的两条不许撞 id', async () => {
+    // id 的种子去掉了正文，只剩「类 + 主体 + 时刻」。
+    // 不守住严格递增，同毫秒同主体的两条会算出同一个 id，
+    // 而 fold() 按 id 归并 ⇒ 两条记忆**静默合成一条**（不报错，最难发现的那种）。
+    const frozen = new Clock(() => new Date('2026-10-08T00:00:00.000Z'));
+    const m = new MemoryService({ layout: f.layout, policy: f.policy, audit: f.audit, clock: frozen });
+    const a = await m.remember({ subject: LEAD, 类: '偏好', 内容: '同一毫秒的第一条', 来源: '测试' });
+    const b = await m.remember({ subject: LEAD, 类: '偏好', 内容: '同一毫秒的第二条', 来源: '测试' });
+    assert.notEqual(a.id, b.id, '撞 id 会让 fold() 把两条静默合成一条');
+    const 两条 = await m.query({ 类: ['偏好'] });
+    assert.ok(两条.条目.some((e) => e.内容 === '同一毫秒的第一条' && e.id === a.id));
+    assert.ok(两条.条目.some((e) => e.内容 === '同一毫秒的第二条' && e.id === b.id));
+  });
+
+  it('记忆：失效不进默认召回、但仍可见；含失效才拉回来，且降权不许复活它', async () => {
+    const entry = await memory.remember({ subject: LEAD, 类: '知识', 内容: '乙案：这条结论后来作废了', 来源: '测试', 项目: P });
+    await memory.invalidate(entry.id, { subject: LEAD, 原因: '被新证据推翻' });
+
+    const 当前 = await memory.query({ 类: ['知识'], 项目: P, 文本: '作废' });
+    assert.equal(当前.命中.length, 0, '失效条目不进默认召回');
+    assert.ok(当前.条目.some((e) => e.id === entry.id), '但要留在 条目 里供追溯');
+    assert.equal(当前.口径.排除失效, 1, '口径必须点名排除了几条，不许折成「没找到」');
+    assert.match(当前.说明 ?? '', /含失效/, '说明要给出把它拉回来的办法');
+
+    const 历史 = await memory.query({ 类: ['知识'], 项目: P, 文本: '作废', 含失效: true });
+    assert.equal(历史.命中.length, 1, '含失效: true 要能召回');
+    assert.equal(历史.口径.失效条目数, 1, '「有几条失效」要报');
+    assert.equal(历史.口径.排除失效, 0, '一条都没排除时不许报成排除了 —— 假读数比没读数更贵');
+
+    // 「冷」不许撤销「错」：后来追加的降权不能把它放回当前召回面。
+    await memory.demote(entry.id, { subject: LEAD, 原因: '这条冷下来了' });
+    const 降权后 = await memory.query({ 类: ['知识'], 项目: P, 文本: '作废' });
+    assert.equal(降权后.命中.length, 0, '失效是事实判断，降权是优先级判断，降权不许复活它');
+    assert.equal(降权后.条目.find((e) => e.id === entry.id).状态, '已降权', '但状态读数要如实反映最后一次处置');
   });
 
   it('记忆：作答归档后的可读性矩阵', async () => {

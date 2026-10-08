@@ -23,6 +23,9 @@ const ANSWER_READERS = ['主权者', 'Lead', '复核者'];
 const isStateRow = (row) => typeof row?.指向 === 'string' && typeof row?.追加 === 'string';
 
 export class MemoryService {
+  /** id 用的严格递增时刻（只在内存里；见 `#nextStamp`）。 */
+  #lastStamp;
+
   /**
    * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock }} spec
    */
@@ -36,7 +39,7 @@ export class MemoryService {
   /**
    * 记一条。写入时校验正文结构与来源；不合规拒写，不做事后修补。
    *
-   * @param {{ subject: object, 类: string, 内容: string, 来源: string|{谁?: string, 怎么知道: string}, 项目?: string, 岗位?: string, 标签?: string[], 轮?: string, 任务?: object }} input
+   * @param {{ subject: object, 类: string, 内容: string, 来源: string|{谁?: string, 怎么知道: string}, 项目?: string, 岗位?: string, 标签?: string[], 标题?: string, 轮?: string, 任务?: object }} input
    * @returns {Promise<{ id: string, 类: string, 归属: string, 账本: string, 项目: string|null, 岗位: string|null }>}
    */
   async remember(input) {
@@ -72,10 +75,16 @@ export class MemoryService {
       context: { task: input.任务 ?? null, 类: kind },
     });
 
-    const id = objectId(kind, `${text.slice(0, 40)}/${input.subject?.id ?? ''}`, { at: this.clock.ms() });
+    // id 的种子**不许含正文**。id 会进每一条审计记录的 `对象.id`，而审计只增、
+    // 连主权者也只能追加更正 ⇒ 正文一旦折进 id，物理删除就永远删不干净
+    // （评审稿 §A8/§C8：删除凭据应是随机对象 ID，不保留原文，也不保留可枚举的敏感标题）。
+    // 所以种子只用「类 + 主体 + 时刻」；人可读的标题另存 `标题` 字段——
+    // 它是账本里的一行，`purge` 能连带抹掉，而 id 里的东西抹不掉。
+    const id = objectId(kind, `${kind}/${input.subject?.id ?? 'unknown'}`, { at: this.#nextStamp() });
     const row = {
       id,
       类: kind,
+      标题: input.标题 ?? text.slice(0, 40),
       内容: text,
       来源,
       归属: scope,
@@ -144,8 +153,10 @@ export class MemoryService {
 
   /**
    * 检索。默认把归档后的作答排除在检索面之外；`显式: true` 才把它拉回来（§7）。
+   * 默认还按「当前有效视图」召回：已失效 / 被推翻的条目留在 `条目` 里供追溯，但不进 `命中`；
+   * 要看它们就带 `含失效: true`。
    *
-   * @param {{ 类?: string[], 项目?: string, 岗位?: string, 文本?: string, 显式?: boolean, 读者?: object, limit?: number }} [query]
+   * @param {{ 类?: string[], 项目?: string, 岗位?: string, 文本?: string, 显式?: boolean, 含失效?: boolean, 读者?: object, limit?: number }} [query]
    * @returns {Promise<{ 命中: object[], 口径: object, 条目: object[], 说明?: string }>}
    */
   async query(query = {}) {
@@ -169,17 +180,50 @@ export class MemoryService {
       visible.push(entry);
     }
 
+    // 「当前有效视图」：失效与被推翻的条目**不进召回**，但**仍留在 `条目` 里**供追溯——
+    // 调用方要看到「这条存在过、已经被否掉」，而不是让它悄悄消失（§7 追加状态的本意）。
+    // 要看它们就显式带 `含失效: true`（历史 / 调查口径）。
+    //
+    // 判据是**粘的**：只要追加过 invalid / 推翻，就不再进当前召回，之后的「降权」不许把它复活。
+    // 只看最后一个 `状态` 会漏：`fold` 是按 `追于` 覆盖的，而 `追于` 是**秒级**——
+    // 同一秒里「先失效、后降权」会让最终状态变成 `已降权`，于是被判错过的条目又回到召回面。
+    // 方向也一致：降权的意思是「冷」，不是「错」（§7「冷 ⇒ 追加降权状态，不删」），
+    // 而「错」是事实判断，不该被后来的优先级判断撤销。
+    const 已被否 = (entry) =>
+      entry.状态 === '已失效' ||
+      entry.状态 === '被推翻' ||
+      (entry.历史 ?? []).some((s) => s.追加 === 'invalid' || s.追加 === '推翻');
+    const 撤回 = visible.filter(已被否);
+    const 可召回 = query.含失效 === true ? visible : visible.filter((entry) => !已被否(entry));
+
+    // `排除失效` 只报**实际被排除**的条数：带 `含失效: true` 时一条都没排除，
+    // 那里还写个 1 就是一句假读数（这个组织里假读数比没读数更贵）。
+    // 「一共有几条失效」另用 `失效条目数` 报，两个问题分开答。
+    const 口径数 = {
+      文档数: visible.length,
+      可召回数: 可召回.length,
+      失效条目数: 撤回.length,
+      排除失效: query.含失效 === true ? 0 : 撤回.length,
+    };
+
     if (!query.文本) {
       return {
         命中: [],
         条目: visible,
-        口径: { 搜索面: '记忆服务', 查询词: '', 范围: wanted.join('/'), 文档数: visible.length, 命中数: 0 },
+        口径: { 搜索面: '记忆服务', 查询词: '', 范围: wanted.join('/'), ...口径数, 命中数: 0 },
         ...(query.显式 === true ? { 说明: '已显式包含归档作答。' } : {}),
       };
     }
-    const index = buildIndex(visible.map((entry) => ({ id: entry.id, 正文: entry.内容, 标签: [entry.类, entry.岗位 ?? ''], 来源: entry.归属 })));
+    const index = buildIndex(可召回.map((entry) => ({ id: entry.id, 正文: entry.内容, 标签: [entry.类, entry.岗位 ?? ''], 来源: entry.归属 })));
     const result = search(index, query.文本, { limit: query.limit ?? 10, 范围: `${wanted.join('/')}@${query.项目 ?? '全部项目'}` });
+    result.口径 = { ...result.口径, ...口径数 };
     if (result.命中.length === 0) result.说明 = formatMiss(result.口径);
+    if (撤回.length > 0 && query.含失效 !== true) {
+      // 「0 命中」与「有材料但被当前有效视图挡住」是两件事，不许折成同一句话。
+      result.说明 = [result.说明, `另有 ${撤回.length} 条已失效/被推翻的条目按「当前有效视图」未进召回；要看它们请带 含失效: true。`]
+        .filter(Boolean)
+        .join(' ');
+    }
     result.条目 = visible;
     return result;
   }
@@ -338,6 +382,20 @@ export class MemoryService {
   }
 
   // ── 内部 ────────────────────────────────────────────────────────────────────
+
+  /**
+   * 严格递增的时刻，只给 id 用。
+   *
+   * 为什么需要它：id 的种子去掉了正文，只剩「类 + 主体 + 时刻」。
+   * 若同一毫秒内、同一主体写两条，哈希输入完全相同 ⇒ **撞 id**，
+   * 而 `fold()` 是按 id 归并的，撞 id 会让两条记忆静默合成一条。
+   * 所以这里保证「后一次调用拿到的时刻严格大于前一次」。
+   */
+  #nextStamp() {
+    const now = this.clock.ms();
+    this.#lastStamp = this.#lastStamp !== undefined && now <= this.#lastStamp ? this.#lastStamp + 1 : now;
+    return this.#lastStamp;
+  }
 
   /** @param {string} kind @param {string|undefined} 项目 */
   async #scopesFor(kind, 项目) {

@@ -176,6 +176,7 @@ function mindTool({ org, 项目, 项目键 }) {
         标签: { type: 'string' },
         文本: { type: 'string', description: '检索查询词' },
         显式: { type: 'boolean', description: '检索时是否显式包含归档作答' },
+        含失效: { type: 'boolean', description: '检索时是否包含已失效/被推翻的记忆（默认 false：只召回当前有效视图）' },
         全量: { type: 'boolean', description: 'workbench 是否越过「成员只读自己那片」的切片' },
         op: { type: 'string', enum: ['invalidate', 'demote', 'overturn', 'purge', 'promote'], description: '记忆处置；不许改写只能追加' },
         新条目: { type: 'string' },
