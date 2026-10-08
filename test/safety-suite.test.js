@@ -33,17 +33,17 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
     await f.cleanup();
   });
 
-  it('四行处置表：直接替换 / 保留用户的 / 挂起 / 强制替换', () => {
+  it('处置表（裁决 2026-10-08）：直接替换 / 保留用户的（含冲突私有优先）/ 强制替换', () => {
     assert.equal(decide(null, 'a', null), '直接替换');
     assert.equal(decide('a', 'a', 'a'), '直接替换');
     assert.equal(decide('a', 'a', 'b'), '保留用户的', '出厂没改 ⇒ 保留用户的');
     assert.equal(decide('a', 'b', 'a'), '直接替换', '用户没改 ⇒ 直接替换');
-    assert.equal(decide('a', 'b', 'c'), '挂起', '两边都改了同一条');
+    assert.equal(decide('a', 'b', 'c'), '保留用户的', '两边都改了同一条 ⇒ 私有优先，不再挂起');
     assert.equal(decide('a', 'b', 'c', true), '强制替换', '安全类不可协商');
-    assert.equal(decide(null, 'b', 'c'), '挂起');
+    assert.equal(decide(null, 'b', 'c'), '保留用户的', '无基线的分歧也私有优先');
   });
 
-  it('条款级合并：真按条款判，不按整文件判', async () => {
+  it('条款级合并：真按条款判；冲突标出来、告警提示、不落挂起（裁决 2026-10-08）', async () => {
     // 不写 H1：条款键就是标题路径，H1 会让键带上前缀（`演示/条款一`），
     // 这里要断言的是条款级行为本身，所以用最直接的形状。
     const 出厂 = `${条款('条款一', '出厂第一版')}\n${条款('条款二', '出厂第二版')}\n`;
@@ -54,48 +54,37 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
 
     await upgrade.stamp({ 版本: '1.0.0', 对象: ['合并演示'] });
 
-    // 出厂只动了条款一，而用户也改了条款一 ⇒ 挂起。
+    // 出厂只动了条款一，而用户也改了条款一 ⇒ 冲突，私有优先。
     const 出厂改 = `${条款('条款一', '出厂新版')}\n${条款('条款二', '出厂第二版')}\n`;
     await writeUnder(f.factoryRoot, 能力相对('合并演示'), 出厂改);
     const rows = await upgrade.compare({ 对象: '合并演示' });
     const 第一条 = rows.find((r) => r.条款 === '条款一');
     const 第二条 = rows.find((r) => r.条款 === '条款二');
     assert.ok(第一条 && 第二条, `条款键应被识别，实际键：${rows.map((r) => r.条款).join(',')}`);
-    assert.equal(第一条.处置, '挂起', '两边都改了同一条');
-    assert.ok(第一条.diff && 第一条.diff.出厂.includes('出厂新版'), '挂起必须摆 diff');
+    assert.equal(第一条.处置, '保留用户的', '两边都改了同一条 ⇒ 私有优先');
+    assert.equal(第一条.冲突, true, '冲突事实必须显式标出');
+    assert.ok(第一条.diff && 第一条.diff.出厂.includes('出厂新版'), '冲突行保留 diff 供提示');
     assert.equal(第二条.处置, '保留用户的', '出厂没改的那条保留用户的');
-
-    const pending = await upgrade.pending();
-    assert.equal(pending.length, 1);
-    assert.deepEqual(pending[0].可选项, ['用出厂版', '用我的版']);
-    assert.match(pending[0].私有, /用户改过的一条/);
+    // 不落新挂起：冲突私有优先后，挂起队列不再增长。
+    assert.equal((await upgrade.pending()).length, 0, '新冲突不产生挂起项');
+    // Lead 提示主权者：一条告警审计。
+    const 提示 = (await f.audit.read({})).filter((r) => r.告警 === true && /私有优先/.test(String(r.结果)));
+    assert.ok(提示.length >= 1, '冲突必须留下告警提示');
+    assert.ok(提示.at(-1).详情.条款.includes('条款一'), '提示里点名冲突条款');
   });
 
-  it('挂起不阻塞其他更新；裁决与撤回都留记录而不是删除', async () => {
-    await writeUnder(f.factoryRoot, 能力相对('另一个'), `${条款('甲', 'v1')}\n`);
-    await writeUnder(f.privateRoot, 能力相对('另一个'), `${条款('甲', 'v1-用户改过')}\n`);
-    await upgrade.stamp({ 版本: '1.0.1', 对象: ['另一个'] });
-    await writeUnder(f.factoryRoot, 能力相对('另一个'), `${条款('甲', 'v2')}\n`);
-    const rows = await upgrade.compare({ 对象: '另一个' });
-    assert.equal(rows[0].处置, '挂起');
-    const all = await upgrade.pending();
-    assert.equal(all.length, 2, '新的挂起没有阻塞也不会顶掉旧的');
-
-    const target = all.find((p) => p.对象 === '另一个');
-    await assert.rejects(
-      () => upgrade.resolve({ subject: LEAD, id: target.id, 选择: '用我的版', 理由: '我说了算' }),
-      (error) => error.message.length > 0,
-    );
-    const resolved = await upgrade.resolve({ subject: SOVEREIGN, id: target.id, 选择: '用我的版', 理由: '保留本机改动' });
-    assert.equal(resolved.已裁决, true);
+  it('遗留挂起项：Lead 可裁决；裁决与撤回都留记录而不是删除', async () => {
+    await f.writePrivate('升级/挂起/legacy-1.json', `${JSON.stringify({ id: 'legacy-1', 对象: '另一个', 条款: '甲', 安全类: false, 状态: '挂起', 可选项: ['用出厂版', '用我的版'] }, null, 2)}\n`);
+    const resolved = await upgrade.resolve({ subject: LEAD, id: 'legacy-1', 选择: '用我的版', 理由: '主权者授意' });
+    assert.equal(resolved.已裁决, true, '法律档遗留挂起：Lead 裁决通道放行');
     const after = await upgrade.pending();
-    assert.equal(after.length, 2, '裁决后记录仍在（不可逆的是记录）');
-    assert.equal(after.find((p) => p.id === target.id).选择, '用我的版');
+    assert.equal(after.find((p) => p.id === 'legacy-1').选择, '用我的版');
+    assert.equal(after.find((p) => p.id === 'legacy-1').已裁决, true, '裁决后记录仍在（不可逆的是记录）');
 
-    const other = after.find((p) => !p.已裁决);
-    const withdrawn = await upgrade.withdraw({ subject: SOVEREIGN, id: other.id, 理由: '不升级了' });
+    await f.writePrivate('升级/挂起/legacy-2.json', `${JSON.stringify({ id: 'legacy-2', 对象: '另一个', 条款: '乙', 安全类: false, 状态: '挂起' }, null, 2)}\n`);
+    const withdrawn = await upgrade.withdraw({ subject: LEAD, id: 'legacy-2', 理由: '不升级了' });
     assert.equal(withdrawn.已撤回, true);
-    assert.equal((await upgrade.pending()).length, 2, '撤回也不删记录');
+    assert.equal((await upgrade.pending()).find((p) => p.id === 'legacy-2').已撤回, true, '撤回也不删记录');
   });
 
   it('安全类走强制替换，不看用户改没改', async () => {

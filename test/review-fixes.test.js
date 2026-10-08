@@ -93,15 +93,17 @@ describe('审查修复 · 批次 1+2', () => {
     await assert.rejects(() => tasks.start(node2.id, { subject: REVIEWER, 项目: P }), (e) => e instanceof Denied);
   });
 
-  it('upgrade_withdraw 与 resolve 同一口径：Lead 不能撤回主权者的挂起项', async () => {
-    // 直接种一个挂起项（compare 落挂起那条链与本断言无关）。
+  it('upgrade_withdraw：法律档挂起项 Lead 可处置（裁决 2026-10-08）；安全类（宪章档）仍拒 Lead', async () => {
+    // 直接种两个遗留挂起项（新冲突已按私有优先自动处置，不再产生挂起）。
     await f.writePrivate('升级/挂起/pend-1.json', `${JSON.stringify({ id: 'pend-1', 对象: '权限矩阵', 安全类: false, 状态: '挂起' }, null, 2)}\n`);
+    await f.writePrivate('升级/挂起/pend-2.json', `${JSON.stringify({ id: 'pend-2', 对象: '宪章', 安全类: true, 状态: '挂起' }, null, 2)}\n`);
+    const withdrawn = await upgrade.withdraw({ subject: LEAD, id: 'pend-1', 理由: '主权者授意撤回' });
+    assert.equal(withdrawn.已撤回, true, '法律档：Lead 裁决通道放行');
     await assert.rejects(
-      () => upgrade.withdraw({ subject: LEAD, id: 'pend-1', 理由: '我替他决定了' }),
-      (e) => e instanceof Denied && /主权者/.test(e.rule),
+      () => upgrade.withdraw({ subject: LEAD, id: 'pend-2', 理由: '试试安全类' }),
+      (e) => e instanceof Denied && /主权者|宪章/.test(e.rule + e.reason),
+      '宪章档（安全类）：Lead 仍不可达',
     );
-    const withdrawn = await upgrade.withdraw({ subject: SOVEREIGN, id: 'pend-1', 理由: '不升级了' });
-    assert.equal(withdrawn.已撤回, true);
   });
 
   it('purge：理由必填（不再是 TypeError），敏感必须显式声明，且过策略闸', async () => {

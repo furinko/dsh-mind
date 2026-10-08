@@ -50,11 +50,14 @@ describe('策略引擎', () => {
     assert.match(修宪.reason, /修宪|不得/);
   });
 
-  it('法律档：主权者确定，Lead 只可提议', async () => {
+  it('法律档：主权者确定，Lead 可提议；publish 走升级裁决通道（裁决 2026-10-08）', async () => {
     const target = { id: '权限矩阵', kind: '规则', authority: '法律' };
     assert.equal((await 判定(SOVEREIGN, 'write', target)).verdict, 'allow');
     assert.equal((await 判定(LEAD, 'propose', target)).verdict, 'allow');
-    assert.equal((await 判定(LEAD, 'publish', target)).verdict, 'deny');
+    assert.equal((await 判定(LEAD, 'publish', target)).verdict, 'allow', '规则件 publish = 升级裁决通道，Lead 放行');
+    // 通道按对象收窄：非规则件的法律档 publish 仍拒。
+    assert.equal((await 判定(LEAD, 'publish', { id: 'k-9', kind: '知识', authority: '法律' })).verdict, 'deny');
+    assert.equal((await 判定(LEAD, 'delete', target)).verdict, 'deny', 'delete 不在通道内');
   });
 
   it('自治档：组织自决；成员任务内全权、任务外无', async () => {

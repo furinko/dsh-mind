@@ -9,7 +9,7 @@
  *  3. **归档 takes precedence over 状态** —— §7 明确「不承担回滚、不做状态」，
  *     所以这里没有任何 `update`/`delete` 方法，将来也不加。
  */
-import { appendLines, atomicWrite, ensureDirPath, listFiles, readJsonl, readJsonOrNull, withLock } from './kernel/fsx.js';
+import { appendLines, atomicWrite, ensureDirPath, listFiles, readJsonl, readJsonOrNull, withLock, serializeByKey } from './kernel/fsx.js';
 import { chainHash } from './kernel/text.js';
 import { monthKey } from './kernel/time.js';
 
@@ -71,7 +71,8 @@ export class AuditLog {
     // 「读尾→算 seq→追加→写 anchor」必须整体在锁内（E3）：
     // 并发追加会算出同 seq 同 prev 的两行 ⇒ 链 fork，verify() 把正常并发误判成篡改。
     // fsx.js 头注释自称「读-改-写一律走 withLock」，审计此前恰好没走。
-    return withLock(`${file}.lock`, async () => {
+    return serializeByKey(`${file}`, () =>
+      withLock(`${file}.lock`, async () => {
       // 锁内必须重读真源（fresh）：内存链尾缓存只被「自己的追加」更新，
       // 别的写者在锁外推进过的账，缓存看不见 ⇒ 同 seq 同 prev 的 fork 行。
       const prev = await this.#chainTail(month, { fresh: true });
@@ -97,7 +98,8 @@ export class AuditLog {
       await this.#writeAnchor(month, { seq: record.seq, hash, at });
       if (stored.告警) this.onAlarm({ month, ...stored });
       return { seq: record.seq, hash, 时间: at, 月: month };
-    });
+      }),
+    );
   }
 
   /**

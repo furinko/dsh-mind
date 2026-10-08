@@ -178,7 +178,10 @@ export async function withLock(lockPath, fn, options = {}) {
         await rm(lockPath, { force: true });
       }
     } catch (error) {
-      if (!error || error.code !== 'EEXIST') throw error;
+      // Windows 的已知行为：对已存在文件 open('wx') 常抛 EPERM 而非 EEXIST
+      // （文件被别的句柄持有或处于删除挂起态时尤其如此）。锁文件路径只会指向普通文件，
+      // 这里的 EPERM 按「锁被占着」处理：进入等待/夺取分支，而不是炸掉调用方。
+      if (!error || (error.code !== 'EEXIST' && error.code !== 'EPERM')) throw error;
       const info = await stat(lockPath).catch(() => null);
       const age = info ? Date.now() - info.mtimeMs : Number.POSITIVE_INFINITY;
       if (age > staleMs) {
@@ -186,6 +189,8 @@ export async function withLock(lockPath, fn, options = {}) {
         options.onSteal?.({ lockPath, ageMs: age });
         continue;
       }
+      // stat 不到 = 锁刚被释放（删除挂起窗口）——重试即可，不算失败。
+      if (!info) continue;
       if (Date.now() - started > timeoutMs) {
         throw new Error(`获取锁超时：${lockPath}（持有者未在 ${timeoutMs}ms 内释放）`);
       }
@@ -198,6 +203,29 @@ export async function withLock(lockPath, fn, options = {}) {
 export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+/**
+ * 进程内按 key 串行化（互斥的最后一道保险）。
+ *
+ * 为什么有了 withLock 还要它：Windows 上「名字式」文件锁存在 rm/create 竞态——
+ * 持有者的 rm 与等待者的 open('wx') 在删除挂起窗口内交错时，两个等待者可以**先后各自
+ * 建出锁文件并都进入临界区**（实测复现：审计链同 seq 双行 fork，见 identity-chain E3）。
+ * 进程内这条队列不依赖文件系统语义，await 链保证同 key 的 fn 绝不重叠；
+ * 跨进程的一致性仍由 withLock 尽力 + 审计链自检兜底。
+ *
+ * @template T
+ * @param {string} key
+ * @param {() => Promise<T>} fn
+ * @returns {Promise<T>}
+ */
+export function serializeByKey(key, fn) {
+  const tail = (serializeByKey._queue.get(key) ?? Promise.resolve()).catch(() => {});
+  const run = tail.then(fn);
+  serializeByKey._queue.set(key, run.catch(() => {}));
+  return run;
+}
+/** @type {Map<string, Promise<void>>} */
+serializeByKey._queue = new Map();
 
 /**
  * 在锁内做「读-改-写」。

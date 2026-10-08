@@ -460,7 +460,11 @@ export class PolicyEngine {
         howToChange: '旧数据原地只读、不接入检索面；确需内容请主权者导出。',
       });
     }
-    if (['delete', 'publish'].includes(action) && subject.kind !== '主权者') {
+    // 升级裁决通道（主权者裁决 2026-10-08）：不开主权者身份通道，改允许 Lead
+    // 对**法律档规则件**执行 publish（裁决/撤回遗留挂起项）。自我约束：Lead 仅在主权者
+    // 授意时行使（裁决已入审计与记忆）。宪章档（安全类）与 delete 仍主权者专属。
+    const 升级裁决通道 = subject.kind === 'Lead' && action === 'publish' && target.kind === '规则' && authority === '法律';
+    if (['delete', 'publish'].includes(action) && subject.kind !== '主权者' && !升级裁决通道) {
       return deny('宪章 §3.2 未经主权者的删除 / 发布 / 批量覆盖', `${subject.kind} 不得执行 ${action}。`, {
         requireAuthority: '主权者',
         howToChange: '改为提交提案（propose），由主权者发布或删除。',
@@ -514,6 +518,12 @@ export class PolicyEngine {
         return allow('法律 权限矩阵 · 法律档（Lead 可提议修法）', 'Lead 可提议修法，确定权在主权者。');
       }
       if (subject.kind === 'Lead' && action === 'read') return allow('法律 权限矩阵 · 法律档', '法律可读。');
+      if (subject.kind === 'Lead' && action === 'publish' && target.kind === '规则') {
+        return allow(
+          '法律 权限矩阵 · 法律档 · 升级裁决通道（主权者裁决 2026-10-08）',
+          'Lead 可对规则件执行裁决类发布（upgrade_resolve / upgrade_withdraw）。自我约束：仅在主权者授意时行使。',
+        );
+      }
       return deny('法律 权限矩阵 · 法律档', `${subject.kind} 不得对法律执行 ${action}。`, {
         requireAuthority: '主权者',
         howToChange: 'Lead 提议（propose）后由主权者确定；法律默认文本与用户改动走叠加层合并。',

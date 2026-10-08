@@ -2,22 +2,22 @@
  * 升级：叠加层 + 条款级合并（§5）。
  *
  * 一句话概括这一件的行为：**出厂文件是只读模板，用户改动是叠加层，生效内容是合并结果**。
- * 合并的最小单位是**条款**而不是文件——否则任何一处改动都会把整个文件判成冲突，
- * 挂起队列会永远清不空（那正是「不强制 ≠ 不通知」想避免的反面）。
+ * 合并的最小单位是**条款**而不是文件——否则任何一处改动都会把整个文件判成冲突。
  *
- * 四行处置表（§5）在这里只有一处实现：
+ * 处置表（§5，经主权者 2026-10-08 批次4裁决修订）：
  *   用户没改过        → 直接替换
  *   用户改了、出厂没改 → 保留用户的
- *   两边改了同一条     → 挂起（摆 diff 给主权者选）
+ *   两边改了同一条     → **保留用户的（私有优先）**，并审计一条告警提示主权者——
+ *                       不再挂起等裁决；Lead 的裁决通道保留给遗留挂起项
  *   安全类            → 强制替换，不可协商
  */
-import { readJsonOrNull, readTextOrNull, atomicWrite, listFiles, ensureDirPath } from './kernel/fsx.js';
+import { readJsonOrNull, readTextOrNull, atomicWrite, listFiles } from './kernel/fsx.js';
 import { InvalidBody } from './kernel/errors.js';
-import { digest, splitClauses } from './kernel/text.js';
+import { splitClauses } from './kernel/text.js';
 import { RULE_FILES } from './paths.js';
 
-/** 处置四态。 */
-export const DISPOSITIONS = ['直接替换', '保留用户的', '挂起', '强制替换'];
+/** 处置三态（「挂起」已按主权者 2026-10-08 裁决并入「保留用户的」：冲突私有优先 + 告警提示）。 */
+export const DISPOSITIONS = ['直接替换', '保留用户的', '强制替换'];
 
 export class UpgradeManager {
   /**
@@ -97,18 +97,32 @@ export class UpgradeManager {
       const fHash = 出厂条款.get(key)?.hash ?? null;
       const pHash = 私有条款.get(key)?.hash ?? null;
       const 处置 = decide(基线哈希, fHash, pHash, spec.安全类 === true);
+      // 「两边都改了」要显式标出：处置是私有优先（保留用户的），但冲突事实必须可见——
+      // Lead 据此提示主权者（主权者裁决 2026-10-08），diff 也保留给提示用。
+      const 冲突 = pHash !== null && fHash !== 基线哈希 && pHash !== 基线哈希 && pHash !== fHash;
       return {
         条款: key,
         处置,
+        ...(冲突 ? { 冲突: true } : {}),
         出厂哈希: fHash,
         私有哈希: pHash,
         基线哈希,
-        diff: 处置 === '挂起' ? { 出厂: trim(出厂条款.get(key)?.body ?? ''), 私有: trim(私有条款.get(key)?.body ?? '') } : null,
+        diff: 冲突 ? { 出厂: trim(出厂条款.get(key)?.body ?? ''), 私有: trim(私有条款.get(key)?.body ?? '') } : null,
       };
     });
 
-    for (const row of 结果.filter((r) => r.处置 === '挂起')) {
-      await this.#suspend(spec.对象, row);
+    // 冲突私有优先：不挂起、不阻塞，但必须有一条告警让 Lead 能向主权者提示（裁决 2026-10-08）。
+    const 冲突行 = 结果.filter((r) => r.冲突);
+    if (冲突行.length) {
+      await this.audit.append({
+        动作: '状态变更',
+        主体: { id: 'system', kind: '系统' },
+        对象: { id: spec.对象, kind: '规则' },
+        依据: '§5 升级冲突私有优先（主权者裁决 2026-10-08）',
+        结果: `私有优先：${冲突行.length} 条出厂/私有冲突保留私有版，待 Lead 提示主权者`,
+        告警: true,
+        详情: { 条款: 冲突行.map((r) => r.条款) },
+      });
     }
     if (结果.some((r) => r.处置 !== '保留用户的')) {
       await this.audit.append({
@@ -139,7 +153,9 @@ export class UpgradeManager {
   }
 
   /**
-   * 裁决一个挂起项。只有主权者能裁决（判定交给策略引擎，目标对象按 authority 区分）。
+   * 裁决一个**遗留**挂起项（新冲突已按私有优先自动处置，不再产生挂起）。
+   * 主权者或 Lead 可裁决（主权者裁决 2026-10-08：Lead 自我约束，仅在主权者授意时行使）；
+   * 安全类挂起项仍按宪章档拒绝 Lead。
    *
    * @param {{ subject: object, id: string, 选择: string, 理由: string }} spec
    * @returns {Promise<{ id: string, 已裁决: true, 选择: string }>}
@@ -173,10 +189,7 @@ export class UpgradeManager {
   /**
    * 可撤回（§5 升级三配套之三）。撤回同样留痕：挂起项不消失，只是被撤回。
    *
-   * 撤回与裁决同一口径（action: 'publish'）：挂起项是「留给主权者的决定」，
-   * Lead 把它撤掉 = Lead 替主权者把决定抹了——与直接裁决是同一性质的越权。
-   * （这意味着主权者身份通道落地前，撤回与裁决一样不可达——fail-closed 的方向是对的：
-   *  宁可队列停着，也不许被越权清掉。）
+   * 撤回与裁决同一口径（action: 'publish'）与同一授权面（主权者或 Lead，裁决 2026-10-08）。
    * @param {{ subject: object, id: string, 理由?: string }} spec
    */
   async withdraw(spec) {
@@ -202,50 +215,6 @@ export class UpgradeManager {
   }
 
   // ── 内部 ────────────────────────────────────────────────────────────────────
-
-  /** @param {string} 对象 @param {object} row */
-  async #suspend(对象, row) {
-    const id = `${对象}-${digest(row.条款).slice(0, 8)}`;
-    const existing = await readJsonOrNull(this.layout.pendingFile(id));
-    if (existing && !existing.已裁决 && !existing.已撤回) return;
-    // 已裁决/已撤回的同 id 挂起项不许被覆盖重写（F3）：裁决历史丢失 = 队列永不收敛。
-    // 旧档案挪进 history/ 子目录（pending() 只扫顶层，不会把历史当新挂起读回来）。
-    if (existing) {
-      const historyDir = `${this.layout.pendingDir()}/history`;
-      await ensureDirPath(historyDir);
-      const 戳 = this.clock.iso().replace(/[:.]/g, '');
-      await atomicWrite(`${historyDir}/${id}--${existing.已裁决 ? '已裁决' : '已撤回'}--${戳}.json`, `${JSON.stringify(existing, null, 2)}\n`);
-    }
-    await atomicWrite(
-      this.layout.pendingFile(id),
-      `${JSON.stringify(
-        {
-          id,
-          对象,
-          条款: row.条款,
-          处置: '挂起',
-          出厂: row.diff?.出厂 ?? '',
-          私有: row.diff?.私有 ?? '',
-          出厂哈希: row.出厂哈希,
-          私有哈希: row.私有哈希,
-          基线哈希: row.基线哈希,
-          挂起于: this.clock.iso(),
-          可选项: ['用出厂版', '用我的版'],
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    await this.audit.append({
-      动作: '升级挂起',
-      主体: { id: 'system', kind: '系统' },
-      对象: { id: 对象, kind: '规则' },
-      依据: '§5 两边改了同一条 ⇒ 挂起，摆 diff 给主权者选',
-      结果: `挂起条款「${row.条款}」`,
-      告警: true,
-      详情: { 挂起项: id },
-    });
-  }
 
   /** @returns {Promise<string[]>} 出厂区里可参与合并的对象（规则 + 岗位卡 + 能力）。 */
   async #factoryObjects() {
@@ -283,8 +252,11 @@ export class UpgradeManager {
 }
 
 /**
- * 四行处置表。独立成函数是为了让「判定」与「落盘」分开，
- * 于是它能被单独测（合并逻辑出错时，回滚队列比磁盘状态更早暴露问题）。
+ * 处置表。独立成函数是为了让「判定」与「落盘」分开，
+ * 于是它能被单独测（合并逻辑出错时，比磁盘状态更早暴露问题）。
+ *
+ * 「挂起」已按主权者 2026-10-08 批次4裁决移除：两边都改了同一条 ⇒ 保留用户的（私有优先），
+ * 冲突事实由 compare() 标注并审计告警提示，不再等裁决。
  *
  * @param {string|null} 基线
  * @param {string|null} 出厂
@@ -295,11 +267,10 @@ export class UpgradeManager {
 export function decide(基线, 出厂, 私有, 安全类 = false) {
   if (私有 === null) return '直接替换';
   if (安全类) return '强制替换';
-  if (基线 === null) return 出厂 === 私有 ? '直接替换' : '挂起';
+  if (基线 === null) return 出厂 === 私有 ? '直接替换' : '保留用户的';
   if (出厂 === 基线) return 私有 === 基线 ? '直接替换' : '保留用户的';
-  if (私有 === 基线) return '直接替换';
-  if (私有 === 出厂) return '直接替换';
-  return '挂起';
+  if (私有 === 基线 || 私有 === 出厂) return '直接替换';
+  return '保留用户的';
 }
 
 /** @param {string} text */

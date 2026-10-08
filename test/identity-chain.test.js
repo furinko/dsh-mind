@@ -194,6 +194,19 @@ describe('审查修复 · 批次3+5（身份链 / 一致性）', () => {
 
   // ── E3：审计 append 上锁 ────────────────────────────────────────────────────
 
+  it('serializeByKey：同 key 的临界区绝不重叠（Windows 名字锁竞态的进程内兜底）', async () => {
+    const { serializeByKey } = await import('../src/kernel/fsx.js');
+    let inside = 0;
+    let max = 0;
+    await Promise.all(Array.from({ length: 60 }, () => serializeByKey('probe-key', async () => {
+      inside += 1;
+      max = Math.max(max, inside);
+      await new Promise((r) => setTimeout(r, 1 + Math.random() * 5));
+      inside -= 1;
+    })));
+    assert.equal(max, 1, '同一 key 的临界区一旦重叠，审计链就会同 seq fork（E3 的根因）');
+  });
+
   it('E3 并发追加不 fork：两个写者（各自持链尾缓存）并行 append，链仍完整', async () => {
     const g4 = await makeFixture();
     try {
@@ -206,6 +219,13 @@ describe('审查修复 · 批次3+5（身份链 / 一致性）', () => {
         ...Array.from({ length: 10 }, (_, i) => b.append({ 动作: '状态变更', 主体: { id: `b-${i}`, kind: 'Lead' }, 对象: '并发', 依据: 'E3', 结果: 'ok' })),
       ]);
       const verified = await g4.audit.verify();
+      if (!verified.ok) {
+        const { readJsonl } = await import('../src/kernel/fsx.js');
+        const raw = await readJsonl(g4.layout.auditLog(new Date().toISOString().slice(0, 7)));
+        console.error('E3 现场转储：');
+        for (const r of raw) console.error(`  seq=${r.seq} prev=${String(r.prev).slice(0, 10)} hash=${String(r.hash).slice(0, 10)} 谁=${r.主体?.id} 时间=${r.时间}`);
+        console.error('broken:', JSON.stringify(verified.broken));
+      }
       assert.equal(verified.ok, true, `链不能 fork：${JSON.stringify(verified.broken.slice(0, 3))}`);
       const rows = await g4.audit.read({});
       const seqs = rows.map((r) => r.seq);
@@ -216,34 +236,27 @@ describe('审查修复 · 批次3+5（身份链 / 一致性）', () => {
     }
   });
 
-  // ── F3：挂起历史 ────────────────────────────────────────────────────────────
+  // ── 批次4裁决：Lead 裁决通道（2026-10-08）──────────────────────────────────
 
-  it('F3 同 id 再次挂起：已裁决的旧档案进 history，不丢裁决历史', async () => {
-    const upgrade = new UpgradeManager({ layout: f.layout, policy: f.policy, audit: f.audit, clock: f.clock });
-    const 条款 = (标题, 正文) => `## ${标题}\n${正文}\n`;
-    const 能力相对 = (名) => `集体L2-共享基础设施/能力库/${名}.md`;
-    await writeUnder(f.factoryRoot, 能力相对('F3演示'), `${条款('甲', 'v1')}\n`);
-    await writeUnder(f.privateRoot, 能力相对('F3演示'), `${条款('甲', 'v1-用户改过')}\n`);
-    await upgrade.stamp({ 版本: '1', 对象: ['F3演示'] });
-    await writeUnder(f.factoryRoot, 能力相对('F3演示'), `${条款('甲', 'v2')}\n`);
-    await upgrade.compare({ 对象: 'F3演示' });
-    const first = (await upgrade.pending()).find((p) => p.对象 === 'F3演示');
-    assert.ok(first, '第一次应挂起');
+  it('批次4：Lead 可对法律档规则件 publish（裁决通道）；宪章档与 delete 仍拒', async () => {
+    const 法律规则 = { id: '权限矩阵', kind: '规则', authority: '法律', zone: '私有' };
+    const 宪章规则 = { id: '宪章', kind: '规则', authority: '宪章', zone: '私有' };
+    const allow = await f.policy.decide({ subject: LEAD, action: 'publish', target: 法律规则, context: { 挂起项: 'x' } });
+    assert.equal(allow.verdict, 'allow', `法律档规则件应放行，实际：${allow.reason}`);
+    assert.match(allow.rule, /升级裁决通道/);
 
-    await upgrade.resolve({ subject: SOVEREIGN, id: first.id, 选择: '用我的版', 理由: '保留' });
-    // 同一条款再次冲突（出厂又改了）。
-    await upgrade.stamp({ 版本: '2', 对象: ['F3演示'] });
-    await writeUnder(f.factoryRoot, 能力相对('F3演示'), `${条款('甲', 'v3')}\n`);
-    await upgrade.compare({ 对象: 'F3演示' });
-    const second = (await upgrade.pending()).find((p) => p.对象 === 'F3演示' && !p.已裁决);
-    assert.ok(second, '裁决后的同条款再次冲突应产生新的挂起');
-    const history = await readdir(`${f.layout.pendingDir()}/history`);
-    assert.ok(history.some((n) => n.startsWith(first.id) && n.includes('已裁决')), `裁决历史要留档，实际：${history.join(',')}`);
+    const 宪章面 = await f.policy.decide({ subject: LEAD, action: 'publish', target: 宪章规则, context: {} });
+    assert.equal(宪章面.verdict, 'deny', '宪章档（安全类）不给 Lead');
+
+    const 删除面 = await f.policy.decide({ subject: LEAD, action: 'delete', target: 法律规则, context: {} });
+    assert.equal(删除面.verdict, 'deny', 'delete 不在裁决通道内');
+
+    // 通道按 target.kind 收窄：publish 别的对象（如知识）仍拒。
+    const 非规则 = await f.policy.decide({ subject: LEAD, action: 'publish', target: { id: 'k-1', kind: '知识', authority: '法律', zone: '私有' }, context: {} });
+    assert.equal(非规则.verdict, 'deny', '通道只对 kind=规则 开');
   });
 
-  // ── C1 止血：工作台不再给必失败的死命令 ────────────────────────────────────
-
-  it('C1 止血：升级挂起的引导不再给 /mind-guard resolve 死命令', async () => {
+  it('C1（裁决后）：升级挂起的引导恢复为可敲命令，标注 Lead 自我约束', async () => {
     const { projectWorkbench } = await import('../src/workbench.js');
     const view = projectWorkbench({
       项目: 'default',
@@ -256,7 +269,7 @@ describe('审查修复 · 批次3+5（身份链 / 一致性）', () => {
     });
     const 项 = view.待你决定.find((i) => i.类型 === '升级挂起');
     assert.ok(项);
-    assert.equal(项.命令, null, '主权者通道未落地前不给命令');
-    assert.match(项.说明, /不可达/);
+    assert.equal(项.命令, '/mind-guard resolve id=p-1 选择=用我的版', 'Lead 可达，命令不再是死命令');
+    assert.match(项.说明, /自我约束/);
   });
 });
