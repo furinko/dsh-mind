@@ -420,10 +420,28 @@ window.__ModuleLoader__.load({
         }),
         会审: arr(firstOf(v, ['会审', '会审记录'])).map(reviewRow),
         审计尾: arr(firstOf(v, ['审计尾', '审计', 'audit'])),
+        // 记忆读数：宿主没给就是 null（不装懂）；给了只取四个标量，数字真伪由投影侧负责。
+        记忆: 记忆读数Of(firstOf(v, ['记忆', '记忆读数', 'memory'])),
         任务: taskBag,
         // 投影把节点放在 `任务.节点` 下；`节点` 只是同一件事的直白叫法。
         任务节点: arr(taskBag.节点 || firstOf(v, ['任务节点', '节点', 'tasks'])),
         视图: line(firstOf(v, ['视图', 'view']), ''),
+      };
+    }
+
+    /**
+     * 记忆读数袋 → 渲染用的形状。null/非对象 ⇒ null：宿主没给就不画，
+     * 与「失联四态」同一纪律——缺数据不许伪装成 0。
+     */
+    function 记忆读数Of(bag) {
+      var b = obj(bag);
+      if (!b) return null;
+      var 近段 = obj(firstOf(b, ['近段'])) || {};
+      return {
+        存量: numOf(firstOf(b, ['存量', '存量合计'])),
+        窗口天: numOf(firstOf(近段, ['窗口天'])),
+        新增: numOf(firstOf(近段, ['新增', '新增合计'])),
+        晋升: numOf(firstOf(近段, ['晋升'])),
       };
     }
 
@@ -1826,6 +1844,11 @@ window.__ModuleLoader__.load({
           h('span', { key: 'c' }, '命令 ' + COMMAND),
           h('span', { key: 's' }, '会话 ' + (snap.sessionId ? snap.sessionId.slice(0, 12) : '—') + (snap.source ? '（' + snap.source + '）' : '')),
           view ? h('span', { key: 'm' }, '待你决定 ' + 待你决定.length + ' 项 · 会审 ' + 会审.length + ' 场 · 任务 ' + tasks.length + ' 节点') : null,
+          view && view.记忆
+            ? h('span', { key: 'mem' },
+                '记忆 存量 ' + (view.记忆.存量 === null ? '—' : view.记忆.存量)
+                  + (view.记忆.新增 === null ? '' : ' · 近' + (view.记忆.窗口天 || 7) + '天 +' + view.记忆.新增 + '（晋升 ' + (view.记忆.晋升 === null ? '—' : view.记忆.晋升) + '）'))
+            : null,
           view && view.视图 ? h('span', { key: 'v' }, '视图 ' + view.视图) : null,
         ].filter(Boolean)),
       ];

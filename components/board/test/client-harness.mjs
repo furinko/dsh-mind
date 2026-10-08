@@ -604,6 +604,8 @@ export function sampleView() {
       { seq: 3, 时间: '2026-10-07T17:03:04+08:00', 动作: '只读调用', 主体: 'role-α', 结果: '记', 档位: '不逐次记', 告警: false },
       { seq: 4, 时间: '2026-10-07T17:04:05+08:00', 动作: '零分歧异常', 主体: { id: 'lead', kind: 'Lead' }, 结果: '触发人工抽检', 档位: '全记', 告警: true },
     ],
+    // 验账读数：人扫一眼页脚就知道记账在正常发生（真源是 MemoryService.activity）。
+    记忆: { 存量: 12, 近段: { 窗口天: 7, 新增: 3, 晋升: 1 } },
   };
 }
 
@@ -960,6 +962,10 @@ export async function runHarness() {
   const decideButtons = collect(r1.tree, { skipStyle: true }).elements
     .filter((el) => el.type === 'button' && String(el.props.className || '').indexOf('dshmind-cmd') >= 0);
   passed.push(check(decideButtons.length === 0, '命令不是按钮'));
+
+  // ③c 待你决定之前先看页脚的验账读数：记忆存量 + 近段新增/晋升
+  passed.push(check(c1.text.includes('记忆 存量 12 · 近7天 +3（晋升 1）'),
+    '页脚给记忆验账读数（存量 + 近7天新增 + 晋升）'));
 
   // ③c 会审：未交齐只出盲标 + 锁行（成员 id 一个都不许出）
   const cards = findAllByClass(r1.tree, 'dshmind-review');

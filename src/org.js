@@ -154,6 +154,7 @@ export class Org {
       // `describe()` 给的是 `error`，而投影字段叫 `错误` —— 这里显式补上同名键，
       // 让「面板要读的那个键」在输入里就存在（只靠投影那一侧的兜底太隐蔽，见 workbench.js 的注释）。
       策略: { ...this.policy.describe(), 错误: this.policy.state.error, 介入度: this.policy.intervention(), 失联: this.policy.presence() },
+      记忆: await this.memory.activity({ 项目 }),
       生成于: this.clock.iso(),
     });
     return spec.读者 ? sliceForViewer(view, spec.读者) : view;
@@ -173,7 +174,8 @@ export class Org {
       探针,
       任务: (await this.tasks.snapshot({ 项目: this.project })).节点.length,
       能力: await this.capability.stats(),
-      记忆: (await this.memory.stats({ 项目: this.project })).合计,
+      // 验账读数：人不翻账本，扫一眼「存量 + 近段新增/晋升」就知道记账在正常发生。
+      记忆: await this.memory.activity({ 项目: this.project }),
       岗位: (await this.registry.list()).length,
       引导: this.boot,
     };

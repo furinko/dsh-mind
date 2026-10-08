@@ -402,6 +402,44 @@ export class MemoryService {
     return { 计数, 合计: Object.values(计数).reduce((a, b) => a + b, 0) };
   }
 
+  /**
+   * 记忆规模与近段异动：给 status / 工作台的「验账读数」。
+   *
+   * 为什么要有它：人不翻账本，但要能一眼确认「记账在正常发生」。
+   * 数字必须真实：同 id 的晋升副本与项目原件折成一条计（不双计数），
+   * 物理删除的不计；晋升按带 `跨项目判定` 的行数（那是晋升动作本身的留痕）。
+   *
+   * @param {{ 项目?: string, 天?: number }} [query]
+   * @returns {Promise<{窗口天: number, 起点: string, 存量合计: number, 新增合计: number, 按类: Record<string, number>, 晋升: number}>}
+   */
+  async activity(query = {}) {
+    const 天 = Number.isFinite(query.天) && query.天 > 0 ? query.天 : 7;
+    const 起点 = new Date(this.clock.ms() - 天 * 86_400_000).toISOString();
+    const 按类 = {};
+    let 存量合计 = 0;
+    let 新增合计 = 0;
+    let 晋升 = 0;
+    for (const kind of MEMORY_KINDS) {
+      按类[kind] = 0;
+      const rows = [];
+      for (const scope of await this.#scopesFor(kind, query.项目)) {
+        const scopeRows = await readJsonl(this.layout.memoryLog(scope, kind));
+        rows.push(...scopeRows);
+        if (kind === '知识') {
+          晋升 += scopeRows.filter((r) => r.跨项目判定 && String(r.跨项目判定.于) >= 起点).length;
+        }
+      }
+      // 跨账本 fold 一次：同 id 的晋升副本与原件是一条记忆，不许双计数（假读数比没读数贵）。
+      for (const entry of fold(rows)) {
+        if (entry.状态 === '物理删除') continue;
+        存量合计 += 1;
+        按类[kind] += 1;
+        if (String(entry.记于) >= 起点) 新增合计 += 1;
+      }
+    }
+    return { 窗口天: 天, 起点, 存量合计, 新增合计, 按类, 晋升 };
+  }
+
   // ── 内部 ────────────────────────────────────────────────────────────────────
 
   /**
