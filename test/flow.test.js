@@ -74,6 +74,7 @@ describe('主干环路', () => {
   it('任务：复核三态与打回计数；未验不算通过也不计打回；打回≥2 升级主权者', async () => {
     const node = await tasks.create({ subject: LEAD, 项目: P, 描述: '复核演示', 负责人: 'member-a', 判据: ['x'] });
     await tasks.dispatch(node.id, { subject: LEAD, 项目: P });
+    await tasks.start(node.id, { subject: MEMBER, 项目: P });
     await tasks.submit(node.id, { subject: MEMBER, 项目: P, 产出物引用: ['artifact-9'] });
 
     const 未验 = await review.record({ subject: REVIEWER, 项目: P, 节点: node.id, 三态: '未验', 反例面: ['读数拿不到'] });
@@ -99,6 +100,7 @@ describe('主干环路', () => {
   it('任务：产出物只存引用；待决项是节点状态且裁决后记录不消失', async () => {
     const node = await tasks.create({ subject: LEAD, 项目: P, 描述: '待决演示', 负责人: 'member-a', 判据: ['x'] });
     await tasks.dispatch(node.id, { subject: LEAD, 项目: P });
+    await tasks.start(node.id, { subject: MEMBER, 项目: P });
     await tasks.submit(node.id, { subject: MEMBER, 项目: P, 产出物引用: ['artifact-1', 'artifact-2'] });
     const submitted = await tasks.get(node.id, { 项目: P });
     assert.deepEqual(submitted.产出物引用, ['artifact-1', 'artifact-2']);
@@ -181,7 +183,7 @@ describe('主干环路', () => {
   it('记忆：物理删除只对敏感数据或主权者开放，且仍然留一条不可逆记录', async () => {
     const entry = await memory.remember({ subject: LEAD, 类: '偏好', 内容: '临时偏好', 来源: '本人' });
     await assert.rejects(() => memory.purge(entry.id, { subject: LEAD, 理由: '我改主意了' }), (e) => e instanceof Denied);
-    const purged = await memory.purge(entry.id, { subject: LEAD, 理由: '这是敏感数据，必须清掉' });
+    const purged = await memory.purge(entry.id, { subject: LEAD, 理由: '这是敏感数据，必须清掉', 敏感: true });
     assert.equal(purged.已删除, true);
     const { readFile } = await import('node:fs/promises');
     const text = await readFile(f.layout.memoryLog('跨项目', '偏好'), 'utf8');
@@ -393,6 +395,7 @@ describe('主干环路', () => {
   it('复核结论不经 Lead 修改：记录不同意只追加，原结论不动', async () => {
     const node = await tasks.create({ subject: LEAD, 项目: P, 描述: '结论不可改', 负责人: 'member-a', 判据: ['x'] });
     await tasks.dispatch(node.id, { subject: LEAD, 项目: P });
+    await tasks.start(node.id, { subject: MEMBER, 项目: P });
     await tasks.submit(node.id, { subject: MEMBER, 项目: P });
     await review.record({ subject: REVIEWER, 项目: P, 节点: node.id, 三态: '不过', 分歧清单: ['判据未满足'] });
     const before = await tasks.get(node.id, { 项目: P });

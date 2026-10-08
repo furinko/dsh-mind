@@ -101,6 +101,7 @@ describe('装载后的真实调用链', () => {
     const id = created.节点.id;
 
     assert.equal(JSON.parse(await tool.execute({ action: 'task_dispatch', id, project: P }, exec)).节点.判据冻结, true);
+    assert.equal(JSON.parse(await tool.execute({ action: 'task_start', id, project: P }, exec)).节点.状态, '执行中');
     assert.equal(JSON.parse(await tool.execute({ action: 'task_submit', id, project: P, 产出物引用: 'artifact-e2e' }, exec)).节点.状态, '已交卷');
     const reviewed = JSON.parse(await tool.execute({ action: 'task_review', id, project: P, 三态: '过', 复核者: 'reviewer' }, exec));
     assert.equal(reviewed.结论.算通过, true);

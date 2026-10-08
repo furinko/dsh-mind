@@ -22,6 +22,24 @@ export const REVIEW_VERDICTS = ['过', '不过', '未验'];
 
 const TERMINAL = new Set(['已采纳', '已结账']);
 
+/**
+ * 合法转移表：主干环路（受理→定判据→派发→执行→交卷→复核→采纳/打回）的次序由它强制执行。
+ * 没有它，「已采纳」能被 start 复活、「待派发」能直接 review 成已采纳——环路次序就没有强制力。
+ *  - start：已派发开工；已打回/未验返工。
+ *  - submit：执行中交卷；已交卷再交 = 会审里另一个人交他自己的那份（fold 按人留）。
+ *  - review：已交卷初核；未验/已打回后再核。
+ *  - markPending：任何非终态、非待决；resolvePending：只在待决。
+ *  - attach：任何非终态。
+ */
+const TRANSITIONS = {
+  start: ['已派发', '已打回', '未验'],
+  submit: ['执行中', '已交卷'],
+  review: ['已交卷', '未验', '已打回'],
+  markPending: ['待派发', '已派发', '执行中', '已交卷', '未验', '已打回'],
+  resolvePending: ['待决'],
+  attach: ['待派发', '已派发', '执行中', '已交卷', '未验', '已打回', '待决'],
+};
+
 export class TaskGraph {
   /**
    * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock }} spec
@@ -93,7 +111,9 @@ export class TaskGraph {
 
   /** @param {string} id @param {{ subject: object, 项目: string }} spec */
   async start(id, spec) {
-    await this.#require(id, spec.项目);
+    const node = await this.#require(id, spec.项目);
+    this.#requireTransition(node, 'start');
+    await this.#checkWrite(id, node, spec);
     await this.#append(spec.项目, { kind: 'started', id, 状态: '执行中' }, spec.subject);
     return this.get(id, { 项目: spec.项目 });
   }
@@ -108,7 +128,9 @@ export class TaskGraph {
    * @param {{ subject: object, 项目: string, 产出物引用?: string[], 结论?: string }} spec
    */
   async submit(id, spec) {
-    await this.#require(id, spec.项目);
+    const node = await this.#require(id, spec.项目);
+    this.#requireTransition(node, 'submit');
+    await this.#checkWrite(id, node, spec);
     await this.#append(spec.项目, {
       kind: 'submitted',
       id,
@@ -133,7 +155,8 @@ export class TaskGraph {
     if (!REVIEW_VERDICTS.includes(spec.三态)) {
       throw new InvalidBody(`复核结论只有三态：${REVIEW_VERDICTS.join(' / ')}。`, { missing: ['三态'] });
     }
-    await this.#require(id, spec.项目);
+    const node = await this.#require(id, spec.项目);
+    this.#requireTransition(node, 'review');
     await this.policy.check({
       subject: spec.subject,
       action: 'review',
@@ -158,11 +181,17 @@ export class TaskGraph {
 
   /**
    * 打回：同一节点打回 ≥2 次 ⇒ 升级主权者。
+   *
+   * 不单独过策略引擎：唯一的调用方是 review()（复核「不过」），闸已经在那里过了；
+   * 动作面也没有直达 reject 的入口。这里只守终态：已采纳/已结账的节点不许再打回。
    * @param {string} id
    * @param {{ subject: object, 项目: string, 理由: string }} spec
    */
   async reject(id, spec) {
     const node = await this.#require(id, spec.项目);
+    if (TERMINAL.has(node.状态)) {
+      throw new Denied('任务图 · 状态机', `节点 ${id} 已到终态 ${node.状态}，不能再打回。`, { howToChange: '终态节点只能追加更正，不能回到环路里。' });
+    }
     const 次数 = (node.打回次数 ?? 0) + 1;
     await this.#append(spec.项目, { kind: 'rejected', id, 打回次数: 次数, 理由: spec.理由 }, spec.subject);
     if (次数 >= 2) {
@@ -177,7 +206,9 @@ export class TaskGraph {
    * @param {{ subject: object, 项目: string, 原因: string, 待决类型?: string }} spec
    */
   async markPending(id, spec) {
-    await this.#require(id, spec.项目);
+    const node = await this.#require(id, spec.项目);
+    this.#requireTransition(node, 'markPending');
+    await this.#checkWrite(id, node, spec);
     await this.#append(spec.项目, { kind: 'pending', id, 状态: '待决', 待决原因: spec.原因, 待决类型: spec.待决类型 ?? '升级差异' }, spec.subject);
     return this.get(id, { 项目: spec.项目 });
   }
@@ -189,6 +220,8 @@ export class TaskGraph {
    */
   async resolvePending(id, spec) {
     const node = await this.#require(id, spec.项目);
+    this.#requireTransition(node, 'resolvePending');
+    await this.#checkWrite(id, node, spec);
     await this.#append(spec.项目, { kind: 'resolved', id, 待决: false, 状态: node.待决前的状态 ?? node.状态, 决定: spec.决定, 已决于: this.clock.iso() }, spec.subject);
     return this.get(id, { 项目: spec.项目 });
   }
@@ -199,7 +232,9 @@ export class TaskGraph {
    * @param {{ subject: object, 项目: string, 产出物: string }} spec
    */
   async attach(id, spec) {
-    await this.#require(id, spec.项目);
+    const node = await this.#require(id, spec.项目);
+    this.#requireTransition(node, 'attach');
+    await this.#checkWrite(id, node, spec);
     await this.#append(spec.项目, { kind: 'artifact', id, 产出物: spec.产出物 }, spec.subject);
     return this.get(id, { 项目: spec.项目 });
   }
@@ -282,6 +317,30 @@ export class TaskGraph {
     const node = await this.get(id, { 项目 });
     if (!node) throw new InvalidBody(`没有这个任务节点：${id}（项目 ${项目}）`);
     return node;
+  }
+
+  /** @param {object} node @param {keyof TRANSITIONS} op */
+  #requireTransition(node, op) {
+    const allowed = TRANSITIONS[op];
+    if (!allowed.includes(node.状态)) {
+      throw new Denied('任务图 · 状态机', `节点 ${node.id} 当前状态为 ${node.状态}，不能执行 ${op}（允许的状态：${allowed.join(' / ')}）。`, {
+        howToChange: '主干环路的次序是 受理→定判据→派发→执行→交卷→复核→采纳/打回；按当前状态选下一步动作。',
+      });
+    }
+  }
+
+  /**
+   * 写动作的闸（§9：写操作先过策略引擎，无旁路）。
+   * context 带上节点本体：成员的「任务内全权，任务外无」靠 scopeOf 读它判定。
+   * @param {string} id @param {object} node @param {{ subject: object, 项目: string }} spec
+   */
+  async #checkWrite(id, node, spec) {
+    await this.policy.check({
+      subject: spec.subject,
+      action: 'write',
+      target: { id, kind: '任务', authority: '自治', zone: '私有', project: spec.项目 },
+      context: { task: node },
+    });
   }
 }
 

@@ -82,6 +82,12 @@ for (const rel of [manifest.main, manifest.icon, manifest.dsh?.bundle?.patch].fi
   if ((await readTextOrNull(join(root, rel))) === null) failures.push(`${normalized} 不存在。`);
 }
 if (manifest.dsh?.client) failures.push('bundle 包不该有 dsh.client：浏览器半区属于看板组件。');
+// exports 每一项都必须落在磁盘上：浏览器半区独立成组件后，根包曾留着指向
+// 不存在文件的 `./client` 导出——引用面（上面的循环）查不到它，因为没人引用它。
+for (const [key, value] of Object.entries(manifest.exports ?? {})) {
+  if (typeof value !== 'string' || !value.startsWith('./')) continue;
+  if ((await readTextOrNull(join(root, value))) === null) failures.push(`exports["${key}"] 指向不存在的文件：${value}`);
+}
 
 /** 极简补丁解析：只认 `- id:` 与紧随的 `name:`。 */
 const 补丁行 = [...String(await readTextOrNull(join(root, 'cordis.patch.yml')) ?? '').matchAll(/^\s*-\s+id:\s*(\S+)\s*$[\s\S]*?^\s+name:\s*(\S+)\s*$/gm)]

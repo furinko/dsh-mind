@@ -62,6 +62,11 @@ describe('dsh-mind 宿主半区', () => {
     assert.deepEqual(tool.output.render({}, 'hello'), [{ type: 'text', text: 'hello' }]);
     assert.equal(tool.isConcurrencySafe({ action: 'workbench' }), true);
     assert.equal(tool.isConcurrencySafe({ action: 'task_create' }), false);
+    // schema ↔ actions ↔ src 三段必须对齐：动作层读的每个参数都要在 schema 里有名分
+    // （additionalProperties:false，缺一个字段那个参数就永远传不进——交卷结论曾因此永远落空）。
+    for (const field of ['结论', '决定', '复核者', '待决类型', 'limit', '敏感']) {
+      assert.ok(tool.parameters.properties[field], `schema 缺字段：${field}`);
+    }
   });
 
   it('execute 返回可解析的 JSON，且拒绝路径带可执行理由', async () => {
@@ -93,9 +98,16 @@ describe('dsh-mind 宿主半区', () => {
     const dispatched = JSON.parse(await tool.execute({ action: 'task_dispatch', id, project: 'boot' }, exec));
     assert.equal(dispatched.节点.判据冻结, true);
 
-    const submitted = JSON.parse(await tool.execute({ action: 'task_submit', id, project: 'boot', 产出物引用: 'artifact-1' }, exec));
+    const started = JSON.parse(await tool.execute({ action: 'task_start', id, project: 'boot' }, exec));
+    assert.equal(started.节点.状态, '执行中');
+
+    const submitted = JSON.parse(await tool.execute({ action: 'task_submit', id, project: 'boot', 产出物引用: 'artifact-1', 结论: '做完了', 反例面: '没测边界' }, exec));
     assert.equal(submitted.节点.状态, '已交卷');
     assert.deepEqual(submitted.节点.产出物引用, ['artifact-1']);
+    // 结论与反例面必须原样落进独立答案：漏传会让零分歧判据「无人给反例面」恒真。
+    assert.equal(submitted.节点.独立答案.length, 1);
+    assert.equal(submitted.节点.独立答案[0].结论, '做完了');
+    assert.deepEqual(submitted.节点.独立答案[0].反例面, ['没测边界']);
 
     const reviewed = JSON.parse(await tool.execute({ action: 'task_review', id, project: 'boot', 三态: '未验', 反例面: '读数拿不到' }, exec));
     assert.equal(reviewed.结论.算通过, false);

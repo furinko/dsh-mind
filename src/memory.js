@@ -270,25 +270,40 @@ export class MemoryService {
    * 物理删除：仅限敏感数据、或主权者明确要求。
    *
    * 这是全库唯一允许**真的**从账本里抹掉内容的动作，所以它必须：
-   * ① 只在两种理由下开放；② 抹掉内容后仍然在审计里留一条不可逆操作记录
+   * ① 只在两种理由下开放——敏感数据要**显式声明**（`敏感: true`），不靠理由文本里捞关键字
+   *   （关键字闸会被「这段不敏感」这种措辞误开，而声明是会进审计的明确动作）；
+   * ② 抹掉内容后仍然在审计里留一条不可逆操作记录
    * （记录 id 与理由，不记录内容本身——否则等于没删）；③ **扫遍出现过该 id 的每一本账**
    * （晋升过的知识同时住在项目账与跨项目账上，只删一本等于没删）。
    *
+   * 闸的动作为什么是 'write' 而不是 'delete'：'delete' 是主权者专属（宪章 §3.2），
+   * 而敏感数据清除是不能排队等主权者的安全动作；'write' 闸把失联冻结、介入度、
+   * 复核者只读这些边界接进来，「仅限敏感数据 / 主权者明确要求」由上面的域内闸收口。
+   *
    * @param {string} id
-   * @param {{ subject: object, 理由: string }} spec
+   * @param {{ subject: object, 理由: string, 敏感?: boolean }} spec
    * @returns {Promise<{ id: string, 已删除: true, 依据: string }>}
    */
   async purge(id, spec) {
-    const 敏感 = spec.理由.includes('敏感');
+    if (typeof spec.理由 !== 'string' || !spec.理由.trim()) {
+      throw new InvalidBody('物理删除必须带理由：它要进那条不可逆操作记录。', { missing: ['理由'] });
+    }
+    const 敏感 = spec.敏感 === true;
     const 主权者要求 = spec.subject?.kind === '主权者';
     if (!敏感 && !主权者要求) {
       throw new Denied('法律 记忆处置表（物理删除只限敏感数据 / 主权者明确要求）', '物理删除会破坏「不许改写只能追加」这条唯一原则，只有敏感数据或主权者明确要求才允许。', {
         requireAuthority: '主权者',
-        howToChange: '改用 invalidate() 追加失效状态；那才是错误/过期条目的常规处置。',
+        howToChange: '改用 invalidate() 追加失效状态；那才是错误/过期条目的常规处置。确属敏感数据时显式声明 敏感: true，声明会进审计。',
       });
     }
     const entry = await this.#folded(id);
     if (!entry) throw new InvalidBody(`没有这条记忆：${id}`);
+    await this.policy.check({
+      subject: spec.subject,
+      action: 'write',
+      target: memoryTarget(entry.类, entry.归属, entry.项目),
+      context: { id, 状态: '物理删除' },
+    });
 
     // 同一个 id 可以同时躺在两本账上：知识晋升会把它复制进「跨项目」，
     // 而原条目仍留在产生它的那个项目账里（§7「双份留痕」）。
@@ -335,6 +350,12 @@ export class MemoryService {
    */
   async archiveAnswers(spec) {
     const file = this.layout.memoryLog(spec.项目, '作答');
+    await this.policy.check({
+      subject: spec.subject,
+      action: 'write',
+      target: memoryTarget('作答', spec.项目, spec.项目),
+      context: { id: spec.任务 ?? null, 状态: '归档' },
+    });
     const rows = await readJsonl(file);
     const open = rows.filter((row) => !isStateRow(row));
     if (open.length === 0) return { 归档条数: 0, 账本: file };

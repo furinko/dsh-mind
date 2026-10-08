@@ -11,6 +11,7 @@
 import { listFiles, readTextOrNull, atomicWrite, ensureDir } from './kernel/fsx.js';
 import { InvalidBody } from './kernel/errors.js';
 import { assertStructure, formatFrontMatter, parseDocument } from './tags.js';
+import { assertPathSegment } from './paths.js';
 import { slug } from './kernel/ids.js';
 
 /** 两个来源的固定标签。 */
@@ -118,7 +119,7 @@ export class CapabilityLibrary {
     if (适用岗位.length === 0) {
       throw new InvalidBody('能力卡必须声明适用岗位：没有岗位就无从维持单源。', { missing: ['适用岗位'] });
     }
-    const id = input.id ?? slug(input.名, { maxLength: 40 });
+    const id = assertPathSegment(input.id ?? slug(input.名, { maxLength: 40 }), '能力id');
     const meta = {
       id,
       kind: '能力',
@@ -158,8 +159,9 @@ export class CapabilityLibrary {
    * @returns {Promise<{ 岗位: string, 引用: string[], 解析: Array<{id: string, 来源: string|null}> }>}
    */
   async referencesFor(query) {
-    const cardPath = `${this.layout.roleCardDir('自治')}/${query.岗位}.md`;
-    const text = (await readTextOrNull(cardPath)) ?? (await readTextOrNull(`${this.layout.roleCardDir('出厂')}/${query.岗位}.md`));
+    const 岗位 = assertPathSegment(query.岗位, '岗位');
+    const cardPath = `${this.layout.roleCardDir('自治')}/${岗位}.md`;
+    const text = (await readTextOrNull(cardPath)) ?? (await readTextOrNull(`${this.layout.roleCardDir('出厂')}/${岗位}.md`));
     if (text === null) throw new InvalidBody(`没有岗位卡：${query.岗位}`);
     const parsed = parseDocument(text);
     const 引用 = parseRefs(section(parsed.body, '个体L2'));

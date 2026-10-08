@@ -15,6 +15,7 @@ import { Denied, InvalidBody } from './kernel/errors.js';
 import { digest } from './kernel/text.js';
 import { parseDocument } from './tags.js';
 import { section } from './capability.js';
+import { assertPathSegment } from './paths.js';
 import { ACTIONS, identityStatus } from './policy.js';
 
 /** 卡上的四段，顺序即个体域的层级（§14：个体域才有 L0~L3）。 */
@@ -63,9 +64,10 @@ export class RoleRegistry {
    * @returns {Promise<{ id: string, 来源: string, meta: object, 段: Record<string, string>, 能力引用: string[], 经验引用: string[], 正文: string }|null>}
    */
   async get(spec) {
+    const id = assertPathSegment(spec.id, '岗位卡id');
     for (const zone of ['自治', '出厂']) {
       const dir = this.layout.roleCardDir(zone);
-      const path = `${dir}/${spec.id}.md`;
+      const path = `${dir}/${id}.md`;
       const text = await readTextOrNull(path);
       if (text === null) continue;
       const parsed = parseDocument(text);

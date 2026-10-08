@@ -103,6 +103,14 @@ export class MessageBus {
     const target = rows.find((row) => row.id === spec.id);
     if (!target) throw new InvalidBody(`线程 ${spec.线程} 里没有消息 ${spec.id}`);
     if (target.状态 === '已投递') return { id: spec.id, 状态: '已投递' };
+    // 「暂不投递 → 已投递」也是一次状态变更，必须与 send 过同一道闸（§9 写无旁路）；
+    // 动作取 create：消息是只增对象，投递动作的实现也是追加一条新记录。
+    await this.policy.check({
+      subject: spec.subject,
+      action: 'create',
+      target: { id: spec.id, kind: '消息', authority: '只增', zone: '私有', domain: '集体', project: spec.项目 },
+      context: {},
+    });
     // 只增：投递动作也是一条新记录（同 id 的最新状态生效），历史那条「暂不投递」不动。
     await appendLines(this.layout.busThread(spec.项目, spec.线程), [
       { ...target, 状态: '已投递', 投递于: this.clock.iso(), 记录: '投递动作' },

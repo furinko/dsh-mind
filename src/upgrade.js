@@ -172,11 +172,22 @@ export class UpgradeManager {
 
   /**
    * 可撤回（§5 升级三配套之三）。撤回同样留痕：挂起项不消失，只是被撤回。
+   *
+   * 撤回与裁决同一口径（action: 'publish'）：挂起项是「留给主权者的决定」，
+   * Lead 把它撤掉 = Lead 替主权者把决定抹了——与直接裁决是同一性质的越权。
+   * （这意味着主权者身份通道落地前，撤回与裁决一样不可达——fail-closed 的方向是对的：
+   *  宁可队列停着，也不许被越权清掉。）
    * @param {{ subject: object, id: string, 理由?: string }} spec
    */
   async withdraw(spec) {
     const item = (await this.pending()).find((i) => i.id === spec.id);
     if (!item) throw new InvalidBody(`没有这个挂起项：${spec.id}`);
+    await this.policy.check({
+      subject: spec.subject,
+      action: 'publish',
+      target: { id: item.对象, kind: '规则', authority: item.安全类 ? '宪章' : '法律', zone: '私有' },
+      context: { 挂起项: spec.id },
+    });
     const withdrawn = { ...item, 已撤回: true, 撤回理由: spec.理由 ?? '未说明', 撤回于: this.clock.iso(), 由: spec.subject?.id ?? null };
     await atomicWrite(this.layout.pendingFile(spec.id), `${JSON.stringify(withdrawn, null, 2)}\n`);
     await this.audit.append({

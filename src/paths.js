@@ -14,6 +14,25 @@
  */
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { InvalidBody } from './kernel/errors.js';
+
+/**
+ * 路径片段校验：项目键 / 线程 / 对象 id / 岗位 这类**入口可控**的字符串，
+ * 进 `join` 之前必须过这一关——`project="../../x"` 一行就能让账本与审计追加落到私有区外面。
+ * 拒绝：空串、`.` / `..`、路径分隔符、冒号（盘符/ADS）、控制字符。
+ * 正常片段（中文、点号如 `my.proj`、连字符）原样放行。
+ *
+ * @param {unknown} value
+ * @param {string} 名 出错时指给调用方看的字段名
+ * @returns {string} 通过校验的片段
+ */
+export function assertPathSegment(value, 名) {
+  const s = String(value ?? '');
+  if (!s || s === '.' || s === '..' || /[/\\:]/.test(s) || /[\u0000-\u001f]/.test(s)) {
+    throw new InvalidBody(`路径片段不合法（${名}）：不许为空、不许是 . 或 ..、不许含路径分隔符 / 冒号 / 控制字符。`, { detail: { 字段: 名, 值: s } });
+  }
+  return s;
+}
 
 /**
  * 出厂区的绝对路径——**全插件唯一的答案**。
@@ -154,32 +173,32 @@ export class Layout {
 
   /** 任务图：`任务图/<项目>/tasks.jsonl`（append-only 事件流，状态可重算）。 */
   taskLog(project) {
-    return this.private(DIR.基础设施, DIR.任务图, project, 'tasks.jsonl');
+    return this.private(DIR.基础设施, DIR.任务图, assertPathSegment(project, '项目'), 'tasks.jsonl');
   }
 
   /** 任务图的锁。 */
   taskLock(project) {
-    return this.private(DIR.基础设施, DIR.任务图, project, '.tasks.lock');
+    return this.private(DIR.基础设施, DIR.任务图, assertPathSegment(project, '项目'), '.tasks.lock');
   }
 
   /** 消息总线目录：`消息总线/<项目>/`。 */
   busDir(project) {
-    return this.private(DIR.基础设施, DIR.消息总线, project);
+    return this.private(DIR.基础设施, DIR.消息总线, assertPathSegment(project, '项目'));
   }
 
   /** 消息总线线程文件：`消息总线/<项目>/<线程>.jsonl`。 */
   busThread(project, thread) {
-    return join(this.busDir(project), `${thread}.jsonl`);
+    return join(this.busDir(project), `${assertPathSegment(thread, '线程')}.jsonl`);
   }
 
   /** 记忆服务目录：`记忆服务/跨项目/` 或 `记忆服务/<项目>/`。 */
   memoryDir(scope) {
-    return this.private(DIR.基础设施, DIR.记忆服务, scope);
+    return this.private(DIR.基础设施, DIR.记忆服务, assertPathSegment(scope, '记忆范围'));
   }
 
   /** 某一类记忆的账本文件。 */
   memoryLog(scope, kind) {
-    return join(this.memoryDir(scope), `${kind}.jsonl`);
+    return join(this.memoryDir(scope), `${assertPathSegment(kind, '记忆类')}.jsonl`);
   }
 
   /** 审计日志：按月分片，不按项目分（§14.3）。 */
@@ -247,12 +266,12 @@ export class Layout {
   }
 
   pendingFile(id) {
-    return join(this.pendingDir(), `${id}.json`);
+    return join(this.pendingDir(), `${assertPathSegment(id, '挂起项id')}.json`);
   }
 
   /** 版本历史：`版本历史/<对象id>/<版本号>.md`（§14.4-4）。 */
   historyDir(objectId) {
-    return this.private(DIR.版本历史, objectId);
+    return this.private(DIR.版本历史, assertPathSegment(objectId, '对象id'));
   }
 
   historyFile(objectId, version) {
@@ -272,7 +291,7 @@ export class Layout {
    * @returns {string}
    */
   documentPath(kind, meta, zone) {
-    const id = meta.id;
+    const id = assertPathSegment(meta.id, '对象id');
     switch (kind) {
       case '规则':
         return zone === '出厂'

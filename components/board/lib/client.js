@@ -306,8 +306,6 @@ window.__ModuleLoader__.load({
      */
     var ROUTE_PRESENCE = '/plugins/dsh-mind/presence';
     var ROUTE_WORKBENCH = '/plugins/dsh-mind/workbench';
-    /** 组件名册（「看板开没开」那一次探针；原来走 `/mind components`）。 */
-    var ROUTE_COMPONENTS = '/plugins/dsh-mind/components';
     /** 上一次已知快照：取不到投影时仍然有东西可看。 */
     var CACHE_KEY = 'dsh-mind.dashboard.v1';
     /** 自动刷新间隔（人看的板子，30s 够「活」，又不打扰）。 */
@@ -2241,40 +2239,10 @@ window.__ModuleLoader__.load({
         }
       }
 
-      // 看板是「按需」的一个组件：它可能被宿主配置关掉。
-      // 浏览器半区读不到那份配置，所以问一次宿主；关着就自己撤下席位，
-      // 不留一个点了没反应的按钮。问不到（无会话 / 无 remote）就默认显示——
-      // 界面可见性不是安全边界，真去取数时宿主会照旧拒绝。
-      probeBoardEnabled(ctx).then(function (enabled) {
-        if (enabled === false) disposeAll();
-      });
-
+      // 看板行被关掉时本模块根本不进 roster（只有被行引用的包才会被注入浏览器），
+      // 可见性由 roster 自己管——曾有的 components 探针打的是宿主从未注册过的路由
+      // （端点表只许 presence/workbench/ping 三条），死代码已删，不留第二个口径。
       return disposeAll;
-    }
-
-    /**
-     * 问一次宿主：看板组件现在是开是关？
-     *
-     * 走的是与其它请求**同一条传输**（同源 `fetch` 的 `/mind components` 路由）——
-     * 旧代码用 `remote.commands.execute`，而那条通道在真机上永不返回 ⇒ 这个探针也一起死。
-     * 问不到（没有 fetch / HTTP 失败 / 不是 JSON / 没这个键）一律返回 `null`：**按显示处理**，
-     * 因为界面可见性不是安全边界，真去取数时宿主会照旧拒绝。
-     *
-     * @returns {Promise<boolean|null>} true/false；问不到返回 null（按显示处理）
-     */
-    function probeBoardEnabled(ctx) {
-      var session = { id: '', source: '' };
-      try { session = resolveSessionId(ctx); } catch (error) { session = { id: '', source: '' }; }
-      return runCommand(ctx, session.id, { method: 'GET', path: ROUTE_COMPONENTS }).then(function (out) {
-        try {
-          if (!out.ok) return null;
-          var 名册 = out.value && out.value.组件;
-          if (!名册 || !名册.board) return null;
-          return 名册.board.已装载 !== false;
-        } catch (error) {
-          return null;
-        }
-      });
     }
 
     return { name: 'dsh-mind-board', inject: ['slots'], apply: apply };

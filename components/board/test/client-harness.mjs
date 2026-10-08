@@ -332,7 +332,6 @@ export function jsonResponse(payload, status) {
  *  · `GET  /plugins/dsh-mind/presence`  → `/mind presence`
  *  · `POST /plugins/dsh-mind/presence`  → `/mind presence 开关=… 小时=…`（参数从 body 还原）
  *  · `GET  /plugins/dsh-mind/workbench` → `/mind dashboard`
- *  · `GET  /plugins/dsh-mind/components`→ `/mind components`
  *
  * 兼容两种 handler 返回值：
  *  · 命令面形状 `{ok:true, value:{result:{kind,text}}}`（老的 `okReply(...)`）；
@@ -357,8 +356,6 @@ export function makeFetchFromCommands(handler) {
       }
     } else if (路径 === '/plugins/dsh-mind/workbench') {
       命令 = '/mind dashboard';
-    } else if (路径 === '/plugins/dsh-mind/components') {
-      命令 = '/mind components';
     } else {
       命令 = 路径;
     }
@@ -867,36 +864,18 @@ export async function runHarness() {
   passed.push(check(registrationOf(a, 'settings.section').Component !== registrationOf(a, 'main').Component,
     '设置页组件**不是**看板面板本体（看板是只读视图，设置页才有写控件）'));
 
-  // ①b 看板是「按需」组件：宿主说关着，浏览器半区必须自己撤下两处席位。
-  const offSpy = makeRemote((sessionId, command) => {
-    if (command === '/mind components') {
-      return Promise.resolve({ ok: true, value: { result: { kind: 'success', text: JSON.stringify({ 成功: true, 组件: { kernel: { 已装载: true }, board: { 已装载: false, 原因: '配置里关掉了' } } }) } } });
-    }
-    return Promise.resolve({ ok: true, value: { result: { kind: 'success', text: '{}' } } });
-  });
-  const off = boot({ services: Object.assign(session(), { remote: offSpy.remote }) });
-  passed.push(check(off.calls.disposed === 0, '先注册（还没问到开关）', String(off.calls.disposed)));
+  // ①b 清理器：宿主卸载时三处席位一起撤下。可见性由 roster 管（看板行被关时本模块
+  //    不注入浏览器）——曾经的 components 探针打的是宿主从未注册的路由，已连同这里
+  //    的 mock 一起删掉，不留第二个口径。
+  const off = boot({ services: session() });
   await settle();
-  await settle();
-  passed.push(check(offSpy.calls.some((c) => c.command === '/mind components'), '问过一次宿主的组件名册'));
-  passed.push(check(off.calls.disposed === 3, '宿主说看板关着 ⇒ 三处席位自动撤下', String(off.calls.disposed)));
-
-  // ①c 开关是「开」或问不到时，都不许乱撤
-  const onSpy = makeRemote((sessionId, command) => Promise.resolve({
-    ok: true,
-    value: { result: { kind: 'success', text: JSON.stringify(command === '/mind components' ? { 成功: true, 组件: { board: { 已装载: true } } } : {}) } },
-  }));
-  const on = boot({ services: Object.assign(session(), { remote: onSpy.remote }) });
-  await settle();
-  await settle();
-  passed.push(check(on.calls.disposed === 0, '看板开着时不撤', String(on.calls.disposed)));
-  on.disposer();
-  passed.push(check(on.calls.disposed === 3, '清理器照旧能撤下', String(on.calls.disposed)));
+  passed.push(check(off.calls.disposed === 0, '注册后不自行撤下（没有名册探针了）', String(off.calls.disposed)));
+  off.disposer();
+  passed.push(check(off.calls.disposed === 3, '清理器一次撤下三处席位', String(off.calls.disposed)));
 
   const noAnswer = boot({ services: session() });
   await settle();
-  await settle();
-  passed.push(check(noAnswer.calls.disposed === 0, '问不到开关时默认显示（界面可见性不是安全边界）', String(noAnswer.calls.disposed)));
+  passed.push(check(noAnswer.calls.disposed === 0, '取不到数时默认显示（界面可见性不是安全边界）', String(noAnswer.calls.disposed)));
   noAnswer.disposer();
   passed.push(check(typeof entryOptions.order === 'number', '入口带数字 order'));
   passed.push(check(typeof entryOptions.label === 'function' && String(entryOptions.label()).length > 0,

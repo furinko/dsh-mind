@@ -149,7 +149,9 @@ export class PolicyEngine {
    */
   async decide(input) {
     if (!this.healthy) {
-      return new Fault('POLICY_NOT_LOADED', `策略引擎不健康：${this.state.error ?? '未知原因'}`).toDecision();
+      const fault = new Fault('POLICY_NOT_LOADED', `策略引擎不健康：${this.state.error ?? '未知原因'}`).toDecision();
+      await this.#auditFault(input, fault);
+      return fault;
     }
     try {
       const verdict = this.#evaluate(input);
@@ -165,10 +167,33 @@ export class PolicyEngine {
       }
       return verdict;
     } catch (error) {
-      return new Fault('POLICY_EVALUATION_FAILED', `判定过程故障：${error instanceof Error ? error.message : String(error)}`, {
+      const fault = new Fault('POLICY_EVALUATION_FAILED', `判定过程故障：${error instanceof Error ? error.message : String(error)}`, {
         cause: error,
         detail: { action: input.action, target: input.target?.id ?? null },
       }).toDecision();
+      await this.#auditFault(input, fault);
+      return fault;
+    }
+  }
+
+  /**
+   * 故障路径的拒绝也要入账：Fault.toDecision 的 howToChange 承诺「故障期间的拒绝记录已入账」，
+   * 不留痕这句就是假话（留痕是自治的门槛）。入账自身失败只能吞——decide 承诺永不抛，
+   * 而账本坏了本来就会让审计链探针见红，那里才是它该响的地方。
+   */
+  async #auditFault(input, decision) {
+    try {
+      await this.audit?.append?.({
+        动作: '策略拒绝',
+        主体: input.subject,
+        对象: { id: input.target?.id ?? null, kind: input.target?.kind ?? '未知' },
+        依据: decision.rule,
+        结果: '安全闸故障（fail-closed）',
+        告警: true,
+        详情: { action: input.action, reason: decision.reason },
+      });
+    } catch {
+      // 见上方 JSDoc：decide 永不抛，故障入账失败不二次故障。
     }
   }
 
