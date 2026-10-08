@@ -1033,11 +1033,10 @@ export async function runHarness() {
     const blocks = findAllByClass(tree, 'dshmind-readout');
     const 块 = blocks.find((el) => textOf(el).indexOf('失联状态') >= 0);
     if (!块) return null;
-    // 详情行是**主读数之外**的次要行（`.dshmind-readoutDetail`）：文本一起算，
-    // 但点色只取主读数那一格 —— 「这一态是什么颜色」问的是主读数。
-    const 详情 = findAllByClass(tree, 'dshmind-readoutDetail')[0];
+    // 详情**就在这一格里面**（Batch 8：从"横跨整行的脚注"改成"格内附注"）。
+    // 所以文本直接取整格的 —— 点色也只取主读数那一格（「这一态是什么颜色」问的是主读数）。
     return {
-      文本: textOf(块) + (详情 ? '\n' + textOf(详情) : ''),
+      文本: textOf(块),
       点色: (findAllByClass(块, 'dshmind-dot')[0] || { props: {} }).props.style.background,
     };
   };
@@ -1842,7 +1841,110 @@ export async function runHarness() {
   const result = barePlugin.apply(makeCtx({}));
   passed.push(check(result === undefined || result === null, 'slots 缺失时 apply 返回空且不抛'));
 
-  // ═══ Batch 7 · 这个宿主的 `useEffect` 很可能是空实现 ⇒ **取数不许挂在它上面** ═══
+  // ═══ Batch 8 · 状态条排版（真机截图逐条拆出来的）═══
+  {
+    /** 状态条每一格：键 → 该格渲染出的文本（探针要靠这张表眼检排版）。 */
+    const 状态条各格 = (tree) => findAllByClass(tree, 'dshmind-readout').map((el) => {
+      const 键 = (findAllByClass(el, 'dshmind-readoutKey')[0] || { props: {} });
+      return {
+        键: textOf(键).trim(),
+        文本: textOf(el).replace(/\s+/g, ' ').trim(),
+        元素: el,
+      };
+    });
+
+    const 状态render = async (view) => {
+      const spy = makeRemote(() => okReply(view));
+      const b = boot({ store, services: Object.assign(session(), { remote: spy.remote }) });
+      const r = mountDashboard(b);
+      r.flush();
+      await settle();
+      r.flush();
+      return r;
+    };
+
+    // ① 面板里**不许有"看起来能点"的东西**（唯一例外：刷新按钮）。
+    //    旧版「介入度档位」画成 4 个 chip（零参与/事后抽检/变更预审/逐条审批）——
+    //    只读投影长得像按钮，会误导人以为能点。
+    const 面板 = await 状态render(sampleView());
+    const 面板元素 = collect(面板.tree, { skipStyle: true }).elements;
+    const 可点按钮 = 面板元素.filter((el) => el.type === 'button');
+    passed.push(check(可点按钮.length === 1 && String(可点按钮[0].props.children).indexOf('刷新') >= 0,
+      '① 面板里唯一可点的是「刷新」', JSON.stringify(可点按钮.map((el) => String(el.props.children)))));
+    passed.push(check(面板元素.every((el) => el.props.role !== 'button'),
+      '① 没有任何 role=button 的伪按钮', JSON.stringify(面板元素.filter((el) => el.props.role === 'button').map((el) => el.type))));
+    passed.push(check(面板元素.every((el) => el.props.tabIndex === undefined && el.props.tabindex === undefined),
+      '① 没有任何 tabindex（不可聚焦）'));
+    // 伪按钮 chip：状态条里**一个 chip 都不许有**（chip 是"可选项"的长相 ⇒ 只读投影不用）。
+    // `badge` 例外：它是**真告警**（恒红 / 恒绿），语义是"这一格出事了"，不是"可以点我"。
+    const 状态条节点 = findAllByClass(面板.tree, 'dshmind-readouts')[0];
+    passed.push(check(!!状态条节点, '① 找得到状态条那一块'));
+    const 状态条里的伪按钮 = findAllByClass(状态条节点, 'dshmind-chip');
+    passed.push(check(状态条里的伪按钮.length === 0,
+      '① 状态条里没有任何 chip（"可选项"长相 ⇒ 只读投影不许有）',
+      JSON.stringify(状态条里的伪按钮.map((el) => textOf(el)))));
+    passed.push(check(findAllByClass(状态条节点, 'dshmind-badge').length === 0
+      || findAllByClass(状态条节点, 'dshmind-badge').every((el) => /恒[红绿]警报/.test(textOf(el))),
+      '① 状态条里出现的 badge 只能是真告警（恒红/恒绿），不是选项外观',
+      JSON.stringify(findAllByClass(状态条节点, 'dshmind-badge').map((el) => textOf(el)))));
+    // 介入度那格：**只显示当前生效的那一档**（一个值），而且不带边框/背景/光标。
+    const 各格 = 状态条各格(面板.tree);
+    const 介入格 = 各格.find((g) => g.键 === '介入度档位');
+    passed.push(check(!!介入格 && 介入格.文本.indexOf('事后抽检') >= 0 && 介入格.文本.indexOf('零参与') < 0
+      && 介入格.文本.indexOf('变更预审') < 0 && 介入格.文本.indexOf('逐条审批') < 0,
+      '① 介入度只显示当前生效那一档（其余三档不出现）', 介入格 ? 介入格.文本 : '(缺)'));
+    passed.push(check(!!介入格 && collect(介入格.元素).elements.every((el) => !el.props.onClick
+      && (!el.props.style || el.props.style.cursor === undefined)),
+      '① 介入度那格没有任何可点外观（无 onClick / 无 pointer 光标）'));
+    面板.unmount();
+
+    // ② 失联状态格：**文案完整**（旧版窄格 + nowrap + ellipsis 被裁成「已关闭（不判定失」）。
+    const 关闭面板 = await 状态render(closedView());
+    const 关闭各格 = 状态条各格(关闭面板.tree);
+    const 失联格2 = 关闭各格.find((g) => g.键 === '失联状态');
+    passed.push(check(!!失联格2 && 失联格2.文本.indexOf('已关闭（不判定失联）') >= 0,
+      '② 失联状态格**完整**渲染「已关闭（不判定失联）」（不许被截断）', 失联格2 ? 失联格2.文本 : '(缺)'));
+    // 「不裁切」的可判形态：值节点上**不许有** nowrap / ellipsis 这类会裁字的样式。
+    const 失联值 = 失联格2 ? findAllByClass(失联格2.元素, 'dshmind-readoutVal')[0] : null;
+    passed.push(check(!!失联值 && (!失联值.props.style || 失联值.props.style.whiteSpace !== 'nowrap'),
+      '② 失联那一格的值没有被设成 nowrap（换行而不是裁切）',
+      JSON.stringify(失联值 && 失联值.props.style)));
+    // ⑥ 详情必须**贴在这一格里**（不再横跨整行当脚注）。
+    passed.push(check(!!失联格2 && 失联格2.文本.indexOf('生效期限') >= 0 && 失联格2.文本.indexOf('开关来源') >= 0,
+      '⑥ 失联的详情（生效期限 / 开关来源）**紧贴这一格**渲染', 失联格2 ? 失联格2.文本 : '(缺)'));
+    passed.push(check(findAllByClass(关闭面板.tree, 'dshmind-readoutDetail').length === 0,
+      '⑥ 不再有横跨整行的旧详情行（.dshmind-readoutDetail 已删）'));
+    关闭面板.unmount();
+
+    // ③ 没数据的安全类探针：**不许渲染空容器** —— 要么有说明文字、要么整格不出现。
+    const 无探针 = sampleView();
+    无探针.状态条 = Object.assign({}, 无探针.状态条);
+    delete 无探针.状态条.探针;
+    const 无探针面板 = await 状态render(无探针);
+    const 探针格 = 状态条各格(无探针面板.tree).find((g) => g.键 === '安全类探针');
+    passed.push(check(!探针格 || 探针格.文本.replace('安全类探针', '').trim().length > 0,
+      '③ 没数据的安全类探针格**不是空的**（有"未跑过"这类说明文字）', 探针格 ? 探针格.文本 : '(整格未渲染)'));
+    // 形态二：整格也可以收起来 —— 两种都接受，但"空框"不接受。
+    passed.push(check(!探针格 || (探针格.文本.indexOf('未跑过') >= 0 || 探针格.文本.indexOf('没有快照') >= 0),
+      '③ 没数据时如实说「未跑过 / 没有快照」，不留空白大框', 探针格 ? 探针格.文本 : '(整格未渲染)'));
+    无探针面板.unmount();
+
+    // ⑦ 生成时刻与项目键那两格的列宽口径一致（同一个网格、同一套类名 ⇒ 宽窄齐）。
+    const 项目格 = 各格.find((g) => g.键 === '项目键');
+    const 时刻格 = 各格.find((g) => g.键 === '生成时刻');
+    passed.push(check(!!项目格 && !!时刻格
+      && String(项目格.元素.props.className) === String(时刻格.元素.props.className),
+      '⑦ 项目键与生成时刻两格用同一套类名（列宽口径一致）',
+      JSON.stringify([项目格 && 项目格.元素.props.className, 时刻格 && 时刻格.元素.props.className])));
+    // 自适应：状态条用 auto-fit 网格（窄面板自动减列），值可换行。
+    const 面板源码 = readFileSync(CLIENT_PATH, 'utf8');
+    passed.push(check(/\.dshmind-readouts\{display:grid;grid-template-columns:repeat\(auto-fit,minmax\(\d+px,1fr\)\)/.test(面板源码),
+      '⑤ 状态条是 auto-fit 自适应网格（窄面板自动减列，不是固定 5~6 列）'));
+    passed.push(check(/\.dshmind-readoutVal\{[^}]*overflow-wrap:anywhere/.test(面板源码)
+      && !/\.dshmind-readoutVal\{[^}]*text-overflow:ellipsis/.test(面板源码),
+      '⑤ 值的样式是"可换行"而不是"裁切"（无 text-overflow:ellipsis）'));
+  }
+
   //
   // 真机事实：设置页与看板面板**都停在初始态**，而点「保存」能让按钮变「保存中…」
   // ⇒ `useState`（含 setter 与重渲染）是好的，坏的只有 `useEffect`。

@@ -267,7 +267,7 @@ Done in 425ms using pnpm v10.34.5          ← exit=0
 ```powershell
 cd E:\dsh-mind
 npm test                                             # preflight 门禁 + 内核用例 136 条
-node components/board/test/client-harness.mjs        # 看板：273 条行为断言
+node components/board/test/client-harness.mjs        # 看板：290 条行为断言
 node --test components/board/test/client.test.js     # 看板：6 条结构断言
 ```
 
@@ -276,7 +276,7 @@ node --test components/board/test/client.test.js     # 看板：6 条结构断�
 | 数 | 产出者 | 怎么看 |
 |---|---|---|
 | **136** | `node --test "test/*.test.js"`（`npm test` 的后半段） | `ℹ tests 136` / `ℹ pass 136` / `ℹ fail 0` |
-| **273** | `components/board/test/client-harness.mjs` 自己打印 | 末行 `client-harness: 273 条断言全部通过` |
+| **290** | `components/board/test/client-harness.mjs` 自己打印 | 末行 `client-harness: 290 条断言全部通过` |
 | **6** | `node --test components/board/test/client.test.js` | `ℹ tests 6` / `ℹ pass 6` / `ℹ fail 0` |
 
 这三个数会随断言增加而变——**以脚本自己的输出为准**（表里是写这份文档时的实测值）。

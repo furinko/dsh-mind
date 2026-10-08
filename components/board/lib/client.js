@@ -545,12 +545,28 @@ window.__ModuleLoader__.load({
       'color:var(--dsw-alias-label-secondary,#61666b);font-size:12px;font-family:inherit}',
       '.dshmind-btn:hover{background:var(--dsw-alias-interactive-bg-hover,#eff1f5);',
       'color:var(--dsw-alias-label-primary,#16181d)}',
-      '.dshmind-readouts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;',
+      // ── 状态条（Batch 8 重排）────────────────────────────────────────────
+      // 三条规矩，都是从真机截图上拆出来的：
+      //  1. **值不许被裁**：旧版 `white-space:nowrap` + `ellipsis` 把「已关闭（不判定失联）」
+      //     裁成了「已关闭（不判定失」——为了"一行好看"牺牲了完整性，不能接受。现在值可换行。
+      //  2. **一格的宽度按内容**：`auto-fit,minmax(190px,1fr)` 让窄面板自动减列，
+      //     配合 `overflow-wrap:anywhere` 长文案自己换行（不再需要横向截断）。
+      //  3. **告警底色贴合内容**：底色只染「值那一小块」（`width:fit-content`），
+      //     不再铺满整格/整列（旧版底色比内容宽一大截）。
+      '.dshmind-readouts{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:1px;',
       'background:var(--dsw-alias-border-l1,#0000001f)}',
       '.dshmind-readout{background:var(--dsw-alias-bg-layer-1,#fff);padding:10px 14px;min-width:0}',
       '.dshmind-readoutKey{color:var(--dsw-alias-label-tertiary,#81858c);font-size:11px;letter-spacing:.04em}',
-      '.dshmind-readoutVal{margin-top:3px;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;',
-      'text-overflow:ellipsis}',
+      // 键在下、值在上：值可以换行，**永不 `text-overflow:ellipsis`**（裁切会把话说不全）。
+      '.dshmind-readoutVal{margin-top:3px;font-size:14px;font-weight:600;line-height:20px;',
+      'overflow-wrap:anywhere}',
+      // 格内附注：紧贴这一格（不横跨整行），字号小、色淡，可换行。
+      '.dshmind-readoutNote{display:flex;flex-direction:column;gap:2px;margin-top:5px;font-size:11px;',
+      'line-height:16px;color:var(--dsw-alias-label-tertiary,#81858c);overflow-wrap:anywhere}',
+      // 「介入度」那格的值行：一个值 + 一句注解，**不带边框/背景/光标**（只读，别像能点）。
+      '.dshmind-valueLine{display:inline-flex;align-items:baseline;gap:6px;flex-wrap:wrap}',
+      '.dshmind-valueNote{font-size:11px;line-height:16px;font-weight:400;',
+      'color:var(--dsw-alias-label-tertiary,#81858c)}',
 
       // 状态点 / 徽章
       '.dshmind-dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex:none}',
@@ -576,14 +592,13 @@ window.__ModuleLoader__.load({
       '.dshmind-secCount{margin-left:auto;color:var(--dsw-alias-label-caption,#adb2b8);font-size:12px}',
       '.dshmind-secBody{padding:14px 16px}',
 
-      // 页头告警：闸不在位 / 已失联 / 已关闭 —— 只是换个点色不算「看见了」，整块读数要变色。
-      '.dshmind-readoutAlarm{background:var(--dsw-alias-state-error-tertiary,#fdecea)}',
-      '.dshmind-readoutAlarm .dshmind-readoutVal{color:var(--dsw-alias-state-error-primary,#d54941)}',
-      // 失联的**次要行**：回答「凭什么」（生效期限 / 来源 / 坏值）。占整行、字号更小、
-      // 不与主读数抢位置 —— 主读数照旧一眼可见，这一行想看才看。
-      '.dshmind-readoutDetail{grid-column:1/-1;display:flex;gap:14px;flex-wrap:wrap;align-items:baseline;',
-      'background:var(--dsw-alias-bg-layer-1,#fff);padding:6px 14px 9px;font-size:11px;line-height:16px;',
-      'color:var(--dsw-alias-label-tertiary,#81858c)}',
+      // 页头告警：闸不在位 / 已失联 / 已关闭 —— 只是换个点色不算「看见了」，值那一块要变色。
+      // ⚠️ 底色**只染值那一小块**（`width:fit-content`），不再染整格：
+      //    旧版整格染色 ⇒ 底色铺满整列、比内容宽一大截（Batch 8 主人提的第 2 条）。
+      //    键与注仍保持中性色，免得"一整块红"看起来像坏了。
+      '.dshmind-readoutAlarm .dshmind-readoutVal{color:var(--dsw-alias-state-error-primary,#d54941);',
+      'display:inline-block;width:fit-content;max-width:100%;padding:1px 6px;border-radius:4px;',
+      'background:var(--dsw-alias-state-error-tertiary,#fdecea)}',
 
       // 待你决定：只读工作台给的是**一条命令**，不是一个按钮
       '.dshmind-decide{display:flex;flex-direction:column;gap:10px}',
@@ -924,12 +939,29 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dshmind-secBody' }, body),
       ]);
     }
-    /** `alarm` 为真时整块读数进告警色：闸不在位 / 已失联属于「一眼就得看见」，不能只换个点色。 */
-    function readout(key, value, node, alarm) {
+    /**
+     * 一格读数：**键在上、值在下**（Batch 8 改的排版）。
+     *
+     * 为什么从「左键右值」改成堆叠：旧版是一个 `repeat(auto-fit,minmax(150px,1fr))` 的网格，
+     * 每格 150px 起 —— 真机上窄面板里「已关闭（不判定失联）」被**裁成「已关闭（不判定失」**，
+     * 因为值是 `white-space:nowrap` + `text-overflow:ellipsis`（为"一行好看"牺牲了完整性）。
+     * 堆叠之后：键占一行、值占一行，值可以**换行**，窄面板下也不会被裁。
+     *
+     * `alarm` 不再染整格背景（旧版底色会铺满整列、比内容宽一大截），而是染**值那一小块**：
+     * 底色由 `.dshmind-readoutVal` 自己 `width:fit-content` 决定 ⇒ **贴合内容**。
+     *
+     * @param {string} key 键
+     * @param {string|null} value 纯文本值（`node` 为空时用它）
+     * @param {*} [node] 自定义值节点
+     * @param {boolean} [alarm] 是否进告警色（闸不在位 / 已失联 / 已关闭）
+     * @param {*} [note] 格内附注（换行的次要读数；紧贴这一格，不横跨整行）
+     */
+    function readout(key, value, node, alarm, note) {
       return h('div', { className: 'dshmind-readout' + (alarm ? ' dshmind-readoutAlarm' : '') }, [
         h('div', { className: 'dshmind-readoutKey' }, key),
         h('div', { className: 'dshmind-readoutVal' }, node || value),
-      ]);
+        note ? h('div', { className: 'dshmind-readoutNote' }, note) : null,
+      ].filter(Boolean));
     }
 
     // ── 会话定位 ────────────────────────────────────────────────────────────
@@ -1462,6 +1494,9 @@ window.__ModuleLoader__.load({
       // `未知`（宿主没给）不当成故障，也不当成正常。
       var gateAlarm = !!gate && gate.在位 === false;
       var 失联态 = bar ? bar.失联 : '未知';
+      // 「探针有结论」= 有状态且不是"未知"，或者有见红/恒红/恒绿这类明确信号。
+      // 缺一格数据时 `normalizeView` 会造出 `状态:'未知'` 的空袋，别把它当成"有数据"。
+      var 探针有结论 = !!probe && (probe.状态 !== '未知' || probe.见红.length > 0 || probe.恒红 || probe.恒绿);
       var 失联详情 = bar ? bar.失联详情 : 失联详情Of(null);
       var lostAlarm = !!bar && (失联态 === '已失联' || 失联态 === '已关闭');
 
@@ -1510,24 +1545,19 @@ window.__ModuleLoader__.load({
                 : null,
               gate && gate.错误 ? h('span', { key: 'e' }, gate.错误) : null,
             ].filter(Boolean)), gateAlarm),
-            readout('介入度档位', null, bar
-              ? h('span', { style: { display: 'inline-flex', flexWrap: 'wrap', gap: 3 } },
-                  ['零参与', '事后抽检', '变更预审', '逐条审批'].map(function (level) {
-                    var on = bar.介入度 === level;
-                    return h('span', {
-                      key: level,
-                      className: 'dshmind-badge',
-                      style: {
-                        color: on ? 'var(--dsw-alias-label-primary-inverted,#fff)' : 'var(--dsw-alias-label-tertiary,#81858c)',
-                        background: on ? 'var(--dsw-alias-state-business-primary,#0f1115)' : 'transparent',
-                        borderColor: on ? 'transparent' : 'var(--dsw-alias-border-l2,#0000001f)',
-                      },
-                    }, level);
-                  }))
-              : '—'),
+            // 介入度：**只显示当前生效的那一档**（一个值）。
+            // 旧版画成 4 个 chip（零参与 / 事后抽检 / 变更预审 / 逐条审批），选中那个上色 ——
+            // 那是**只读投影**，4 个看着能点的小方块会让人以为能点（Batch 8 主人提的第 4 条）。
+            // 现在：一个值 + 旁边一句"（四档之一）"，不带边框、不带背景、不带光标、不可聚焦。
+            readout('介入度档位', null, h('span', { className: 'dshmind-valueLine' }, [
+              h('span', { key: 'v' }, bar ? bar.介入度 : '未接入'),
+              bar ? h('span', { key: 'h', className: 'dshmind-valueNote' }, '四档之一（只读）') : null,
+            ].filter(Boolean))),
             // 失联那一格四态四样。**`已关闭` 绝不许给绿点**：开关被关掉不是「主权者一直在」，
             // 但也不是失联 —— 所以它拿告警色 + 明说「不判定失联」，与「在位」「已失联」都长得不一样。
             // `未知` 照旧是灰点 + 未接入：宿主没给 ≠ 正常。
+            // 详情（生效期限 / 来源 / 坏值）**紧贴这一格**放在同一个 cell 里 —— 别拉到整行当脚注，
+            // 那会横跨所有列、把列对齐打断（Batch 8 主人提的第 6 条）。
             readout('失联状态', null, h('span', { className: 'dshmind-dot-line' }, [
               dot(!bar ? GREY : 失联态 === '已失联' ? RED : 失联态 === '已关闭' ? WARN : 失联态 === '在位' ? GREEN : GREY),
               h('span', { key: 'v' }, !bar ? '未接入'
@@ -1535,36 +1565,34 @@ window.__ModuleLoader__.load({
                 : 失联态 === '已关闭' ? '已关闭（不判定失联）'
                 : 失联态 === '在位' ? '在位'
                 : '未知'),
-              // 悬停给全套读数细节；版面上只留一行短附注（详见详情行）。
+            ].filter(Boolean)), lostAlarm,
+              // 格内附注：完整读数，换行显示（不裁切、不铺满整行）。
               失联详情.在位
-                ? h('span', {
-                    key: 'd',
-                    className: 'dshmind-mono',
-                    style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary,#81858c)' },
-                    title: 失联详情.提示,
-                  }, 失联附注(失联详情))
-                : null,
-            ].filter(Boolean)), lostAlarm),
-            // 详情**次要行**：主读数（上面那格）照旧一眼可见，这一行只回答「凭什么」。
-            失联详情.在位
-              ? h('div', { key: 'lostDetail', className: 'dshmind-readoutDetail' }, [
-                  h('span', { key: 'a', className: 'dshmind-mono' }, 失联详情.读数 === '缺失' ? '读数：缺失' : '读数：' + 失联详情.读数),
-                  h('span', { key: 'b' }, '生效期限 ' + (失联详情.生效响应期限小时 === null ? '—' : 失联详情.生效响应期限小时 + 'h')
-                    + '（' + 失联详情.响应期限小时来源 + '）'),
-                  h('span', { key: 'c' }, '开关来源 ' + 失联详情.失联限制来源),
-                  失联详情.值不合法
-                    ? h('span', { key: 'd', style: { color: WARN } }, '⚠ 值不合法：原值 ' + JSON.stringify(失联详情.原值)
-                        + '（' + 失联详情.原值来源 + '）已退回兜底' + (失联详情.不合法说明 ? ' · ' + 失联详情.不合法说明 : ''))
-                    : null,
-                ].filter(Boolean))
-              : null,
-            readout('安全类探针', null, h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } }, [
+                ? h('span', { key: 'note', className: 'dshmind-readoutNote' }, [
+                    h('span', { key: 'a', className: 'dshmind-mono' }, 失联详情.读数 === '缺失' ? '读数：缺失' : '读数：' + 失联详情.读数),
+                    h('span', { key: 'b' }, '生效期限 ' + (失联详情.生效响应期限小时 === null ? '—' : 失联详情.生效响应期限小时 + 'h')
+                      + '（' + 失联详情.响应期限小时来源 + '）'),
+                    h('span', { key: 'c' }, '开关来源 ' + 失联详情.失联限制来源),
+                    失联详情.值不合法
+                      ? h('span', { key: 'd', style: { color: WARN } }, '⚠ 值不合法：原值 ' + JSON.stringify(失联详情.原值)
+                          + '（' + 失联详情.原值来源 + '）已退回兜底' + (失联详情.不合法说明 ? ' · ' + 失联详情.不合法说明 : ''))
+                      : null,
+                  ].filter(Boolean))
+                : null),
+            // 安全类探针：**没数据时给一句人话**（"未跑过"），不留一个空白大框。
+            // 旧版这一格右边一整块空白 —— 版面上看起来像"坏了"（Batch 8 主人提的第 3 条）。
+            // ⚠️ 「没数据」的判据不是 `!probe`：`normalizeView` 总会造一个探针袋（缺了就是
+            //    `状态:'未知'` + 没见红），所以这里认「没有结论」= 状态未知且没有见红/恒红/恒绿。
+            readout('安全类探针', null, h('span', { className: 'dshmind-dot-line' }, [
               dot(!probe ? GREY : probe.见红.length ? RED : probe.状态 === '正常' || probe.状态 === '绿' ? GREEN : GREY),
-              h('span', { key: 'v' }, probe ? probe.状态 : '未接入'),
+              h('span', { key: 'v' }, probe ? probe.状态 : '未跑过'),
               probe && probe.见红.length ? h('span', { key: 'r' }, '见红：' + probe.见红.join('、')) : null,
               probe && probe.恒红 ? badge('恒红警报', 'red') : null,
               probe && probe.恒绿 ? badge('恒绿警报', 'warn') : null,
-            ].filter(Boolean))),
+            ].filter(Boolean)), false,
+              !探针有结论
+                ? h('span', { key: 'note', className: 'dshmind-readoutNote' }, '这一块没有快照（宿主没给探针读数）')
+                : null),
           ]),
         ]),
 
