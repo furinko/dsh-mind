@@ -42,11 +42,33 @@ window.__ModuleLoader__.load({
     var React = require('react');
 
     // ── React 兜底 ──────────────────────────────────────────────────────────
-    // React 16.8+ 都有这几个 hook；兜底只为「万一取不到也还有一次静态渲染」，
-    // 因为一次抛错就等于整个槽位空白。
+    /**
+     * **兜底不许静默**（Batch 6 修的第二条真缺陷）。
+     *
+     * 原来的写法是 `hook('useEffect', function () {})` —— 取不到就退化成空实现，
+     * 于是设置页**永远停在「正在读取设置…」**：effect 根本没跑，页面看着像死的，
+     * 而控制台一片安静。`useState` 的空 setter 同理（设了值不重渲染）。
+     *
+     * 「React 16.8+ 都有这几个 hook」这句假设**正是兜底存在的唯一理由** ——
+     * 而它一旦不成立，这个兜底就把缺陷**藏起来**了。所以现在：
+     *  · 兜底仍然给（页面不能因为少一个 hook 就整个空白 —— 那更糟）；
+     *  · 但**明确报出来**：`console.error` 一句 + 一个可查询的标记（页面据此显示一句人话）。
+     *
+     * @param {string} name hook 名
+     * @param {Function} fallback 退化实现
+     * @returns {Function}
+     */
+    var 缺失的钩子 = [];
     function hook(name, fallback) {
       var fn = React && React[name];
-      return typeof fn === 'function' ? fn : fallback;
+      if (typeof fn === 'function') return fn;
+      缺失的钩子.push(name);
+      try {
+        // 响亮：这不是"顺手告警"，是这个页面接下来会坏成什么样，必须能在控制台里看到。
+        console.error('dsh-mind: React 缺少 ' + name + '（需要 16.8+）。已退化为静态兜底：'
+          + '这一页不会自动取数 / 不会重渲染，界面会停在初始状态。');
+      } catch (error) { /* 控制台都没了就算了 —— 标记还在，页面照样会显示 */ }
+      return fallback;
     }
     var createElement = hook('createElement', function (type, props) {
       return { type: type, key: null, props: props || {} };
@@ -271,6 +293,18 @@ window.__ModuleLoader__.load({
     var CACHE_KEY = 'dsh-mind.dashboard.v1';
     /** 自动刷新间隔（人看的板子，30s 够「活」，又不打扰）。 */
     var REFRESH_MS = 30000;
+    /**
+     * 一次宿主命令的**上限等待**（毫秒）。
+     *
+     * 为什么必须有：`remote.commands.execute` 返回的 promise **可能永远不 settle**
+     * （会话 id 拿到了但无效/过期、通道不回、宿主侧卡住）。链上没有超时的话，
+     * 设置页就**永远停在「正在读取设置…」**——页面看着像死的，而没有任何报错。
+     * Batch 6 主人真机上遇到的就是这个（`phase:'reading'` 出不来了）。
+     *
+     * 8 秒是"人还愿意等"与"别把真卡住当成慢"之间的折中；超时后落到 `phase:'error'`
+     * 并**带上可诊断信息**（会话 id / 命令 / 等了多久），下一张截图就能指出卡在哪一步。
+     */
+    var COMMAND_TIMEOUT_MS = 8000;
     /** 设置页分区：id 与标签（`settings.section` 的注册契约是 `{name, id, order, label()}`）。 */
     var SETTINGS_SECTION_ID = 'dsh-mind-settings';
     var SETTINGS_SECTION_LABEL = '心智';
@@ -610,7 +644,26 @@ window.__ModuleLoader__.load({
       'border:.5px solid var(--dsw-alias-state-warn-secondary,#e5b46a);border-radius:var(--dsw-radius-md,8px)}',
       '.dshmind-empty{color:var(--dsw-alias-label-tertiary,#81858c);font-size:12px;padding:10px 0}',
 
-      // ── 设置页（`settings.section`「心智」）────────────────────────────────
+      '.dshmind-foot{display:flex;gap:10px;flex-wrap:wrap;align-items:center;color:var(--dsw-alias-label-caption,#adb2b8);',
+      'font-size:11px;padding:2px 2px 4px}',
+
+    ].join('');
+
+    /**
+     * 设置页那套样式（`.dshmind-set__*`）—— **必须走 `document.head` 注入，不能挂在渲染子树里**。
+     *
+     * 为什么单独一份、单独注入（这是 Batch 6 修的真缺陷，记在这儿免得后人又改回去）：
+     * 看板面板的样式可以当**面板自己的 DOM 子节点**渲染（`h('style', …)`）——面板在哪，
+     * 样式就在哪，够用。但**设置页不住在看板面板的子树里**：它住在官方设置面板里（
+     * `settings.section` 那一格）。挂在看板子树里的 CSS 对设置页**根本不可达** ——
+     * 表现就是文案与类名都是新的、样式一条没生效（标签与控件竖着堆、控件是浏览器默认长相）。
+     * 所以设置页这套要走**文档级**：`document.head` 追加 `<style>`，全局可见。
+     *
+     * 参考实现：`E:\DSHOME-Plugin\lib\client.js` 的 `installStyle`（同一个宿主、同一个槽位，
+     * 已在官方客户端跑通）——它也是 `document.createElement('style')` + `document.head.appendChild`，
+     * 并按 `style[data-plugin='<id>']` 判重，所以热重载不会叠出第二份。
+     */
+    var SETTINGS_CSS = [
       // 前缀 `.dshmind-set__*`（BEM 风），**另起一套、不与看板的 `.dshmind-*` 混用**：
       // 设置页住在官方设置面板里，与看板面板是两件东西，样式也该各归各的。
       //
@@ -686,12 +739,99 @@ window.__ModuleLoader__.load({
       'color:var(--dsw-alias-label-caption,#8b93a7)}',
       '.dshmind-set__mono{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Menlo,monospace);',
       'overflow-wrap:anywhere}',
-      '.dshmind-foot{display:flex;gap:10px;flex-wrap:wrap;align-items:center;color:var(--dsw-alias-label-caption,#adb2b8);',
-      'font-size:11px;padding:2px 2px 4px}',
-
     ].join('');
 
+    /** 注入设置页样式的 `<style>` 标记（判重用），与宿主里 `installStyle` 的做法同源。 */
+    var SETTINGS_STYLE_ID = 'dsh-mind-settings-style';
+
+    /**
+     * 把**设置页**那套样式注入到**文档级**（`document.head`）。
+     *
+     * 四条纪律，缺一条都会在真机上坏掉：
+     *  1. **一次、幂等**：靠 `window.__dshMindSettingsStyle` 记住"这份样式归谁管" ⇒
+     *     重复 `apply` / 热重载不会叠出第二份（叠了不会立刻出错，但会越来越难收拾）；
+     *  2. **随卸载移除**：返回 disposer（`apply` 把它并进那份合并 disposer 里），
+     *     组件被撤下时样式也一起走，不留野样式；
+     *  3. **非浏览器环境有守卫**：这个文件是**经典脚本**，可能在没有 `document` 的环境里被求值，
+     *     拿不到 `document` / `document.head` 就**静默返回 null**（样式没了只是难看，绝不能抛）；
+     *  4. **失败只掉外观**：任何一步抛错都吞掉并 `warn` 一句 —— 设置页仍然可用，只是没套主题。
+     *
+     * 为什么用 window 上的标记而不是 `document.querySelector` 判重：两者都能防重复注入，
+     * 但**只有标记能回答"这份样式是不是我插的"**——不是自己插的那种，卸载时就不该去摘它
+     * （摘掉别的实例/别的插件的样式是越界）。参考实现（DSHOME 的 `installStyle`）用 querySelector
+     * 判重，那里只有一个实例、不涉及移除，所以那样够用；这里要管卸载，就多留一个归属标记。
+     *
+     * @returns {Function|null} 移除注入的 disposer；注入不了（无 document / 已有主 / 抛错）时返回 null
+     */
+    function 注入设置页样式() {
+      try {
+        if (typeof document === 'undefined' || !document) return null;
+        var head = document.head;
+        if (!head || typeof head.appendChild !== 'function') return null;
+        // 幂等 + 归属：已有主人就不再插第二份，也不再接管移除（谁注的谁撤）。
+        var 宿主 = typeof window !== 'undefined' && window ? window : null;
+        if (宿主 && 宿主.__dshMindSettingsStyle) return null;
+        var tag = document.createElement('style');
+        tag.setAttribute('data-mind', SETTINGS_STYLE_ID);
+        tag.textContent = SETTINGS_CSS;
+        head.appendChild(tag);
+        var 撤下 = function 撤下设置页样式() {
+          try {
+            if (宿主) 宿主.__dshMindSettingsStyle = null;
+            if (tag && tag.parentNode && typeof tag.parentNode.removeChild === 'function') {
+              tag.parentNode.removeChild(tag);
+            }
+          } catch (error) { /* 已经没了就算了：撤样式失败不该影响任何东西 */ }
+        };
+        if (宿主) 宿主.__dshMindSettingsStyle = 撤下;
+        return 撤下;
+      } catch (error) {
+        // 注入失败只掉外观，不掉功能：说一声，然后继续（设置页仍可用，只是没套主题）。
+        try { console.warn('dsh-mind: 设置页样式注入失败（只影响外观）', error); } catch (ignored) { /* 控制台都没了就算了 */ }
+        return null;
+      }
+    }
+
     // ── 小部件 ──────────────────────────────────────────────────────────────
+    /**
+     * 给一个 promise 加**上限等待**：到点没 settle 就当作失败（永不 reject 的 promise 是这里的天敌）。
+     *
+     * 为什么不能只靠 `.catch`：`remote.commands.execute` 卡住时**既不会 resolve 也不会 reject**，
+     * `.catch` 一辈子等不到 —— 页面就一直停在 loading。**超时是唯一能离开那种状态的东西。**
+     *
+     * @template T
+     * @param {Promise<T>|T} promise
+     * @param {number} ms 上限等待
+     * @param {string} 说明 超时时要带出去的可诊断信息（会话 / 命令 / 等了多久）
+     * @returns {Promise<T>} 超时以 reject 的方式失败（错误信息就是那句可诊断信息）
+     */
+    function 限时(promise, ms, 说明) {
+      return new Promise(function (resolve, reject) {
+        var 到了 = false;
+        var 计时器 = null;
+        try {
+          if (typeof window !== 'undefined' && window && typeof window.setTimeout === 'function') {
+            计时器 = window.setTimeout(function () {
+              if (到了) return;
+              到了 = true;
+              reject(new Error('超时：' + 说明));
+            }, ms);
+          }
+        } catch (error) { /* 没有计时器就不设上限，总比整页抛掉强 */ }
+        Promise.resolve(promise).then(function (value) {
+          if (到了) return;
+          到了 = true;
+          try { if (计时器 !== null && window && typeof window.clearTimeout === 'function') window.clearTimeout(计时器); } catch (error) { /* 无所谓 */ }
+          resolve(value);
+        }, function (error) {
+          if (到了) return;
+          到了 = true;
+          try { if (计时器 !== null && window && typeof window.clearTimeout === 'function') window.clearTimeout(计时器); } catch (ignored) { /* 无所谓 */ }
+          reject(error);
+        });
+      });
+    }
+
     function dot(color) {
       return h('span', { className: 'dshmind-dot', style: { background: color } });
     }
@@ -776,17 +916,22 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 跑一条宿主命令。**永不 reject**：所有失败都变成一个 `{ok:false, error}`。
+     * 跑一条宿主命令。**永不 reject**：所有失败（含**超时**）都变成一个 `{ok:false, error}`。
      * 返回形状：`{ok:true, value}` 或 `{ok:false, error}`；`value` 是命令返回体解析出的 JSON 对象。
      *
      * 看板取数与设置页读写走的是**同一条路**（同一个 `remote.commands.execute`，
      * 同一套「失败包成 ok:false」的约定），所以只有这一个入口 —— 降级口径就只有一份。
+     *
+     * ⚠️ **上限等待是这条路的硬要求**：`execute` 可能返回一个永不 settle 的 promise
+     * （会话无效/过期、通道不回），只有 `.catch` 是**永远等不到**的 ⇒ 页面会一直停在 loading。
+     * 超时错误里带上**可诊断信息**（会话 id · 命令 · 等了多久）：下一张真机截图就能指出卡在哪一步。
      *
      * @param {object} ctx 客户端上下文
      * @param {string} sessionId 会话 id（`resolveSessionId` 给的）
      * @param {string} command 命令文本，如 `/mind dashboard` / `/mind presence 开关=否`
      */
     function runCommand(ctx, sessionId, command) {
+      var 会话尾 = line(sessionId, '') ? String(sessionId).slice(0, 12) + '…' : '（无会话 id）';
       return new Promise(function (resolve) {
         var remote = null;
         try {
@@ -807,7 +952,8 @@ window.__ModuleLoader__.load({
           resolve({ ok: false, error: '命令调用抛错：' + line(error && error.message, String(error)) });
           return;
         }
-        Promise.resolve(pending).then(function (response) {
+        var 说明 = '会话 ' + 会话尾 + ' · 命令 ' + command + ' · 等 ' + Math.round(COMMAND_TIMEOUT_MS / 1000) + ' 秒无回应';
+        限时(pending, COMMAND_TIMEOUT_MS, 说明).then(function (response) {
           try {
             var result = response && response.value && response.value.result;
             if (!obj(result)) { resolve({ ok: false, error: '命令返回体无法识别' }); return; }
@@ -983,6 +1129,13 @@ window.__ModuleLoader__.load({
       if (s.indexOf('定位不到会话') >= 0) return '这一页需要一个打开的会话才能读写设置。';
       if (s.indexOf('宿主命令服务不可用') >= 0) return '这一页需要一个打开的会话才能读写设置。';
       if (s.indexOf('读取 remote 服务失败') >= 0) return '这一页需要一个打开的会话才能读写设置。';
+      // ⚠️ 「超时」必须排在「命令失败」**前面**：超时错误也是被 `命令失败：…` 那层包出来的，
+      //    放在后面就永远轮不到它 —— 诊断信息会被那句泛泛的"通信失败"吃掉，
+      //    而这行诊断正是**下一张真机截图唯一能定位的东西**（Batch 6 的教训）。
+      if (s.indexOf('超时') >= 0) {
+        var 尾巴 = s.replace(/^.*?超时[:：]\s*/, '');
+        return '未接入：读设置超时（' + 尾巴 + '）';
+      }
       if (s.indexOf('命令调用抛错') >= 0) return '与宿主通信失败，设置暂时读写不了。';
       if (s.indexOf('命令失败') >= 0) return '与宿主通信失败，设置暂时读写不了。';
       if (s.indexOf('不是 JSON') >= 0 || s.indexOf('无法识别') >= 0) return '读到的设置无法解析，暂时按未知处理。';
@@ -1577,7 +1730,22 @@ window.__ModuleLoader__.load({
       // 用户面前**不许**出现实现细节（函数名 / `remote.commands.execute` 之类）：
       // 要解释为什么现在不可用，就说"这一页需要一个打开的会话"。
       // ⇒ 原因必须过 `用户向原因` 那道映射（原始错误串是排障用的，不是给主人读的）。
-      var 未接入原因 = snap.phase === 'reading' ? '正在读取设置…' : 用户向原因(snap.error);
+      //
+      // ⚠️ **页面永远不许停在 loading**（Batch 6 修的第二条真缺陷）：
+      // 「正在读取设置…」只是**过程**，不是终态 —— 读链要么拿到读数、要么落到 error（含超时），
+      // 所以这句话在收敛之后**不可能**还留在版面上。若它一直在，那就是真的没跑起来（见 `钩子缺失`）。
+      var 钩子缺失提示 = 缺失的钩子.length
+        ? '这一页在本客户端里跑不起来：缺少 React 的 ' + 缺失的钩子.join(' / ') + '（需要 16.8+）。'
+          + '控制台有详细错误；这是客户端版本问题，不是设置问题。'
+        : '';
+      var 未接入原因 = 钩子缺失提示 !== '' ? 钩子缺失提示
+        : snap.phase === 'reading' ? '正在读取设置…'
+        : 用户向原因(snap.error);
+      // 统一带上「未接入」这个前缀：**只要不是"正在读"，这一页就是"没接上"**（含超时/异常），
+      // 让人一眼看出这是终态而不是还在转圈。超时那句本身已经带了「未接入：」，别叠两遍。
+      if (未接入原因.indexOf('未接入') !== 0 && 未接入原因.indexOf('正在读取设置') !== 0) {
+        未接入原因 = '未接入：' + 未接入原因;
+      }
       var 未接入块 = 未接入
         ? h('div', { key: 'off', className: 'dshmind-set__notice' }, [
             h('div', { key: 't', className: 'dshmind-set__noticeText' }, 未接入原因),
@@ -1755,6 +1923,12 @@ window.__ModuleLoader__.load({
           label: function () { return SETTINGS_SECTION_LABEL; },
         }, 心智设置);
       });
+
+      // 设置页那套样式走**文档级**注入（`document.head`）—— 它不住在看板面板的子树里，
+      // 挂在面板里的 CSS 对设置页不可达（Batch 6 修的真缺陷，见 `SETTINGS_CSS` 的说明）。
+      // 注入失败（无 document 等）返回 null：只掉外观，不影响任何功能。
+      var 撤样式 = 注入设置页样式();
+      if (typeof 撤样式 === 'function') disposers.push(撤样式);
 
       var disposed = false;
       function disposeAll() {

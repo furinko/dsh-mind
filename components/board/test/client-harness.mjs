@@ -275,13 +275,53 @@ export function okReply(view) {
 
 // ── 装载经典脚本 ──────────────────────────────────────────────────────────────
 /**
+ * 一个**最小**的假 `document`：只够验「样式有没有注到文档级」这一件事。
+ *
+ * 为什么必须有它：设置页的样式**必须**走 `document.head`（它不住在看板面板的子树里，
+ * 挂在面板里的 CSS 对设置页不可达 —— Batch 6 的真缺陷就是栽在这里）。
+ * 而"挂在哪"这件事只有 `document` 知道，渲染树里看不出来 ⇒ 不给假 document，这条性质就没人守。
+ *
+ * 刻意**不 mock 一整套 DOM**：只要 `head.appendChild` 记下收到的节点、`createElement('style')`
+ * 能造出一个带 `textContent`/`setAttribute`/`parentNode` 的小对象即可（`head.appendChild` 会
+ * 顺手把 `parentNode` 接上，好让「卸载时移除」也测得出来）。
+ *
+ * @param {{ nodes: object[] }} doc 记录器：`nodes` 就是"head 里现在的样式标记"（会被就地增删）
+ */
+export function makeDocument(doc = {}) {
+  const 记录 = doc.nodes ? doc : { nodes: [] };
+  const head = {
+    appendChild(node) {
+      node.parentNode = {
+        removeChild(target) {
+          const at = 记录.nodes.indexOf(target);
+          if (at >= 0) 记录.nodes.splice(at, 1);
+        },
+      };
+      记录.nodes.push(node);
+      return node;
+    },
+  };
+  const document = {
+    head,
+    createElement(tag) {
+      return { tagName: String(tag).toUpperCase(), attrs: {}, textContent: '', parentNode: null,
+        setAttribute(k, v) { this.attrs[k] = String(v); } };
+    },
+  };
+  // 把记录挂回 document 上，方便调用方拿到（`booted.doc` 用它）。
+  document.__nodes = 记录.nodes;
+  return { doc: 记录, document };
+}
+
+/**
  * 在一个干净的 vm 上下文里执行 lib/client.js，捕获 loader 定义。
- * @param {{ store?: Map<string,string>, sessionId?: string }} [options]
- *   `store` 可跨次复用以模拟同一个浏览器（缓存跨插件加载存活）。
+ * @param {{ store?: Map<string,string>, sessionId?: string, document?: object }} [options]
+ *   `store` 可跨次复用以模拟同一个浏览器（缓存跨插件加载存活）；
+ *   `document` 不传则上下文里**没有** document（顺手守住"无 document 也不许抛"）。
  */
 export function loadClient(options = {}) {
   const store = options.store || new Map();
-  const timers = { intervals: [], cleared: [] };
+  const timers = { intervals: [], cleared: [], timeouts: [], clearedTimeouts: [] };
   let definition = null;
   let loaderCalls = 0;
 
@@ -294,6 +334,11 @@ export function loadClient(options = {}) {
     },
     setInterval(fn, ms) { timers.intervals.push({ fn, ms }); return timers.intervals.length; },
     clearInterval(id) { timers.cleared.push(id); },
+    // ⚠️ `setTimeout` 必须在：设置页的读/写链靠**上限等待**离开 loading
+    //    （`execute` 返回永不 settle 的 promise 时，只有超时能救）。
+    //    这里不真的等 8 秒：把回调记下来，由测试用 `timers.fireTimeouts()` 推进。
+    setTimeout(fn, ms) { timers.timeouts.push({ fn, ms }); return timers.timeouts.length; },
+    clearTimeout(id) { timers.clearedTimeouts.push(id); },
   };
   if (options.sessionId) win.__dshSessionId = options.sessionId;
 
@@ -306,10 +351,25 @@ export function loadClient(options = {}) {
       log() {},
     },
   };
+  if (options.document) sandbox.document = options.document;
   vm.createContext(sandbox);
   new vm.Script(readFileSync(CLIENT_PATH, 'utf8'), { filename: CLIENT_PATH }).runInContext(sandbox);
 
-  return { win, store, timers, warnings, get loaderCalls() { return loaderCalls; }, get definition() { return definition; } };
+  /**
+   * 推进「假时钟」：把已注册的 setTimeout 回调全部触发一次（模拟"8 秒到了"）。
+   * 只对**还没被 clearTimeout 撤掉**的那些触发（撤了就不该再响）。
+   */
+  timers.fireTimeouts = function fireTimeouts() {
+    const 撤掉的 = new Set(timers.clearedTimeouts);
+    const 待发 = timers.timeouts.filter((t, i) => !撤掉的.has(i + 1));
+    timers.timeouts.length = 0;
+    timers.clearedTimeouts.length = 0;
+    待发.forEach((t) => { try { t.fn(); } catch (error) { /* 回调抛错交给调用方观察 */ } });
+    return 待发.length;
+  };
+
+  return { win, store, timers, warnings, document: options.document || null,
+    get loaderCalls() { return loaderCalls; }, get definition() { return definition; } };
 }
 
 /** 严格 require：只暴露 react / react/jsx-runtime，其它一律抛错（宿主内部包必须抛）。 */
@@ -521,7 +581,13 @@ function check(passed, name, detail) {
 
 /** 装载 + apply，返回渲染器所需的全部把手。 */
 function boot(options = {}) {
-  const loaded = loadClient({ store: options.store, sessionId: options.sessionId });
+  // ⚠️ 假 `document` 走**服务**传进来（`services.document`）——所有调用方都是
+  // `boot({ services: Object.assign(session(), …) })` 这个形状，而 `session()` 里带 document。
+  // 第一版这里读的是 `options.document`（顶层）⇒ 组件拿不到假 document、head 里永远是空的，
+  // 「注入到 document.head」那条断言就永远绿不了（**接线错了，不是实现错了**）。
+  // 顶层 `options.document` 仍保留：给"就想单独指定一个 document"的用例用。
+  const doc = options.document || (options.services && options.services.document) || null;
+  const loaded = loadClient({ store: options.store, sessionId: options.sessionId, document: doc });
   check(loaded.loaderCalls === 1, 'loader 被调用一次', '实际 ' + loaded.loaderCalls + ' 次');
   const def = loaded.definition;
   check(!!def && def.id === PACKAGE_NAME, '工厂 id 是包名 ' + PACKAGE_NAME, String(def && def.id));
@@ -537,7 +603,9 @@ function boot(options = {}) {
   const { slots, calls } = makeSlots();
   const ctx = makeCtx(Object.assign({ slots }, options.services));
   const disposer = plugin.apply(ctx);
-  return { loaded, strict, plugin, slots, calls, ctx, disposer, timers: loaded.timers, warnings: loaded.warnings };
+  return { loaded, strict, plugin, slots, calls, ctx, disposer, timers: loaded.timers, warnings: loaded.warnings,
+    // 这次 boot 的假 document 记录（`nodes` = head 里现在挂着的样式标记）。
+    doc: doc && doc.__nodes ? doc.__nodes : null };
 }
 
 function registrationOf(booted, slotName) {
@@ -563,7 +631,23 @@ function mountSettings(booted, props) {
   return createRenderer(registrationOf(booted, 'settings.section').Component, props || { close() {} });
 }
 
+/**
+ * 一次 boot 用的服务：会话 + 一个**属于这次 boot 的假 document**。
+ *
+ * 为什么要配 document：设置页样式必须注到 `document.head`（不可达的话真机上就是"类名在、样式没上去"）。
+ * 每次 boot 一个新 document ⇒ 各用例之间不会因为"样式已有人管"而互相干扰。
+ */
 function session() {
+  return { sessions: makeSessions([{ id: 'sess-main', main: true }]), document: makeDocument().document };
+}
+
+/** 取这次 boot 的假 document 记录（`head` 里现在有哪些样式标记）。 */
+function docNodes(booted) {
+  return (booted.ctx.get('document') && booted.ctx.get('document').__nodes) || [];
+}
+
+/** 一次 boot 用的服务，但**故意不给** document（守住"非浏览器环境不许抛"）。 */
+function sessionWithNoDocument() {
   return { sessions: makeSessions([{ id: 'sess-main', main: true }]) };
 }
 
@@ -1355,7 +1439,9 @@ export async function runHarness() {
     const 渲染 = (services) => {
       const booted = boot({ store, services });
       const renderer = mountSettings(booted);
-      return { renderer, 元素: () => collect(renderer.tree, { skipStyle: true }).elements };
+      // ⚠️ `doc` 必须一起带出来：样式注入到哪，只有假 document 的 head 知道，
+      //    渲染树里看不出来（那正是 Batch 6 缺陷能溜过 247 条断言的原因）。
+      return { renderer, doc: booted.doc, 元素: () => collect(renderer.tree, { skipStyle: true }).elements };
     };
     const 常驻 = 渲染(Object.assign(session(), { remote: makeRemote(() => okReply({ 读数: 读数袋(), 设置文件: SETTINGS_FILE, 说明: '读…' })).remote }));
     await textAfterLoad(常驻.renderer);
@@ -1382,35 +1468,58 @@ export async function runHarness() {
     passed.push(check(collect(常驻.renderer.tree, { skipStyle: true }).text.indexOf(旧词) < 0,
       '⑨ 设置页里不许再出现旧词（失联限制那个不吉利的旧叫法）'));
 
-    // ⑩ 所有交互控件都带我们的类名（= 不是裸浏览器默认样式），且注入的样式表里能找到对应规则。
+    // ⑩ 所有交互控件都带我们的类名（= 不是裸浏览器默认样式），且**文档级样式里**能找到对应规则。
     const 控 = 常驻.元素().filter((el) => ['select', 'input', 'button'].indexOf(el.type) >= 0);
     passed.push(check(控.length >= 4, '⑩ 设置页确实渲染出交互控件（select/number/保存/重新读取…）', String(控.length)));
-    // ⚠️ 样式**不在渲染树里**：`<style>` 只在**看板面板**里注入，设置页那一格为了不污染
-    //    官方设置页故意不注入自己的 style —— 所以样式文本只能从**源码**里查。
-    //    （第一版我在渲染树里找 `<style>`，收集到 0 个字符，于是"规则存在与否"永远查不到。）
-    const 源码 = readFileSync(CLIENT_PATH, 'utf8');
-    const 样式段 = 源码.slice(源码.indexOf('var CSS = ['), 源码.indexOf('].join(\'\');', 源码.indexOf('var CSS = [')));
-    const 样式文本 = 样式段;
-    passed.push(check(样式文本.indexOf('.dshmind-set__') >= 0,
-      '⑩ 样式源里确实有设置页那套规则（前提检查：能查到 .dshmind-set__ 前缀）', String(样式文本.length) + ' 字符'));
-    // ⚠️ 判据必须强到「这条控件真有基础样式」，**不是**「文件里出现过这个词」——这道坎我踏了两次：
-    //    第一版 `indexOf('.' + 基)`：把基础规则整条删掉后，`:focus` 那条仍让它"找得到" ⇒ 变异不红；
-    //    第二版只要求「有从选择器开头的规则」：`select:focus,…{border-color}` 这种**只带伪态**的规则
-    //    照样满足 ⇒ 变异还是不红（控件其实已经回不到基础观感了，门禁却在打勾）。
-    //    现在要求：**不带伪态的基础规则**存在，且它真带上了这条控件的样式属性（height/padding/background）。
-    const 基础规则体 = (基) => {
-      const 选择器 = '.' + 基;
-      for (const 行 of 样式文本.split("',")) {
-        const 起 = 行.indexOf(选择器);
-        if (起 < 0) continue;
-        const 左 = 行[起 - 1];
-        if (起 !== 0 && 左 !== "'" && 左 !== ',') continue;
-        const 括号 = 行.indexOf('{', 起);
+
+    // ⚠️⚠️ 判据是**可达性**，不是"源里有"（Batch 6 的教训，写在这儿免得又退回去）：
+    //    设置页样式**必须**在 `document.head` 里（文档级），因为设置页**不住在看板面板的子树里**。
+    //    上一版这条只查"源码里有对应规则" ⇒ 样式压根没生效它照样绿 —— 一个字都没测到可达性。
+    //    现在从**假 document 的 head** 里取样式文本：注到面板子树里的那种写法在这里必然查不到。
+    const 文档级样式 = (常驻.doc || []).filter((n) => n.tagName === 'STYLE').map((n) => n.textContent).join('\n');
+    passed.push(check((常驻.doc || []).some((n) => n.attrs && n.attrs['data-mind'] === 'dshmind-set-settings-style'
+      || String(n.attrs && n.attrs['data-mind'] || '').indexOf('settings-style') >= 0),
+      '⑩ 设置页样式**注入到 document.head**（文档级，设置页不在看板子树里也能取到）',
+      JSON.stringify((常驻.doc || []).map((n) => n.attrs))));
+    passed.push(check(文档级样式.indexOf('.dshmind-set__') >= 0,
+      '⑩ 文档级样式里确实含设置页那套规则 .dshmind-set__*（不是只存在于某个祖先子树里）',
+      String(文档级样式.length) + ' 字符'));
+    // 反例守卫：设置页的**渲染树里不许有 style 节点** —— 那就是"挂在子树里"的老写法，
+    // 一旦有人改回去，样式会再次对设置页不可达，而这条会先红。
+    passed.push(check(常驻.元素().filter((el) => el.type === 'style').length === 0,
+      '⑩ 设置页渲染树里没有 <style>（样式**不许**挂在子树里：那样对设置页不可达）'));
+    // 判据要强到「这条控件真有基础样式」：
+    //  · 第一版 `indexOf('.类名')` —— 基础规则删掉后 `:focus` 那条仍让它"找得到" ⇒ 变异不红；
+    //  · 第二版只要求"有从选择器开头的规则" —— 只剩伪态的规则照样满足 ⇒ 变异还是不红；
+    //  · 第三版按 `',` 切行 —— 那时样式是**数组源码**；现在设置页样式是注入到 head 的
+    //    **连续文本**（数组已经 join 过），按 `',` 切什么都切不到 ⇒ 又绿不了。
+    //  现在按**真正的规则边界**（`{` 与 `}`）解析选择器与规则体，与代码怎么拼串无关。
+    const 样式文本 = 文档级样式;
+    const 规则表 = (() => {
+      const 表 = [];
+      const 段 = String(样式文本).split('}');
+      for (const 块 of 段) {
+        const 括号 = 块.lastIndexOf('{');
         if (括号 < 0) continue;
+        let 选择器 = 块.slice(0, 括号);
+        const 换行 = 选择器.lastIndexOf('\n');
+        if (换行 >= 0) 选择器 = 选择器.slice(换行 + 1);
+        选择器 = 选择器.trim().replace(/^['"]/, '');
+        表.push({ 选择器, 体: 块.slice(括号 + 1) });
+      }
+      return 表;
+    })();
+    passed.push(check(规则表.length > 20, '⑩ 样式表解析出可判的规则条数（前提检查）', String(规则表.length)));
+    const 基础规则体 = (基) => {
+      const 类 = '.' + 基;
+      for (const { 选择器, 体 } of 规则表) {
+        // 类名边界：`.dshmind-set__btn` 不许匹配到 `.dshmind-set__btn--primary`。
+        const 位 = 选择器.indexOf(类);
+        if (位 < 0) continue;
+        const 后 = 选择器[位 + 类.length];
+        if (后 !== undefined && /[\w-]/.test(后)) continue;
         // 伪态（`:focus` / `:hover` / `:disabled`）不算基础规则。
-        if (行.slice(起, 括号).indexOf(':') >= 0) continue;
-        const 体 = 行.slice(括号 + 1);
-        // 「有样式」= 带了任何一条真会改变观感的属性（不限于尺寸：主按钮那条是 border-color/background）。
+        if (选择器.indexOf(':') >= 0) continue;
         if (/height|padding|background|border|color|font|opacity|border-radius/.test(体)) return 体;
       }
       return '';
@@ -1576,6 +1685,113 @@ export async function runHarness() {
   const barePlugin = boot({ services: {} }).plugin;
   const result = barePlugin.apply(makeCtx({}));
   passed.push(check(result === undefined || result === null, 'slots 缺失时 apply 返回空且不抛'));
+
+  // ═══ Batch 6 · 坏宿主：这一页**不许有「终态是 loading」这一说** ═══  //
+  // 真机缺陷：设置页永远停在「正在读取设置…」。两个成因，两条都要守：
+  //  1. `execute` 返回**永不 settle** 的 promise ⇒ 只有**超时**能离开 loading（`.catch` 永远等不到）；
+  //  2. React 缺 `useEffect`（兜底是空实现）⇒ effect 根本没跑 ⇒ 页面静止在初始态。
+  {
+    // ① 永不 settle + 推进假时钟 ⇒ 必须离开 loading，落到「未接入（超时）」，且文案带诊断。
+    const 挂死 = boot({ store, services: Object.assign(session(), {
+      remote: {
+        commands: {
+          execute() { return new Promise(() => {}); }, // 永不 settle：resolve/reject 都不来
+        },
+      },
+    }) });
+    const 挂死渲染 = mountSettings(挂死);
+    挂死渲染.flush();
+    await settle();
+    挂死渲染.flush();
+    const 未推进 = collect(挂死渲染.tree, { skipStyle: true }).text;
+    passed.push(check(未推进.includes('正在读取设置'),
+      '⑯ 未推进时钟时仍是 loading（前提：这一态真的存在）', 未推进.slice(0, 100)));
+    // 推进 8 秒：超时回调触发 ⇒ 链落到 error。
+    挂死.timers.fireTimeouts();
+    await settle();
+    挂死渲染.flush();
+    const 挂死文本 = collect(挂死渲染.tree, { skipStyle: true }).text;
+    passed.push(check(挂死文本.indexOf('正在读取设置') < 0,
+      '⑯ 永不 settle 的 execute + 推进 8 秒 ⇒ **必须离开 loading**', 挂死文本.slice(0, 160)));
+    passed.push(check(挂死文本.includes('超时'),
+      '⑯ 落到「未接入（超时）」而不是继续等', 挂死文本.slice(0, 160)));
+    passed.push(check(挂死文本.includes('sess-main') && 挂死文本.includes(PRESENCE_COMMAND) && 挂死文本.includes('8 秒'),
+      '⑯ 超时文案**带可诊断信息**（会话 id · 命令 · 等了多久）', 挂死文本.slice(0, 200)));
+    挂死渲染.unmount();
+
+    // ② reject ⇒ 同样落「未接入（原因）」，不停 loading。
+    const 拒了 = boot({ store, services: Object.assign(session(), {
+      remote: makeRemote(() => Promise.reject(new Error('通道断了'))).remote,
+    }) });
+    const 拒了渲染 = mountSettings(拒了);
+    const 拒了文本 = await textAfterLoad(拒了渲染);
+    passed.push(check(拒了文本.indexOf('正在读取设置') < 0 && 拒了文本.includes('未接入'),
+      '⑯ execute reject ⇒ 落到「未接入」，不停 loading', 拒了文本.slice(0, 160)));
+    passed.push(check(拒了文本.includes('通道断了') || 拒了文本.includes('与宿主通信失败'),
+      '⑯ reject 的原因要看得见（原样带出或给用户向说法）', 拒了文本.slice(0, 160)));
+    拒了渲染.unmount();
+
+    // ③ 假 React 抽掉 useEffect ⇒ **明确报错**（console + 页面上的人话），不许静默停住。
+    const 真Effect = React.useEffect;
+    delete React.useEffect;
+    try {
+      const 缺钩 = boot({ store, services: Object.assign(session(), {
+        remote: makeRemote(() => okReply({ 读数: 读数袋(), 设置文件: SETTINGS_FILE, 说明: '读…' })).remote,
+      }) });
+      const 缺钩渲染 = mountSettings(缺钩);
+      缺钩渲染.flush();
+      const 缺钩文本 = collect(缺钩渲染.tree, { skipStyle: true }).text;
+      passed.push(check(缺钩.warnings.some((w) => w.indexOf('useEffect') >= 0),
+        '⑯ 缺 useEffect ⇒ console **明确报出**（不许静默）',
+        JSON.stringify(缺钩.warnings.slice(0, 2))));
+      passed.push(check(缺钩文本.includes('缺少 React') && 缺钩文本.includes('useEffect'),
+        '⑯ 缺 useEffect ⇒ 页面上也明说（不是无声停住）', 缺钩文本.slice(0, 200)));
+      passed.push(check(缺钩.calls.register.length === 3,
+        '⑯ 缺 useEffect 也不影响注册（页面还在，只是不能自动取数）'));
+      缺钩渲染.unmount();
+    } finally {
+      React.useEffect = 真Effect;
+    }
+
+    // ④ 保存链超时 ⇒ 按钮**不永久「保存中」**，并明说「没写进去」。
+    let 第几次 = 0;
+    const 保存挂死 = boot({ store, services: Object.assign(session(), {
+      remote: makeRemote(() => {
+        第几次 += 1;
+        // 第一次（读）正常返回；之后（写命令 + 回读）全部挂死 ⇒ 保存链卡住。
+        if (第几次 === 1) return okReply({ 读数: 读数袋(), 设置文件: SETTINGS_FILE, 说明: '读…' });
+        return new Promise(() => {});
+      }).remote,
+    }) });
+    const 保存渲染 = mountSettings(保存挂死);
+    await textAfterLoad(保存渲染);
+    collect(保存渲染.tree, { skipStyle: true }).elements.find((el) => el.type === 'button'
+      && String(el.props.children).indexOf('保存') >= 0).props.onClick();
+    await settle();
+    保存渲染.flush();
+    保存挂死.timers.fireTimeouts();
+    await settle();
+    保存渲染.flush();
+    const 保存文本 = collect(保存渲染.tree, { skipStyle: true }).text;
+    const 保存钮 = collect(保存渲染.tree, { skipStyle: true }).elements.find((el) => el.type === 'button'
+      && String(el.props.children).indexOf('保存') >= 0);
+    passed.push(check(!!保存钮 && 保存钮.props.disabled !== true && String(保存钮.props.children) === '保存',
+      '⑯ 保存链超时 ⇒ 按钮**不永久「保存中」**，回到可点', JSON.stringify(保存钮 && String(保存钮.props.children))));
+    passed.push(check(保存文本.includes('没写进去'),
+      '⑯ 保存链超时 ⇒ 明说「没写进去」，不装成功', 保存文本.slice(-180)));
+    保存渲染.unmount();
+  }
+
+  // ⑩b 设置页无 document 时也不抛：样式注不了只掉外观，功能不受影响
+  {
+    const 无文档 = boot({ services: sessionWithNoDocument() });
+    const 无文档渲染 = mountSettings(无文档);
+    const 无文档文本 = await textAfterLoad(无文档渲染);
+    passed.push(check(!!无文档渲染.tree && 无文档文本.includes('心智'),
+      '⑩b 没有 document 时：页面照常渲染（注入不了样式只掉外观，不抛）'));
+    passed.push(check(无文档.doc === null, '⑩b 没有 document 时：没有 head 可注入，也不报错'));
+    无文档渲染.unmount();
+  }
 
   return { passed, liveElements: c1.elements.length, liveTexts: c1.texts.length };
 }
