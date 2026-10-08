@@ -13,6 +13,7 @@ import { MemoryService } from '../src/memory.js';
 import { ReviewProtocol } from '../src/review.js';
 import { buildIndex, formatMiss, runRegression, search } from '../src/retrieval.js';
 import { Denied, InvalidBody } from '../src/kernel/errors.js';
+import { readJsonl } from '../src/kernel/fsx.js';
 
 /** @type {Awaited<ReturnType<typeof makeFixture>>} */
 let f;
@@ -186,6 +187,26 @@ describe('主干环路', () => {
     assert.ok(!text.includes('临时偏好'), '内容必须真的不在账本里');
     const rows = await f.audit.read({});
     assert.ok(rows.some((r) => r.动作 === '不可逆操作' && r.对象.id === entry.id), '删除这件事本身必须留痕');
+  });
+
+  it('记忆：晋升过的知识被物理删除时，另一本账上的副本也必须抹掉', async () => {
+    // 双份留痕的代价：同一个 id 同时住在两本账上。
+    // 只删「归属」那一本 ⇒ 另一本留下全文副本，而审计写着「内容已抹掉」。
+    const entry = await memory.remember({ subject: LEAD, 类: '知识', 内容: '敏感结论：客户端低于 2.4 需兼容回退', 来源: '测试', 项目: P });
+    await memory.promoteCrossProject(entry.id, { subject: LEAD, 岗位: '插件工程', 理由: '可复用' });
+    const 本账 = f.layout.memoryLog(P, '知识');
+    const 跨账 = f.layout.memoryLog('跨项目', '知识');
+    assert.ok((await readJsonl(本账)).some((r) => r.id === entry.id), '前置：本项目账上有一份');
+    assert.ok((await readJsonl(跨账)).some((r) => r.id === entry.id), '前置：跨项目账上也有一份');
+
+    const purged = await memory.purge(entry.id, { subject: SOVEREIGN, 理由: '这是敏感数据，必须清掉' });
+    assert.equal(purged.已删除, true);
+    assert.deepEqual([...purged.清理覆盖].sort(), [P, '跨项目'].sort(), '两本账都要进覆盖范围');
+    for (const file of [本账, 跨账]) {
+      assert.ok(!(await readJsonl(file)).some((r) => r.id === entry.id), `${file} 上不许留有内容副本`);
+    }
+    const 检索 = await memory.query({ 类: ['知识'], 项目: P, 文本: '兼容回退' });
+    assert.equal(检索.命中.length, 0, '删除后不许还能搜到');
   });
 
   it('记忆：作答归档后的可读性矩阵', async () => {

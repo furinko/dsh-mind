@@ -10,7 +10,7 @@
  * 四类的归属（§7 表）：知识 = 岗位 + 项目双标签（跨项目/本项目）；经历 = 组织账本（只增）；
  * 偏好 = 部署（永不外流）；作答 = 实例（私有区内部，任务结束归档）。
  */
-import { appendLines, listDirs, readJsonl, readTextOrNull, atomicWrite, withLock } from './kernel/fsx.js';
+import { appendLines, exists, listDirs, readJsonl, readTextOrNull, atomicWrite, withLock } from './kernel/fsx.js';
 import { InvalidBody, Denied } from './kernel/errors.js';
 import { objectId } from './kernel/ids.js';
 import { buildIndex, formatMiss, search } from './retrieval.js';
@@ -227,7 +227,8 @@ export class MemoryService {
    *
    * 这是全库唯一允许**真的**从账本里抹掉内容的动作，所以它必须：
    * ① 只在两种理由下开放；② 抹掉内容后仍然在审计里留一条不可逆操作记录
-   * （记录 id 与理由，不记录内容本身——否则等于没删）。
+   * （记录 id 与理由，不记录内容本身——否则等于没删）；③ **扫遍出现过该 id 的每一本账**
+   * （晋升过的知识同时住在项目账与跨项目账上，只删一本等于没删）。
    *
    * @param {string} id
    * @param {{ subject: object, 理由: string }} spec
@@ -244,31 +245,43 @@ export class MemoryService {
     }
     const entry = await this.#folded(id);
     if (!entry) throw new InvalidBody(`没有这条记忆：${id}`);
-    const file = this.layout.memoryLog(entry.归属, entry.类);
-    await withLock(`${file}.lock`, async () => {
-      const text = (await readTextOrNull(file)) ?? '';
-      const kept = text
-        .split('\n')
-        .filter((line) => line.trim())
-        .filter((line) => {
-          try {
-            return JSON.parse(line).id !== id;
-          } catch {
-            return true;
-          }
-        });
-      await atomicWrite(file, kept.length ? `${kept.join('\n')}\n` : '');
-    });
+
+    // 同一个 id 可以同时躺在两本账上：知识晋升会把它复制进「跨项目」，
+    // 而原条目仍留在产生它的那个项目账里（§7「双份留痕」）。
+    // 所以物理删除必须扫**所有**出现过它的账本——只删 `归属` 那一本，
+    // 另一本会留下全文副本，而审计却写着「内容已抹掉」：那是一句假话。
+    // 漏删的那本正是「原文禁读、副本仍可读」的空窗（评审稿 §C8 明令禁止）。
+    const 覆盖 = [];
+    for (const scope of [DIR.跨项目, ...(await this.#projectScopes())]) {
+      const file = this.layout.memoryLog(scope, entry.类);
+      if (await exists(file)) 覆盖.push({ scope, file });
+    }
+    for (const { file } of 覆盖) {
+      await withLock(`${file}.lock`, async () => {
+        const text = (await readTextOrNull(file)) ?? '';
+        const kept = text
+          .split('\n')
+          .filter((line) => line.trim())
+          .filter((line) => {
+            try {
+              return JSON.parse(line).id !== id;
+            } catch {
+              return true;
+            }
+          });
+        await atomicWrite(file, kept.length ? `${kept.join('\n')}\n` : '');
+      });
+    }
     await this.audit.append({
       动作: '不可逆操作',
       主体: spec.subject,
       对象: { id, kind: entry.类 },
       依据: 敏感 ? '记忆处置表：敏感数据' : '记忆处置表：主权者明确要求',
-      结果: '物理删除（内容已抹掉）',
+      结果: `物理删除（内容已抹掉；覆盖 ${覆盖.length} 本账：${覆盖.map((x) => x.scope).join(' / ')}）`,
       项目: entry.项目,
-      详情: { 理由: spec.理由, 类: entry.类 },
+      详情: { 理由: spec.理由, 类: entry.类, 清理覆盖: 覆盖.map((x) => x.file) },
     });
-    return { id, 已删除: true, 依据: spec.理由 };
+    return { id, 已删除: true, 依据: spec.理由, 清理覆盖: 覆盖.map((x) => x.scope) };
   }
 
   /**
