@@ -19,6 +19,7 @@ import { subjectFor, DEFAULT_PROJECT } from '../../../src/org.js';
 import { kernelFactoryRoot } from '../../../src/paths.js';
 import { describeFailure } from '../../../src/kernel/errors.js';
 import { ACTIONS, runAction } from '../../../lib/actions.js';
+import { 挂同源路由, 看板包 } from './routes.js';
 
 export const name = 'dsh-mind-kernel';
 export const inject = ['tools'];
@@ -75,6 +76,17 @@ export async function apply(ctx, config = {}) {
     } catch (error) {
       logger.warn?.(`[dsh-mind] 注册组织说明段失败：${error instanceof Error ? error.message : String(error)}`);
     }
+  });
+
+  // 同源路由：浏览器侧**唯一**的读/写通路（`remote.commands.execute` 那条链在官方客户端
+  // 上永不返回 —— 那是「面板空、设置写不进去」的根因）。注册不上路由不许影响装载。
+  挂同源路由({
+    ctx,
+    org,
+    项目,
+    logger,
+    间隔毫秒: config.webServer间隔毫秒,
+    次数: config.webServer次数,
   });
 
   try {
@@ -228,8 +240,9 @@ function mindCommand(spec) {
       try {
         if (line === '' || line === 'dashboard' || line === 'workbench') {
           // 看板走的也是「按身份切片」的同一条路：Lead 看全量，成员只读自己那片。
-          const view = await spec.org.workbench({ 项目: 本次项目, 审计条数: 40, 读者: agentSubject({ agent }) });
-          return { kind: 'success', text: JSON.stringify({ 成功: true, action: 'workbench', 项目: 本次项目, 数据: view }, null, 1) };
+          // 投影本体与同源路由**共用**（`看板包`）：同一份 JSON，客户端只换传输层。
+          const 包 = await 看板包({ org: spec.org, 项目: 本次项目, 读者: agentSubject({ agent }), 审计条数: 40 });
+          return { kind: 'success', text: JSON.stringify(包, null, 1) };
         }
         const [head, ...rest] = line.split(/\s+/);
         const action = ALIASES[head] ?? head;

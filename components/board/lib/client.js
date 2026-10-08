@@ -64,9 +64,13 @@ window.__ModuleLoader__.load({
       if (typeof fn === 'function') return fn;
       缺失的钩子.push(name);
       try {
-        // 响亮：这不是"顺手告警"，是这个页面接下来会坏成什么样，必须能在控制台里看到。
+        // 响亮：这不是"顺手告警"，是这个页面接下来会缺什么，必须能在控制台里看到。
+        // ⚠️ 措辞别写成"页面会停在初始状态" —— 那是 Batch 6 之前的实话，现在已经不成立：
+        // 取数已移出 `useEffect`（`apply` 里的裸轮询负责），所以缺 effect **只少一层增强**，
+        // 不再影响出数据。写错这句话会把排障的人带偏。
         console.error('dsh-mind: React 缺少 ' + name + '（需要 16.8+）。已退化为静态兜底：'
-          + '这一页不会自动取数 / 不会重渲染，界面会停在初始状态。');
+          + '与本插件的数据无关（数据由轮询喂 store、靠 useState 重渲染）——'
+          + '少的只是「挂载后立刻再拉一次」这类增强。');
       } catch (error) { /* 控制台都没了就算了 —— 标记还在，页面照样会显示 */ }
       return fallback;
     }
@@ -289,20 +293,34 @@ window.__ModuleLoader__.load({
     var PANEL_KEY = 'dsh-mind';
     /** 宿主半边注册的会话命令；`dashboard` 子命令返回工作台投影 JSON。 */
     var COMMAND = '/mind dashboard';
-    /** 上一次已知快照：命令不可用时仍然有东西可看。 */
+    /**
+     * ── 传输层：同源 `fetch` 路由（Batch 7 换的，**不再是 `remote.commands.execute`**）──
+     *
+     * 为什么换：真机实测 `remote.commands.execute(sessionId, '/mind dashboard')` **永不返回**
+     * （私有 `部署.json` 没建、审计 0 条 ⇒ 命令根本没到宿主；看板与设置页**一起死**，
+     * 因为它们共用同一个 `runCommand`）。同机另一个第三方插件走的是同源 `fetch`
+     * 打 `/plugins/<包名>/...` 路由 —— 那条路是活的。所以照它来。
+     *
+     * **响应体与命令面返回的 JSON 完全同形**（宿主侧另一位成员按此契约注册路由）⇒
+     * 下面的解析 / 失败形状 / 回读判据**一个字都不用改**，换的只是"怎么把请求发出去"。
+     */
+    var ROUTE_PRESENCE = '/plugins/dsh-mind/presence';
+    var ROUTE_WORKBENCH = '/plugins/dsh-mind/workbench';
+    /** 组件名册（「看板开没开」那一次探针；原来走 `/mind components`）。 */
+    var ROUTE_COMPONENTS = '/plugins/dsh-mind/components';
+    /** 上一次已知快照：取不到投影时仍然有东西可看。 */
     var CACHE_KEY = 'dsh-mind.dashboard.v1';
     /** 自动刷新间隔（人看的板子，30s 够「活」，又不打扰）。 */
     var REFRESH_MS = 30000;
     /**
-     * 一次宿主命令的**上限等待**（毫秒）。
+     * 一次请求的**上限等待**（毫秒）。
      *
-     * 为什么必须有：`remote.commands.execute` 返回的 promise **可能永远不 settle**
-     * （会话 id 拿到了但无效/过期、通道不回、宿主侧卡住）。链上没有超时的话，
+     * 为什么必须有：请求**可能永远不 settle**（通道不回、宿主侧卡住）。链上没有超时的话，
      * 设置页就**永远停在「正在读取设置…」**——页面看着像死的，而没有任何报错。
      * Batch 6 主人真机上遇到的就是这个（`phase:'reading'` 出不来了）。
      *
      * 8 秒是"人还愿意等"与"别把真卡住当成慢"之间的折中；超时后落到 `phase:'error'`
-     * 并**带上可诊断信息**（会话 id / 命令 / 等了多久），下一张截图就能指出卡在哪一步。
+     * 并**带上可诊断信息**（路由 / 等了多久），下一张截图就能指出卡在哪一步。
      */
     var COMMAND_TIMEOUT_MS = 8000;
     /** 设置页分区：id 与标签（`settings.section` 的注册契约是 `{name, id, order, label()}`）。 */
@@ -792,41 +810,84 @@ window.__ModuleLoader__.load({
       }
     }
 
-    // ── 小部件 ──────────────────────────────────────────────────────────────
+    // ── 计时器：**裸全局**，拿不到就响亮地报（Batch 7 修）────────────────────
     /**
-     * 给一个 promise 加**上限等待**：到点没 settle 就当作失败（永不 reject 的 promise 是这里的天敌）。
+     * 取一个计时器函数：**裸全局名优先**，`globalThis.*` 兜底。
      *
-     * 为什么不能只靠 `.catch`：`remote.commands.execute` 卡住时**既不会 resolve 也不会 reject**，
+     * 为什么不是 `window.setTimeout`：真机上那个**不一定是函数**（`window` 存在 ≠ 它上面有计时器；
+     * 宿主也可能把 `window.*` 换掉/隔离掉）。同机跑通的第三方插件用的就是**裸 `setTimeout` /
+     * `setInterval`**（`dsh-status-rotator/lib/client.js` 多处），所以照它来。
+     *
+     * ⚠️ **拿不到必须响亮**（这是 Batch 6 的教训）：旧代码在拿不到计时器时**静默地不设超时**，
+     * 于是真机上"8 秒超时也没救出来"——因为那个超时**压根没设上**，而控制台一片安静。
+     * 现在：取不到就记进 `缺失的计时器`，`console.error` 一句，页面也会照实说
+     * 「本客户端拿不到计时器 ⇒ 不设上限等待」，而**绝不假装超时在生效**。
+     *
+     * @param {'setTimeout'|'setInterval'|'clearTimeout'|'clearInterval'} name
+     * @returns {Function|null}
+     */
+    var 缺失的计时器 = [];
+    function 取计时器(name) {
+      var fromGlobal = null;
+      try {
+        // 裸名：经典脚本里就是全局函数的直接引用。
+        if (typeof globalThis !== 'undefined' && globalThis && typeof globalThis[name] === 'function') {
+          fromGlobal = globalThis[name];
+        }
+      } catch (error) { /* 继续试 window */ }
+      if (!fromGlobal) {
+        try {
+          if (typeof window !== 'undefined' && window && typeof window[name] === 'function') fromGlobal = window[name];
+        } catch (error) { /* 没有就没有 */ }
+      }
+      if (fromGlobal) return fromGlobal;
+      if (缺失的计时器.indexOf(name) < 0) {
+        缺失的计时器.push(name);
+        try {
+          console.error('dsh-mind: 本客户端拿不到计时器 ' + name
+            + '。后果：请求**没有上限等待**（页面可能一直停在"读取中"）。'
+            + '这是运行环境问题，不是设置问题。');
+        } catch (error) { /* 控制台都没了就算了 */ }
+      }
+      return null;
+    }
+
+    /**
+     * 给一个 promise 加**上限等待**：到点没 settle 就当作失败（永不 settle 的 promise 是这里的天敌）。
+     *
+     * 为什么不能只靠 `.catch`：请求卡住时**既不会 resolve 也不会 reject**，
      * `.catch` 一辈子等不到 —— 页面就一直停在 loading。**超时是唯一能离开那种状态的东西。**
      *
      * @template T
      * @param {Promise<T>|T} promise
      * @param {number} ms 上限等待
-     * @param {string} 说明 超时时要带出去的可诊断信息（会话 / 命令 / 等了多久）
+     * @param {string} 说明 超时时要带出去的可诊断信息（路由 / 等了多久）
      * @returns {Promise<T>} 超时以 reject 的方式失败（错误信息就是那句可诊断信息）
      */
     function 限时(promise, ms, 说明) {
       return new Promise(function (resolve, reject) {
         var 到了 = false;
         var 计时器 = null;
-        try {
-          if (typeof window !== 'undefined' && window && typeof window.setTimeout === 'function') {
-            计时器 = window.setTimeout(function () {
+        var 设时 = 取计时器('setTimeout');
+        var 清时 = 取计时器('clearTimeout');
+        if (设时) {
+          try {
+            计时器 = 设时(function () {
               if (到了) return;
               到了 = true;
               reject(new Error('超时：' + 说明));
             }, ms);
-          }
-        } catch (error) { /* 没有计时器就不设上限，总比整页抛掉强 */ }
+          } catch (error) { 计时器 = null; }
+        }
         Promise.resolve(promise).then(function (value) {
           if (到了) return;
           到了 = true;
-          try { if (计时器 !== null && window && typeof window.clearTimeout === 'function') window.clearTimeout(计时器); } catch (error) { /* 无所谓 */ }
+          try { if (计时器 !== null && 清时) 清时(计时器); } catch (error) { /* 无所谓 */ }
           resolve(value);
         }, function (error) {
           if (到了) return;
           到了 = true;
-          try { if (计时器 !== null && window && typeof window.clearTimeout === 'function') window.clearTimeout(计时器); } catch (ignored) { /* 无所谓 */ }
+          try { if (计时器 !== null && 清时) 清时(计时器); } catch (ignored) { /* 无所谓 */ }
           reject(error);
         });
       });
@@ -916,66 +977,90 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 跑一条宿主命令。**永不 reject**：所有失败（含**超时**）都变成一个 `{ok:false, error}`。
-     * 返回形状：`{ok:true, value}` 或 `{ok:false, error}`；`value` 是命令返回体解析出的 JSON 对象。
+     * 打一次同源 HTTP 请求，拿回宿主那边算好的 JSON。**永不 reject**：所有失败（含**超时**）
+     * 都变成一个 `{ok:false, error}`。返回形状：`{ok:true, value}` 或 `{ok:false, error}`，
+     * `value` 就是**命令面那份同形 JSON**（`{成功:true, …}` / `{成功:false, 结果, 理由, …}`）。
      *
-     * 看板取数与设置页读写走的是**同一条路**（同一个 `remote.commands.execute`，
-     * 同一套「失败包成 ok:false」的约定），所以只有这一个入口 —— 降级口径就只有一份。
+     * 看板取数与设置页读写走的是**同一条路**（同一个 `fetch` + 同一套「失败包成 ok:false」的约定），
+     * 所以只有这一个入口 —— 降级口径就只有一份。
      *
-     * ⚠️ **上限等待是这条路的硬要求**：`execute` 可能返回一个永不 settle 的 promise
-     * （会话无效/过期、通道不回），只有 `.catch` 是**永远等不到**的 ⇒ 页面会一直停在 loading。
-     * 超时错误里带上**可诊断信息**（会话 id · 命令 · 等了多久）：下一张真机截图就能指出卡在哪一步。
+     * ⚠️ **上限等待是这条路的硬要求**：请求可能永不 settle（通道不回、宿主卡住），
+     * 只有 `.catch` 是**永远等不到**的 ⇒ 页面会一直停在 loading。
+     * 超时错误里带上**可诊断信息**（路由 · 等了多久）：下一张真机截图就能指出卡在哪一步。
      *
-     * @param {object} ctx 客户端上下文
-     * @param {string} sessionId 会话 id（`resolveSessionId` 给的）
-     * @param {string} command 命令文本，如 `/mind dashboard` / `/mind presence 开关=否`
+     * @param {object} ctx 客户端上下文（**不再用它取 `remote`**，留着只为兼容调用点签名）
+     * @param {string} sessionId 会话 id（`resolveSessionId` 给的；这里只进诊断串，不进 URL）
+     * @param {{method:string, path:string, body?:object}} 请求
      */
-    function runCommand(ctx, sessionId, command) {
+    function runCommand(ctx, sessionId, 请求) {
       var 会话尾 = line(sessionId, '') ? String(sessionId).slice(0, 12) + '…' : '（无会话 id）';
+      var 方法 = 请求 && 请求.method ? String(请求.method).toUpperCase() : 'GET';
+      var 路径 = 请求 && 请求.path ? String(请求.path) : '';
       return new Promise(function (resolve) {
-        var remote = null;
+        var 取fetch = null;
         try {
-          remote = ctx.get('remote');
-        } catch (error) {
-          resolve({ ok: false, error: '读取 remote 服务失败：' + line(error && error.message, String(error)) });
+          if (typeof globalThis !== 'undefined' && globalThis && typeof globalThis.fetch === 'function') 取fetch = globalThis.fetch;
+        } catch (error) { /* 继续试 window */ }
+        if (!取fetch) {
+          try {
+            if (typeof window !== 'undefined' && window && typeof window.fetch === 'function') 取fetch = function () { return window.fetch.apply(window, arguments); };
+          } catch (error) { /* 没有就没有 */ }
+        }
+        if (typeof 取fetch !== 'function') {
+          resolve({ ok: false, error: '本客户端拿不到 fetch：读不到设置（这一页需要一个能发请求的会话宿主）。' });
           return;
         }
-        var execute = remote && remote.commands && remote.commands.execute;
-        if (typeof execute !== 'function') {
-          resolve({ ok: false, error: '宿主命令服务不可用（remote.commands.execute）' });
-          return;
+        var 选项 = { method: 方法 };
+        if (方法 === 'GET') {
+          // 照同机跑通的第三方插件：GET 一律绕开缓存。
+          选项.cache = 'no-store';
+        } else if (请求.body !== undefined) {
+          选项.headers = { 'content-type': 'application/json' };
+          选项.body = JSON.stringify(请求.body);
         }
         var pending;
         try {
-          pending = execute(sessionId, command, []);
+          pending = 取fetch(路径, 选项);
         } catch (error) {
-          resolve({ ok: false, error: '命令调用抛错：' + line(error && error.message, String(error)) });
+          // 同步抛（有些实现对非法参数会抛）：按请求失败处理，别让它冒出去。
+          resolve({ ok: false, error: '请求发送失败：' + line(error && error.message, String(error)) });
           return;
         }
-        var 说明 = '会话 ' + 会话尾 + ' · 命令 ' + command + ' · 等 ' + Math.round(COMMAND_TIMEOUT_MS / 1000) + ' 秒无回应';
+        var 说明 = '路由 ' + 方法 + ' ' + 路径 + ' · 会话 ' + 会话尾
+          + ' · 等 ' + Math.round(COMMAND_TIMEOUT_MS / 1000) + ' 秒无回应';
         限时(pending, COMMAND_TIMEOUT_MS, 说明).then(function (response) {
           try {
-            var result = response && response.value && response.value.result;
-            if (!obj(result)) { resolve({ ok: false, error: '命令返回体无法识别' }); return; }
-            if (result.kind !== 'success') {
-              resolve({ ok: false, error: line(result.text, '命令执行失败') });
-              return;
-            }
-            var parsed = parseLooseJson(result.text);
-            if (!obj(parsed)) { resolve({ ok: false, error: '命令返回的不是 JSON' }); return; }
-            // 宿主把失败也包在 `kind:success` 里（`{成功:false, 结果:'结构不合规', 理由:…}`，
-            // 见 `describeFailure`）：认出来就不许当成成功 —— 否则设置页会把「被拒绝」
-            // 显示成「已保存」。`理由` 就是那条可执行理由，优先取它。
-            if (parsed.成功 === false) {
-              resolve({ ok: false, error: line(firstOf(parsed, ['理由', '错误', '原因', '结果', 'message']), '命令报告失败') });
-              return;
-            }
-            resolve({ ok: true, value: parsed });
+            if (!response || typeof response !== 'object') { resolve({ ok: false, error: '请求没有返回响应体' }); return; }
+            var 状态 = Number(response.status);
+            var 行不行 = response.ok === true || (状态 >= 200 && 状态 < 300);
+            // 读文本再自己解析：响应**不是** JSON 时也要能给出人话（别让 `res.json()` 抛出去）。
+            Promise.resolve(typeof response.text === 'function' ? response.text() : '').then(function (text) {
+              try {
+                var parsed = parseLooseJson(text);
+                if (!obj(parsed)) {
+                  resolve({ ok: false, error: 行不行 ? '返回的内容不是 JSON（HTTP ' + 状态 + '）' : 'HTTP ' + 状态 });
+                  return;
+                }
+                // 宿主把失败也包在同一份 JSON 里（`{成功:false, 结果:'结构不合规', 理由:…}`，
+                // 见 `describeFailure`）：认出来就不许当成成功 —— 否则设置页会把「被拒绝」
+                // 显示成「已保存」。`理由` 就是那条可执行理由，优先取它。
+                if (parsed.成功 === false) {
+                  resolve({ ok: false, error: line(firstOf(parsed, ['理由', '错误', '原因', '结果', 'message']), '请求被拒绝') });
+                  return;
+                }
+                if (!行不行) { resolve({ ok: false, error: 'HTTP ' + 状态 }); return; }
+                resolve({ ok: true, value: parsed });
+              } catch (error) {
+                resolve({ ok: false, error: '解析返回体失败：' + line(error && error.message, String(error)) });
+              }
+            }, function (error) {
+              resolve({ ok: false, error: '读取返回体失败：' + line(error && error.message, String(error)) });
+            });
           } catch (error) {
             resolve({ ok: false, error: '解析返回体失败：' + line(error && error.message, String(error)) });
           }
         }, function (error) {
-          resolve({ ok: false, error: '命令失败：' + line(error && error.message, String(error)) });
+          resolve({ ok: false, error: '请求失败：' + line(error && error.message, String(error)) });
         });
       });
     }
@@ -985,7 +1070,7 @@ window.__ModuleLoader__.load({
      * 返回形状：`{ok:true, view}` 或 `{ok:false, error}`。
      */
     function fetchView(ctx, sessionId) {
-      return runCommand(ctx, sessionId, COMMAND).then(function (out) {
+      return runCommand(ctx, sessionId, { method: 'GET', path: ROUTE_WORKBENCH }).then(function (out) {
         if (!out.ok) return out;
         return { ok: true, view: normalizeView(out.value) };
       });
@@ -1002,10 +1087,10 @@ window.__ModuleLoader__.load({
      * @returns {Promise<{ok:true, 读数:object, 设置文件:string, 说明:string} | {ok:false, error:string}>}
      */
     function readPresence(ctx, sessionId) {
-      return runCommand(ctx, sessionId, PRESENCE_COMMAND).then(function (out) {
+      return runCommand(ctx, sessionId, { method: 'GET', path: ROUTE_PRESENCE }).then(function (out) {
         if (!out.ok) return out;
         var 读数 = obj(out.value.读数);
-        if (!读数) return { ok: false, error: '命令返回体里没有「读数」字段' };
+        if (!读数) return { ok: false, error: '返回体里没有「读数」字段' };
         return {
           ok: true,
           读数: 读数,
@@ -1029,15 +1114,16 @@ window.__ModuleLoader__.load({
      */
     function writePresence(spec) {
       var 请求 = { 开关: spec.开关 === undefined ? null : spec.开关, 小时: spec.小时 === undefined ? null : spec.小时 };
-      var 段 = [];
-      if (请求.开关 !== null) 段.push('开关=' + 请求.开关);
-      if (请求.小时 !== null) 段.push('小时=' + 请求.小时);
-      var command = PRESENCE_COMMAND + (段.length ? ' ' + 段.join(' ') : '');
-      return runCommand(spec.ctx, spec.sessionId, command).then(function (out) {
+      // body 里**只放本次真要改的键**：`开关=是` 单独一次写不许顺手把 `小时` 也写一遍
+      // （那会把「只改一个键」变成"替人做主改了另一个"）。
+      var body = {};
+      if (请求.开关 !== null) body.开关 = 请求.开关;
+      if (请求.小时 !== null) body.小时 = 请求.小时;
+      return runCommand(spec.ctx, spec.sessionId, { method: 'POST', path: ROUTE_PRESENCE, body: body }).then(function (out) {
         if (!out.ok) return { ok: false, error: out.error, 请求: 请求 };
-        // 写成功也**必须回读**：命令的返回值是「它说它做了什么」，回读才是「盘上现在是什么」。
+        // 写成功也**必须回读**：写请求的返回值是「它说它做了什么」，回读才是「盘上现在是什么」。
         return readPresence(spec.ctx, spec.sessionId).then(function (back) {
-          if (!back.ok) return { ok: false, error: '写命令已发出，但回读失败：' + back.error, 请求: 请求 };
+          if (!back.ok) return { ok: false, error: '写请求已发出，但回读失败：' + back.error, 请求: 请求 };
           return { ok: true, 请求: 请求, 写回应: out.value, 回读: back };
         });
       });
@@ -1161,69 +1247,206 @@ window.__ModuleLoader__.load({
       return 段.join(' · ');
     }
 
+    // ── 模块级 store + 轮询器（Batch 7：**取数不许挂在 useEffect 上**）───────────
+    /**
+     * 为什么要有这一层（这是真机"页面永远不动"的根因）：
+     *
+     * 真机实测：设置页与看板面板**都停在初始态**（`正在读取设置…` / 右上「读取中」、底部 `会话 —`）；
+     * 而**点「保存」按钮能让它变「保存中…」** ⇒ `useState`（含 setter 与重渲染）是**好的**，
+     * 坏的只有 `useEffect` —— 这个宿主给插件的 React 里它**很可能是空实现**。
+     * 同机**真机跑通**的 `DSHOME-Plugin` 全文**一个 `useEffect` 都没有**，只用 `useState` +
+     * 裸 `setInterval` 轮询 —— 照它来。
+     *
+     * 于是分工钉死：
+     *  · **出数据**：`apply` 里起的裸 `setInterval` 轮询（立刻拉一次 + 每 3 秒）→ 写进下面的 store；
+     *  · **渲染**：组件 `useState` 订阅 store，store 一变就 `setState` ⇒ 重渲染；
+     *  · **`useEffect` 只是增强**（挂载后立刻再拉一次）：它不跑，数据照样有。
+     *
+     * store 是模块级的（不是组件 state）：`apply` 只跑一次、组件可多次挂载，
+     * 让"只有一个轮询器"和"组件随时订阅"两件事同时成立。
+     */
+    var 投影store = { 快照: EMPTY, 订阅者: [] };
+    var 设置store = { 快照: { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' }, 订阅者: [] };
+    /** 轮询间隔：2~5 秒量级（人看的板子，又不至于把宿主问烦）。 */
+    var POLL_MS = 3000;
+    /** 轮询把手：`apply` 起、disposer 清（**不许留定时器**）。 */
+    var 轮询把手 = { timer: null, 停了: true, 通知: null };
+
+    function 发通知(store, 快照) {
+      store.快照 = 快照;
+      for (var i = 0; i < store.订阅者.length; i += 1) {
+        try { store.订阅者[i](快照); } catch (error) { /* 单个订阅者坏掉不影响别的 */ }
+      }
+    }
+    /** 订阅：**立刻回放当前值**（这样"数据先到、组件后挂载"也能直接显示），返回退订。 */
+    function 订阅(store, fn) {
+      store.订阅者.push(fn);
+      try { fn(store.快照); } catch (error) { /* 首次回放失败不影响订阅本身 */ }
+      return function 退订() {
+        var at = store.订阅者.indexOf(fn);
+        if (at >= 0) store.订阅者.splice(at, 1);
+      };
+    }
+    /**
+     * 把 store 清回初始态。
+     *
+     * 生产里只在 `apply` 开始时叫一次（一个插件实例一份数据）。测试里每次 boot 也会叫：
+     * 模块级 store 在**同一次进程**里是活的，不清就会让上一个用例的数据漏到下一个用例
+     * （表现是"A 用例的数据出现在 B 用例页面上"——那会污染断言，比缺陷还难查）。
+     */
+    function 清空store() {
+      投影store.快照 = EMPTY;
+      设置store.快照 = { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' };
+    }
+    /** 组件用它接 store：`useState` + 订阅（不依赖 `useEffect`）。 */
+    function useStore(store) {
+      var box = useState(store.快照);
+      var 值 = box[0];
+      var 设值 = box[1];
+      useEffect(function () {
+        // 有 effect 就在这里退订（干净）；没有 effect 也不影响取值 ——
+        // 退订只在"组件卸载后 store 还在推"时才有意义，代价是几次多余 setState，可接受。
+        return 订阅(store, 设值);
+      }, []);
+      if (缺失的钩子.indexOf('useEffect') >= 0) {
+        // effect 不跑 ⇒ 没人订阅 ⇒ 值永远是订阅那一刻的快照。这里补一次同步订阅兜住。
+        try { 订阅(store, 设值); } catch (error) { /* 订阅不上就算了：至少初次回放拿到了当前值 */ }
+      }
+      return 值;
+    }
+
+    /** 拉一次工作台投影并写进 store（失败保留旧快照，只是标 stale）。 */
+    function 刷新投影() {
+      var ctx = activeCtx;
+      return new Promise(function (resolve) {
+        var session = { id: '', source: '' };
+        try { session = resolveSessionId(ctx); } catch (error) { session = { id: '', source: '' }; }
+        if (!session.id) {
+          var cached = readCache();
+          发通知(投影store, {
+            phase: 'nosession', view: cached ? normalizeView(cached.view) : null, at: cached ? cached.at : '',
+            error: '', sessionId: '', source: '', stale: !!cached,
+          });
+          resolve();
+          return;
+        }
+        fetchView(ctx, session.id).then(function (out) {
+          if (out.ok) {
+            writeCache(out.view.原始);
+            发通知(投影store, {
+              phase: 'live', view: out.view, at: new Date().toISOString(),
+              error: '', sessionId: session.id, source: session.source, stale: false,
+            });
+            resolve();
+            return;
+          }
+          var last = readCache();
+          发通知(投影store, {
+            phase: 'error', view: last ? normalizeView(last.view) : null, at: last ? last.at : '',
+            error: out.error, sessionId: session.id, source: session.source, stale: !!last,
+          });
+          resolve();
+        }, function (error) {
+          发通知(投影store, Object.assign({}, 投影store.快照, {
+            phase: 'error', error: '工作台投影不可用：' + line(error && error.message, String(error)),
+          }));
+          resolve();
+        });
+      });
+    }
+
+    /** 拉一次设置读数并写进 store。**保留** `保存中 / 提示`（那是交互状态，不该被轮询抹掉）。 */
+    function 刷新设置() {
+      var ctx = activeCtx;
+      return new Promise(function (resolve) {
+        var session = { id: '', source: '' };
+        try { session = resolveSessionId(ctx); } catch (error) { session = { id: '', source: '' }; }
+        var 旧 = 设置store.快照;
+        if (!session.id) {
+          发通知(设置store, Object.assign({}, 旧, {
+            phase: 'nosession', 读数: null, 设置文件: '', error: '定位不到会话 id，无法读取设置',
+          }));
+          resolve();
+          return;
+        }
+        readPresence(ctx, session.id).then(function (out) {
+          if (!out.ok) {
+            发通知(设置store, Object.assign({}, 旧, {
+              phase: 'error', 读数: null, error: out.error,
+            }));
+            resolve();
+            return;
+          }
+          发通知(设置store, Object.assign({}, 旧, {
+            phase: 'live', 读数: out.读数, 设置文件: out.设置文件, error: '',
+          }));
+          resolve();
+        }, function (error) {
+          发通知(设置store, Object.assign({}, 旧, {
+            phase: 'error', 读数: null, error: '读设置失败：' + line(error && error.message, String(error)),
+          }));
+          resolve();
+        });
+      });
+    }
+
+    /** 立刻拉一次（两个页面都刷）。给"手动刷新"按钮与 effect 增强用。 */
+    function 立即刷新() {
+      return Promise.all([刷新投影(), 刷新设置()]);
+    }
+
+    /**
+     * 起轮询：**立刻拉一次**，然后每 `POLL_MS` 拉一次。返回停止函数（进 `apply` 的 disposer）。
+     *
+     * ⚠️ 区间计时器与超时一样走**裸全局**（`取计时器`）：拿不到就**响亮报出**，
+     * 绝不静默地"不轮询"——那正是真机上"什么都没发生"的成因之一。
+     */
+    function 起轮询() {
+      var 设 = 取计时器('setInterval');
+      var 清 = 取计时器('clearInterval');
+      if (!设) {
+        // 响亮：页面会显示这句（见设置页的 `钩子缺失提示` 同类处理），控制台也有一句。
+        轮询把手.停了 = true;
+        轮询把手.通知 = '本客户端拿不到计时器 setInterval：这一页不会自动刷新（只能手动点「重新读取」）。';
+        发通知(投影store, Object.assign({}, 投影store.快照, { error: 投影store.快照.error || 轮询把手.通知 }));
+        return function 停轮询() {};
+      }
+      轮询把手.停了 = false;
+      轮询把手.通知 = null;
+      立即刷新();
+      var timer = null;
+      try {
+        timer = 设(function () { if (!轮询把手.停了) 立即刷新(); }, POLL_MS);
+      } catch (error) {
+        轮询把手.停了 = true;
+        return function 停轮询() {};
+      }
+      轮询把手.timer = timer;
+      return function 停轮询() {
+        轮询把手.停了 = true;
+        try { if (timer !== null && 清) 清(timer); } catch (error) { /* 已经没了就算了 */ }
+        轮询把手.timer = null;
+      };
+    }
+
     // ── 主视图 ──────────────────────────────────────────────────────────────
     /** `apply` 拿到的客户端上下文（`apply` 只跑一次，组件可多次挂载）。 */
     var activeCtx = null;
 
     function Dashboard() {
-      var stateBox = useState(EMPTY);
-      var snap = stateBox[0];
-      var setSnap = stateBox[1];
-      var nonceBox = useState(0);
-      var nonce = nonceBox[0];
-      var setNonce = nonceBox[1];
+      var snap = useStore(投影store);
       var ctx = activeCtx;
 
-      useEffect(function () {
-        var alive = true;
-        function settle(next) { if (alive) setSnap(next); }
-        try {
-          var session = resolveSessionId(ctx);
-          if (!session.id) {
-            var cached = readCache();
-            settle({
-              phase: 'nosession', view: cached ? normalizeView(cached.view) : null, at: cached ? cached.at : '',
-              error: '', sessionId: '', source: '', stale: !!cached,
-            });
-            return function () { alive = false; };
-          }
-          fetchView(ctx, session.id).then(function (out) {
-            if (!alive) return;
-            if (out.ok) {
-              writeCache(out.view.原始);
-              settle({
-                phase: 'live', view: out.view, at: new Date().toISOString(),
-                error: '', sessionId: session.id, source: session.source, stale: false,
-              });
-              return;
-            }
-            var last = readCache();
-            settle({
-              phase: 'error', view: last ? normalizeView(last.view) : null, at: last ? last.at : '',
-              error: out.error, sessionId: session.id, source: session.source, stale: !!last,
-            });
-          });
-        } catch (error) {
-          settle({
-            phase: 'error', view: null, at: '', stale: false,
-            error: '工作台投影不可用：' + line(error && error.message, String(error)), sessionId: '', source: '',
-          });
-        }
-        return function () { alive = false; };
-      }, [nonce, ctx]);
-
+      // ⚠️ **取数不在这里做**（Batch 7 的方向修正，见模块顶部 `起轮询` 的长注释）：
+      // 这个宿主给插件的 `useEffect` 很可能是**空实现** ⇒ 把取数挂在 effect 上 = 页面永远不动。
+      // 数据由 `apply` 起的**裸 setInterval 轮询**放进模块级 store；组件只是**订阅**它。
       useEffect(function () {
         try {
-          if (typeof window === 'undefined' || typeof window.setInterval !== 'function') return undefined;
-          var timer = window.setInterval(function () {
-            setNonce(function (value) { return value + 1; });
-          }, REFRESH_MS);
-          return function () {
-            try { if (typeof window.clearInterval === 'function') window.clearInterval(timer); } catch (error) { /* 已卸载 */ }
-          };
-        } catch (error) {
-          return undefined;
-        }
+          // effect 可用时只当**增强**：挂载后立刻拉一次，让首屏更快。
+          // **不许**因为这里不跑就什么都不做 —— 出数据靠 store，不靠它。
+          立即刷新();
+        } catch (error) { /* effect 不可用也没关系 */ }
+        return function () { /* 订阅由 store 自己管，这里没有要清的 */ };
       }, []);
 
       var view = snap.view;
@@ -1272,7 +1495,7 @@ window.__ModuleLoader__.load({
               ]),
               h('button', {
                 key: 'r', type: 'button', className: 'dshmind-btn',
-                onClick: function () { setNonce(function (value) { return value + 1; }); },
+                onClick: function () { 立即刷新(); },
               }, '刷新'),
             ]),
           ]),
@@ -1573,75 +1796,49 @@ window.__ModuleLoader__.load({
      */
     function 心智设置(props) {
       var close = props && typeof props.close === 'function' ? props.close : null;
-      var 态 = useState({ phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' });
-      var snap = 态[0];
-      var setSnap = 态[1];
-      var 非 = useState(0);
-      var nonce = 非[0];
-      var setNonce = 非[1];
+      // ⚠️ 读数来自**模块级 store**（由 `apply` 的裸 setInterval 轮询喂），**不来自 effect**：
+      // 这个宿主的 `useEffect` 很可能是空实现 ⇒ 挂在它上面的取数永远不会跑。
+      var snap = useStore(设置store);
       // 表单草稿：**独立于读数**——回读一来就覆盖输入框，人正在打的字会被吃掉。
       var 表 = useState({ 开关: '是', 小时: '72' });
       var form = 表[0];
       var setForm = 表[1];
+      /** 「提示 / 保存中」是**组件本地**状态（交互结果，不该被轮询抹掉）。 */
+      var 提示态 = useState({ 保存中: false, 提示: '', 提示调: 'warn' });
+      var 提示 = 提示态[0];
+      var set提示 = 提示态[1];
+      /** 表单是否已被"人改过"：改过就别再被回读刷掉（否则人正在填的字会被轮询吃掉）。 */
+      var 已改 = useState(false);
+      var 人改过 = 已改[0];
+      var set人改过 = 已改[1];
 
-      useEffect(function () {
-        var alive = true;
-        function settle(next) { if (alive) setSnap(next); }
-        try {
-          var ctx = activeCtx;
-          var session = resolveSessionId(ctx);
-          if (!session.id) {
-            // 拿不到会话 ≠ 未接入：页面照旧给人一条能敲的命令，绝不空白、绝不装成已连接。
-            settle({
-              phase: 'nosession', 读数: null, 设置文件: '',
-              error: '定位不到会话 id，无法读取 /mind presence', 保存中: false, 提示: '', 提示调: 'warn',
-            });
-            return function () { alive = false; };
-          }
-          readPresence(ctx, session.id).then(function (out) {
-            if (!alive) return;
-            if (!out.ok) {
-              settle({
-                phase: 'error', 读数: null, 设置文件: '', error: out.error,
-                保存中: false, 提示: '', 提示调: 'warn',
-              });
-              return;
-            }
-            settle({
-              phase: 'live', 读数: out.读数, 设置文件: out.设置文件, error: '',
-              保存中: false, 提示: '', 提示调: 'warn',
-            });
-            // 回读即真源：表单跟着它走（相位是 reading 那一次不播动画）。
-            // 表单初值走 `开关态Of`：`失联限制` 缺了就**从 `已关闭` 推**，
-            // 不许因为字段没产出就悄悄退回硬编码的「是」（那会把「关着」显示成「开着」）。
-            var 开 = 开关态Of(out.读数);
-            var 时 = numOf(out.读数.生效响应期限小时);
-            setForm({
-              开关: 开 === false ? '否' : 开 === true ? '是' : '是',
-              小时: 时 === null ? '' : String(时),
-            });
-          });
-        } catch (error) {
-          settle({
-            phase: 'error', 读数: null, 设置文件: '',
-            error: '读设置失败：' + line(error && error.message, String(error)),
-            保存中: false, 提示: '', 提示调: 'warn',
-          });
+      // 回读即真源：读数一变就把表单同步过来（**只在人没改过时**，且用 `useState` 驱动，
+      // 不靠 effect）。`useState` 的初值 + 这里每次渲染的比对，等价于"受控同步"。
+      var 读 = snap.读数;
+      var 上次同步 = useState({ 键: '', 开关: '是', 小时: '72' });
+      var 同步 = 上次同步[0];
+      var set同步 = 上次同步[1];
+      if (读 && !人改过) {
+        var 开 = 开关态Of(读);
+        var 时 = numOf(读.生效响应期限小时);
+        var 键 = String(开) + '/' + String(时);
+        if (键 !== 同步.键) {
+          set同步({ 键: 键, 开关: 开 === false ? '否' : '是', 小时: 时 === null ? '' : String(时) });
+          setForm({ 开关: 开 === false ? '否' : '是', 小时: 时 === null ? '' : String(时) });
         }
-        return function () { alive = false; };
-      }, [nonce]);
+      }
 
       function 保存() {
         var ctx = activeCtx;
         var session = resolveSessionId(ctx);
         if (!session.id) {
-          setSnap(Object.assign({}, snap, { phase: 'nosession', error: '定位不到会话 id，无法写入 /mind presence' }));
+          set提示({ 保存中: false, 提示: '没写进去：定位不到会话 id。', 提示调: 'warn' });
           return;
         }
         var 小时文本 = String(form.小时 === null || form.小时 === undefined ? '' : form.小时).trim();
         var 小时;
         if (小时文本 === '') {
-          setSnap(Object.assign({}, snap, { 提示: '没写进去：响应期限小时 必须填一个 ≥1 的整数。', 提示调: 'warn' }));
+          set提示({ 保存中: false, 提示: '没写进去：响应期限小时 必须填一个 ≥1 的整数。', 提示调: 'warn' });
           return;
         }
         小时 = Number(小时文本);
@@ -1649,45 +1846,39 @@ window.__ModuleLoader__.load({
         // 失联判定要算的 `deadline = since + 小时×3600e3` 会越出 `Date` 上界，
         // `toIso()` 抛错 ⇒ 拿不到状态条。宿主侧拒它，页面也在本地就拦住并说清区间。
         if (!isFinite(小时) || Math.floor(小时) !== 小时 || 小时 < 1 || 小时 > MAX_RESPONSE_DEADLINE_HOURS) {
-          setSnap(Object.assign({}, snap, {
+          set提示({
+            保存中: false,
             提示: '没写进去：响应期限小时 只接受 1 ~ ' + MAX_RESPONSE_DEADLINE_HOURS
               + ' 之间的整数（上限 ≈ 100 年），收到 ' + JSON.stringify(小时文本) + '。',
             提示调: 'warn',
-          }));
+          });
           return;
         }
         if (form.开关 !== '是' && form.开关 !== '否') {
-          setSnap(Object.assign({}, snap, { 提示: '没写进去：失联限制 只接受「是 / 否」。', 提示调: 'warn' }));
+          set提示({ 保存中: false, 提示: '没写进去：失联限制 只接受「是 / 否」。', 提示调: 'warn' });
           return;
         }
-        setSnap(Object.assign({}, snap, { 保存中: true, 提示: '', 提示调: 'warn' }));
+        set提示({ 保存中: true, 提示: '', 提示调: 'warn' });
         writePresence({ ctx: ctx, sessionId: session.id, 开关: form.开关, 小时: 小时 }).then(function (out) {
           if (!out.ok) {
-            // 拒绝也要**照旧显示盘上现在是什么**（借最近一次读数），并明说没写进去。
-            setSnap({
-              phase: snap.phase === 'live' ? 'live' : snap.phase, 读数: snap.读数, 设置文件: snap.设置文件,
-              error: snap.error, 保存中: false,
-              提示: '没写进去：宿主拒绝了（' + out.error + '）', 提示调: 'warn',
-            });
+            // 拒绝也要**照旧显示盘上现在是什么**（走 store 的最近一次读数），并明说没写进去。
+            set提示({ 保存中: false, 提示: '没写进去：宿主拒绝了（' + out.error + '）', 提示调: 'warn' });
             return;
           }
           var 差 = 回读对不上(out.请求, out.回读.读数);
-          var 开 = 开关态Of(out.回读.读数);
-          var 时 = numOf(out.回读.读数.生效响应期限小时);
-          setSnap({
-            phase: 'live', 读数: out.回读.读数, 设置文件: out.回读.设置文件, error: '', 保存中: false,
-            提示: 差 ? 差 : ('已保存，且回读一致：' + 生效读数行(out.回读.读数)), 提示调: 差 ? 'warn' : 'ok',
+          // 回读值**写进 store**（那才是"盘上现在是什么"的权威），UI 因此以回读为准。
+          发通知(设置store, Object.assign({}, 设置store.快照, {
+            phase: 'live', 读数: out.回读.读数, 设置文件: out.回读.设置文件, error: '',
+          }));
+          set提示({
+            保存中: false,
+            提示: 差 ? 差 : ('已保存，且回读一致：' + 生效读数行(out.回读.读数)),
+            提示调: 差 ? 'warn' : 'ok',
           });
-          if (!差) {
-            setForm({
-              开关: 开 === false ? '否' : 开 === true ? '是' : '是',
-              小时: 时 === null ? '' : String(时),
-            });
-          }
+          if (!差) set人改过(false); // 回读已确认 ⇒ 表单可以重新跟着读数走
         });
       }
 
-      var 读 = snap.读数;
       var 值不合法 = !!读 && boolOf(读.值不合法) === true;
       // 设置页的读数是**对象** ⇒ 在这里一次性归一成四态（别再各处 `失联态Of(读)`）。
       var 设置四态 = 读数对象四态(读);
@@ -1738,7 +1929,13 @@ window.__ModuleLoader__.load({
         ? '这一页在本客户端里跑不起来：缺少 React 的 ' + 缺失的钩子.join(' / ') + '（需要 16.8+）。'
           + '控制台有详细错误；这是客户端版本问题，不是设置问题。'
         : '';
+      // 拿不到计时器 ⇒ **响亮**：不轮询这件事必须写在脸上（Batch 7 的纪律，与超时同一条）。
+      var 计时器缺失提示 = 缺失的计时器.length
+        ? '本客户端拿不到计时器 ' + 缺失的计时器.join(' / ') + '：这一页不会自动刷新，也不会超时。'
+          + '控制台有详细错误；这是运行环境问题，不是设置问题。'
+        : '';
       var 未接入原因 = 钩子缺失提示 !== '' ? 钩子缺失提示
+        : 计时器缺失提示 !== '' ? 计时器缺失提示
         : snap.phase === 'reading' ? '正在读取设置…'
         : 用户向原因(snap.error);
       // 统一带上「未接入」这个前缀：**只要不是"正在读"，这一页就是"没接上"**（含超时/异常），
@@ -1824,12 +2021,12 @@ window.__ModuleLoader__.load({
         h('div', { key: 'acts', className: 'dshmind-set__actions' }, [
           h('button', {
             key: 'save', type: 'button', className: 'dshmind-set__btn dshmind-set__btn--primary',
-            disabled: snap.保存中 === true,
+            disabled: 提示.保存中 === true,
             onClick: function () { 保存(); },
-          }, snap.保存中 ? '保存中…' : '保存'),
+          }, 提示.保存中 ? '保存中…' : '保存'),
           h('button', {
             key: 'read', type: 'button', className: 'dshmind-set__btn',
-            onClick: function () { setNonce(function (value) { return value + 1; }); },
+            onClick: function () { 立即刷新(); },
           }, '重新读取'),
           close
             ? h('button', { key: 'close', type: 'button', className: 'dshmind-set__btn', onClick: function () { close(); } }, '关闭')
@@ -1837,11 +2034,11 @@ window.__ModuleLoader__.load({
         ].filter(Boolean)),
 
         // 写失败 / 回读不一致：**明说没写进去**，绝不许显示成功。
-        snap.提示
+        提示.提示
           ? h('div', {
               key: 'toast',
-              className: 'dshmind-set__toast ' + (snap.提示调 === 'ok' ? 'dshmind-set__toast--ok' : 'dshmind-set__toast--warn'),
-            }, snap.提示)
+              className: 'dshmind-set__toast ' + (提示.提示调 === 'ok' ? 'dshmind-set__toast--ok' : 'dshmind-set__toast--warn'),
+            }, 提示.提示)
           : null,
 
         坏值块,
@@ -1930,6 +2127,13 @@ window.__ModuleLoader__.load({
       var 撤样式 = 注入设置页样式();
       if (typeof 撤样式 === 'function') disposers.push(撤样式);
 
+      // **起轮询**：取数不挂在 `useEffect` 上（这个宿主的 effect 很可能是空实现）。
+      // 立刻拉一次 + 每 `POLL_MS` 拉一次；停止函数进 disposer（**不许留定时器**）。
+      // 先清 store：一个插件实例一份数据，别让上一次 apply 的残留漏进来。
+      清空store();
+      var 停轮询 = 起轮询();
+      if (typeof 停轮询 === 'function') disposers.push(停轮询);
+
       var disposed = false;
       function disposeAll() {
         if (disposed) return;
@@ -1954,29 +2158,25 @@ window.__ModuleLoader__.load({
 
     /**
      * 问一次宿主：看板组件现在是开是关？
+     *
+     * 走的是与其它请求**同一条传输**（同源 `fetch` 的 `/mind components` 路由）——
+     * 旧代码用 `remote.commands.execute`，而那条通道在真机上永不返回 ⇒ 这个探针也一起死。
+     * 问不到（没有 fetch / HTTP 失败 / 不是 JSON / 没这个键）一律返回 `null`：**按显示处理**，
+     * 因为界面可见性不是安全边界，真去取数时宿主会照旧拒绝。
+     *
      * @returns {Promise<boolean|null>} true/false；问不到返回 null（按显示处理）
      */
     function probeBoardEnabled(ctx) {
-      return new Promise(function (resolve) {
+      var session = { id: '', source: '' };
+      try { session = resolveSessionId(ctx); } catch (error) { session = { id: '', source: '' }; }
+      return runCommand(ctx, session.id, { method: 'GET', path: ROUTE_COMPONENTS }).then(function (out) {
         try {
-          var session = resolveSessionId(ctx);
-          if (!session || !session.id) { resolve(null); return; }
-          var remote = ctx && typeof ctx.get === 'function' ? ctx.get('remote') : null;
-          if (!remote || !remote.commands || typeof remote.commands.execute !== 'function') { resolve(null); return; }
-          Promise.resolve(remote.commands.execute(session.id, '/mind components', [])).then(function (response) {
-            try {
-              var result = response && response.value && response.value.result;
-              if (!result || result.kind !== 'success') { resolve(null); return; }
-              var parsed = parseLooseJson(result.text);
-              var 名册 = parsed && parsed.组件;
-              if (!名册 || !名册.board) { resolve(null); return; }
-              resolve(名册.board.已装载 !== false);
-            } catch (error) {
-              resolve(null);
-            }
-          }).catch(function () { resolve(null); });
+          if (!out.ok) return null;
+          var 名册 = out.value && out.value.组件;
+          if (!名册 || !名册.board) return null;
+          return 名册.board.已装载 !== false;
         } catch (error) {
-          resolve(null);
+          return null;
         }
       });
     }

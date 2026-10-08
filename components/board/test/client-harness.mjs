@@ -51,8 +51,8 @@ export const PANEL_KEY = 'dsh-mind';
 export const COMMAND = '/mind dashboard';
 /** 本地缓存键：与 lib/client.js 里的常量一致。 */
 export const CACHE_KEY = 'dsh-mind.dashboard.v1';
-/** 自动刷新间隔：与 lib/client.js 里的常量一致。 */
-export const REFRESH_MS = 30000;
+/** 轮询间隔：与 lib/client.js 里的 `POLL_MS` 一致（Batch 7：取数改由 `apply` 里的裸 setInterval 轮询）。 */
+export const REFRESH_MS = 3000;
 
 // ── 最小渲染器 ────────────────────────────────────────────────────────────────
 let renderCtx = null;
@@ -256,17 +256,129 @@ export function makeCtx(services) {
 /** 让 remote 记住每次调用，便于断言命令名与会话 id。 */
 export function makeRemote(handler) {
   const calls = [];
+  // ⚠️ 传输层已换成同源 `fetch`（见 `makeFetchFromCommands`）。这里**只改接线、不改夹具语义**：
+  //    同一个 handler（收到的还是"命令串"）被接到 fetch 上；`calls` 仍然形如
+  //    `{sessionId, command, attachments}`，老断言一个字不用改。
+  const 桥 = makeFetchFromCommands(function (命令, 记录) {
+    calls.push({ sessionId: '', command: 命令, attachments: [], 请求: 记录 });
+    return handler('', 命令, []);
+  });
   return {
     calls,
+    fetch: 桥.fetch,
     remote: {
       commands: {
+        // 这个通道**已经不用了**：真机上它永不返回。留着只为兼容调用点签名 ——
+        // 万一有人（或某段代码）又去调它，立刻**响亮地失败**，而不是无声卡住。
         execute(sessionId, command, attachments) {
-          calls.push({ sessionId, command, attachments });
-          return handler(sessionId, command, attachments);
+          calls.push({ sessionId, command, attachments, 走了旧通道: true });
+          return Promise.reject(new Error('旧通道 remote.commands.execute 已停用（Batch 7 换成同源 fetch）'));
         },
       },
+      __fetch: 桥.fetch,
     },
   };
+}
+
+/**
+ * 一个**最小**的假 `fetch`：记下每次请求，按 handler 给回应。
+ *
+ * 为什么要它：传输层已从 `remote.commands.execute` 换成**同源 `fetch`**
+ * （真机上命令通道永不返回，而另一个第三方插件的 fetch 路由是活的）。
+ * 断言要验「发了哪个方法 / 哪个路由 / 带没带 `cache` / body 对不对」——
+ * 只有假的 fetch 能回答这些。**不 mock 一整套 HTTP**：
+ * 只要 `{ok, status, text()}` 三样，够 `runCommand` 的全部判据走通。
+ *
+ * @param {(url: string, options: object) => any} handler 返回假 Response
+ * @returns {{ calls: object[], fetch: Function }}
+ */
+export function makeFetch(handler) {
+  const calls = [];
+  const fetch = function (url, options) {
+    const 选项 = options || {};
+    const 记录 = {
+      url: String(url),
+      method: String(选项.method || 'GET').toUpperCase(),
+      cache: 选项.cache,
+      headers: 选项.headers,
+      body: 选项.body,
+    };
+    calls.push(记录);
+    return handler(String(url), 选项, 记录);
+  };
+  return { calls, fetch };
+}
+
+/** 假 Response：`text()` 给一段 JSON 文本（`payload` 是字符串时原样给，用来造非 JSON）。 */
+export function jsonResponse(payload, status) {
+  const 状态 = status === undefined ? 200 : status;
+  return {
+    ok: 状态 >= 200 && 状态 < 300,
+    status: 状态,
+    text() { return Promise.resolve(typeof payload === 'string' ? payload : JSON.stringify(payload)); },
+  };
+}
+
+/**
+ * **把"命令面夹具"接到新传输上**——让既有夹具一个字不改就能继续测同一件事。
+ *
+ * 传输层从 `remote.commands.execute(sessionId, 命令, [])` 换成同源 `fetch`，
+ * 但**路由与命令、响应 JSON 是逐字同形的**（宿主侧按此契约注册）。所以：
+ * 把旧夹具那套「给命令 → 给回应」原样接在 fetch 上即可 —— 断言测的还是同样的行为，
+ * 只是现在能从**请求侧**（方法 / 路由 / cache / body）多验一层。
+ *
+ * 请求 → 命令的对应（写死在这里，与 `lib/client.js` 的常量一致）：
+ *  · `GET  /plugins/dsh-mind/presence`  → `/mind presence`
+ *  · `POST /plugins/dsh-mind/presence`  → `/mind presence 开关=… 小时=…`（参数从 body 还原）
+ *  · `GET  /plugins/dsh-mind/workbench` → `/mind dashboard`
+ *  · `GET  /plugins/dsh-mind/components`→ `/mind components`
+ *
+ * 兼容两种 handler 返回值：
+ *  · 命令面形状 `{ok:true, value:{result:{kind,text}}}`（老的 `okReply(...)`）；
+ *  · 直接给 JSON 对象/字符串（更贴近"路由直接回 JSON"）。
+ *
+ * @param {(command: string, 请求: object) => any} handler
+ */
+export function makeFetchFromCommands(handler) {
+  return makeFetch(function (url, options, 记录) {
+    const 路径 = 记录.url.split('?')[0];
+    let 命令 = null;
+    if (路径 === '/plugins/dsh-mind/presence') {
+      if (记录.method === 'POST') {
+        let body = {};
+        try { body = 记录.body ? JSON.parse(记录.body) : {}; } catch (error) { body = {}; }
+        const 段 = [];
+        if (body && body.开关 !== undefined && body.开关 !== null) 段.push('开关=' + body.开关);
+        if (body && body.小时 !== undefined && body.小时 !== null) 段.push('小时=' + body.小时);
+        命令 = '/mind presence' + (段.length ? ' ' + 段.join(' ') : '');
+      } else {
+        命令 = '/mind presence';
+      }
+    } else if (路径 === '/plugins/dsh-mind/workbench') {
+      命令 = '/mind dashboard';
+    } else if (路径 === '/plugins/dsh-mind/components') {
+      命令 = '/mind components';
+    } else {
+      命令 = 路径;
+    }
+    const 原始 = handler(命令, 记录);
+    return Promise.resolve(原始).then(function (回应) {
+      const 盒子 = 回应 && 回应.value && 回应.value.result;
+      if (盒子 && typeof 盒子.text === 'string') {
+        const 行不行 = 盒子.kind === 'success';
+        return jsonResponse(盒子.text, 行不行 ? 200 : 500);
+      }
+      if (typeof 回应 === 'string') return jsonResponse(回应);
+      if (回应 && typeof 回应 === 'object' && typeof 回应.text === 'function') return 回应; // 已是假 Response
+      return jsonResponse(回应 === undefined ? {} : 回应);
+    });
+  });
+}
+
+/** 老夹具里的 `makeRemote(...).remote` 形状 → 新传输的 fetch。**只改接线，不改夹具语义**。 */
+export function remoteShim(fetch) {
+  // `ctx.get('remote')` 已不被 `runCommand` 使用；留着只为兼容既有调用点签名。
+  return { commands: { execute() { return new Promise(() => {}); } }, __fetch: fetch };
 }
 
 export function okReply(view) {
@@ -352,6 +464,17 @@ export function loadClient(options = {}) {
     },
   };
   if (options.document) sandbox.document = options.document;
+  // 假 `fetch` 装成**全局**（组件取的是裸 `fetch` / `globalThis.fetch`）——
+  // 不传就真的没有 fetch，用来守「拿不到 fetch 要响亮降级」那条。
+  if (options.fetch) sandbox.fetch = options.fetch;
+  // 不给计时器：`noTimers: true` 时沙箱里**没有** setTimeout/setInterval
+  // （守住"拿不到计时器要响亮，不许静默不设超时 / 不轮询"那条纪律）。
+  if (options.noTimers) {
+    delete win.setTimeout;
+    delete win.clearTimeout;
+    delete win.setInterval;
+    delete win.clearInterval;
+  }
   vm.createContext(sandbox);
   new vm.Script(readFileSync(CLIENT_PATH, 'utf8'), { filename: CLIENT_PATH }).runInContext(sandbox);
 
@@ -587,14 +710,22 @@ function boot(options = {}) {
   // 「注入到 document.head」那条断言就永远绿不了（**接线错了，不是实现错了**）。
   // 顶层 `options.document` 仍保留：给"就想单独指定一个 document"的用例用。
   const doc = options.document || (options.services && options.services.document) || null;
-  const loaded = loadClient({ store: options.store, sessionId: options.sessionId, document: doc });
+  // 假 `fetch`：优先 `services.fetch`；老夹具的 `services.remote.__fetch`（`makeRemote` 的桥）也认。
+  // 两者都没有 ⇒ 沙箱里**真的没有 fetch**，用来守「拿不到 fetch 要响亮降级」那条。
+  const fetchImpl = options.fetch
+    || (options.services && options.services.fetch)
+    || (options.services && options.services.remote && options.services.remote.__fetch)
+    || null;
+  const loaded = loadClient({ store: options.store, sessionId: options.sessionId, document: doc,
+    fetch: fetchImpl, noTimers: options.noTimers });
   check(loaded.loaderCalls === 1, 'loader 被调用一次', '实际 ' + loaded.loaderCalls + ' 次');
   const def = loaded.definition;
   check(!!def && def.id === PACKAGE_NAME, '工厂 id 是包名 ' + PACKAGE_NAME, String(def && def.id));
   check(typeof def.factory === 'function', 'factory 是函数');
 
   const strict = makeStrictRequire();
-  const plugin = def.factory(strict.require);
+  const 用的require = options.requireOverride ? options.requireOverride(strict.require) : strict.require;
+  const plugin = def.factory(用的require);
   check(!!plugin && plugin.name === PACKAGE_NAME, '插件体 name 是 ' + PACKAGE_NAME, String(plugin && plugin.name));
   check(Array.isArray(plugin.inject) && plugin.inject.indexOf('slots') >= 0,
     '插件体 inject 含 slots', JSON.stringify(plugin.inject));
@@ -775,8 +906,8 @@ export async function runHarness() {
   await settle();
   passed.push(check(r0.flush() >= 1, 'effect 收敛后发生重渲染', '轮数 ' + rounds0));
   const c0b = collect(r0.tree, { skipStyle: true });
-  passed.push(check(c0b.text.includes('未连接') && c0b.text.includes('宿主命令服务不可用'),
-    '无 remote 时给出「未连接」与原因，而不是空白或抛错'));
+  passed.push(check(c0b.text.includes('未连接') && c0b.text.includes('拿不到 fetch'),
+    '拿不到 fetch 时给出「未连接」与原因，而不是空白或抛错'));
   passed.push(check(c0b.text.includes(ENTRY_LABEL), '降级后页面仍在'));
 
   // ③ 装了 remote：活数据 + 落缓存
@@ -791,13 +922,15 @@ export async function runHarness() {
   const rounds1 = r1.flush();
   const c1 = collect(r1.tree, { skipStyle: true });
   passed.push(check(rounds1 >= 1, '取数成功后重渲染', '轮数 ' + rounds1));
-  // 取数命令只允许一条。看板组件开关是用**另一条**命令（`/mind components`）问的，
-  // 所以这里按命令名分离计数：混在一起数会把「问一次开关」误判成重复取数。
+  // 取工作台投影的那次请求：**至少一次**（`apply` 的轮询立刻拉一次；组件挂载的 effect 增强
+  // 若可用会再拉一次 ⇒ 一次以上是正常的，**少于一次**才是缺陷）。
+  // 断言打在"请求长相"上：方法 / 路由 / cache —— 这是换传输后新有的可验面。
   const dashboardCalls = spy.calls.filter((call) => call.command === COMMAND);
-  passed.push(check(dashboardCalls.length === 1, '取数命令只调一次', String(dashboardCalls.length)));
-  passed.push(check(dashboardCalls[0].command === COMMAND, '命令是 ' + COMMAND, dashboardCalls[0].command));
-  passed.push(check(dashboardCalls[0].sessionId === 'sess-main', '用的是 mainView 那个会话 id', dashboardCalls[0].sessionId));
-  passed.push(check(Array.isArray(dashboardCalls[0].attachments) && dashboardCalls[0].attachments.length === 0, 'attachments 是空数组'));
+  passed.push(check(dashboardCalls.length >= 1, '取投影至少请求一次', String(dashboardCalls.length)));
+  passed.push(check(dashboardCalls[0].command === COMMAND, '走的是工作台路由（' + COMMAND + '）', dashboardCalls[0].command));
+  passed.push(check(dashboardCalls[0].请求.method === 'GET' && dashboardCalls[0].请求.url === '/plugins/dsh-mind/workbench',
+    '看板取数是 GET /plugins/dsh-mind/workbench', JSON.stringify({ m: dashboardCalls[0].请求.method, u: dashboardCalls[0].请求.url })));
+  passed.push(check(dashboardCalls[0].请求.cache === 'no-store', '看板取数带 cache:no-store', String(dashboardCalls[0].请求.cache)));
   passed.push(check(c1.text.includes('mind-private'), '活数据里出现项目键'));
   passed.push(check(c1.text.includes('把工作台投影接上客户端'), '活数据里出现节点描述'));
   passed.push(check(c1.text.includes('零分歧异常'), '活数据里出现审计动作'));
@@ -1077,11 +1210,15 @@ export async function runHarness() {
   const sr1 = mountSettings(s1);
   const 设置文本 = await textAfterLoad(sr1);
   const 读调用 = readSpy.calls.filter((c) => c.command === PRESENCE_COMMAND);
-  passed.push(check(读调用.length === 1, '⑤ 设置页读一次：remote 收到恰好一条 ' + PRESENCE_COMMAND,
-    JSON.stringify(readSpy.calls.map((c) => c.command))));
-  passed.push(check(读调用[0].command === PRESENCE_COMMAND, '⑤ 读命令是 ' + PRESENCE_COMMAND, 读调用[0].command));
-  passed.push(check(读调用[0].sessionId === 'sess-main', '⑤ 读命令用的是 mainView 那个会话 id', 读调用[0].sessionId));
-  passed.push(check(Array.isArray(读调用[0].attachments) && 读调用[0].attachments.length === 0, '⑤ 读命令 attachments 是空数组'));
+  passed.push(check(读调用.length >= 1,
+    '⑤ 设置页**至少请求过一次**（`apply` 的轮询立刻拉一次 ⇒ 取数不靠 effect）', String(读调用.length)));
+  passed.push(check(读调用[0].command === PRESENCE_COMMAND, '⑤ 读到的是 ' + PRESENCE_COMMAND, 读调用[0].command));
+  // ① 读：**GET /plugins/dsh-mind/presence + cache:no-store**（不再走 remote.commands.execute）
+  passed.push(check(读调用[0].请求.method === 'GET' && 读调用[0].请求.url === '/plugins/dsh-mind/presence',
+    '① 读是 GET /plugins/dsh-mind/presence', JSON.stringify({ m: 读调用[0].请求.method, u: 读调用[0].请求.url })));
+  passed.push(check(读调用[0].请求.cache === 'no-store', '① 读带 cache:no-store', String(读调用[0].请求.cache)));
+  passed.push(check(读调用.every((c) => c.走了旧通道 !== true),
+    '① 一次都没有再碰旧通道 remote.commands.execute'));
   passed.push(check(设置文本.includes('生效期限 72 小时') && 设置文本.includes('期限来自 出厂'),
     '⑤ 页面显示生效值与来源（生效期限 + 由哪一层给的）', 设置文本.slice(0, 140)));
   passed.push(check(设置文本.includes('期限 出厂') && 设置文本.includes('开关 出厂'),
@@ -1158,10 +1295,10 @@ export async function runHarness() {
     renderer.unmount();
   }
 
-  const 写日志 = [];
   let 盘上 = 读数袋();
   const writeSpy = makeRemote((sessionId, command) => {
-    写日志.push({ command, sessionId });
+    // ⚠️ 用 `writeSpy.calls`（`makeRemote` 里记的那份）当日志，因为它**带 `请求` 明细**
+    // （方法 / URL / cache / body），写请求的三条断言全靠它；别在这里另起一份只记命令串的。
     if (command === PRESENCE_COMMAND) {
       return Promise.resolve(okReply({ 读数: 盘上, 设置文件: SETTINGS_FILE, 说明: '读：没带参数…' }));
     }
@@ -1175,6 +1312,7 @@ export async function runHarness() {
     }
     return Promise.resolve(okReply({}));
   });
+  const 写日志 = writeSpy.calls;
   const s2 = boot({ store, services: Object.assign(session(), { remote: writeSpy.remote }) });
   const sr2 = mountSettings(s2);
   const 设置文本2 = await textAfterLoad(sr2);
@@ -1207,15 +1345,21 @@ export async function runHarness() {
   await settle();
   sr2.flush();
   const 写命令 = 写日志.filter((c) => c.command.indexOf(PRESENCE_COMMAND + ' ') === 0);
-  passed.push(check(写命令.length === 1, '⑥ 保存 ⇒ 恰好一条带参数的命令', JSON.stringify(写日志.map((c) => c.command))));
+  passed.push(check(写命令.length === 1, '⑥ 保存 ⇒ 恰好一条写请求', JSON.stringify(写日志.map((c) => c.command))));
   passed.push(check(!!写命令[0] && 写命令[0].command.indexOf('开关=否') >= 0 && 写命令[0].command.indexOf('小时=168') >= 0,
-    '⑥ 写命令带上两个参数（开关=否 小时=168）', String(写命令[0] && 写命令[0].command) + ' / 全部 ' + JSON.stringify(写日志.map((c) => c.command))));
-  passed.push(check(!!写命令[0] && 写命令[0].command.indexOf(PRESENCE_COMMAND) === 0,
-    '⑥ 写命令是 ' + PRESENCE_COMMAND + ' …', String(写命令[0] && 写命令[0].command)));
-  passed.push(check(写日志.length >= 2 && 写日志[1].command === PRESENCE_COMMAND,
-    '⑥ **写完必须回读**：第二条命令是一次不带参数的 ' + PRESENCE_COMMAND, JSON.stringify(写日志.map((c) => c.command))));
-  passed.push(check(写日志[0].command.indexOf(' ') > 0, '⑥ 顺序对：先写后读（不是反的）'));
-  const 设置文本3 = collect(sr2.tree, { skipStyle: true }).text;
+    '⑥ 写请求带上两个参数（开关=否 小时=168）', String(写命令[0] && 写命令[0].command) + ' / 全部 ' + JSON.stringify(写日志.map((c) => c.command))));
+  // ② 写：**POST /plugins/dsh-mind/presence** + content-type + body 键值对
+  const 写请求 = 写命令[0] && 写命令[0].请求;
+  passed.push(check(!!写请求 && 写请求.method === 'POST' && 写请求.url === '/plugins/dsh-mind/presence',
+    '② 写是 POST /plugins/dsh-mind/presence', JSON.stringify(写请求 && { m: 写请求.method, u: 写请求.url })));
+  passed.push(check(!!写请求 && 写请求.headers && 写请求.headers['content-type'] === 'application/json',
+    '② 写带 content-type: application/json', JSON.stringify(写请求 && 写请求.headers)));
+  passed.push(check(!!写请求 && 写请求.body === JSON.stringify({ 开关: '否', 小时: 168 }),
+    '② 写 body 是对的键值（只放本次要改的键）', String(写请求 && 写请求.body)));
+  passed.push(check(写日志.length >= 2 && 写日志[1].command === PRESENCE_COMMAND
+    && 写日志[1].请求 && 写日志[1].请求.method === 'GET',
+    '② **写完必须回读**：紧随其后的是一次不带参数的 GET ' + PRESENCE_COMMAND, JSON.stringify(写日志.map((c) => c.command + ':' + (c.请求 && c.请求.method)))));
+  passed.push(check(写日志[0].command.indexOf(' ') > 0, '② 顺序对：先写后读（不是反的）'));  const 设置文本3 = collect(sr2.tree, { skipStyle: true }).text;
   passed.push(check(设置文本3.includes('已保存') && 设置文本3.includes('回读一致'),
     '⑥ 回读一致 ⇒ 明说已保存且回读一致', 设置文本3.slice(-120)));
   passed.push(check(设置文本3.includes('失联保险 关') && 设置文本3.includes('生效期限 168 小时')
@@ -1385,23 +1529,24 @@ export async function runHarness() {
   }
 
   // ⑧ 诚实降级：remote 缺失 / 命令返回 error / 非 JSON ⇒ 「未接入（用户向）+ 可复制命令」，不抛
-  // ⚠️ 这里的 `expect` 是**用户看得见的那句话**，不是实现内部那句错误串（Batch 5 起两者分家）：
-  // 内部串（`宿主命令服务不可用（remote.commands.execute）`）是排障用的，印到界面上就是让用户读我们的栈。
+  // ⚠️ 这里的 `expect` 是**用户看得见的那句话**，不是实现内部那句错误串（Batch 5 起两者分家）。
+  // Batch 7 换传输后，"失败长相"也换了：不再是 `remote.commands.execute` 那套，
+  // 而是「拿不到 fetch / HTTP 错 / 非 JSON / 宿主同形 JSON 报失败」。
   const 降级清单 = [
-    { name: 'remote 缺失', services: session(), expect: '这一页需要一个打开的会话才能读写设置。' },
-    { name: '命令返回 kind:error', services: Object.assign(session(), {
-      remote: makeRemote(() => ({ ok: true, value: { result: { kind: 'error', text: '策略引擎不健康' } } })).remote,
-    }), expect: '策略引擎不健康' },
-    { name: '命令返回 成功:false（真拒绝形状）', services: Object.assign(session(), {
+    { name: '拿不到 fetch', services: session(), expect: '拿不到 fetch' },
+    { name: 'HTTP 500', services: Object.assign(session(), {
+      fetch: makeFetch(() => jsonResponse('<html>500</html>', 500)).fetch,
+    }), expect: 'HTTP 500' },
+    { name: '宿主同形 JSON 报失败（真拒绝形状）', services: Object.assign(session(), {
       // `InvalidBody` 经 `describeFailure` 出来就是这几个键 —— **没有 `错误` 这一栏**。
       // 所以这一条也钉住「拒绝的形状照真实的那样读得出来」，而不是我以为的形状。
-      remote: makeRemote(() => okReply({ 成功: false, 结果: '结构不合规', 理由: '小时 只接受 ≥1 的整数：收到 "0"。' })).remote,
+      fetch: makeFetch(() => jsonResponse({ 成功: false, 结果: '结构不合规', 理由: '小时 只接受 ≥1 的整数：收到 "0"。' })).fetch,
     }), expect: '只接受 ≥1 的整数' },
     { name: '返回体不是 JSON', services: Object.assign(session(), {
-      remote: makeRemote(() => ({ ok: true, value: { result: { kind: 'success', text: '<html>不是 JSON</html>' } } })).remote,
+      fetch: makeFetch(() => jsonResponse('<html>不是 JSON</html>', 200)).fetch,
     }), expect: '读到的设置无法解析' },
     { name: '返回体缺「读数」', services: Object.assign(session(), {
-      remote: makeRemote(() => okReply({ 说明: '没有读数' })).remote,
+      fetch: makeFetch(() => jsonResponse({ 说明: '没有读数' })).fetch,
     }), expect: '读到的设置不完整' },
   ];
   for (const 场景 of 降级清单) {
@@ -1546,10 +1691,12 @@ export async function runHarness() {
       JSON.stringify([基础规则体('dshmind-set__select').slice(0, 40)])));
 
     // ⑪ 「未接入」是**用户向**的，且仍给出可复制命令。
-    const 未接 = 渲染(session()); // 没有 remote ⇒ 未接入
+    // Batch 7 换传输后，"没有 remote" 不再是一种失败（传输已经不用 remote 了）；
+    // 这里的"未接入"取自**拿不到 fetch**（沙箱里真的没有 fetch）—— 那才是现在真实的降级起点。
+    const 未接 = 渲染(session());
     const 未接文本 = await textAfterLoad(未接.renderer);
-    passed.push(check(未接文本.includes('这一页需要一个打开的会话才能读写设置。'),
-      '⑪ 未接入文案是用户向的（不说函数名 / 服务名）', 未接文本.slice(0, 140)));
+    passed.push(check(未接文本.includes('未接入') && 未接文本.includes('拿不到 fetch'),
+      '⑪ 未接入文案是用户向的（说"拿不到 fetch"，不说函数名 / 通道名）', 未接文本.slice(0, 140)));
     passed.push(check(!/remote\.|commands\.execute|execute\(/.test(未接文本),
       '⑪ 未接入文案里没有实现细节'));
     // ⚠️ 这条必须打**未接入那块自己**：页脚本来就有「命令 /mind presence」，
@@ -1637,29 +1784,38 @@ export async function runHarness() {
   passed.push(check(typeof broken.disposer === 'function' || broken.disposer === undefined,
     '注册失败也不抛，apply 照常返回'));
 
-  // ⑥ 时钟：30s 自动刷新 + 卸载清理
+  // ⑥ 时钟：轮询间隔 + 卸载清理（Batch 7：从"组件里的 30s 自动刷新"改成"apply 里的轮询"）
   passed.push(check(fresh.timers.intervals.length >= 1 && fresh.timers.intervals.some((t) => t.ms === REFRESH_MS),
-    '注册了 ' + REFRESH_MS + 'ms 自动刷新', JSON.stringify(fresh.timers.intervals.map((t) => t.ms))));
+    '注册了 ' + REFRESH_MS + 'ms 轮询（取数不靠 effect）', JSON.stringify(fresh.timers.intervals.map((t) => t.ms))));
   r0.unmount();
   r1.unmount();
-  passed.push(check(fresh.timers.cleared.length >= 1, '卸载时 clearInterval 被调用', String(fresh.timers.cleared.length)));
+  // ⚠️ 轮询器**不在组件里**（Batch 7：取数移出 effect、由 `apply` 起）⇒ 组件 unmount 不会清它。
+  //    清它的地方是 **`apply` 的 disposer** —— 断言就必须打在那上面（③ 轮询计时器被清掉）。
+  fresh.disposer();
+  passed.push(check(fresh.timers.cleared.length >= 1,
+    '③ 轮询计时器在 dispose 时被清掉（clearInterval 被调用）', String(fresh.timers.cleared.length)));
 
   // ⑦ 六条降级路径（都带缓存，所以既能报「未连接」也能显示旧快照）
+  // ⚠️ 传输层换了（`remote.commands.execute` → 同源 `fetch`），这一表也跟着换了"失败长相"：
+  //    原来的「宿主命令服务不可用 / 读取 remote 服务失败」不再存在，取而代之的是
+  //    「拿不到 fetch」与 HTTP / 非 JSON / 宿主同形 JSON 里的失败。
   const fallbacks = [
-    { name: 'remote 服务缺失', services: session(), expect: '宿主命令服务不可用' },
-    { name: 'ctx.get 抛错', services: Object.assign(session(), { throwOn: ['remote'] }), expect: '读取 remote 服务失败' },
-    { name: '命令返回 kind:error', services: Object.assign(session(), {
-      remote: makeRemote(() => ({ ok: true, value: { result: { kind: 'error', text: '策略引擎不健康' } } })).remote,
+    { name: '拿不到 fetch', services: session(), expect: '拿不到 fetch' },
+    { name: 'HTTP 500 且响应非 JSON', services: Object.assign(session(), {
+      fetch: makeFetch(() => jsonResponse('<html>500</html>', 500)).fetch,
+    }), expect: 'HTTP 500' },
+    { name: '宿主同形 JSON 报失败', services: Object.assign(session(), {
+      fetch: makeFetch(() => jsonResponse({ 成功: false, 结果: '策略拒绝', 理由: '策略引擎不健康' })).fetch,
     }), expect: '策略引擎不健康' },
-    { name: 'Promise reject', services: Object.assign(session(), {
-      remote: makeRemote(() => Promise.reject(new Error('桥断了'))).remote,
+    { name: 'fetch reject', services: Object.assign(session(), {
+      fetch: makeFetch(() => Promise.reject(new Error('桥断了'))).fetch,
     }), expect: '桥断了' },
     { name: '返回体不是 JSON', services: Object.assign(session(), {
-      remote: makeRemote(() => ({ ok: true, value: { result: { kind: 'success', text: '<html>不是 JSON</html>' } } })).remote,
-    }), expect: '命令返回的不是 JSON' },
-    { name: '返回体结构无法识别', services: Object.assign(session(), {
-      remote: makeRemote(() => ({ ok: true })).remote,
-    }), expect: '命令返回体无法识别' },
+      fetch: makeFetch(() => jsonResponse('<html>不是 JSON</html>', 200)).fetch,
+    }), expect: '返回的内容不是 JSON' },
+    { name: '响应没有 text()', services: Object.assign(session(), {
+      fetch: makeFetch(() => ({ ok: true, status: 200 })).fetch,
+    }), expect: '返回的内容不是 JSON' },
   ];
   for (const scenario of fallbacks) {
     const booted = boot({ store, services: scenario.services });
@@ -1686,18 +1842,81 @@ export async function runHarness() {
   const result = barePlugin.apply(makeCtx({}));
   passed.push(check(result === undefined || result === null, 'slots 缺失时 apply 返回空且不抛'));
 
-  // ═══ Batch 6 · 坏宿主：这一页**不许有「终态是 loading」这一说** ═══  //
+  // ═══ Batch 7 · 这个宿主的 `useEffect` 很可能是空实现 ⇒ **取数不许挂在它上面** ═══
+  //
+  // 真机事实：设置页与看板面板**都停在初始态**，而点「保存」能让按钮变「保存中…」
+  // ⇒ `useState`（含 setter 与重渲染）是好的，坏的只有 `useEffect`。
+  // 所以：数据由 `apply` 里的裸 `setInterval` 轮询喂进模块级 store，组件只 `useState` 订阅。
+  // 下面两条就是"把 effect 废掉，页面照样出数据"。
+  {
+    /** 一个**没有** `useEffect` 的 React（模拟这个宿主）。 */
+    const 无effect的React = {
+      createElement: React.createElement,
+      useState: React.useState,
+      useRef: React.useRef,
+    };
+    const 去掉effect = (require) => (name) => {
+      if (name === 'react') return 无effect的React;
+      return require(name);
+    };
+    const 好宿主 = Object.assign(session(), {
+      fetch: makeFetch((url) => (String(url).indexOf('workbench') >= 0
+        ? jsonResponse(sampleView())
+        : jsonResponse({ 读数: 读数袋(), 设置文件: SETTINGS_FILE, 说明: '读…' }))).fetch,
+    });
+
+    // ① 设置页：没有 effect ⇒ 仍能出数据（读数 / 生效值都在）
+    const 设置无effect = boot({ store, services: Object.assign({}, 好宿主, {}), requireOverride: 去掉effect });
+    const 设置渲染 = mountSettings(设置无effect);
+    设置渲染.flush();  // **只 flush，不跑 effect**（effect 是空的）
+    await settle();
+    设置渲染.flush();
+    const 设置文本 = collect(设置渲染.tree, { skipStyle: true }).text;
+    passed.push(check(设置文本.includes('失联保险 开') && 设置文本.includes('生效期限 72 小时'),
+      '① 宿主没有 useEffect ⇒ 设置页**仍出数据**（轮询喂 store，不靠 effect）', 设置文本.slice(0, 160)));
+    passed.push(check(设置文本.indexOf('正在读取设置') < 0,
+      '① 没有 effect 也不会停在「正在读取设置…」', 设置文本.slice(0, 120)));
+    设置渲染.unmount();
+
+    // ② 看板面板：同样没有 effect ⇒ 仍出数据
+    const 面板无effect = boot({ store, services: 好宿主, requireOverride: 去掉effect });
+    const 面板渲染 = mountDashboard(面板无effect);
+    面板渲染.flush();
+    await settle();
+    面板渲染.flush();
+    const 面板文本 = collect(面板渲染.tree, { skipStyle: true }).text;
+    passed.push(check(面板文本.includes('mind-private') && 面板文本.includes('把工作台投影接上客户端'),
+      '② 宿主没有 useEffect ⇒ **看板面板**仍出数据（它以前也是 effect 驱动，所以一直不出）',
+      面板文本.slice(0, 180)));
+    passed.push(check(面板文本.includes('活数据'),
+      '② 面板页头显示「活数据」（不是永远「读取中」）', 面板文本.slice(0, 120)));
+    面板渲染.unmount();
+  }
+
+  // ═══ Batch 7 · 拿不到计时器 ⇒ **响亮**（不许静默"不设超时 / 不轮询"）═══
+  {
+    const 无计时器 = boot({ services: Object.assign(session(), {
+      fetch: makeFetch(() => jsonResponse({ 读数: 读数袋(), 设置文件: SETTINGS_FILE, 说明: '读…' })).fetch,
+    }), noTimers: true });
+    const 渲染器 = mountSettings(无计时器);
+    const 文本 = await textAfterLoad(渲染器);
+    passed.push(check(无计时器.warnings.some((w) => w.indexOf('计时器') >= 0),
+      '④ 拿不到计时器 ⇒ console **明确报出**（不许静默）', JSON.stringify(无计时器.warnings.slice(0, 2))));
+    passed.push(check(文本.includes('计时器') && 文本.includes('不会自动刷新'),
+      '④ 拿不到计时器 ⇒ 页面上也明说（不许静默不轮询）', 文本.slice(0, 200)));
+    passed.push(check(无计时器.timers.intervals.length === 0,
+      '④ 拿不到计时器时确实没有注册轮询（如实反映，而不是假装有）'));
+    渲染器.unmount();
+  }
+  //
   // 真机缺陷：设置页永远停在「正在读取设置…」。两个成因，两条都要守：
   //  1. `execute` 返回**永不 settle** 的 promise ⇒ 只有**超时**能离开 loading（`.catch` 永远等不到）；
   //  2. React 缺 `useEffect`（兜底是空实现）⇒ effect 根本没跑 ⇒ 页面静止在初始态。
   {
     // ① 永不 settle + 推进假时钟 ⇒ 必须离开 loading，落到「未接入（超时）」，且文案带诊断。
     const 挂死 = boot({ store, services: Object.assign(session(), {
-      remote: {
-        commands: {
-          execute() { return new Promise(() => {}); }, // 永不 settle：resolve/reject 都不来
-        },
-      },
+      // 请求永不 settle：resolve/reject 都不来（真机那次就是这个形状）。
+      fetch: makeFetch(() => new Promise(() => {})).fetch,
     }) });
     const 挂死渲染 = mountSettings(挂死);
     挂死渲染.flush();
@@ -1715,8 +1934,8 @@ export async function runHarness() {
       '⑯ 永不 settle 的 execute + 推进 8 秒 ⇒ **必须离开 loading**', 挂死文本.slice(0, 160)));
     passed.push(check(挂死文本.includes('超时'),
       '⑯ 落到「未接入（超时）」而不是继续等', 挂死文本.slice(0, 160)));
-    passed.push(check(挂死文本.includes('sess-main') && 挂死文本.includes(PRESENCE_COMMAND) && 挂死文本.includes('8 秒'),
-      '⑯ 超时文案**带可诊断信息**（会话 id · 命令 · 等了多久）', 挂死文本.slice(0, 200)));
+    passed.push(check(挂死文本.includes('/plugins/dsh-mind/presence') && 挂死文本.includes('8 秒'),
+      '⑯ 超时文案**带可诊断信息**（路由 · 等了多久）', 挂死文本.slice(0, 220)));
     挂死渲染.unmount();
 
     // ② reject ⇒ 同样落「未接入（原因）」，不停 loading。
@@ -1731,12 +1950,18 @@ export async function runHarness() {
       '⑯ reject 的原因要看得见（原样带出或给用户向说法）', 拒了文本.slice(0, 160)));
     拒了渲染.unmount();
 
-    // ③ 假 React 抽掉 useEffect ⇒ **明确报错**（console + 页面上的人话），不许静默停住。
+    // ③ 假 React 抽掉 useEffect ⇒ **明确报出**（console 一句），不许静默。
+    //    ⚠️ Batch 7 起断言**改了半条**（不是放松，是事实变了）：取数已移出 effect，
+    //    所以缺 effect **不再让页面停住** —— 它只少一层增强。于是这里要同时钉住两件事：
+    //      · console 仍然**响亮**（缺 hook 必须有人看得见，不许静默退化）；
+    //      · 页面**照常有数据**（不再依赖 effect ⇒ 这条比"页面会说一句"强得多）。
     const 真Effect = React.useEffect;
     delete React.useEffect;
     try {
       const 缺钩 = boot({ store, services: Object.assign(session(), {
-        remote: makeRemote(() => okReply({ 读数: 读数袋(), 设置文件: SETTINGS_FILE, 说明: '读…' })).remote,
+        fetch: makeFetch((url) => (String(url).indexOf('workbench') >= 0
+          ? jsonResponse(sampleView())
+          : jsonResponse({ 读数: 读数袋(), 设置文件: SETTINGS_FILE, 说明: '读…' }))).fetch,
       }) });
       const 缺钩渲染 = mountSettings(缺钩);
       缺钩渲染.flush();
@@ -1744,8 +1969,12 @@ export async function runHarness() {
       passed.push(check(缺钩.warnings.some((w) => w.indexOf('useEffect') >= 0),
         '⑯ 缺 useEffect ⇒ console **明确报出**（不许静默）',
         JSON.stringify(缺钩.warnings.slice(0, 2))));
-      passed.push(check(缺钩文本.includes('缺少 React') && 缺钩文本.includes('useEffect'),
-        '⑯ 缺 useEffect ⇒ 页面上也明说（不是无声停住）', 缺钩文本.slice(0, 200)));
+      await settle();
+      缺钩渲染.flush();
+      const 缺钩终态 = collect(缺钩渲染.tree, { skipStyle: true }).text;
+      passed.push(check(缺钩终态.includes('失联保险 开') && 缺钩终态.includes('生效期限 72 小时'),
+        '⑯ 缺 useEffect ⇒ 页面**照常有数据**（取数不再依赖 effect，这是 Batch 7 的重心）',
+        缺钩终态.slice(0, 200)));
       passed.push(check(缺钩.calls.register.length === 3,
         '⑯ 缺 useEffect 也不影响注册（页面还在，只是不能自动取数）'));
       缺钩渲染.unmount();
