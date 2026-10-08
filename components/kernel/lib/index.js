@@ -221,7 +221,7 @@ function mindCommand(spec) {
   return {
     name: 'mind',
     description: '心智 · 数字组织：查看状态与工作台投影，或执行组织动作',
-    input: { hint: '[status|workbench|audit|...] [参数JSON]' },
+    input: { hint: '[status|workbench|audit|presence|...] [参数JSON 或 键=值]' },
     handler: async ({ agent, rawInput }) => {
       const line = String(rawInput ?? '').trim();
       const 本次项目 = spec.项目键(agent);
@@ -235,7 +235,10 @@ function mindCommand(spec) {
         const action = ALIASES[head] ?? head;
         const args = 解析参数(rest.join(' '));
         const 主体 = agentSubject({ agent });
-        const result = await runAction({ org: spec.org, 项目: args.project ?? 本次项目, subject: 主体, args: { action, ...args } });
+        // `面: 'command'` 是**人侧**的标记：命令面专属动作（如改设置的 `presence`）
+        // 只在这一面可达，`mind` 工具的 enum 里没有它们（模型没有这只手）。
+        // `主体` 一起显式传下去：账上要记**敲这条命令的那个人**，不许归并成一个泛化的 lead。
+        const result = await runAction({ org: spec.org, 项目: args.project ?? 本次项目, subject: 主体, 主体, args: { action, ...args }, 面: 'command' });
         return { kind: 'success', text: JSON.stringify({ 成功: true, ...result }, null, 1) };
       } catch (error) {
         return { kind: 'error', text: JSON.stringify({ 成功: false, ...describeFailure(error) }, null, 1) };

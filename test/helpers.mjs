@@ -95,7 +95,9 @@ version: 1
 ## 岗位
 Lead 常驻唯一；成员岗位持久、实例临时。
 `,
-  '集体L2-共享基础设施/defaults/介入度.json': JSON.stringify({ 介入度: '零参与', 响应期限小时: 72 }, null, 2),
+  // 单源：介入度.json 只放介入度；响应期限的两个键只放 响应期限.json。
+  '集体L2-共享基础设施/defaults/介入度.json': JSON.stringify({ 介入度: '零参与' }, null, 2),
+  '集体L2-共享基础设施/defaults/响应期限.json': JSON.stringify({ 失联限制: true, 响应期限小时: 72 }, null, 2),
   '集体L2-共享基础设施/defaults/工具总范围.json': JSON.stringify({ 允许: [], 拒绝: [] }, null, 2),
   '集体L2-共享基础设施/defaults/安全类探针.json': JSON.stringify({ 探针: ['审计链', '闸在位', '出厂件洁净', '撤回名单一致'] }, null, 2),
   '集体L3-成员角色卡/_模板.md': `---
@@ -125,10 +127,22 @@ version: 1
 /**
  * 造一个临时双区。
  *
- * @param {{ rules?: Record<string, string>, defaults?: Record<string, any>, privateFiles?: Record<string, string>, offline?: boolean, members?: Record<string, object>, denylist?: object[] }} [options]
+ * @param {{ rules?: Record<string, string>, defaults?: Record<string, any>, presence?: Record<string, any>|string, privateFiles?: Record<string, string>, offline?: boolean, members?: Record<string, object>, denylist?: object[] }} [options]
  * @returns {Promise<{ home: string, factoryRoot: string, privateRoot: string, layout: Layout, clock: Clock, audit: AuditLog, policy: PolicyEngine, write(rel: string, text: string): Promise<void>, writePrivate(rel: string, text: string): Promise<void>, cleanup(): Promise<void> }>}
  */
 export async function makeFixture(options = {}) {
+  // `defaults` 只写 介入度.json（那一个键的唯一出厂源）；响应期限的两个键住在 响应期限.json ⇒ 走 `presence`。
+  // 以前这里对这两个键**静默无效**（写进了 介入度.json，而生效的是 响应期限.json）——
+  // 下一个写测试的人会踩「夹具设了没用，还查不出为什么」。所以直接响亮拒绝并指路。
+  for (const 键 of ['响应期限小时', '失联限制']) {
+    if (options.defaults && 键 in options.defaults) {
+      throw new Error(
+        `夹具的 defaults 选项不承载 ${键}：它写的是 介入度.json，而 ${键} 的唯一出厂源是 响应期限.json。` +
+          `请改用 presence 选项，例如 makeFixture({ presence: { ${键}: … } })；` +
+          `两个键都要写就 makeFixture({ presence: { 失联限制: true, 响应期限小时: 72 } })。`,
+      );
+    }
+  }
   const home = await mkdtemp(join(tmpdir(), 'mind-fix-'));
   const factoryRoot = join(home, 'mind');
   const privateRoot = join(home, 'mind-private');
@@ -139,8 +153,16 @@ export async function makeFixture(options = {}) {
   for (const [rel, text] of Object.entries(options.privateFiles ?? {})) {
     await writeUnder(privateRoot, rel, text);
   }
+  // `defaults` 只写介入度（`介入度.json` 的唯一键）；响应期限走 `presence`（`响应期限.json`）。
   if (options.defaults) {
     await writeUnder(factoryRoot, '集体L2-共享基础设施/defaults/介入度.json', JSON.stringify(options.defaults, null, 2));
+  }
+  if (options.presence) {
+    await writeUnder(
+      factoryRoot,
+      '集体L2-共享基础设施/defaults/响应期限.json',
+      typeof options.presence === 'string' ? options.presence : JSON.stringify(options.presence, null, 2),
+    );
   }
 
   const layout = new Layout({ factoryRoot, privateRoot });

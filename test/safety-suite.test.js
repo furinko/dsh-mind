@@ -219,7 +219,9 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
     // 状态条：够判断「现在能不能干活」
     assert.equal(a.状态条.闸.在位, true);
     assert.equal(a.状态条.闸.规则数, 1);
-    assert.equal(a.状态条.失联, false);
+    // 四态字符串（Batch 2 起）：策略给了 lost:false 且开关没关 ⇒ 「在位」。
+    assert.equal(a.状态条.失联, '在位');
+    assert.equal(a.状态条.失联详情.lost, false, '详情要把原始读数带出来（这里没有 已关闭 这个字段 ⇒ 不是「关了」）');
     assert.equal(a.状态条.介入度, '零参与');
 
     // 待你决定：待决项与打回升级都要进来，并且**每项都给该敲的命令**（工作台只读）

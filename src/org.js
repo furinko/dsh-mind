@@ -151,7 +151,9 @@ export class Org {
       // 四盏灯取最近一次真实运行的快照；没有跑过就老实显示「未跑过」。
       // 不现场重跑：否则它就不是「从已有记录重算的投影」了。
       探针: { ...健康, 结果: 最近一次?.结果 ?? [], 于: 最近一次?.于 ?? null, 机制版本: 最近一次?.机制版本 ?? null },
-      策略: { ...this.policy.describe(), 介入度: this.policy.intervention(), 失联: this.policy.presence() },
+      // `describe()` 给的是 `error`，而投影字段叫 `错误` —— 这里显式补上同名键，
+      // 让「面板要读的那个键」在输入里就存在（只靠投影那一侧的兜底太隐蔽，见 workbench.js 的注释）。
+      策略: { ...this.policy.describe(), 错误: this.policy.state.error, 介入度: this.policy.intervention(), 失联: this.policy.presence() },
       生成于: this.clock.iso(),
     });
     return spec.读者 ? sliceForViewer(view, spec.读者) : view;

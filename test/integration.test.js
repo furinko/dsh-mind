@@ -47,7 +47,9 @@ describe('装载后的真实调用链', () => {
     assert.ok(Array.isArray(view.会审), '会审块要能直接遍历');
     assert.equal(view.边界.只读, true);
     assert.equal(typeof view.状态条.闸.在位, 'boolean');
-    assert.equal(typeof view.状态条.失联, 'boolean');
+    // 失联态是**四态字符串**（Batch 2 起）：布尔装不下「关了」这件事（关了 ≠ 在位 ≠ 失联）。
+    assert.equal(typeof view.状态条.失联, 'string');
+    assert.ok(['在位', '已失联', '已关闭', '未知'].includes(view.状态条.失联), `状态条.失联 必须是四态之一，实际 ${view.状态条.失联}`);
     assert.ok(view.状态条.探针 && Array.isArray(view.状态条.探针.见红), '探针见红要能直接遍历');
 
     // 设计里点名要显示的两块，在空组织下也必须是**明确的空**，不是 undefined。

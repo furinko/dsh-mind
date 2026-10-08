@@ -69,7 +69,8 @@ describe('策略引擎', () => {
   });
 
   it('介入度只影响自治档：变更预审要主权者点头，立宪立法不受影响', async () => {
-    const gated = await makeFixture({ defaults: { 介入度: '变更预审', 响应期限小时: 72 } });
+    // 响应期限的两个键归 `presence`（夹具的 defaults 只写 介入度.json，传它会直接抛错）。
+    const gated = await makeFixture({ defaults: { 介入度: '变更预审' } });
     const 自治 = await gated.policy.decide({ subject: LEAD, action: 'write', target: { id: 'c', kind: '能力', authority: '自治' } });
     assert.equal(自治.verdict, 'confirm');
     assert.equal(自治.requireAuthority, '主权者');
@@ -217,7 +218,7 @@ describe('策略引擎', () => {
 
   it('check() 把三种结论分别映射成 allow / NeedsApproval / Denied', async () => {
     assert.equal((await f.policy.check({ subject: LEAD, action: 'read', target: { id: 'k', kind: '知识', authority: '自治' } })).verdict, 'allow');
-    const g = await makeFixture({ defaults: { 介入度: '逐条审批', 响应期限小时: 72 } });
+    const g = await makeFixture({ defaults: { 介入度: '逐条审批' } });
     await assert.rejects(
       () => g.policy.check({ subject: LEAD, action: 'write', target: { id: 'c', kind: '能力', authority: '自治' } }),
       (error) => error instanceof NeedsApproval && error.requireAuthority === '主权者',

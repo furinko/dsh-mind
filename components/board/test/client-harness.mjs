@@ -10,21 +10,29 @@
 // 覆盖的断言（`runHarness()` 的返回值里逐条列出）：
 //   1. 经典脚本形态：`window.__ModuleLoader__.load({id, factory})` 被调用，id 是新包名；
 //   2. 工厂返回插件体：name / inject / apply，且只 require react 系模块；
-//   3. 两处席位注册：`main`（带 key `dsh-mind`）与 `sidebar.panellist`（图标排在插件入口下面）
-//      （带 id 与 label 函数），且**不再**注册 `settings.section`；
-//      apply 的返回值能把两处一起撤下（合并 disposer）；
+//   3. 三处席位注册：`main`（带 key `dsh-mind`）与 `sidebar.panellist`（图标排在插件入口下面）
+//      （带 id 与 label 函数），以及 `settings.section`（「心智设置」分区）。
+//      **看板面板 ≠ 设置页**：面板搬出设置页那条历史决定，说的是「面板不是一个设置项」，
+//      不是「本组件永不注册设置页」。设置页是失联限制 / 响应期限小时**唯一**的写入口，
+//      而面板（§9 工作台只读）里一个写控件都没有 —— 两件事各有各的断言。
+//      apply 的返回值能把三处一起撤下（合并 disposer）；
 //   4. 首帧就渲染出一棵非平凡的树（一条数据都没有时也一样）：标题、四个分区全在，
 //      空态文案是「没有需要你决定的事」这类明说的话，不是空白；
 //   5. 装了 remote：调 `/mind dashboard`、解析 JSON、把活数据画上去，并把快照落缓存；
-//      状态条（闸 / 介入度 / 失联 / 探针见红）、待你决定的命令、会审的揭名与零分歧都在；
+//      状态条（闸 / 介入度 / 失联四态 / 探针见红）、待你决定的命令、会审的揭名与零分歧都在；
 //   6. remote 缺失 / ctx.get 抛错 / 返回 error / Promise reject / 返回非 JSON /
 //      返回体结构不明 —— 六条降级路径都**不许抛**，且都渲染出「未连接」+ 旧快照；
 //   7. 定位不到会话 id —— 优雅空态，不是抛错、不是空白；
 //   8. 侧边栏入口：只画 svg 标记，点击与文案都归宿主那一行；
 //   9. 时钟：注册 30s 自动刷新，卸载时 clearInterval。
-//  10. 状态条告警：闸不在位 / 已失联 / 探针见红 —— 读数块进告警样式，不只是换个点色。
+//  10. 状态条告警：闸不在位 / 已失联 / 已关闭 / 探针见红 —— 读数块进告警样式，不只是换个点色。
 //  11. 会审：未交齐（揭名 false）只出盲标 + 锁行，成员 id 一个都不许出；交齐后两者都给。
 //  12. 零分歧 true 渲染成**异常**，复核三态三档三个类名。
+//  13. 失联四态：`在位` 绿 / `已失联` 红 / `已关闭` **不是绿**（本批修的真缺陷）/ `未知` 灰；
+//      旧宿主只给布尔 ⇒ 降级成 `已失联` / `在位`。
+//  14. 设置页：读（remote 收到 `mind presence`、页面显示生效值与来源）、
+//      写（收到带参数的命令 **且随后有一次回读**）、回读不一致 ⇒ 明说「没写进去」、
+//      remote 缺失 / 命令报错 / 非 JSON ⇒ 「未接入 + 原因」且不抛。
 //
 // 只用 node 内置模块，不装任何东西。
 
@@ -321,8 +329,11 @@ export function makeStrictRequire() {
 // ── 样本数据 ──────────────────────────────────────────────────────────────────
 /**
  * 一份**真实形状**的投影（`src/workbench.js` 的 `projectWorkbench` 输出）。
- * 故意包含：闸在位 / 未失联 / 探针见红；两种揭名状态的会审；零分歧 true 的一场；
+ * 故意包含：闸在位 / 失联`在位` / 探针见红；两种揭名状态的会审；零分歧 true 的一场；
  * 三种审计档位各一条。这样每条界面断言都有真数据可打。
+ *
+ * ⚠️ `状态条.失联` 是**四态字符串**（Batch 2 的契约）：`在位` / `已失联` / `已关闭` / `未知`。
+ * 夹具跟着契约走，而不是跟着旧实现的布尔走 —— 布尔装不下「已关闭」，那正是本批要修的缺陷。
  */
 export function sampleView() {
   return {
@@ -332,7 +343,12 @@ export function sampleView() {
     状态条: {
       闸: { 在位: true, 规则数: 5, 错误: null },
       介入度: '事后抽检',
-      失联: false,
+      失联: '在位',
+      失联详情: {
+        读数: '在位', 已关闭: false, lost: false, hours: 0.5, since: '2026-10-07T16:50:00+08:00',
+        deadline: '2026-10-10T17:20:00+08:00', 生效响应期限小时: 72, 响应期限小时来源: '出厂',
+        失联限制来源: '出厂', 值不合法: false,
+      },
       探针: { 状态: '异常', 见红: ['审计链'], 恒红: false, 恒绿: true },
     },
     待你决定: [
@@ -416,9 +432,58 @@ export function alarmingView() {
   view.状态条 = {
     闸: { 在位: false, 规则数: 0, 错误: '策略引擎未加载' },
     介入度: '逐条审批',
-    失联: true,
+    失联: '已失联',
+    失联详情: {
+      读数: '已失联', 已关闭: false, lost: true, hours: 100, since: '2026-10-03T10:00:00+08:00',
+      deadline: '2026-10-06T10:00:00+08:00', 生效响应期限小时: 72, 响应期限小时来源: '出厂',
+      失联限制来源: '出厂', 值不合法: false,
+    },
     探针: { 状态: '异常', 见红: ['审计链', '闸在位'], 恒红: true, 恒绿: false },
   };
+  return view;
+}
+
+/**
+ * 失联开关被**关掉**（`presence().已关闭 === true`）——本批要修的那个真缺陷。
+ *
+ * Batch 2 之前页面读的是 `boolOf('已关闭')`：`boolOf` 只认布尔 / `'true'` / `'是'` 那几个，
+ * 于是拿到 **null** ⇒ 画成灰点「未知」。看上去像「没读到」，而真相是「这个机制被停掉了」。
+ *
+ * 这份夹具同时还带了 `值不合法: true`（私有层写了 `0`）：关掉开关与坏值可以同时发生，
+ * 页面两件都得说 —— 坏值不许被「已关闭」这个更响的结论盖掉。
+ */
+export function closedView() {
+  const view = sampleView();
+  view.状态条 = Object.assign({}, view.状态条, {
+    失联: '已关闭',
+    失联详情: {
+      读数: '已关闭', 已关闭: true, lost: false, hours: 0, since: null, deadline: null,
+      生效响应期限小时: 168, 响应期限小时来源: '内置兜底', 失联限制来源: '私有', 值不合法: true,
+      原值: 0, 原值来源: '私有', 不合法说明: '响应期限小时 的原值 0 不合法（不是 ≥1 的整数），已退回内置兜底 168。',
+    },
+  });
+  return view;
+}
+
+/** 宿主没给失联读数（既没有 `失联`，也没有 `失联详情`）—— 未知 ≠ 正常。 */
+export function unknownPresenceView() {
+  const view = sampleView();
+  const 状态条 = Object.assign({}, view.状态条);
+  delete 状态条.失联;
+  delete 状态条.失联详情;
+  view.状态条 = 状态条;
+  return view;
+}
+
+/**
+ * 旧宿主：`状态条.失联` 只给**布尔**（Batch 2 之前的契约），也没有 `失联详情`。
+ * 新版页面必须降级读得出来：`true → 已失联`、`false → 在位`，而不是变成「未知」。
+ */
+export function legacyBoolView(值) {
+  const view = sampleView();
+  const 状态条 = Object.assign({}, view.状态条, { 失联: 值 === true });
+  delete 状态条.失联详情;
+  view.状态条 = 状态条;
   return view;
 }
 
@@ -438,6 +503,13 @@ export const LOCK_LINE = '🔒 未交齐，讨论保持锁定';
 export const VERDICT_CLASSES = ['dshmind-verdictPass', 'dshmind-verdictFail', 'dshmind-verdictUnverified'];
 export const AUDIT_CLASSES = ['dshmind-auditFull', 'dshmind-auditMid', 'dshmind-auditLow'];
 export const ENTRY_LABEL = '心智 · 数字组织';
+/** 设置页分区：与 lib/client.js 里的常量一致（`settings.section` 的注册契约）。 */
+export const SETTINGS_SECTION_ID = 'dsh-mind-settings';
+export const SETTINGS_SECTION_LABEL = '心智';
+/** 设置页命令：与 lib/client.js 里的常量一致。 */
+export const PRESENCE_COMMAND = '/mind presence';
+/** 未接入时给用户复制的那条完整命令（也来自 lib/client.js 的常量）。 */
+export const PRESENCE_EXAMPLE = '/mind presence 开关=是 小时=168';
 
 // ── 断言 ──────────────────────────────────────────────────────────────────────
 class HarnessFailure extends Error {}
@@ -486,6 +558,11 @@ function mountEntry(booted, props) {
   return createRenderer(registrationOf(booted, 'sidebar.panellist').Component, props);
 }
 
+/** 渲染设置页那一格（`settings.section`「心智设置」）。主人只传 `{close}`。 */
+function mountSettings(booted, props) {
+  return createRenderer(registrationOf(booted, 'settings.section').Component, props || { close() {} });
+}
+
 function session() {
   return { sessions: makeSessions([{ id: 'sess-main', main: true }]) };
 }
@@ -513,19 +590,30 @@ export async function runHarness() {
     '只 require react 系模块（未 require 宿主内部包）', a.strict.asked.join(',')));
 
   const injected = a.calls.inject.slice().sort();
-  passed.push(check(injected.length === 2 && injected[0] === 'main' && injected[1] === 'sidebar.panellist',
-    'inject 的槽位恰好是 main + sidebar.panellist', a.calls.inject.join(',')));
-  passed.push(check(a.calls.inject.indexOf('settings.section') < 0,
-    '不再注册 settings.section（看板已搬出设置页）'));
+  passed.push(check(injected.length === 3
+    && injected[0] === 'main' && injected[1] === 'settings.section' && injected[2] === 'sidebar.panellist',
+    'inject 的槽位恰好是 main + sidebar.panellist + settings.section', a.calls.inject.join(',')));
+  // ⚠️ 这一条**改过**，理由必须留在注释里（不是把历史的红偷偷删掉）：
+  //
+  // 旧断言是「不再注册 settings.section」，理由是「看板已搬出设置页」。那条决定说的是
+  // **看板面板** —— 它是常驻运维视图，不是一项设置，所以不该占着设置页里的一格。
+  //
+  // 本批新增的 `settings.section` 是**另一件东西**：官方设置页里的「心智设置」分区，
+  // 里面只有「失联限制」开关 + 「响应期限小时」数字 + 保存。失联限制与响应期限小时
+  // 是要主权者改的**设置**，而 §9「工作台只读」不许面板里出现写控件 —— 两者必须分家。
+  // 于是：面板照旧搬出设置页（断言在 ③h：面板里一个写控件都没有），
+  // 设置页这一格注册的是「心智设置」而不是看板面板本身。
+  passed.push(check(a.calls.inject.indexOf('settings.section') >= 0,
+    '注册 settings.section：看板面板 ≠ 设置页，「心智设置」分区是失联限制唯一的写入口'));
   passed.push(check(a.calls.inject.indexOf('sidebar.footer.action') < 0,
     '不再占用侧边栏页脚席位（入口移到插件入口下面）'));
-  passed.push(check(a.calls.register.length === 2, '恰好两处 register', String(a.calls.register.length)));
+  passed.push(check(a.calls.register.length === 3, '恰好三处 register', String(a.calls.register.length)));
 
   const mainOptions = registrationOf(a, 'main').options;
   passed.push(check(mainOptions.key === PANEL_KEY, 'main 席位带 key ' + PANEL_KEY, JSON.stringify(mainOptions)));
   passed.push(check(typeof a.disposer === 'function', 'apply 返回合并后的 disposer'));
   a.disposer();
-  passed.push(check(a.calls.disposed === 2, '撤下时两处注册都被释放', String(a.calls.disposed)));
+  passed.push(check(a.calls.disposed === 3, '撤下时三处注册都被释放', String(a.calls.disposed)));
 
   const entryOptions = registrationOf(a, 'sidebar.panellist').options;
   passed.push(check(entryOptions.id === PANEL_KEY, '入口的 id 是 ' + PANEL_KEY, JSON.stringify(entryOptions)));
@@ -533,6 +621,20 @@ export async function runHarness() {
     '入口 order > 0：插件入口是 0，所以本组件排在它下面', String(entryOptions.order)));
   passed.push(check(typeof entryOptions.label === 'function' && String(entryOptions.label()).length > 0,
     '入口带 label 函数（窄轨工具提示与无障碍名由侧边栏取用）', String(entryOptions.label && entryOptions.label())));
+
+  // ①a 设置页分区：注册形状 (`{name, id, order, label()}`) 一项都不能少
+  // （`settings.section` 是 list 协议，官方客户端按这些字段渲染分区标题与排序）。
+  const sectionOptions = registrationOf(a, 'settings.section').options;
+  passed.push(check(sectionOptions.name === 'settings.section',
+    '设置页注册的 name 是 settings.section', String(sectionOptions.name)));
+  passed.push(check(sectionOptions.id === SETTINGS_SECTION_ID,
+    '设置页分区 id 是 ' + SETTINGS_SECTION_ID, String(sectionOptions.id)));
+  passed.push(check(typeof sectionOptions.order === 'number' && isFinite(sectionOptions.order),
+    '设置页分区带数字 order', String(sectionOptions.order)));
+  passed.push(check(typeof sectionOptions.label === 'function' && sectionOptions.label() === SETTINGS_SECTION_LABEL,
+    '设置页 label() 返回分区标题「' + SETTINGS_SECTION_LABEL + '」', String(sectionOptions.label && sectionOptions.label())));
+  passed.push(check(registrationOf(a, 'settings.section').Component !== registrationOf(a, 'main').Component,
+    '设置页组件**不是**看板面板本体（看板是只读视图，设置页才有写控件）'));
 
   // ①b 看板是「按需」组件：宿主说关着，浏览器半区必须自己撤下两处席位。
   const offSpy = makeRemote((sessionId, command) => {
@@ -546,7 +648,7 @@ export async function runHarness() {
   await settle();
   await settle();
   passed.push(check(offSpy.calls.some((c) => c.command === '/mind components'), '问过一次宿主的组件名册'));
-  passed.push(check(off.calls.disposed === 2, '宿主说看板关着 ⇒ 两处席位自动撤下', String(off.calls.disposed)));
+  passed.push(check(off.calls.disposed === 3, '宿主说看板关着 ⇒ 三处席位自动撤下', String(off.calls.disposed)));
 
   // ①c 开关是「开」或问不到时，都不许乱撤
   const onSpy = makeRemote((sessionId, command) => Promise.resolve({
@@ -558,7 +660,7 @@ export async function runHarness() {
   await settle();
   passed.push(check(on.calls.disposed === 0, '看板开着时不撤', String(on.calls.disposed)));
   on.disposer();
-  passed.push(check(on.calls.disposed === 2, '清理器照旧能撤下', String(on.calls.disposed)));
+  passed.push(check(on.calls.disposed === 3, '清理器照旧能撤下', String(on.calls.disposed)));
 
   const noAnswer = boot({ services: session() });
   await settle();
@@ -623,11 +725,16 @@ export async function runHarness() {
   const marks = DEGRADED_MARKS.filter((m) => c1.text.includes(m));
   passed.push(check(marks.length === 0, '全量数据下不出现任何降级占位文本', marks.join(',')));
 
-  // ③a 状态条：闸 / 探针 / 见红 / 恒绿
+  // ③a 状态条：闸 / 探针 / 见红 / 恒绿 / 失联四态（夹具这一份是 `在位`）
   passed.push(check(c1.text.includes('闸在位') && c1.text.includes('规则 5'), '状态条给「闸在位 + 规则数」'));
   passed.push(check(c1.text.includes('见红：审计链'), '状态条列出见红的探针名'));
   passed.push(check(c1.text.includes('恒绿警报'), '恒绿也要报警（恒绿与恒红一样是坏信号）'));
-  passed.push(check(c1.text.includes('在位') && !c1.text.includes('已失联'), '未失联时不画失联告警'));
+  passed.push(check(c1.text.includes('在位') && !c1.text.includes('已失联') && !c1.text.includes('已关闭'),
+    '失联=在位 时只画「在位」，不画失联告警、也不画「已关闭」'));
+  // 详情是**次要行**：生效期限 + 来源要看得见，但不许抢主读数的位置。
+  passed.push(check(c1.text.includes('生效期限 72h（出厂）'), '失联详情给出生效期限与来源'));
+  passed.push(check(c1.text.includes('开关来源 出厂'), '失联详情给出「失联限制」生效值的来源'));
+  passed.push(check(c1.text.includes('读数：在位'), '失联详情给出读数本身'));
 
   // ③b 待你决定：命令是**可拿走的文本**，不是按钮
   passed.push(check(c1.text.includes('/mind task_resolve id=t-3 决定=用出厂版'), '待你决定渲染出可敲的命令文本'));
@@ -702,6 +809,674 @@ export async function runHarness() {
     '闸不在位与已失联两块读数都进告警样式，不只是换个点色', String(alarmClasses.length)));
   r2.unmount();
 
+  // ③g 失联**四态**：每一态渲染各不相同，`已关闭` **绝不许给绿点**
+  //     （Batch 2 之前读的是 `boolOf`，拿到 `'已关闭'` 得到 null ⇒ 画成灰点「未知」，
+  //      看上去像「没读到」，而真相是「这个机制被停掉了」）。
+  const 失联格 = (tree) => {
+    const blocks = findAllByClass(tree, 'dshmind-readout');
+    const 块 = blocks.find((el) => textOf(el).indexOf('失联状态') >= 0);
+    if (!块) return null;
+    // 详情行是**主读数之外**的次要行（`.dshmind-readoutDetail`）：文本一起算，
+    // 但点色只取主读数那一格 —— 「这一态是什么颜色」问的是主读数。
+    const 详情 = findAllByClass(tree, 'dshmind-readoutDetail')[0];
+    return {
+      文本: textOf(块) + (详情 ? '\n' + textOf(详情) : ''),
+      点色: (findAllByClass(块, 'dshmind-dot')[0] || { props: {} }).props.style.background,
+    };
+  };
+  const GREEN_TOKEN = 'var(--dsw-alias-state-success-primary,#2f9e44)';
+  const RED_TOKEN = 'var(--dsw-alias-state-error-primary,#d54941)';
+  const GREY_TOKEN = 'var(--dsw-alias-label-caption,#adb2b8)';
+  const WARN_TOKEN = 'var(--dsw-alias-state-warn-primary,#c47f17)';
+
+  async function 失联态渲染(view, name) {
+    const spy4 = makeRemote(() => okReply(view));
+    const booted = boot({ store, services: Object.assign(session(), { remote: spy4.remote }) });
+    const renderer = mountDashboard(booted);
+    renderer.flush();
+    await settle();
+    renderer.flush();
+    const 格 = 失联格(renderer.tree);
+    check(!!格, name + '：页面里找得到「失联状态」那一格');
+    renderer.unmount();
+    return 格;
+  }
+
+  const 在位格 = await 失联态渲染(sampleView(), '在位');
+  passed.push(check(在位格.文本.includes('在位') && !在位格.文本.includes('已失联') && !在位格.文本.includes('已关闭'),
+    '① 失联=在位 ⇒ 「在位」'));
+  passed.push(check(在位格.点色 === GREEN_TOKEN, '① 在位给绿点', String(在位格.点色)));
+
+  const 失联格2 = await 失联态渲染(alarmingView(), '已失联');
+  passed.push(check(失联格2.文本.includes('已失联 · 自治冻结'), '① 失联=已失联 ⇒ 「已失联 · 自治冻结」'));
+  passed.push(check(失联格2.点色 === RED_TOKEN && 失联格2.点色 !== GREEN_TOKEN, '① 已失联给红点（且不是绿）', String(失联格2.点色)));
+
+  const 关闭格 = await 失联态渲染(closedView(), '已关闭');
+  passed.push(check(关闭格.文本.includes('已关闭（不判定失联）'), '① 失联=已关闭 ⇒ 渲染出「已关闭」文案', 关闭格.文本.slice(0, 80)));
+  passed.push(check(关闭格.点色 !== GREEN_TOKEN, '① 已关闭**不是绿点**（这是本批要修的真缺陷）', String(关闭格.点色)));
+  passed.push(check(关闭格.点色 === WARN_TOKEN, '① 已关闭给中性/告警色', String(关闭格.点色)));
+  passed.push(check(!关闭格.文本.includes('已失联'), '① 已关闭 ≠ 已失联：不许写成「已失联」'));
+  // 详情里「值不合法」也要露出来（悬停 + 详情行），但主读数不许被它顶掉。
+  passed.push(check(关闭格.文本.includes('已关闭（不判定失联）') && 关闭格.文本.includes('值不合法'),
+    '① 已关闭那一格同时给出详情里的「值不合法」标记', 关闭格.文本.slice(0, 120)));
+  passed.push(check(关闭格.文本.includes('原值 0'), '① 坏值详情带出原值', 关闭格.文本.slice(0, 200)));
+
+  const 未知格 = await 失联态渲染(unknownPresenceView(), '未知');
+  passed.push(check(未知格.文本.includes('未知') && !未知格.文本.includes('在位') && !未知格.文本.includes('已关闭'),
+    '① 宿主没给失联读数 ⇒ 「未知」，不画成「在位」'));
+  passed.push(check(未知格.点色 === GREY_TOKEN, '① 未知给灰点（宿主没给 ≠ 正常）', String(未知格.点色)));
+  passed.push(check(未知格.点色 !== GREEN_TOKEN && 未知格.点色 !== RED_TOKEN,
+    '① 未知既不是绿也不是红：它与在位、已失联都长得不一样'));
+
+  // ② 四态各渲染对（把四态的点色摊在一张表上比，防止「两态其实同色」这种悄悄退化）
+  const 点色表 = { 在位: 在位格.点色, 已失联: 失联格2.点色, 已关闭: 关闭格.点色, 未知: 未知格.点色 };
+  passed.push(check(Object.keys(点色表).every((k) => typeof 点色表[k] === 'string' && 点色表[k]),
+    '② 四态都有各自的点色', JSON.stringify(点色表)));
+  passed.push(check(点色表.在位 !== 点色表.已失联 && 点色表.已失联 !== 点色表.已关闭
+    && 点色表.已关闭 !== 点色表.未知 && 点色表.在位 !== 点色表.未知,
+    '② 四态的点色两两不同（尤以「在位」与「已关闭」必须不同）', JSON.stringify(点色表)));
+
+  // ③ 旧宿主只给布尔 ⇒ 降级成 已失联 / 在位（绝不降成「未知」）
+  const 旧真 = await 失联态渲染(legacyBoolView(true), '旧宿主 true');
+  const 旧假 = await 失联态渲染(legacyBoolView(false), '旧宿主 false');
+  passed.push(check(旧真.文本.includes('已失联'), '③ 旧宿主 失联=true ⇒ 降级成「已失联」', 旧真.文本.slice(0, 60)));
+  passed.push(check(旧真.点色 === RED_TOKEN, '③ 旧宿主 true 给红点', String(旧真.点色)));
+  passed.push(check(旧假.文本.includes('在位') && !旧假.文本.includes('已失联'),
+    '③ 旧宿主 失联=false ⇒ 降级成「在位」', 旧假.文本.slice(0, 60)));
+  passed.push(check(旧假.点色 === GREEN_TOKEN, '③ 旧宿主 false 给绿点', String(旧假.点色)));
+
+  // ④ 看板面板是**只读**的（§9 三条硬规则之三）：一个写控件都不许有。
+  //    设置页是独立分区，写控件只在那边 —— 这两条必须同时成立。
+  const 面板控件 = collect(r1.tree, { skipStyle: true }).elements;
+  const 写控件 = 面板控件.filter((el) => el.type === 'input' || el.type === 'select' || el.type === 'textarea');
+  passed.push(check(写控件.length === 0,
+    '④ 工作台面板里没有任何输入类控件（input/select/textarea）', 写控件.map((el) => el.type).join(',')));
+  const 面板按钮 = 面板控件.filter((el) => el.type === 'button');
+  passed.push(check(面板按钮.length === 1 && String(面板按钮[0].props.className).indexOf('dshmind-btn') >= 0
+    && String(面板按钮[0].props.children).indexOf('刷新') >= 0,
+    '④ 工作台面板里唯一的可点动作是「刷新」（不给任何写动作）',
+    面板按钮.map((el) => String(el.props.children)).join(',')));
+  passed.push(check(!面板控件.some((el) => typeof el.props.onChange === 'function'),
+    '④ 工作台面板里没有 onChange 绑定的表单控件（没有任何「写」的入口）'));
+
+  // ⑤⑥⑦ 设置页：读 / 写 + 回读确认
+  const SETTINGS_FILE = 'mind-data/mind-private/集体L2-共享基础设施/defaults/部署.json';
+
+  /**
+   * `presence` 命令返回体里的 `读数` —— **照真宿主实测的形状写，不是照我们以为的形状写**。
+   *
+   * 形状来源（逐字段核过 `src/policy.js` 的 `presence()`，宿主侧已落地）：
+   *  - **`失联限制: boolean` 恒在**（开 `true` / 关 `false`）—— 它是这个开关的唯一真源；
+   *  - **`已关闭?: boolean` 只在关时出现**（`失联限制 === false` 那条 return 才有它）；
+   *  - 开着时带 `evaluateSovereignPresence(...)` 的 `{lost, since, deadline, hours}`；
+   *  - `响应期限小时来源` / `失联限制来源` 恒在（`来源.X ?? '内置兜底'`）；
+   *  - 坏值才多出 `原值` / `原值来源` / `不合法说明`。
+   *
+   * ⚠️ **这里曾经多补过一个字段、又漏过一个字段**，两次都代价惨重：
+   *  · 多补 `失联限制: true`（实现当时不产出它）⇒ 夹具比实现多一个字段，
+   *    195 条门禁全绿却漏掉「设置页把读数**对象**喂给只认四态字符串的函数」这个真缺陷；
+   *  · 反过来若漏掉现在恒在的 `失联限制`，就等于又在测一个不存在的宿主。
+   * 所以：**夹具只写实现真的会产的字段**；要测「字段缺失」的降级路径，另起夹具并显式说明。
+   */
+  function 真读数(态) {
+    const 公共 = {
+      失联限制: 态 !== '已关闭',
+      响应期限小时来源: '出厂',
+      失联限制来源: '出厂',
+      生效响应期限小时: 72,
+      值不合法: false,
+    };
+    if (态 === '已关闭') {
+      // 关：`已关闭: true` 与 `失联限制: false` 同时出现（前者是后者的显式回声）。
+      return Object.assign({ 已关闭: true, lost: false, hours: 0, since: null, deadline: null }, 公共);
+    }
+    if (态 === '已失联') {
+      // 开且超期：**没有 `已关闭`**（它只在关时出现）。
+      return Object.assign({
+        lost: true, hours: 100, since: '2026-10-03T10:00:00+08:00', deadline: '2026-10-06T10:00:00+08:00',
+      }, 公共);
+    }
+    // 开且在位：同样没有 `已关闭`。
+    return Object.assign({
+      lost: false, hours: 0.5, since: '2026-10-07T16:50:00+08:00', deadline: '2026-10-10T17:20:00+08:00',
+    }, 公共);
+  }
+  const 读数袋 = (extra) => Object.assign(真读数('在位'), extra || {});
+
+  /**
+   * **夹具形状的底本：真宿主实测的键集**（不是我们推断的，也不是我们希望它长什么样）。
+   *
+   * 怎么来的（临时脚本，`makeFixture({presence:{…}})` ＋ `t.policy.presence()`，跑完即删）：
+   * ```text
+   * ── 开着且在位      字段：deadline, hours, lost, since, 值不合法, 响应期限小时来源, 失联限制, 失联限制来源, 生效响应期限小时
+   * ── 关着            字段：… + 已关闭   （失联限制: false, 已关闭: true）
+   * ── 开着但超期      字段：同「开着且在位」（**没有 已关闭**）  lost=true
+   * ── 坏值            字段：… + 不合法说明, 原值, 原值来源
+   * ```
+   * 于是三条不变的结论（**夹具照着它写，谁改宿主形状谁就得回来改这里**）：
+   *  1. `失联限制: boolean` **恒在**；
+   *  2. `已关闭` **只在关时出现**；
+   *  3. 坏值才多出 `原值 / 原值来源 / 不合法说明`。
+   *
+   * ⚠️ 为什么要把它钉成断言：上一轮夹具在**开**状态多补了一个实现没产的 `失联限制: true`，
+   * 结果 195 条门禁全绿却漏掉了 F2（设置页把读数对象喂给只认四态字符串的函数）——
+   * **夹具比实现多一个字段，就等于替实现把缺陷遮住了**。钉住键集，夹具想漂就得先红。
+   */
+  const 真形状键 = {
+    在位: ['deadline', 'hours', 'lost', 'since', '值不合法', '响应期限小时来源', '失联限制', '失联限制来源', '生效响应期限小时'],
+    已失联: ['deadline', 'hours', 'lost', 'since', '值不合法', '响应期限小时来源', '失联限制', '失联限制来源', '生效响应期限小时'],
+    已关闭: ['deadline', 'hours', 'lost', 'since', '值不合法', '响应期限小时来源', '失联限制', '失联限制来源', '已关闭', '生效响应期限小时'],
+  };
+  for (const 态 of Object.keys(真形状键)) {
+    const 实得 = Object.keys(真读数(态)).sort();
+    const 应有 = 真形状键[态].slice().sort();
+    passed.push(check(JSON.stringify(实得) === JSON.stringify(应有),
+      '⑤ 夹具「' + 态 + '」的键集与真宿主实测一致（多一个字段也算漂）'
+      + '｜多出来 ' + JSON.stringify(实得.filter((k) => 应有.indexOf(k) < 0))
+      + '｜少了 ' + JSON.stringify(应有.filter((k) => 实得.indexOf(k) < 0))));
+  }
+  passed.push(check(读数袋().失联限制 === true && !Object.hasOwn(读数袋(), '已关闭'),
+    '⑤ 夹具照真形状：开着时 `失联限制: true` 且**没有** `已关闭`', JSON.stringify(Object.keys(读数袋()))));
+  passed.push(check(真读数('已关闭').失联限制 === false && 真读数('已关闭').已关闭 === true,
+    '⑤ 夹具照真形状：关着时 `失联限制: false` ＋ `已关闭: true`'));
+  passed.push(check(!Object.hasOwn(真读数('已失联'), '已关闭') && 真读数('已失联').失联限制 === true,
+    '⑤ 夹具照真形状：开着（哪怕已失联）**没有** `已关闭`'));
+
+  // ⑤ 读：remote 间谍收到 `mind presence` ⇒ 页面显示生效值 / 来源
+  const readSpy = makeRemote((sessionId, command) => {
+    if (command === PRESENCE_COMMAND) {
+      return Promise.resolve(okReply({ 读数: 读数袋(), 设置文件: SETTINGS_FILE, 说明: '读：本次没带「开关 / 小时」…' }));
+    }
+    return Promise.resolve(okReply({}));
+  });
+  const s1 = boot({ store, services: Object.assign(session(), { remote: readSpy.remote }) });
+  const sr1 = mountSettings(s1);
+  const 设置文本 = await textAfterLoad(sr1);
+  const 读调用 = readSpy.calls.filter((c) => c.command === PRESENCE_COMMAND);
+  passed.push(check(读调用.length === 1, '⑤ 设置页读一次：remote 收到恰好一条 ' + PRESENCE_COMMAND,
+    JSON.stringify(readSpy.calls.map((c) => c.command))));
+  passed.push(check(读调用[0].command === PRESENCE_COMMAND, '⑤ 读命令是 ' + PRESENCE_COMMAND, 读调用[0].command));
+  passed.push(check(读调用[0].sessionId === 'sess-main', '⑤ 读命令用的是 mainView 那个会话 id', 读调用[0].sessionId));
+  passed.push(check(Array.isArray(读调用[0].attachments) && 读调用[0].attachments.length === 0, '⑤ 读命令 attachments 是空数组'));
+  passed.push(check(设置文本.includes('生效期限 72 小时') && 设置文本.includes('期限来自 出厂'),
+    '⑤ 页面显示生效值与来源（生效期限 + 由哪一层给的）', 设置文本.slice(0, 140)));
+  passed.push(check(设置文本.includes('期限 出厂') && 设置文本.includes('开关 出厂'),
+    '⑤ 页面把两个键的来源都显示出来'));
+  passed.push(check(设置文本.includes('失联保险 开'),
+    '⑤ 页面显示「失联限制」的生效值（真源 = 读数里的布尔），且用新词「失联保险」'));
+  passed.push(check(设置文本.includes('心智'), '⑤ 设置页有标题'));
+  passed.push(check(设置文本.includes('写入本部署的私有设置'),
+    '⑤ 说明收短但信息不丢（它是什么 / 写在哪 / 可关）'));
+
+  // ⑤b 【Batch 4b · F2】设置页那行「当前生效值」必须按**四态**取。
+  //     原缺陷：`失联态Of(读)` —— 把 `presence()` 的**对象**喂给只认四态字符串的函数，
+  //     于是三态（关 / 失联 / 在位）**全渲染成「当前 未知」+ caption 灰点**，
+  //     `已关闭（不判定失联）` 那个分支在设置页**根本不可达**。
+  //     （工作台面板没这个错：它读的是宿主已经归一好的 `状态条.失联` 字符串。）
+  const 设置页四态 = async (读数, name) => {
+    const spy4 = makeRemote(() => Promise.resolve(okReply({ 读数, 设置文件: SETTINGS_FILE, 说明: '读…' })));
+    const booted = boot({ store, services: Object.assign(session(), { remote: spy4.remote }) });
+    const renderer = mountSettings(booted);
+    const 文本 = await textAfterLoad(renderer);
+    const 格 = findAllByClass(renderer.tree, 'dshmind-set__row').find((el) => textOf(el).indexOf('当前生效值') >= 0);
+    const 点 = 格 ? findAllByClass(格, 'dshmind-dot')[0] : null;
+    renderer.unmount();
+    return { 文本, 行文本: 格 ? textOf(格) : '', 点色: 点 ? 点.props.style.background : null, name };
+  };
+
+  const 设置关 = await 设置页四态(真读数('已关闭'), '已关闭');
+  passed.push(check(设置关.行文本.includes('已关闭 · 不判定失联'),
+    '⑤b 设置页在「已关闭」读数下显示「已关闭 · 不判定失联」（F2 修的就是这条）', 设置关.行文本.slice(0, 140)));
+  passed.push(check(设置关.行文本.indexOf('当前 未知') < 0, '⑤b 已关闭**不许**再显示成「当前 未知」', 设置关.行文本.slice(0, 140)));
+  passed.push(check(设置关.点色 === WARN_TOKEN, '⑤b 已关闭给中性/告警色（不是 caption 灰）', String(设置关.点色)));
+  passed.push(check(设置关.行文本.includes('当前 已关闭'), '⑤b 那一行后缀的「当前 …」也按四态取', 设置关.行文本.slice(0, 160)));
+
+  passed.push(check(设置关.行文本.includes('失联保险 关'),
+    '⑤b 已关闭那行也说「失联保险 关」（不再跟着状态点一起变成「未知」）', 设置关.行文本.slice(0, 170)));
+
+  const 设置失 = await 设置页四态(真读数('已失联'), '已失联');
+  passed.push(check(设置失.行文本.includes('已失联 · 自治冻结'),
+    '⑤b 设置页在「已失联」读数下显示「已失联 · 自治冻结」', 设置失.行文本.slice(0, 140)));
+  passed.push(check(设置失.点色 === RED_TOKEN, '⑤b 已失联给红点', String(设置失.点色)));
+
+  const 设置在 = await 设置页四态(真读数('在位'), '在位');
+  // ⚠️ 断言只认四态那一栏（`当前 …` / 开关栏），不做整行「未知」搜索：
+  // 开关栏与状态栏是两件事，整行搜会把一栏的字误当成另一栏判错。
+  passed.push(check(设置在.行文本.includes('当前 在位') && 设置在.行文本.indexOf('当前 未知') < 0,
+    '⑤b 设置页在「在位」读数下显示「当前 在位」', 设置在.行文本.slice(0, 140)));
+  passed.push(check(设置在.点色 === GREEN_TOKEN, '⑤b 在位给绿点', String(设置在.点色)));
+
+  passed.push(check(设置关.点色 !== 设置在.点色 && 设置失.点色 !== 设置关.点色 && 设置失.点色 !== 设置在.点色,
+    '⑤b 设置页三态的点色两两不同（原来三态全是 caption 灰）',
+    JSON.stringify([设置在.点色, 设置失.点色, 设置关.点色])));
+
+  // ⑤c 上界：`响应期限小时` 的合法区间是 **1 ~ 876000**（≈100 年），不是「≥1」。
+  //     超过上限的值会让失联判定算不出 deadline（越出 Date 上界）⇒ 读数面全废，
+  //     所以宿主拒它，页面也在本地拦住并说清区间（两边同一个数）。
+  {
+    const spyBound = makeRemote(() => Promise.resolve(okReply({ 读数: 真读数('在位'), 设置文件: SETTINGS_FILE, 说明: '读…' })));
+    const booted = boot({ store, services: Object.assign(session(), { remote: spyBound.remote }) });
+    const renderer = mountSettings(booted);
+    await textAfterLoad(renderer);
+    collect(renderer.tree, { skipStyle: true }).elements.find((el) => el.type === 'input')
+      .props.onChange({ target: { value: '876001' } });
+    renderer.flush();
+    spyBound.calls.length = 0;
+    collect(renderer.tree, { skipStyle: true }).elements
+      .find((el) => el.type === 'button' && String(el.props.children).indexOf('保存') >= 0).props.onClick();
+    await settle();
+    renderer.flush();
+    const 文本 = collect(renderer.tree, { skipStyle: true }).text;
+    passed.push(check(文本.includes('没写进去') && 文本.includes('876000'),
+      '⑤c 超过上界（876001）⇒ 本地就拦住并说清区间 1 ~ 876000', 文本.slice(-200)));
+    passed.push(check(spyBound.calls.filter((c) => c.command.indexOf(PRESENCE_COMMAND + ' ') === 0).length === 0,
+      '⑤c 超过上界时**不发**写命令（先拦，不打无准备的仗）', JSON.stringify(spyBound.calls.map((c) => c.command))));
+    renderer.unmount();
+  }
+
+  const 写日志 = [];
+  let 盘上 = 读数袋();
+  const writeSpy = makeRemote((sessionId, command) => {
+    写日志.push({ command, sessionId });
+    if (command === PRESENCE_COMMAND) {
+      return Promise.resolve(okReply({ 读数: 盘上, 设置文件: SETTINGS_FILE, 说明: '读：没带参数…' }));
+    }
+    if (command.indexOf(PRESENCE_COMMAND + ' ') === 0) {
+      // 宿主行为：写后就地生效；这里让「盘上」跟着变，模拟真写成功。
+      // 「关」这个态在真形状里由 `失联限制: false` ＋ `已关闭: true` 一起表达。
+      盘上 = Object.assign(真读数('已关闭'), { 生效响应期限小时: 168, 响应期限小时来源: '私有', 失联限制来源: '私有' });
+      return Promise.resolve(okReply({
+        设置文件: SETTINGS_FILE, 变更: ['失联限制', '响应期限小时'], 无变更: [], 读数: 盘上, 说明: '已改：这是 merge 写…',
+      }));
+    }
+    return Promise.resolve(okReply({}));
+  });
+  const s2 = boot({ store, services: Object.assign(session(), { remote: writeSpy.remote }) });
+  const sr2 = mountSettings(s2);
+  const 设置文本2 = await textAfterLoad(sr2);
+  passed.push(check(设置文本2.includes('失联保险 开') && 设置文本2.includes('当前 在位'),
+    '⑥ 保存前页面显示的是回读值（开关「开」/ 当前「在位」）', 设置文本2.slice(0, 170)));
+  const 控件 = collect(sr2.tree, { skipStyle: true }).elements;
+  const 选中框 = 控件.find((el) => el.type === 'select');
+  const 数字框 = 控件.find((el) => el.type === 'input');
+  passed.push(check(!!选中框 && !!数字框, '⑥ 设置页有一个开关控件 + 一个数字控件'));
+  passed.push(check(选中框.props.value === '是' && 数字框.props.value === '72',
+    '⑥ 表单初值来自回读（是 / 72）', JSON.stringify([选中框.props.value, 数字框.props.value])));
+  // 改值 → 点保存（走的是真实 onChange / onClick，不是直接调内部函数）。
+  // ⚠️ 每一步之后**重新取一次元素**：`collect` 给的是那一刻的 props 快照，
+  // 重渲染后旧快照上的闭包还握着上一轮的 state —— 拿旧快照调第二次，测的就不是真页面了。
+  选中框.props.onChange({ target: { value: '否' } });
+  sr2.flush();
+  collect(sr2.tree, { skipStyle: true }).elements.find((el) => el.type === 'input')
+    .props.onChange({ target: { value: '168' } });
+  sr2.flush();
+  const 改后 = collect(sr2.tree, { skipStyle: true }).elements;
+  passed.push(check(改后.find((el) => el.type === 'select').props.value === '否'
+    && 改后.find((el) => el.type === 'input').props.value === '168',
+    '⑥ 改动的草稿留在表单里（否 / 168）',
+    JSON.stringify([改后.find((el) => el.type === 'select').props.value, 改后.find((el) => el.type === 'input').props.value])));
+  const 保存钮 = collect(sr2.tree, { skipStyle: true }).elements
+    .find((el) => el.type === 'button' && String(el.props.children).indexOf('保存') >= 0);
+  passed.push(check(!!保存钮, '⑥ 设置页有「保存」按钮，且它是写入口'));
+  写日志.length = 0;
+  保存钮.props.onClick();
+  await settle();
+  sr2.flush();
+  const 写命令 = 写日志.filter((c) => c.command.indexOf(PRESENCE_COMMAND + ' ') === 0);
+  passed.push(check(写命令.length === 1, '⑥ 保存 ⇒ 恰好一条带参数的命令', JSON.stringify(写日志.map((c) => c.command))));
+  passed.push(check(!!写命令[0] && 写命令[0].command.indexOf('开关=否') >= 0 && 写命令[0].command.indexOf('小时=168') >= 0,
+    '⑥ 写命令带上两个参数（开关=否 小时=168）', String(写命令[0] && 写命令[0].command) + ' / 全部 ' + JSON.stringify(写日志.map((c) => c.command))));
+  passed.push(check(!!写命令[0] && 写命令[0].command.indexOf(PRESENCE_COMMAND) === 0,
+    '⑥ 写命令是 ' + PRESENCE_COMMAND + ' …', String(写命令[0] && 写命令[0].command)));
+  passed.push(check(写日志.length >= 2 && 写日志[1].command === PRESENCE_COMMAND,
+    '⑥ **写完必须回读**：第二条命令是一次不带参数的 ' + PRESENCE_COMMAND, JSON.stringify(写日志.map((c) => c.command))));
+  passed.push(check(写日志[0].command.indexOf(' ') > 0, '⑥ 顺序对：先写后读（不是反的）'));
+  const 设置文本3 = collect(sr2.tree, { skipStyle: true }).text;
+  passed.push(check(设置文本3.includes('已保存') && 设置文本3.includes('回读一致'),
+    '⑥ 回读一致 ⇒ 明说已保存且回读一致', 设置文本3.slice(-120)));
+  passed.push(check(设置文本3.includes('失联保险 关') && 设置文本3.includes('生效期限 168 小时')
+    && 设置文本3.indexOf('失联保险 开') < 0,
+    '⑥ UI 以**回读值**为准（关 / 168 小时，不再是写之前的「开 / 72」）', 设置文本3.slice(-220)));
+  passed.push(check(设置文本3.includes('（私有）') || 设置文本3.includes('来自 私有'),
+    '⑥ UI 的来源也换成回读值给的「私有」'));
+
+  // ⑦ 回读不一致 ⇒ UI 明说「没写进去」，**不许**显示成功
+  const 骗人日志 = [];
+  const 骗人的 = makeRemote((sessionId, command) => {
+    骗人日志.push(command);
+    if (command === PRESENCE_COMMAND) {
+      // 回读永远说「开关开着、期限 72」——与请求（否 / 168）不一致。
+      return Promise.resolve(okReply({ 读数: 读数袋(), 设置文件: SETTINGS_FILE, 说明: '读…' }));
+    }
+    if (command.indexOf(PRESENCE_COMMAND + ' ') === 0) {
+      return Promise.resolve(okReply({ 设置文件: SETTINGS_FILE, 变更: ['响应期限小时'], 无变更: [], 读数: 读数袋(), 说明: '已改…' }));
+    }
+    return Promise.resolve(okReply({}));
+  });
+  const s3 = boot({ store, services: Object.assign(session(), { remote: 骗人的.remote }) });
+  const sr3 = mountSettings(s3);
+  await textAfterLoad(sr3);
+  // 同 ⑥：每一步都重新取元素，别拿重渲染前的 props 快照调下一个 handler。
+  collect(sr3.tree, { skipStyle: true }).elements.find((el) => el.type === 'select')
+    .props.onChange({ target: { value: '否' } });
+  sr3.flush();
+  collect(sr3.tree, { skipStyle: true }).elements.find((el) => el.type === 'input')
+    .props.onChange({ target: { value: '168' } });
+  sr3.flush();
+  collect(sr3.tree, { skipStyle: true }).elements
+    .find((el) => el.type === 'button' && String(el.props.children).indexOf('保存') >= 0).props.onClick();
+  await settle();
+  sr3.flush();
+  const 文本3 = collect(sr3.tree, { skipStyle: true }).text;
+  passed.push(check(文本3.includes('没写进去'), '⑦ 回读不一致 ⇒ 明说「没写进去」', 文本3.slice(-140)));
+  passed.push(check(文本3.indexOf('没写进去') >= 0 && 文本3.indexOf('已保存，且回读一致') < 0,
+    '⑦ 绝不许在回读不一致时显示成功'));
+  passed.push(check(文本3.includes('回读与请求不一致') && 文本3.includes('小时 请求 168'),
+    '⑦ 不一致的地方要说清（哪个键、请求什么、回读什么）', 文本3.slice(-160)));
+  passed.push(check(骗人日志.filter((c) => c.indexOf(PRESENCE_COMMAND + ' ') === 0).length === 1
+    && 骗人日志.filter((c) => c === PRESENCE_COMMAND).length >= 2,
+    '⑦ 写完照旧回读了一次（写 1 条 + 读 2 条）', JSON.stringify(骗人日志)));
+
+  // ⑦b 【终审追加 S1】回读判据：**读不出 ⇒ 判不一致**
+  //
+  // 这条与 ⑦ 不是同一件事，所以必须单独一条（⑦ 的 `读数袋()` 里 `失联限制` 是**有值**的：
+  // 它测的是「回读得出、但与请求不同」）。这里测的是**键都读不出**的情形：
+  // 回读只给 `{lost:false, hours:72, …}` —— **既没有 `失联限制` 也没有 `已关闭`**。
+  //
+  // 为什么这条性质非守不可：回读读不出时**唯一安全的方向**是判「不一致」。
+  // 一旦放宽成「读不出就当成请求值」，界面就会显示「已保存」—— 而盘上到底是什么**谁也不知道**。
+  // 这正是 §「查不到 ≠ 放行」在浏览器半边的同款：读不出来不是"写成了"的证据。
+  //
+  // ⚠️ 复核官的变异 M6（把读不出当成请求值）当时**213 条断言全绿** —— 性质对，但无人守。
+  //    这条断言就是为那个变异写的：它必须能红。
+  {
+    // 回读形状：只给 lost/hours 与来源，**关键的两个键一个都不给**。
+    const 读不出的读数 = {
+      lost: false, hours: 72, since: null, deadline: null,
+      生效响应期限小时: 72, 响应期限小时来源: '出厂', 失联限制来源: '出厂', 值不合法: false,
+    };
+    passed.push(check(!Object.hasOwn(读不出的读数, '失联限制') && !Object.hasOwn(读不出的读数, '已关闭'),
+      '⑦b 前提：这份回读**既没有 `失联限制` 也没有 `已关闭`**（键读不出）',
+      JSON.stringify(Object.keys(读不出的读数))));
+
+    const 读不出日志 = [];
+    const 读不出的 = makeRemote((sessionId, command) => {
+      读不出日志.push(command);
+      if (command === PRESENCE_COMMAND) {
+        return Promise.resolve(okReply({ 读数: 读不出的读数, 设置文件: SETTINGS_FILE, 说明: '读…' }));
+      }
+      if (command.indexOf(PRESENCE_COMMAND + ' ') === 0) {
+        // 宿主嘴上说改了 —— 但回读读不出它到底改成了什么。**不许信它**。
+        return Promise.resolve(okReply({
+          设置文件: SETTINGS_FILE, 变更: ['失联限制', '响应期限小时'], 无变更: [], 读数: 读不出的读数, 说明: '已改…',
+        }));
+      }
+      return Promise.resolve(okReply({}));
+    });
+    const s3b = boot({ store, services: Object.assign(session(), { remote: 读不出的.remote }) });
+    const sr3b = mountSettings(s3b);
+    await textAfterLoad(sr3b);
+    collect(sr3b.tree, { skipStyle: true }).elements.find((el) => el.type === 'select')
+      .props.onChange({ target: { value: '否' } });
+    sr3b.flush();
+    collect(sr3b.tree, { skipStyle: true }).elements.find((el) => el.type === 'input')
+      .props.onChange({ target: { value: '168' } });
+    sr3b.flush();
+    collect(sr3b.tree, { skipStyle: true }).elements
+      .find((el) => el.type === 'button' && String(el.props.children).indexOf('保存') >= 0).props.onClick();
+    await settle();
+    sr3b.flush();
+    const 文本3b = collect(sr3b.tree, { skipStyle: true }).text;
+
+    passed.push(check(文本3b.includes('没写进去'),
+      '⑦b 键都读不出 ⇒ **必须**报「没写进去」（读不出 ⇒ 判不一致）', 文本3b.slice(-180)));
+    // ⚠️ 下面这条**改过一次**，理由留在这里（第一版是空转的）：
+    // 第一版写的是 `文本3b.includes('回读 读不出')` —— 而界面上那句话**从来没渲染过**：
+    // 回读不一致时提示里只印「小时 请求 X / 回读 Y」那一条（小时读得出 ⇒ 印 72，不是「读不出」），
+    // 「开关 请求 否 / 回读 读不出」只存在于内部那一行文案里，没进界面。
+    // 拿一个界面根本不显示的串做断言 = 测了个寂寞（复核官的变异也抓不到）。
+    // 改成两条**真能绑定这个判据**的：如实印出读到的数值 + 逐字面点名「读不出」（见 ⑦b-2）。
+    passed.push(check(文本3b.includes('回读 72'),
+      '⑦b 提示里如实给出回读**读出**的那个数值（证明提示确实来自回读比对，不是套话）', 文本3b.slice(-180)));
+    passed.push(check(文本3b.indexOf('已保存') < 0 && 文本3b.indexOf('回读一致') < 0,
+      '⑦b 键读不出时**绝不许**显示「已保存 / 回读一致」（读不出来不是"写成了"的证据）', 文本3b.slice(-180)));
+    // 表单也不许被"读出来的值"顶掉：既然读不出，就保持人刚填的草稿（那才是"没确认"的样子）。
+    const 读不出后 = collect(sr3b.tree, { skipStyle: true }).elements;
+    passed.push(check(读不出后.find((el) => el.type === 'select').props.value === '否'
+      && 读不出后.find((el) => el.type === 'input').props.value === '168',
+      '⑦b 读不出时不拿回读值去刷表单（保留人填的草稿）',
+      JSON.stringify([读不出后.find((el) => el.type === 'select').props.value, 读不出后.find((el) => el.type === 'input').props.value])));
+    passed.push(check(读不出日志.filter((c) => c.indexOf(PRESENCE_COMMAND + ' ') === 0).length === 1
+      && 读不出日志.filter((c) => c === PRESENCE_COMMAND).length >= 2,
+      '⑦b 照旧先写后读（写 1 条 + 读 2 条）', JSON.stringify(读不出日志)));
+    sr3b.unmount();
+  }
+
+  // ⑦b-2 【S1 的关键一条】回读里**小时也读不出**时，判据会得出「两个键都不一致」⇒ 那行提示
+  // 才会把「开关 请求 否 / 回读 读不出」印到界面上。这一条是唯一能按**字面**钉住
+  // 「读不出 ⇒ 判不一致」的断言：把判据放宽成「读不出就当成请求值」，整句提示就会消失 ⇒ 必红。
+  {
+    const 全读不出的读数 = {
+      lost: false, hours: 72, since: null, deadline: null, 值不合法: false,
+      // 既没有 `失联限制` / `已关闭`，也**没有 `生效响应期限小时`** ⇒ 两个键都读不出。
+    };
+    passed.push(check(!Object.hasOwn(全读不出的读数, '失联限制') && !Object.hasOwn(全读不出的读数, '已关闭')
+      && !Object.hasOwn(全读不出的读数, '生效响应期限小时'),
+      '⑦b-2 前提：这份回读**两个键都读不出**（开关与小时都缺）',
+      JSON.stringify(Object.keys(全读不出的读数))));
+
+    const 全读不出 = makeRemote((sessionId, command) => {
+      if (command === PRESENCE_COMMAND) {
+        return Promise.resolve(okReply({ 读数: 全读不出的读数, 设置文件: SETTINGS_FILE, 说明: '读…' }));
+      }
+      if (command.indexOf(PRESENCE_COMMAND + ' ') === 0) {
+        return Promise.resolve(okReply({
+          设置文件: SETTINGS_FILE, 变更: ['失联限制', '响应期限小时'], 无变更: [], 读数: 全读不出的读数, 说明: '已改…',
+        }));
+      }
+      return Promise.resolve(okReply({}));
+    });
+    const s3c = boot({ store, services: Object.assign(session(), { remote: 全读不出.remote }) });
+    const sr3c = mountSettings(s3c);
+    await textAfterLoad(sr3c);
+    collect(sr3c.tree, { skipStyle: true }).elements.find((el) => el.type === 'select')
+      .props.onChange({ target: { value: '否' } });
+    sr3c.flush();
+    collect(sr3c.tree, { skipStyle: true }).elements.find((el) => el.type === 'input')
+      .props.onChange({ target: { value: '168' } });
+    sr3c.flush();
+    collect(sr3c.tree, { skipStyle: true }).elements
+      .find((el) => el.type === 'button' && String(el.props.children).indexOf('保存') >= 0).props.onClick();
+    await settle();
+    sr3c.flush();
+    const 文本3c = collect(sr3c.tree, { skipStyle: true }).text;
+    passed.push(check(文本3c.includes('开关 请求 否 / 回读 读不出'),
+      '⑦b-2 开关读不出 ⇒ 判**不一致**，并按字面点名「回读 读不出」（放宽成"当成请求值"这句就没了）',
+      文本3c.slice(-200)));
+    passed.push(check(文本3c.includes('小时 请求 168 / 回读 读不出'),
+      '⑦b-2 小时读不出 ⇒ 同样判**不一致**并按字面点名（两个键都不许被"当成请求值"）', 文本3c.slice(-200)));
+    passed.push(check(文本3c.includes('没写进去') && 文本3c.indexOf('已保存') < 0 && 文本3c.indexOf('回读一致') < 0,
+      '⑦b-2 两个键都读不出 ⇒ 绝不显示成功', 文本3c.slice(-200)));
+    sr3c.unmount();
+  }
+
+  // ⑧ 诚实降级：remote 缺失 / 命令返回 error / 非 JSON ⇒ 「未接入（用户向）+ 可复制命令」，不抛
+  // ⚠️ 这里的 `expect` 是**用户看得见的那句话**，不是实现内部那句错误串（Batch 5 起两者分家）：
+  // 内部串（`宿主命令服务不可用（remote.commands.execute）`）是排障用的，印到界面上就是让用户读我们的栈。
+  const 降级清单 = [
+    { name: 'remote 缺失', services: session(), expect: '这一页需要一个打开的会话才能读写设置。' },
+    { name: '命令返回 kind:error', services: Object.assign(session(), {
+      remote: makeRemote(() => ({ ok: true, value: { result: { kind: 'error', text: '策略引擎不健康' } } })).remote,
+    }), expect: '策略引擎不健康' },
+    { name: '命令返回 成功:false（真拒绝形状）', services: Object.assign(session(), {
+      // `InvalidBody` 经 `describeFailure` 出来就是这几个键 —— **没有 `错误` 这一栏**。
+      // 所以这一条也钉住「拒绝的形状照真实的那样读得出来」，而不是我以为的形状。
+      remote: makeRemote(() => okReply({ 成功: false, 结果: '结构不合规', 理由: '小时 只接受 ≥1 的整数：收到 "0"。' })).remote,
+    }), expect: '只接受 ≥1 的整数' },
+    { name: '返回体不是 JSON', services: Object.assign(session(), {
+      remote: makeRemote(() => ({ ok: true, value: { result: { kind: 'success', text: '<html>不是 JSON</html>' } } })).remote,
+    }), expect: '读到的设置无法解析' },
+    { name: '返回体缺「读数」', services: Object.assign(session(), {
+      remote: makeRemote(() => okReply({ 说明: '没有读数' })).remote,
+    }), expect: '读到的设置不完整' },
+  ];
+  for (const 场景 of 降级清单) {
+    const booted = boot({ store, services: 场景.services });
+    const renderer = mountSettings(booted);
+    const 文本 = await textAfterLoad(renderer);
+    passed.push(check(文本.includes(场景.expect),
+      '⑧ ' + 场景.name + ' ⇒ 未接入 + 用户向原因（' + 场景.expect + '）', 文本.slice(0, 140)));
+    passed.push(check(文本.includes(PRESENCE_COMMAND), '⑧ ' + 场景.name + ' ⇒ 仍给出可复制去敲的命令'));
+    passed.push(check(文本.includes('心智') && !文本.includes('已保存'), '⑧ ' + 场景.name + ' ⇒ 页面没有空白，也没装成已连接'));
+    // 顺手把「降级路径也不许漏实现细节」一并钉住（与 ⑨ 互补：⑨ 打正常态，这里打异常态）。
+    passed.push(check(!/remote\.|commands\.execute|execute\(/.test(文本),
+      '⑧ ' + 场景.name + ' ⇒ 未接入文案里也不许出现实现细节',
+      (文本.match(/[^\n]*(?:remote\.|commands\.execute|execute\()[^\n]*/) || [''])[0].slice(0, 90)));
+    renderer.unmount();
+  }
+  // 定位不到会话：同样给「未接入 + 用户向原因」，不是抛错
+  const 无会话设置 = boot({ store, services: {} });
+  const 无会话渲染 = mountSettings(无会话设置);
+  const 无会话文本 = await textAfterLoad(无会话渲染);
+  passed.push(check(无会话文本.includes('这一页需要一个打开的会话才能读写设置。'),
+    '⑧ 设置页定位不到会话 ⇒ 未接入 + 用户向原因，不抛', 无会话文本.slice(0, 140)));
+  passed.push(check(无会话文本.includes(PRESENCE_COMMAND), '⑧ 设置页定位不到会话 ⇒ 仍给可敲的命令'));
+  无会话渲染.unmount();
+  sr1.unmount();
+  sr2.unmount();
+  sr3.unmount();
+
+  // ═══ Batch 5：设置页的**人话与样式**（这一类问题此前一条门禁都没有）═══
+  //
+  // 背景：主人看真机截图挑出两条 —— ①失联限制那个旧叫法不吉利（已统一改成「失联保险」）；
+  // ②设置页不像官方设置页的一家人（裸浏览器默认控件 + 一大段文字）。
+  // 下面四组断言把这两条拆成可判的东西。
+  {
+    const 渲染 = (services) => {
+      const booted = boot({ store, services });
+      const renderer = mountSettings(booted);
+      return { renderer, 元素: () => collect(renderer.tree, { skipStyle: true }).elements };
+    };
+    const 常驻 = 渲染(Object.assign(session(), { remote: makeRemote(() => okReply({ 读数: 读数袋(), 设置文件: SETTINGS_FILE, 说明: '读…' })).remote }));
+    await textAfterLoad(常驻.renderer);
+
+    // ⑨ 用户可见文本里不含实现细节（`remote.` / `commands.execute` / `execute(`）。
+    //    为什么守：错误串是给排障写的（里面就是函数名与调用形状），印到界面上等于让主人读我们的栈。
+    const 黑名单 = ['remote.', 'commands.execute', 'execute('];
+    const 可见文本 = (元素) => 元素
+      .filter((el) => el.type !== 'style' && el.type !== 'script')
+      .map((el) => el.props.children)
+      .filter((c) => typeof c === 'string' || typeof c === 'number')
+      .join('\n');
+    const 活文本 = 可见文本(常驻.元素());
+    for (const 串 of 黑名单) {
+      passed.push(check(活文本.indexOf(串) < 0,
+        '⑨ 设置页可见文本不含实现细节「' + 串 + '」',
+        (活文本.match(new RegExp('[^\\n]*' + 串.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[^\\n]*')) || [''])[0].slice(0, 100)));
+    }
+    passed.push(check(活文本.indexOf('失联保险') >= 0, '⑨ 文案已换成新词「失联保险」'));
+    // 新旧词一刀切：整个设置页一个旧词都不许留。
+    // ⚠️ 断言里那个串用 `\u` 转义写字面量：本文件里不留旧词的**明文**，
+    //    这样 `grep 旧词 components mind` 能干净地返回 0（门禁之外的眼睛也是门禁）。
+    const 旧词 = '\u6b7b\u4eba';
+    passed.push(check(collect(常驻.renderer.tree, { skipStyle: true }).text.indexOf(旧词) < 0,
+      '⑨ 设置页里不许再出现旧词（失联限制那个不吉利的旧叫法）'));
+
+    // ⑩ 所有交互控件都带我们的类名（= 不是裸浏览器默认样式），且注入的样式表里能找到对应规则。
+    const 控 = 常驻.元素().filter((el) => ['select', 'input', 'button'].indexOf(el.type) >= 0);
+    passed.push(check(控.length >= 4, '⑩ 设置页确实渲染出交互控件（select/number/保存/重新读取…）', String(控.length)));
+    // ⚠️ 样式**不在渲染树里**：`<style>` 只在**看板面板**里注入，设置页那一格为了不污染
+    //    官方设置页故意不注入自己的 style —— 所以样式文本只能从**源码**里查。
+    //    （第一版我在渲染树里找 `<style>`，收集到 0 个字符，于是"规则存在与否"永远查不到。）
+    const 源码 = readFileSync(CLIENT_PATH, 'utf8');
+    const 样式段 = 源码.slice(源码.indexOf('var CSS = ['), 源码.indexOf('].join(\'\');', 源码.indexOf('var CSS = [')));
+    const 样式文本 = 样式段;
+    passed.push(check(样式文本.indexOf('.dshmind-set__') >= 0,
+      '⑩ 样式源里确实有设置页那套规则（前提检查：能查到 .dshmind-set__ 前缀）', String(样式文本.length) + ' 字符'));
+    // ⚠️ 判据必须强到「这条控件真有基础样式」，**不是**「文件里出现过这个词」——这道坎我踏了两次：
+    //    第一版 `indexOf('.' + 基)`：把基础规则整条删掉后，`:focus` 那条仍让它"找得到" ⇒ 变异不红；
+    //    第二版只要求「有从选择器开头的规则」：`select:focus,…{border-color}` 这种**只带伪态**的规则
+    //    照样满足 ⇒ 变异还是不红（控件其实已经回不到基础观感了，门禁却在打勾）。
+    //    现在要求：**不带伪态的基础规则**存在，且它真带上了这条控件的样式属性（height/padding/background）。
+    const 基础规则体 = (基) => {
+      const 选择器 = '.' + 基;
+      for (const 行 of 样式文本.split("',")) {
+        const 起 = 行.indexOf(选择器);
+        if (起 < 0) continue;
+        const 左 = 行[起 - 1];
+        if (起 !== 0 && 左 !== "'" && 左 !== ',') continue;
+        const 括号 = 行.indexOf('{', 起);
+        if (括号 < 0) continue;
+        // 伪态（`:focus` / `:hover` / `:disabled`）不算基础规则。
+        if (行.slice(起, 括号).indexOf(':') >= 0) continue;
+        const 体 = 行.slice(括号 + 1);
+        // 「有样式」= 带了任何一条真会改变观感的属性（不限于尺寸：主按钮那条是 border-color/background）。
+        if (/height|padding|background|border|color|font|opacity|border-radius/.test(体)) return 体;
+      }
+      return '';
+    };
+    const 我们的 = 控.filter((el) => typeof el.props.className === 'string' && el.props.className.indexOf('dshmind-') === 0);
+    passed.push(check(我们的.length === 控.length,
+      '⑩ 每个交互控件都带我们的类名（裸默认样式 = 0 个）',
+      JSON.stringify(控.filter((el) => 我们的.indexOf(el) < 0).map((el) => el.type + ':' + String(el.props.className)))));
+    const 样式表里没有规则的 = 我们的.filter((el) => {
+      const 基 = el.props.className.split(/\s+/).filter((c) => c.indexOf('dshmind-') === 0)[0];
+      return 基础规则体(基) === '';
+    });
+    passed.push(check(样式表里没有规则的.length === 0,
+      '⑩ 每个控件类名在样式源里都有**基础规则**（带 height/padding/background，不只是伪态；不是"给了类名没给样式"）',
+      JSON.stringify(样式表里没有规则的.map((el) => el.props.className))));
+    // 主次分档：保存＝主（实心主色），重新读取 / 关闭＝次（描边）。
+    const 按钮 = 控.filter((el) => el.type === 'button');
+    const 主按钮 = 按钮.filter((el) => String(el.props.className).indexOf('dshmind-set__btn--primary') >= 0);
+    passed.push(check(主按钮.length === 1 && String(主按钮[0].props.children).indexOf('保存') >= 0,
+      '⑩ 恰好一个主按钮（保存），其余都是次要按钮',
+      JSON.stringify(按钮.map((el) => String(el.props.children)))));
+    passed.push(check(基础规则体('dshmind-set__btn--primary') && 基础规则体('dshmind-set__select') && 基础规则体('dshmind-set__number'),
+      '⑩ 控件基础样式确实在（select / number / 主按钮各有一条带样式的非伪态规则）',
+      JSON.stringify([基础规则体('dshmind-set__select').slice(0, 40)])));
+
+    // ⑪ 「未接入」是**用户向**的，且仍给出可复制命令。
+    const 未接 = 渲染(session()); // 没有 remote ⇒ 未接入
+    const 未接文本 = await textAfterLoad(未接.renderer);
+    passed.push(check(未接文本.includes('这一页需要一个打开的会话才能读写设置。'),
+      '⑪ 未接入文案是用户向的（不说函数名 / 服务名）', 未接文本.slice(0, 140)));
+    passed.push(check(!/remote\.|commands\.execute|execute\(/.test(未接文本),
+      '⑪ 未接入文案里没有实现细节'));
+    // ⚠️ 这条必须打**未接入那块自己**：页脚本来就有「命令 /mind presence」，
+    //    整页搜 `PRESENCE_COMMAND` 会被页脚接住 ⇒ 提示里就算没给命令也照样绿（空转）。
+    const 未接提示 = findAllByClass(未接.renderer.tree, 'dshmind-set__notice')[0];
+    const 提示文本 = 未接提示 ? textOf(未接提示) : '';
+    passed.push(check(!!未接提示 && 提示文本.indexOf(PRESENCE_EXAMPLE) >= 0,
+      '⑪ 未接入那块自己给出可复制去敲的完整命令（' + PRESENCE_EXAMPLE + '）', 提示文本.slice(0, 120)));
+    passed.push(check(!!未接提示 && 提示文本.indexOf(PRESENCE_COMMAND) >= 0,
+      '⑪ 未接入那块给出的命令确实以 ' + PRESENCE_COMMAND + ' 开头'));
+    // 「别喧宾夺主」：未接入提示的元素数要**明显少于**正式内容（不是一整屏告警）。
+    // ⚠️ 按类名 token 精确算容器（`dshmind-set__noticeText` / `__noticeCmd` 也以 `__notice` 开头，
+    //    用 `indexOf` 数会把一条提示数成 3 个元素 —— 那测的就不是"紧凑"了）。
+    const 未接元素数 = 未接.元素().filter((el) => typeof el.props.className === 'string'
+      && el.props.className.split(/\s+/).indexOf('dshmind-set__notice') >= 0).length;
+    passed.push(check(未接元素数 === 1,
+      '⑪ 未接入提示收成紧凑一条（1 个容器块，不是一整屏告警）', String(未接元素数)));
+    未接.renderer.unmount();
+
+    // ⑫ **不渲染空容器**：有我们的类名、却既没文本也没控件的块 = 版面上的"空框"。
+    //    主人截图右侧那个圆角空框，第一件要做的事就是排除它是不是我们自己画的。
+    const 空块 = (元素) => 元素.filter((el) => {
+      if (typeof el.props.className !== 'string' || el.props.className.indexOf('dshmind-set__') !== 0) return false;
+      const 子 = collect(el, { skipStyle: true });
+      const 有控件 = 子.elements.some((x) => ['button', 'select', 'input'].indexOf(x.type) >= 0);
+      return 子.text.trim() === '' && !有控件;
+    });
+    for (const 场景 of [{ name: '能读', 渲染器: 常驻.renderer }, { name: '未接入', 渲染器: 未接.renderer }]) {
+      const 空 = 空块(collect(场景.渲染器.tree, { skipStyle: true }).elements);
+      passed.push(check(空.length === 0,
+        '⑫ ' + 场景.name + '态下不渲染任何空容器',
+        JSON.stringify(空.map((el) => el.props.className))));
+    }
+    常驻.renderer.unmount();
+  }
+
   // ③f 待你决定为空：空态是明说的一句话
   const emptySpy = makeRemote(() => okReply(noDecisionView()));
   const empty = boot({ store, services: Object.assign(session(), { remote: emptySpy.remote }) });
@@ -728,8 +1503,18 @@ export async function runHarness() {
     '不得自己画按钮：会与宿主那一行叠成两层可点区域'));
   passed.push(check(collect(glyphWide.tree).text.trim() === '',
     '不得自己画文字：标签由宿主渲染一次', JSON.stringify(collect(glyphWide.tree).text)));
-  passed.push(check(!/onClick/.test(String(mountEntry(a, { size: 16, active: false }).tree && '')) ,
-    '入口不处理点击（由宿主 selectPanel 负责）'));
+  // 【Batch 4b · 治一条恒真断言】
+  // 旧写法：`!/onClick/.test(String(mountEntry(...).tree && ''))` ——
+  // 树对象是 truthy，`tree && ''` **恒为 `''`**，`String('')` 的 regex 测试**恒通过**。
+  // 也就是说这一条从来没测过任何东西（它并不"保护"什么，只是占了一行、还让人以为测了）。
+  // 现在改成真判据：把入口渲染出的**整棵树的元素**都翻出来，任何一个都不得带 onClick。
+  // 同一条纪律由**两处**接住，删或改都不会留下空档：
+  //   · 这里（入口那一格：点击归宿主 `selectPanel`）；
+  //   · ④（工作台面板：唯一可点动作是「刷新」，且没有任何 onChange 表单控件）。
+  const 入口元素 = collect(mountEntry(a, { size: 16, active: false }).tree, { skipStyle: true }).elements;
+  const 带点击的 = 入口元素.filter((el) => typeof el.props.onClick === 'function');
+  passed.push(check(入口元素.length > 0 && 带点击的.length === 0,
+    '入口不处理点击（由宿主 selectPanel 负责）—— 整棵树 ' + 入口元素.length + ' 个元素，带 onClick 的 ' + 带点击的.length + ' 个'));
   passed.push(check(svg.props.style.opacity === 0.72, '未选中时标记淡一些', String(svg.props.style.opacity)));
   const glyphActive = mountEntry(a, { size: 16, active: true });
   passed.push(check(collect(glyphActive.tree).elements.find((el) => el.type === 'svg').props.style.opacity === 1,
@@ -739,7 +1524,7 @@ export async function runHarness() {
   const throwingSlots = makeSlots();
   throwingSlots.slots.register = () => { throw new Error('槽位协议变了'); };
   const broken = boot({ services: Object.assign(session(), { slots: throwingSlots.slots }) });
-  passed.push(check(throwingSlots.calls.inject.length === 2, '仍然尝试了两次注入', throwingSlots.calls.inject.join(',')));
+  passed.push(check(throwingSlots.calls.inject.length === 3, '仍然尝试了三次注入', throwingSlots.calls.inject.join(',')));
   passed.push(check(typeof broken.disposer === 'function' || broken.disposer === undefined,
     '注册失败也不抛，apply 照常返回'));
 

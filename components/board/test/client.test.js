@@ -63,7 +63,7 @@ test('lib/client.js 不依赖宿主内部包，只用带兜底值的 --dsw-* 令
   assert.ok(/var\(--dsw-alias-/.test(source), '页面配色必须走 --dsw-alias-* 令牌');
 });
 
-test('两处席位：面板进 main（key dsh-mind），图标进 sidebar.panellist 且排在插件入口下面', () => {
+test('三处席位：面板进 main（key dsh-mind）、图标进 sidebar.panellist、设置页进 settings.section', () => {
   // 注册走本地的 `登记(name, 注册)` 包装（它把每次注册都包在 try/catch 里，
   // 界面组件不该有能力把整站 web 启动搞崩），所以断言打在这个包装上。
   assert.ok(/登记\('main', function \(\) \{/.test(source), '必须注册 main 席位（面板本体）');
@@ -72,12 +72,19 @@ test('两处席位：面板进 main（key dsh-mind），图标进 sidebar.panell
   assert.ok(/name: 'sidebar\.panellist',\s*\n\s*id: PANEL_KEY/.test(source), '入口席位必须带 id');
   assert.ok(/order: 10/.test(source), '入口 order 必须是 10 —— 插件入口是 0，这样才排在它下面');
   assert.ok(/function 登记\(name, 注册\) \{[\s\S]{0,400}?try \{/.test(source),
-    '两处注册必须各自包在 try/catch 里：注册失败只能让看板不可见，不能拖垮 web 启动');
-  // 断言打在**注册调用**上，而不是「文件里出现过这个词」——
-  // 后者会被解释这段历史的注释误伤。
-  assert.ok(!/name:\s*'settings\.section'/.test(source), '不得再注册 settings.section');
+    '三处注册必须各自包在 try/catch 里：注册失败只能让看板不可见，不能拖垮 web 启动');
+  // ⚠️ 这一条**改过**（理由留在断言里，不是把历史的红删掉）：
+  // 旧断言「不得再注册 settings.section」说的是**看板面板**搬出设置页 —— 面板是常驻运维视图，
+  // 不是一项设置，且 §9「工作台只读」不许它带写控件。本批注册的那一格是**另一件东西**：
+  // 官方设置页里的「心智设置」分区（失联限制 + 响应期限小时 + 保存），它是这两个键唯一的写入口。
+  // 所以这条断言的形状从「不得出现」改成「出现的必须是心智设置分区，而不是面板本身」。
+  assert.ok(/name: 'settings\.section',\s*\n\s*id: SETTINGS_SECTION_ID/.test(source),
+    '设置页分区必须注册成 settings.section + 自己的 id（不是拿看板面板去顶替）');
+  assert.ok(/order: 60/.test(source), '设置页分区自带 order');
+  assert.ok(/label: function \(\) \{ return SETTINGS_SECTION_LABEL; \}/.test(source), '设置页分区带 label 函数');
   assert.ok(!/name:\s*'sidebar\.footer\.action'/.test(source), '不得再占用侧边栏页脚席位');
   assert.ok(/'\/mind dashboard'/.test(source), '宿主命令必须是 /mind dashboard');
+  assert.ok(/'\/mind presence'/.test(source), '设置页命令必须是 /mind presence');
 });
 
 test('八件与环路已从源码里删除（不是注释掉）：渲染、常量、样式一个不留', () => {

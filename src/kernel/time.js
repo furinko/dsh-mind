@@ -48,22 +48,105 @@ export function monthKey(value) {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
+/** 内置兜底的响应期限（小时）：主权者没写、或写了个坏值时的生效值。 */
+export const BUILTIN_RESPONSE_DEADLINE_HOURS = 72;
+
+/**
+ * 响应期限小时的**上界**（含 876000 小时 ≈ 100 年）。
+ *
+ * 为什么必须有上限（这不是「输入体检」的洁癖，是防止整条读数链全废）：
+ * `evaluateSovereignPresence` 要算 `deadline = since + 小时 × 3600_000`，
+ * 而 `Date` 能表示的最大时刻是 `8.64e15` ms —— 越界时 `toIso()` 抛 `RangeError`，
+ * 于是 `presence()` 抛、`/mind status` 与工作台一起拿不到状态条，而引擎还报 `healthy`。
+ * 越界阈值约 `2.4e9` 小时（`(8.64e15 − 现在)/3600e3`）：**一个「合法的大整数」足以把读数面整个打死**。
+ *
+ * 为什么取 100 年：语义上「期限 876000 小时」已经等于「永不判失联」（远超任何部署寿命），
+ * 再大没有含义，而它距 `Date` 上界还有 4 个数量级的安全余量。
+ *
+ * 为什么常量住在这里而不是写在使用方：判据只该有一份（§12.3 同款纪律）——
+ * 写前校验（`lib/actions.js` 的 `解析设置小时`）与运行时折算（`resolveResponseDeadline`）
+ * 引用的是**同一个**上界；两处字面量迟早会漂，而漂的方向正好是「一处放行、一处炸」。
+ */
+export const MAX_RESPONSE_DEADLINE_HOURS = 876_000;
+
+/**
+ * `Date` 能表示的最大时刻（毫秒，±100,000,000 天）：`8.64e15`。
+ *
+ * 为什么把这个数写下来：`since + 期限×3600e3` 一旦越过它，`toIso()` 就抛 `RangeError`。
+ * 上界只卡住了「期限」那一头，还剩下另一头 —— `lastInteraction` 本身是**合法**时刻但贴近这个上限
+ * （`+275760-09-13T00:00:00.000Z` 正是不多不少的最大值），此时**加上任何正的小时数都会溢出**，
+ * 于是 `presence()` 抛、`/mind status` 与工作台一起拿不到状态条，而引擎还报 `healthy`。
+ */
+const DATE_MAX_MS = 8.64e15;
+
+/**
+ * 解析主权者自设的「响应期限小时」。
+ *
+ * 坏值（`0` / `-5` / `"abc"` / `null` / **越界的大整数**）既**不能让保护失效**，也**不许静默**：
+ *  - 保护方向 fail-safe：退回内置兜底 72（期限照判，失联保险照常工作）；
+ *  - 读数方向响亮：把 `不合法` 与 `原值` 交回调用方，由它如实报进 `/mind status` 与工作台。
+ * 两件事在这一个函数里定，是为了让「什么算合法」只有一个答案（§12.3 权限来源唯一确定的同款纪律：
+ * 判据也只该有一份）。
+ *
+ * **上界是判据的一部分**（`MAX_RESPONSE_DEADLINE_HOURS`）：越界的值必须被判成「不合法」并退回 72，
+ * 否则 `evaluateSovereignPresence` 算出的 deadline 会溢出 `Date` 上界，`toIso()` 抛错 ⇒ 读数面全废。
+ *
+ * @param {unknown} raw 文件里原样读到的值
+ * @returns {{ 生效: number, 不合法: boolean, 原值: unknown, 理由: string }}
+ *   `原值` 为 `undefined` 时折成 `null`（JSON 里没有 undefined，写进读数要能序列化）。
+ */
+export function resolveResponseDeadline(raw) {
+  const hours = Number(raw);
+  const 合法 = Number.isFinite(hours) && hours > 0 && hours <= MAX_RESPONSE_DEADLINE_HOURS;
+  const 原值 = raw === undefined ? null : raw;
+  return {
+    生效: 合法 ? hours : BUILTIN_RESPONSE_DEADLINE_HOURS,
+    不合法: !合法,
+    原值,
+    理由: 合法 ? '' : `需为 1 ~ ${MAX_RESPONSE_DEADLINE_HOURS} 之间的有限值（上限约 100 年），收到 ${JSON.stringify(原值)}`,
+  };
+}
+
 /**
  * 失联判定：自最后一次交互起，超过主权者自设的响应期限未响应。
  *
  * @param {{ lastInteraction: string|number|null, responseDeadlineHours: number, now?: Date|string|number }} input
- * @returns {{ lost: boolean, since: string|null, deadline: string|null, hours: number }}
- *   `lastInteraction` 为空时按「从未交互」处理 —— 那是失联，不是在线（§12.2 不许「查不到 = 放行」）。
+ * @returns {{ lost: boolean, since: string|null, deadline: string|null, hours: number|null, 判定说明?: string }}
+ *   `lastInteraction` 为空**或解析不出一个有效时刻**时，一律按「从未交互」处理 ——
+ *   那是失联，不是在线（§12.2 不许「查不到 = 放行」）。
+ *   坏时间戳必须走这条路而不是让它一路算下去：`toIso(NaN)` 会抛 `RangeError`，
+ *   而这一抛不是「读数难看」，是 `presence()` 抛 ⇒ `/mind status` 与工作台**一起拿不到状态条**
+ *   （与越界的 `响应期限小时` 是同一个后果，所以两条判据都在这里堵）。
+ *
+ *   **本函数永不抛**（调用方 `presence()` 也永不抛 —— 它是读数链的必经之路）：
+ *   时刻解析不出、或「合法时刻 + 期限」越过 `Date` 上界，都给**确定读数**：
+ *   `lost` 按最严取 `true`，`deadline` 取 `null`（表示不出来），原因写进 `判定说明`。
  */
 export function evaluateSovereignPresence(input) {
   const now = input.now === undefined ? Date.now() : new Date(input.now).getTime();
-  const hours = Number(input.responseDeadlineHours);
-  const deadlineMs = (Number.isFinite(hours) && hours > 0 ? hours : 72) * 3600_000;
+  // 坏值在这里就已经被折成合法值（同一份判据），调用方拿到的是「生效值」，不是原值。
+  const hours = resolveResponseDeadline(input.responseDeadlineHours).生效;
+  const deadlineMs = hours * 3600_000;
   if (input.lastInteraction === null || input.lastInteraction === undefined) {
     return { lost: true, since: null, deadline: null, hours: 0 };
   }
   const since = new Date(input.lastInteraction).getTime();
+  if (!Number.isFinite(since)) {
+    // 时刻解析不出来 ⇒ 按「从未交互」判失联（fail-safe），并如实给 null 而不是一个假时间。
+    return { lost: true, since: null, deadline: null, hours: 0 };
+  }
   const deadline = since + deadlineMs;
+  if (!Number.isFinite(deadline) || deadline > DATE_MAX_MS || deadline < -DATE_MAX_MS) {
+    // `since` 合法、但加上期限就溢出（贴近 `Date` 上界）⇒ **不抛**，给确定读数 + 真原因。
+    // `deadline: null` 是「表示不出来」，不是「没有期限」；拿不准按最严判失联（§12.2 查不到 = 最严）。
+    return {
+      lost: true,
+      since: toIso(since),
+      deadline: null,
+      hours: null,
+      判定说明: `到期时刻超出可表示范围（lastInteraction=${toIso(since)} 加上期限 ${hours} 小时会越过 Date 上界 ${DATE_MAX_MS}ms），按最严判失联（fail-safe，§12.2 查不到 = 最严）。`,
+    };
+  }
   return {
     lost: now > deadline,
     since: toIso(since),

@@ -108,6 +108,122 @@ window.__ModuleLoader__.load({
       if (value === 0 || value === '0' || value === 'false' || value === '否') return false;
       return null;
     }
+    /**
+     * 失联态的**四态字符串**（`在位` / `已失联` / `已关闭` / `未知`）。
+     *
+     * 为什么不能是布尔：布尔装不下「关了」这件事 —— `false` 同时表示
+     * 「主权者一直在」与「这个机制被停掉了」，读的人分不清这两件完全不同的事。
+     * Batch 2 之前这里读的是 `boolOf(...)`，于是宿主给 `'已关闭'` 时
+     * `boolOf`（只认布尔 / `'true'` / `'是'` 那几个）返回 **null**，页面画成「未知」——
+     * 而真缺陷比这更糟：**过了 `boolOf` 的值一定是布尔，四态里那一态根本到不了渲染层**。
+     *
+     * @param {unknown} value 宿主给的 `状态条.失联`
+     * @returns {'在位'|'已失联'|'已关闭'|'未知'}
+     */
+    function 失联态Of(value) {
+      if (value === '在位' || value === '已失联' || value === '已关闭' || value === '未知') return value;
+      // 旧宿主只给布尔：降级成两态里最接近的那个，绝不把「没给」画成「在位」。
+      var 旧 = boolOf(value);
+      if (旧 === true) return '已失联';
+      if (旧 === false) return '在位';
+      return '未知';
+    }
+
+    /**
+     * `状态条.失联详情` 的**读数细节**：生效期限、来源、坏值标记。
+     *
+     * 这些答案宿主（`src/workbench.js` 的 `失联详情`）已经算好了，页面只负责取出来；
+     * 取不到就给「未知」而不是「看着正常」的默认值 —— 没读到 ≠ 正常。
+     */
+    function 失联详情Of(bag) {
+      var box = obj(bag);
+      if (!box) {
+        return {
+          在位: false, 读数: '缺失', 已关闭: false, lost: null, hours: null,
+          生效响应期限小时: null, 响应期限小时来源: '未知', 失联限制来源: '未知',
+          值不合法: false, 原值: null, 原值来源: '未知', 不合法说明: '', 说明: '',
+          提示: '宿主没给 状态条.失联详情。',
+        };
+      }
+      var 生效 = numOf(firstOf(box, ['生效响应期限小时', 'hours']));
+      var 来源期限 = line(box.响应期限小时来源, '未知');
+      var 来源开关 = line(box.失联限制来源, '未知');
+      var 值不合法 = boolOf(box.值不合法) === true;
+      var 读数 = 失联态Of(firstOf(box, ['读数', '状态']));
+      return {
+        在位: true,
+        读数: 读数,
+        已关闭: boolOf(box.已关闭) === true,
+        lost: boolOf(box.lost),
+        hours: numOf(box.hours),
+        生效响应期限小时: 生效,
+        响应期限小时来源: 来源期限,
+        失联限制来源: 来源开关,
+        值不合法: 值不合法,
+        原值: 值不合法 ? (box.原值 === undefined ? null : box.原值) : null,
+        原值来源: 值不合法 ? line(box.原值来源, '未知') : '',
+        不合法说明: 值不合法 ? line(box.不合法说明, '') : '',
+        说明: line(box.说明, ''),
+        提示: 失联详情提示({
+          读数: 读数, 生效响应期限小时: 生效,
+          响应期限小时来源: 来源期限, 失联限制来源: 来源开关, 值不合法: 值不合法,
+        }),
+      };
+    }
+
+    /**
+     * **读数对象**（`policy.presence()` / `presence` 动作返回的 `读数`）→ 四态字符串。
+     *
+     * ⚠️ 这个函数与 `失联态Of` 是两件东西，别互相喂错：
+     * `失联态Of` 收的是**已经归一好的值**（`状态条.失联` 那个字符串，或旧宿主的布尔）；
+     * 这里收的是**对象**，判据顺序与宿主 `src/workbench.js` 的 `失联态` 逐条对齐：
+     * `已关闭` 先判（否则关了会被当成在位）→ `已失联` → `在位` → `未知`。
+     *
+     * 为什么必须单独立一个：Batch 4b 的真缺陷就是**把对象喂给了 `失联态Of`** ——
+     * 前者只认四个字符串，遇到对象一律返回 `未知`，于是设置页那行三态（关 / 失联 / 在位）
+     * **全渲染成「当前 未知」+ 灰点**，`已关闭（不判定失联）` 那个分支在设置页根本不可达。
+     * 工作台面板那边没这个错（它读的是宿主已经归一好的 `状态条.失联` 字符串）。
+     */
+    function 读数对象四态(读数) {
+      var box = obj(读数);
+      if (!box) return '未知';
+      if (boolOf(box.已关闭) === true) return '已关闭';
+      var 态 = firstOf(box, ['读数', '状态']);
+      if (态 !== undefined && 态 !== null) return 失联态Of(态);
+      var lost = boolOf(box.lost);
+      if (lost === true) return '已失联';
+      if (lost === false) return '在位';
+      return '未知';
+    }
+
+    /** 悬停用的读数全文：一格里塞不下的东西放这儿，版面上不喧宾夺主。 */
+    function 失联详情提示(d) {
+      var 段 = [
+        '读数：' + (d.读数 === '缺失' ? '缺失' : d.读数),
+        '生效响应期限小时：' + (d.生效响应期限小时 === null ? '—' : d.生效响应期限小时),
+        '响应期限小时来源：' + d.响应期限小时来源,
+        '失联限制来源：' + d.失联限制来源,
+      ];
+      if (d.值不合法) 段.push('值不合法：true —— 已退回内置兜底');
+      return 段.join('\n');
+    }
+
+    /**
+     * 失联那一格的一行后缀：生效期限、来源、坏值标记。
+     * 只在有东西可说时给；绝不把「值不合法」按掉了 —— 那是这一格最该说的事。
+     */
+    function 失联附注(d) {
+      if (!d || !d.在位) return '';
+      var 段 = [];
+      if (d.生效响应期限小时 !== null) {
+        段.push('期限 ' + d.生效响应期限小时 + 'h');
+        if (d.响应期限小时来源 !== '未知') 段.push('来源 ' + d.响应期限小时来源);
+      }
+      if (d.失联限制来源 !== '未知') 段.push('开关来源 ' + d.失联限制来源);
+      if (d.值不合法) 段.push('⚠ 值不合法（已退回兜底）');
+      return 段.join(' · ');
+    }
+
     /** 数量取值：数字直取、数组取长度、对象取 `合计` 或键数。取不到返回 null（渲染成「—」，不是 0）。 */
     function numOf(value) {
       if (typeof value === 'number' && isFinite(value)) return value;
@@ -155,6 +271,19 @@ window.__ModuleLoader__.load({
     var CACHE_KEY = 'dsh-mind.dashboard.v1';
     /** 自动刷新间隔（人看的板子，30s 够「活」，又不打扰）。 */
     var REFRESH_MS = 30000;
+    /** 设置页分区：id 与标签（`settings.section` 的注册契约是 `{name, id, order, label()}`）。 */
+    var SETTINGS_SECTION_ID = 'dsh-mind-settings';
+    var SETTINGS_SECTION_LABEL = '心智';
+    /**
+     * 「响应期限小时」的**上界**，与宿主同一份判据（`src/kernel/time.js` 的
+     * `MAX_RESPONSE_DEADLINE_HOURS`，`lib/actions.js` 的写前校验也用它）。
+     *
+     * 浏览器半边**取不到**那个常量（本文件是经典脚本，不 import 宿主模块），所以这里只能
+     * 复写一份字面量。复写是有代价的（两处会漂），因此：
+     *  · 变红的方式写进了断言（填 876001 ⇒ 页面必须说「没写进去」并给出区间）；
+     *  · 真正说了算的仍是宿主 —— 就算这里漏了，宿主也会拒，页面会因为「回读对不上」而明说没写进去。
+     */
+    var MAX_RESPONSE_DEADLINE_HOURS = 876000;
     var TASK_LIMIT = 12;
     var AUDIT_LIMIT = 20;
     /** 「待你决定」是主子唯一必须看的清单，所以给得比任务卡更宽；超出的部分明说还有多少条。 */
@@ -197,6 +326,9 @@ window.__ModuleLoader__.load({
       var statusBag = obj(firstOf(v, ['状态条', '状态'])) || {};
       var gateBag = obj(firstOf(statusBag, ['闸', 'policy'])) || {};
       var probeBag = obj(firstOf(statusBag, ['探针', 'probes'])) || {};
+    var 失联详情袋 = firstOf(statusBag, ['失联详情']);
+    var 失联原值 = firstOf(statusBag, ['失联', 'lost', 'presenceLost']);
+    if (失联原值 === undefined) 失联原值 = firstOf(obj(失联详情袋) || {}, ['读数']);
       return {
         原始: v,
         项目: line(firstOf(v, ['项目', '项目键', 'project', 'projectKey']), '（未指定）'),
@@ -211,7 +343,11 @@ window.__ModuleLoader__.load({
             错误: line(firstOf(gateBag, ['错误', 'error']), ''),
           },
           介入度: line(firstOf(statusBag, ['介入度', 'intervention']), '未知'),
-          失联: boolOf(firstOf(statusBag, ['失联', 'lost', 'presenceLost'])),
+          // 四态字符串：在位 / 已失联 / 已关闭 / 未知。
+          // 取值顺序是**有意的**：宿主没给 `失联`（`undefined`）时，不要立刻判「未知」——
+          // 它可能只是把结论放在 `失联详情.读数` 里了（两者都缺才是未知）。
+          失联: 失联态Of(失联原值),
+          失联详情: 失联详情Of(失联详情袋),
           探针: {
             状态: line(firstOf(probeBag, ['状态', 'status']), '未知'),
             见红: arr(firstOf(probeBag, ['见红', '红灯', 'red'])).map(probeName).filter(Boolean),
@@ -388,9 +524,14 @@ window.__ModuleLoader__.load({
       '.dshmind-secCount{margin-left:auto;color:var(--dsw-alias-label-caption,#adb2b8);font-size:12px}',
       '.dshmind-secBody{padding:14px 16px}',
 
-      // 页头告警：闸不在位 / 已失联 —— 只是换个点色不算「看见了」，整块读数要变色。
+      // 页头告警：闸不在位 / 已失联 / 已关闭 —— 只是换个点色不算「看见了」，整块读数要变色。
       '.dshmind-readoutAlarm{background:var(--dsw-alias-state-error-tertiary,#fdecea)}',
       '.dshmind-readoutAlarm .dshmind-readoutVal{color:var(--dsw-alias-state-error-primary,#d54941)}',
+      // 失联的**次要行**：回答「凭什么」（生效期限 / 来源 / 坏值）。占整行、字号更小、
+      // 不与主读数抢位置 —— 主读数照旧一眼可见，这一行想看才看。
+      '.dshmind-readoutDetail{grid-column:1/-1;display:flex;gap:14px;flex-wrap:wrap;align-items:baseline;',
+      'background:var(--dsw-alias-bg-layer-1,#fff);padding:6px 14px 9px;font-size:11px;line-height:16px;',
+      'color:var(--dsw-alias-label-tertiary,#81858c)}',
 
       // 待你决定：只读工作台给的是**一条命令**，不是一个按钮
       '.dshmind-decide{display:flex;flex-direction:column;gap:10px}',
@@ -468,6 +609,83 @@ window.__ModuleLoader__.load({
       'background:var(--dsw-alias-state-warn-tertiary,#fdf6e7);color:var(--dsw-alias-state-warn-primary,#c47f17);',
       'border:.5px solid var(--dsw-alias-state-warn-secondary,#e5b46a);border-radius:var(--dsw-radius-md,8px)}',
       '.dshmind-empty{color:var(--dsw-alias-label-tertiary,#81858c);font-size:12px;padding:10px 0}',
+
+      // ── 设置页（`settings.section`「心智」）────────────────────────────────
+      // 前缀 `.dshmind-set__*`（BEM 风），**另起一套、不与看板的 `.dshmind-*` 混用**：
+      // 设置页住在官方设置面板里，与看板面板是两件东西，样式也该各归各的。
+      //
+      // 目标：与官方设置页其它分区（通用 / 模型 / 插件 …）**长得像一家人**。
+      // 参考实现是 `E:\DSHOME-Plugin\lib\client.js` 的「提醒」分区（同一个宿主、同一个槽位，
+      // 已在官方客户端跑通）：它的做法是 —— 每行「左标题 + 说明 / 右控件」、行间用
+      // 那条 `border-l2` 别名令牌画 `1px solid` 分隔、圆角与淡背景也走别名令牌、
+      // 说明用 `label-tertiary`、控件给类名而不是裸默认样式。这里照同一套做法。
+      //
+      // 令牌纪律照旧：每个 `var(--dsw-*)` 都带兜底值（令牌改名只掉外观，不掉功能）。
+      '.dshmind-set__{box-sizing:border-box;display:flex;flex-direction:column;gap:4px;width:100%;',
+      'padding:2px 0 12px;color:var(--dsw-alias-label-primary,#1a2233);font-size:13px;line-height:20px;',
+      "font-family:var(--ds-font-family-sans,-apple-system,'Segoe UI',system-ui,sans-serif)}",
+      '.dshmind-set__ *{box-sizing:border-box}',
+      // 标题与说明：标题与官方分区标题同尺，说明只留一句（原来那一大段收短）。
+      '.dshmind-set__title{margin:0 0 2px;font-size:15px;line-height:24px;font-weight:600;',
+      'color:var(--dsw-alias-label-primary,#1a2233)}',
+      '.dshmind-set__lede{margin:0 0 10px;font-size:12.5px;line-height:19px;',
+      'color:var(--dsw-alias-label-tertiary,#6b7a99);overflow-wrap:anywhere}',
+      // 未接入：**一条紧凑提示**，不抢主版面（原来它占的比正式内容还大）。
+      '.dshmind-set__notice{display:flex;flex-direction:column;gap:6px;margin:0 0 10px;padding:10px 12px;',
+      'border:1px solid var(--dsw-alias-border-l2,#d3dcea);border-left:3px solid var(--dsw-alias-state-warn-primary,#c47f17);',
+      'border-radius:8px;background:var(--dsw-alias-bg-layer-2,#fff);font-size:12.5px;line-height:19px}',
+      '.dshmind-set__noticeText{color:var(--dsw-alias-label-secondary,#4a5a78);overflow-wrap:anywhere}',
+      '.dshmind-set__noticeCmd{margin:0;padding:6px 8px;border-radius:6px;cursor:text;-webkit-user-select:text;user-select:text;',
+      'background:var(--dsw-alias-markdown-code-block,#f5f5f5);border:.5px solid var(--dsw-alias-border-l1,#0000001f);',
+      'font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:11.5px;',
+      'color:var(--dsw-alias-label-secondary,#4a5a78);overflow-wrap:anywhere}',
+      // 行：与官方分区同款「左标题 + 说明 / 右控件」，行间细分隔线。
+      '.dshmind-set__rows{display:flex;flex-direction:column;border-top:1px solid var(--dsw-alias-border-l2,#d3dcea)}',
+      '.dshmind-set__row{display:flex;align-items:center;gap:16px;padding:12px 0;',
+      'border-bottom:1px solid var(--dsw-alias-border-l2,#d3dcea)}',
+      '.dshmind-set__texts{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:2px}',
+      '.dshmind-set__label{font-size:14px;line-height:22px;color:var(--dsw-alias-label-primary,#1a2233)}',
+      '.dshmind-set__hint{font-size:12.5px;line-height:18px;color:var(--dsw-alias-label-tertiary,#6b7a99);',
+      'overflow-wrap:anywhere}',
+      '.dshmind-set__control{flex:0 0 auto;display:flex;align-items:center;gap:8px;min-width:0}',
+      '.dshmind-set__value{min-width:0;display:flex;align-items:center;gap:6px;flex-wrap:wrap;overflow-wrap:anywhere}',
+      // 控件：圆角 / 边框 / 背景 / focus 态对齐宿主观感，且**都有类名**（不许裸默认样式）。
+      '.dshmind-set__select,.dshmind-set__number{height:32px;padding:0 10px;border-radius:8px;font-size:13px;',
+      'font-family:inherit;color:var(--dsw-alias-label-primary,#1a2233);background:var(--dsw-alias-bg-layer-2,#fff);',
+      'border:1px solid var(--dsw-alias-border-l2,#d3dcea)}',
+      '.dshmind-set__number{width:112px}',
+      '.dshmind-set__select:focus,.dshmind-set__number:focus{outline:none;',
+      'border-color:var(--dsw-alias-brand-primary,#4D6BFE)}',
+      '.dshmind-set__select:disabled,.dshmind-set__number:disabled{opacity:.55;cursor:default}',
+      // 按钮：主次分档 —— 保存＝主（实心），重新读取 / 关闭＝次（描边）。
+      '.dshmind-set__actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:14px}',
+      '.dshmind-set__btn{height:32px;padding:0 14px;border-radius:8px;cursor:pointer;font-size:13px;',
+      'font-family:inherit;border:1px solid var(--dsw-alias-border-l2,#d3dcea);',
+      'background:var(--dsw-alias-bg-layer-2,#fff);color:var(--dsw-alias-label-primary,#1a2233);',
+      'transition:background .15s,border-color .15s,color .15s}',
+      '.dshmind-set__btn:hover{background:var(--dsw-alias-interactive-bg-hover,#eff1f5)}',
+      '.dshmind-set__btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4D6BFE);outline-offset:1px}',
+      '.dshmind-set__btn:disabled{opacity:.55;cursor:default}',
+      '.dshmind-set__btn--primary{border-color:transparent;font-weight:500;',
+      'background:var(--dsw-alias-brand-primary,#4D6BFE);color:var(--dsw-alias-label-primary-inverted,#fff)}',
+      '.dshmind-set__btn--primary:hover{background:var(--dsw-alias-brand-primary-hover,#3F5BE8)}',
+      // 坏值 / 提示条：告警与成功各一色，两者都必须**一眼可见**。
+      '.dshmind-set__bad{margin:10px 0 0;padding:9px 11px;border-radius:8px;font-size:12.5px;line-height:19px;',
+      'border:1px solid var(--dsw-alias-state-error-primary,#d54941);',
+      'background:var(--dsw-alias-state-error-tertiary,#fdecea);color:var(--dsw-alias-state-error-primary,#d54941);',
+      'overflow-wrap:anywhere}',
+      '.dshmind-set__toast{margin:12px 0 0;padding:9px 11px;border-radius:8px;font-size:12.5px;line-height:19px;',
+      'overflow-wrap:anywhere}',
+      '.dshmind-set__toast--warn{border:1px solid var(--dsw-alias-state-error-primary,#d54941);',
+      'background:var(--dsw-alias-state-error-tertiary,#fdecea);color:var(--dsw-alias-state-error-primary,#d54941)}',
+      '.dshmind-set__toast--ok{border:1px solid var(--dsw-alias-state-success-primary,#2f9e44);',
+      'background:var(--dsw-alias-state-success-tertiary,#eaf7ec);color:var(--dsw-alias-state-success-primary,#2f9e44)}',
+      // 页脚：命令与设置文件路径 —— 字号最小、色最淡，属于"想看才看"的信息。
+      '.dshmind-set__foot{display:flex;gap:12px;flex-wrap:wrap;margin-top:14px;padding-top:10px;',
+      'border-top:1px solid var(--dsw-alias-border-l2,#d3dcea);font-size:11.5px;line-height:17px;',
+      'color:var(--dsw-alias-label-caption,#8b93a7)}',
+      '.dshmind-set__mono{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Menlo,monospace);',
+      'overflow-wrap:anywhere}',
       '.dshmind-foot{display:flex;gap:10px;flex-wrap:wrap;align-items:center;color:var(--dsw-alias-label-caption,#adb2b8);',
       'font-size:11px;padding:2px 2px 4px}',
 
@@ -558,10 +776,17 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 取工作台投影。**永不 reject**：所有失败都变成一个 `{ok:false, error}`。
-     * 返回形状：`{ok:true, view}` 或 `{ok:false, error}`。
+     * 跑一条宿主命令。**永不 reject**：所有失败都变成一个 `{ok:false, error}`。
+     * 返回形状：`{ok:true, value}` 或 `{ok:false, error}`；`value` 是命令返回体解析出的 JSON 对象。
+     *
+     * 看板取数与设置页读写走的是**同一条路**（同一个 `remote.commands.execute`，
+     * 同一套「失败包成 ok:false」的约定），所以只有这一个入口 —— 降级口径就只有一份。
+     *
+     * @param {object} ctx 客户端上下文
+     * @param {string} sessionId 会话 id（`resolveSessionId` 给的）
+     * @param {string} command 命令文本，如 `/mind dashboard` / `/mind presence 开关=否`
      */
-    function fetchView(ctx, sessionId) {
+    function runCommand(ctx, sessionId, command) {
       return new Promise(function (resolve) {
         var remote = null;
         try {
@@ -577,7 +802,7 @@ window.__ModuleLoader__.load({
         }
         var pending;
         try {
-          pending = execute(sessionId, COMMAND, []);
+          pending = execute(sessionId, command, []);
         } catch (error) {
           resolve({ ok: false, error: '命令调用抛错：' + line(error && error.message, String(error)) });
           return;
@@ -592,7 +817,14 @@ window.__ModuleLoader__.load({
             }
             var parsed = parseLooseJson(result.text);
             if (!obj(parsed)) { resolve({ ok: false, error: '命令返回的不是 JSON' }); return; }
-            resolve({ ok: true, view: normalizeView(parsed) });
+            // 宿主把失败也包在 `kind:success` 里（`{成功:false, 结果:'结构不合规', 理由:…}`，
+            // 见 `describeFailure`）：认出来就不许当成成功 —— 否则设置页会把「被拒绝」
+            // 显示成「已保存」。`理由` 就是那条可执行理由，优先取它。
+            if (parsed.成功 === false) {
+              resolve({ ok: false, error: line(firstOf(parsed, ['理由', '错误', '原因', '结果', 'message']), '命令报告失败') });
+              return;
+            }
+            resolve({ ok: true, value: parsed });
           } catch (error) {
             resolve({ ok: false, error: '解析返回体失败：' + line(error && error.message, String(error)) });
           }
@@ -600,6 +832,180 @@ window.__ModuleLoader__.load({
           resolve({ ok: false, error: '命令失败：' + line(error && error.message, String(error)) });
         });
       });
+    }
+
+    /**
+     * 取工作台投影。**永不 reject**：所有失败都变成一个 `{ok:false, error}`。
+     * 返回形状：`{ok:true, view}` 或 `{ok:false, error}`。
+     */
+    function fetchView(ctx, sessionId) {
+      return runCommand(ctx, sessionId, COMMAND).then(function (out) {
+        if (!out.ok) return out;
+        return { ok: true, view: normalizeView(out.value) };
+      });
+    }
+
+    // ── 设置页的数据通道：读 / 写 `mind presence` ────────────────────────────
+    /** 设置页命令：与看板同一条通道（`remote.commands.execute`），不同子命令。 */
+    var PRESENCE_COMMAND = '/mind presence';
+    /** 没有 remote / 没有会话时给的那条命令：让人自己复制去敲，而不是看一块空白。 */
+    var PRESENCE_EXAMPLE = '/mind presence 开关=是 小时=168';
+
+    /**
+     * 读当前生效设置。读数取自命令返回体的 `读数` 字段（宿主 `policy.presence()` 的原样）。
+     * @returns {Promise<{ok:true, 读数:object, 设置文件:string, 说明:string} | {ok:false, error:string}>}
+     */
+    function readPresence(ctx, sessionId) {
+      return runCommand(ctx, sessionId, PRESENCE_COMMAND).then(function (out) {
+        if (!out.ok) return out;
+        var 读数 = obj(out.value.读数);
+        if (!读数) return { ok: false, error: '命令返回体里没有「读数」字段' };
+        return {
+          ok: true,
+          读数: 读数,
+          设置文件: line(out.value.设置文件, ''),
+          说明: line(out.value.说明, ''),
+        };
+      });
+    }
+
+    /**
+     * 写设置。
+     *
+     * ⚠️ `commands.execute` 的失败会被包成 `{ok:false,error}` 而**不会 reject**，
+     * 所以「没抛错」绝不等于「写进去了」—— 唯一判据是**回读**。
+     * 这里发完写命令立刻再读一次，并把「请求了什么」一起交给界面：
+     * 界面按回读值显示，回读与请求不一致就明说「没写进去」。
+     *
+     * @param {{ctx:object, sessionId:string, 开关:'是'|'否'|null, 小时:number|null}} spec
+     *   `开关` / `小时` 传 null 表示这次不该这个键（不是「写成 null」）。
+     * @returns {Promise<{ok:true, 请求:object, 写回应:object, 回读:object} | {ok:false, error:string, 请求:object}>}
+     */
+    function writePresence(spec) {
+      var 请求 = { 开关: spec.开关 === undefined ? null : spec.开关, 小时: spec.小时 === undefined ? null : spec.小时 };
+      var 段 = [];
+      if (请求.开关 !== null) 段.push('开关=' + 请求.开关);
+      if (请求.小时 !== null) 段.push('小时=' + 请求.小时);
+      var command = PRESENCE_COMMAND + (段.length ? ' ' + 段.join(' ') : '');
+      return runCommand(spec.ctx, spec.sessionId, command).then(function (out) {
+        if (!out.ok) return { ok: false, error: out.error, 请求: 请求 };
+        // 写成功也**必须回读**：命令的返回值是「它说它做了什么」，回读才是「盘上现在是什么」。
+        return readPresence(spec.ctx, spec.sessionId).then(function (back) {
+          if (!back.ok) return { ok: false, error: '写命令已发出，但回读失败：' + back.error, 请求: 请求 };
+          return { ok: true, 请求: 请求, 写回应: out.value, 回读: back };
+        });
+      });
+    }
+
+    /** 回读是否与请求一致；不一致就返回**明说没写进去**的文案（而绝不是「已保存」）。 */
+    function 回读对不上(请求, 读数) {
+      var 差 = [];
+      if (请求.开关 !== null) {
+        var 实际开关 = 开关态Of(读数);
+        var 实际文本 = 实际开关 === false ? '否' : 实际开关 === true ? '是' : '读不出';
+        if (实际文本 !== 请求.开关) 差.push('开关 请求 ' + 请求.开关 + ' / 回读 ' + 实际文本);
+      }
+      if (请求.小时 !== null) {
+        var 实际小时 = numOf(读数.生效响应期限小时);
+        if (实际小时 !== 请求.小时) 差.push('小时 请求 ' + 请求.小时 + ' / 回读 ' + (实际小时 === null ? '读不出' : 实际小时));
+      }
+      return 差.length ? '没写进去：回读与请求不一致（' + 差.join('；') + '）' : '';
+    }
+
+    /**
+     * `presence()` **读数对象** → 「失联限制」这个开关现在是什么：`true / false / null`。
+     *
+     * 为什么不能只读 `读数.失联限制` 就算完：F1 之前 `presence()` **不产出**这个字段
+     * （只有 `lost` / `已关闭`），读它只会得到 `undefined` —— 于是表单「初值来自回读」这件事
+     * 会**悄悄退回硬编码默认值**，而界面上完全看不出差别。这是"没产出的字段被当成了产出"。
+     *
+     * 取值顺序：先认 `失联限制`（F1 之后的唯一真源），缺了就**从 `已关闭` 推**：
+     * `已关闭 === true` ⇒ 关（`false`）；`已关闭 === false` ⇒ 开（`true`）。
+     * 两个都没有 ⇒ `null`（**不许**猜成"开"：查不到 ≠ 放行）。
+     */
+    function 开关态Of(读数) {
+      var box = obj(读数);
+      if (!box) return null;
+      var 直给 = boolOf(box.失联限制);
+      if (直给 !== null) return 直给;
+      var 已关闭 = boolOf(box.已关闭);
+      if (已关闭 !== null) return !已关闭;
+      return null;
+    }
+
+    /** 开关态 → 给人看的字 + 来源。`null` 一律「未知」，绝不画成「开」。 */
+    function 开关文本(读数) {
+      var 态 = 开关态Of(读数);
+      return (态 === false ? '关（不判定失联）' : 态 === true ? '开' : '未知')
+        + '（' + line(obj(读数) && 读数.失联限制来源, '未知') + '）';
+    }
+
+    /**
+     * `presence()` **读数对象** → 一句给设置页看的附注：开关 / 生效期限 / 来源 / 坏值。
+     *
+     * ⚠️ 别拿看板那三个函数（`失联详情Of` / `失联附注` / `失联详情提示`）来这里用：
+     * 它们吃的是**工作台投影**的 `状态条.失联详情`（字段是 `生效响应期限小时` / `来源…`，
+     * 且带"缺失"那套占位），与 `presence()` 的读数**不是同一个东西**（那边没有 `失联限制` 这个布尔）。
+     * 混用会静默读出「未知」——Batch 4b 的 F2 就是同款错法（对象喂给了吃字符串的函数）。
+     */
+    function 读数附注(读数) {
+      var box = obj(读数);
+      if (!box) return '';
+      var 态 = 读数对象四态(box);
+      var 段 = [
+        '失联保险 ' + (开关态Of(box) === false ? '关' : 开关态Of(box) === true ? '开' : '未知'),
+        '生效期限 ' + (numOf(box.生效响应期限小时) === null ? '—' : numOf(box.生效响应期限小时) + ' 小时'),
+      ];
+      if (line(box.响应期限小时来源, '')) 段.push('期限来自 ' + line(box.响应期限小时来源, '未知'));
+      if (line(box.失联限制来源, '')) 段.push('开关来自 ' + line(box.失联限制来源, '未知'));
+      段.push('当前 ' + 态);
+      if (boolOf(box.值不合法) === true) {
+        段.push('⚠ 值不合法：原值 ' + JSON.stringify(box.原值 === undefined ? null : box.原值) + '，已退回兜底');
+      }
+      return 段.join(' · ');
+    }
+
+    /**
+     * 内部错误串 → **用户能读的一句人话**。
+     *
+     * 为什么必须过一道：错误串是给**排障**写的（里面是 `remote.commands.execute`、
+     * 函数名、`sessions.list` 这类实现细节），而设置页是给**主人**看的。
+     * 把排障原文直接印上去，等于让用户读我们的栈 —— 主人截图上那句就是这个问题。
+     *
+     * 认不出原样时**不吞**：先看这句原文是不是**本来就面向人**的（宿主拒绝理由就是这种，
+     * 例如 `小时 只接受 ≥1 的整数：收到 "0"。`、`策略引擎不健康`）——是就原样带出来；
+     * 只有当原文带**实现痕迹**（`remote.` / `execute` / `JSON` / 函数名这类）时，才用一句人话兜住。
+     * 这条映射只改**措辞**，不改判定：拿不到就是拿不到。
+     */
+    function 用户向原因(原始) {
+      var s = line(原始, '');
+      if (s === '') return '这一页需要一个打开的会话才能读写设置。';
+      if (s.indexOf('定位不到会话') >= 0) return '这一页需要一个打开的会话才能读写设置。';
+      if (s.indexOf('宿主命令服务不可用') >= 0) return '这一页需要一个打开的会话才能读写设置。';
+      if (s.indexOf('读取 remote 服务失败') >= 0) return '这一页需要一个打开的会话才能读写设置。';
+      if (s.indexOf('命令调用抛错') >= 0) return '与宿主通信失败，设置暂时读写不了。';
+      if (s.indexOf('命令失败') >= 0) return '与宿主通信失败，设置暂时读写不了。';
+      if (s.indexOf('不是 JSON') >= 0 || s.indexOf('无法识别') >= 0) return '读到的设置无法解析，暂时按未知处理。';
+      if (s.indexOf('没有「读数」字段') >= 0) return '读到的设置不完整，暂时按未知处理。';
+      if (s.indexOf('解析返回体失败') >= 0) return '读到的设置无法解析，暂时按未知处理。';
+      // 剩下的是宿主/会话直接给的话（拒绝理由、门禁拒绝…）：只要不带实现痕迹就原样给人。
+      if (!/remote\.|execute|JSON|undefined|null|function|\{\}/.test(s)) return s;
+      return '这一页需要一个打开的会话才能读写设置。';
+    }
+
+    /** 读数 → 一行「这台机器现在是什么样」：生效值 + 来源 + 坏值标记。 */
+    function 生效读数行(读数) {
+      // 这里收的也是**读数对象** ⇒ 同样走 `读数对象四态`（原来喂给 `失联态Of` 是错的：
+      // 那个只认四个字符串，于是这一行永远印「当前 未知」）。
+      var 态 = 读数对象四态(读数);
+      var 段 = [
+        '失联限制 ' + 开关文本(读数),
+        '生效期限 ' + (numOf(读数.生效响应期限小时) === null ? '—' : numOf(读数.生效响应期限小时) + 'h')
+          + '（' + line(读数.响应期限小时来源, '未知') + '）',
+        '当前 ' + 态,
+      ];
+      if (boolOf(读数.值不合法) === true) 段.push('⚠ 值不合法：原值 ' + JSON.stringify(读数.原值 === undefined ? null : 读数.原值));
+      return 段.join(' · ');
     }
 
     // ── 主视图 ──────────────────────────────────────────────────────────────
@@ -676,9 +1082,12 @@ window.__ModuleLoader__.load({
       var 会审 = view ? view.会审 : [];
       var audit = view ? view.审计尾.slice(-AUDIT_LIMIT).reverse() : [];
       var boundReadOnly = view ? boolOf(firstOf(view.边界, ['只读', 'readonly'])) : null;
-      // 闸不在位 / 已失联是两件「现在能不能干活」的事：false 才告警，null（宿主没给）不当成故障。
+      // 闸不在位 / 已失联 / 已关闭是「现在能不能干活」的事：确定的不良态才告警，
+      // `未知`（宿主没给）不当成故障，也不当成正常。
       var gateAlarm = !!gate && gate.在位 === false;
-      var lostAlarm = !!bar && bar.失联 === true;
+      var 失联态 = bar ? bar.失联 : '未知';
+      var 失联详情 = bar ? bar.失联详情 : 失联详情Of(null);
+      var lostAlarm = !!bar && (失联态 === '已失联' || 失联态 === '已关闭');
 
       var children = [
         h('style', { key: 'dshmind-css' }, CSS),
@@ -740,10 +1149,39 @@ window.__ModuleLoader__.load({
                     }, level);
                   }))
               : '—'),
+            // 失联那一格四态四样。**`已关闭` 绝不许给绿点**：开关被关掉不是「主权者一直在」，
+            // 但也不是失联 —— 所以它拿告警色 + 明说「不判定失联」，与「在位」「已失联」都长得不一样。
+            // `未知` 照旧是灰点 + 未接入：宿主没给 ≠ 正常。
             readout('失联状态', null, h('span', { className: 'dshmind-dot-line' }, [
-              dot(!bar ? GREY : bar.失联 === true ? RED : bar.失联 === false ? GREEN : GREY),
-              h('span', { key: 'v' }, !bar ? '未接入' : bar.失联 === true ? '已失联 · 自治冻结' : bar.失联 === false ? '在位' : '未知'),
-            ]), lostAlarm),
+              dot(!bar ? GREY : 失联态 === '已失联' ? RED : 失联态 === '已关闭' ? WARN : 失联态 === '在位' ? GREEN : GREY),
+              h('span', { key: 'v' }, !bar ? '未接入'
+                : 失联态 === '已失联' ? '已失联 · 自治冻结'
+                : 失联态 === '已关闭' ? '已关闭（不判定失联）'
+                : 失联态 === '在位' ? '在位'
+                : '未知'),
+              // 悬停给全套读数细节；版面上只留一行短附注（详见详情行）。
+              失联详情.在位
+                ? h('span', {
+                    key: 'd',
+                    className: 'dshmind-mono',
+                    style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary,#81858c)' },
+                    title: 失联详情.提示,
+                  }, 失联附注(失联详情))
+                : null,
+            ].filter(Boolean)), lostAlarm),
+            // 详情**次要行**：主读数（上面那格）照旧一眼可见，这一行只回答「凭什么」。
+            失联详情.在位
+              ? h('div', { key: 'lostDetail', className: 'dshmind-readoutDetail' }, [
+                  h('span', { key: 'a', className: 'dshmind-mono' }, 失联详情.读数 === '缺失' ? '读数：缺失' : '读数：' + 失联详情.读数),
+                  h('span', { key: 'b' }, '生效期限 ' + (失联详情.生效响应期限小时 === null ? '—' : 失联详情.生效响应期限小时 + 'h')
+                    + '（' + 失联详情.响应期限小时来源 + '）'),
+                  h('span', { key: 'c' }, '开关来源 ' + 失联详情.失联限制来源),
+                  失联详情.值不合法
+                    ? h('span', { key: 'd', style: { color: WARN } }, '⚠ 值不合法：原值 ' + JSON.stringify(失联详情.原值)
+                        + '（' + 失联详情.原值来源 + '）已退回兜底' + (失联详情.不合法说明 ? ' · ' + 失联详情.不合法说明 : ''))
+                    : null,
+                ].filter(Boolean))
+              : null,
             readout('安全类探针', null, h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } }, [
               dot(!probe ? GREY : probe.见红.length ? RED : probe.状态 === '正常' || probe.状态 === '绿' ? GREEN : GREY),
               h('span', { key: 'v' }, probe ? probe.状态 : '未接入'),
@@ -965,14 +1403,303 @@ window.__ModuleLoader__.load({
       ]);
     }
 
+    // ── 设置页：心智设置（`settings.section`）────────────────────────────────
+    /**
+     * 官方设置页里的「心智设置」分区。
+     *
+     * 为什么单开一页而不塞回看板：**看板面板 ≠ 设置页**。
+     * 看板是常驻运维视图，§9 三条硬规则之三「工作台只读」管着它 —— 面板里**一个写控件都不许有**。
+     * 而失联限制 / 响应期限小时是主权者要改的**设置**：它需要一个能写的地方，
+     * 那个地方就是这里，和只读面板分开，两边互不破对方的规矩。
+     *
+     * 数据通道与看板**复用同一条**（`remote.commands.execute`，见 `runCommand`），
+     * 命令是 `mind presence`：读不带参数、写带 `开关=` / `小时=`。
+     * 页面自己只维护「表单草稿 + 最近一次读数」，值一律以**回读**为准。
+     *
+     * 主人（宿主）只传 `{close}`。
+     */
+    function 心智设置(props) {
+      var close = props && typeof props.close === 'function' ? props.close : null;
+      var 态 = useState({ phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' });
+      var snap = 态[0];
+      var setSnap = 态[1];
+      var 非 = useState(0);
+      var nonce = 非[0];
+      var setNonce = 非[1];
+      // 表单草稿：**独立于读数**——回读一来就覆盖输入框，人正在打的字会被吃掉。
+      var 表 = useState({ 开关: '是', 小时: '72' });
+      var form = 表[0];
+      var setForm = 表[1];
+
+      useEffect(function () {
+        var alive = true;
+        function settle(next) { if (alive) setSnap(next); }
+        try {
+          var ctx = activeCtx;
+          var session = resolveSessionId(ctx);
+          if (!session.id) {
+            // 拿不到会话 ≠ 未接入：页面照旧给人一条能敲的命令，绝不空白、绝不装成已连接。
+            settle({
+              phase: 'nosession', 读数: null, 设置文件: '',
+              error: '定位不到会话 id，无法读取 /mind presence', 保存中: false, 提示: '', 提示调: 'warn',
+            });
+            return function () { alive = false; };
+          }
+          readPresence(ctx, session.id).then(function (out) {
+            if (!alive) return;
+            if (!out.ok) {
+              settle({
+                phase: 'error', 读数: null, 设置文件: '', error: out.error,
+                保存中: false, 提示: '', 提示调: 'warn',
+              });
+              return;
+            }
+            settle({
+              phase: 'live', 读数: out.读数, 设置文件: out.设置文件, error: '',
+              保存中: false, 提示: '', 提示调: 'warn',
+            });
+            // 回读即真源：表单跟着它走（相位是 reading 那一次不播动画）。
+            // 表单初值走 `开关态Of`：`失联限制` 缺了就**从 `已关闭` 推**，
+            // 不许因为字段没产出就悄悄退回硬编码的「是」（那会把「关着」显示成「开着」）。
+            var 开 = 开关态Of(out.读数);
+            var 时 = numOf(out.读数.生效响应期限小时);
+            setForm({
+              开关: 开 === false ? '否' : 开 === true ? '是' : '是',
+              小时: 时 === null ? '' : String(时),
+            });
+          });
+        } catch (error) {
+          settle({
+            phase: 'error', 读数: null, 设置文件: '',
+            error: '读设置失败：' + line(error && error.message, String(error)),
+            保存中: false, 提示: '', 提示调: 'warn',
+          });
+        }
+        return function () { alive = false; };
+      }, [nonce]);
+
+      function 保存() {
+        var ctx = activeCtx;
+        var session = resolveSessionId(ctx);
+        if (!session.id) {
+          setSnap(Object.assign({}, snap, { phase: 'nosession', error: '定位不到会话 id，无法写入 /mind presence' }));
+          return;
+        }
+        var 小时文本 = String(form.小时 === null || form.小时 === undefined ? '' : form.小时).trim();
+        var 小时;
+        if (小时文本 === '') {
+          setSnap(Object.assign({}, snap, { 提示: '没写进去：响应期限小时 必须填一个 ≥1 的整数。', 提示调: 'warn' }));
+          return;
+        }
+        小时 = Number(小时文本);
+        // 上界不是「输入体检」：超过 `MAX_RESPONSE_DEADLINE_HOURS`（≈100 年）之后，
+        // 失联判定要算的 `deadline = since + 小时×3600e3` 会越出 `Date` 上界，
+        // `toIso()` 抛错 ⇒ 拿不到状态条。宿主侧拒它，页面也在本地就拦住并说清区间。
+        if (!isFinite(小时) || Math.floor(小时) !== 小时 || 小时 < 1 || 小时 > MAX_RESPONSE_DEADLINE_HOURS) {
+          setSnap(Object.assign({}, snap, {
+            提示: '没写进去：响应期限小时 只接受 1 ~ ' + MAX_RESPONSE_DEADLINE_HOURS
+              + ' 之间的整数（上限 ≈ 100 年），收到 ' + JSON.stringify(小时文本) + '。',
+            提示调: 'warn',
+          }));
+          return;
+        }
+        if (form.开关 !== '是' && form.开关 !== '否') {
+          setSnap(Object.assign({}, snap, { 提示: '没写进去：失联限制 只接受「是 / 否」。', 提示调: 'warn' }));
+          return;
+        }
+        setSnap(Object.assign({}, snap, { 保存中: true, 提示: '', 提示调: 'warn' }));
+        writePresence({ ctx: ctx, sessionId: session.id, 开关: form.开关, 小时: 小时 }).then(function (out) {
+          if (!out.ok) {
+            // 拒绝也要**照旧显示盘上现在是什么**（借最近一次读数），并明说没写进去。
+            setSnap({
+              phase: snap.phase === 'live' ? 'live' : snap.phase, 读数: snap.读数, 设置文件: snap.设置文件,
+              error: snap.error, 保存中: false,
+              提示: '没写进去：宿主拒绝了（' + out.error + '）', 提示调: 'warn',
+            });
+            return;
+          }
+          var 差 = 回读对不上(out.请求, out.回读.读数);
+          var 开 = 开关态Of(out.回读.读数);
+          var 时 = numOf(out.回读.读数.生效响应期限小时);
+          setSnap({
+            phase: 'live', 读数: out.回读.读数, 设置文件: out.回读.设置文件, error: '', 保存中: false,
+            提示: 差 ? 差 : ('已保存，且回读一致：' + 生效读数行(out.回读.读数)), 提示调: 差 ? 'warn' : 'ok',
+          });
+          if (!差) {
+            setForm({
+              开关: 开 === false ? '否' : 开 === true ? '是' : '是',
+              小时: 时 === null ? '' : String(时),
+            });
+          }
+        });
+      }
+
+      var 读 = snap.读数;
+      var 值不合法 = !!读 && boolOf(读.值不合法) === true;
+      // 设置页的读数是**对象** ⇒ 在这里一次性归一成四态（别再各处 `失联态Of(读)`）。
+      var 设置四态 = 读数对象四态(读);
+      var 未接入 = !读;
+
+      /**
+       * 一行：左「标题 + 说明」，右控件 —— 与官方设置页其它分区同一套排法。
+       * 传 `null` 当控件时不产生右栏（**不留空容器**：空块在版面上是"渲染坏了"的样子）。
+       */
+      function 行(key, 标题, 说明, 控件) {
+        return h('div', { key: key, className: 'dshmind-set__row' }, [
+          h('div', { key: 't', className: 'dshmind-set__texts' }, [
+            h('div', { key: 'l', className: 'dshmind-set__label' }, 标题),
+            说明 ? h('div', { key: 'h', className: 'dshmind-set__hint' }, 说明) : null,
+          ].filter(Boolean)),
+          控件 ? h('div', { key: 'c', className: 'dshmind-set__control' }, 控件) : null,
+        ].filter(Boolean));
+      }
+      /** 只读读数行：值是文字，没有控件（也不产生空的右侧栏）。 */
+      function 读数行(key, 标题, 说明, 值节点) {
+        return h('div', { key: key, className: 'dshmind-set__row' }, [
+          h('div', { key: 't', className: 'dshmind-set__texts' }, [
+            h('div', { key: 'l', className: 'dshmind-set__label' }, 标题),
+            说明 ? h('div', { key: 'h', className: 'dshmind-set__hint' }, 说明) : null,
+          ].filter(Boolean)),
+          h('div', { key: 'c', className: 'dshmind-set__control' }, [
+            h('span', { key: 'v', className: 'dshmind-set__value' }, 值节点),
+          ]),
+        ]);
+      }
+
+      // 四态 → 人话 + 点色（设置页读的是**读数对象**，走 `读数对象四态`）。
+      var 态文本 = 设置四态 === '已关闭' ? '已关闭 · 不判定失联'
+        : 设置四态 === '已失联' ? '已失联 · 自治冻结'
+        : 设置四态 === '在位' ? '在位'
+        : '未知';
+      var 态色 = 设置四态 === '已失联' ? RED : 设置四态 === '已关闭' ? WARN : 设置四态 === '在位' ? GREEN : GREY;
+
+      // 未接入（含"正在读"）：**一条紧凑提示** + 一句人话 + 一条可复制的命令。
+      // 用户面前**不许**出现实现细节（函数名 / `remote.commands.execute` 之类）：
+      // 要解释为什么现在不可用，就说"这一页需要一个打开的会话"。
+      // ⇒ 原因必须过 `用户向原因` 那道映射（原始错误串是排障用的，不是给主人读的）。
+      var 未接入原因 = snap.phase === 'reading' ? '正在读取设置…' : 用户向原因(snap.error);
+      var 未接入块 = 未接入
+        ? h('div', { key: 'off', className: 'dshmind-set__notice' }, [
+            h('div', { key: 't', className: 'dshmind-set__noticeText' }, 未接入原因),
+            h('code', {
+              key: 'c', className: 'dshmind-set__noticeCmd',
+              title: '选中复制这条命令去执行',
+            }, PRESENCE_EXAMPLE),
+          ])
+        : null;
+
+      // 有读数才渲染读数与表单：没读数时不留空块（空块在版面上就是"坏了"）。
+      var 读数块 = 读
+        ? h('div', { key: 'rows', className: 'dshmind-set__rows' }, [
+            读数行('now', '当前生效值', 读数附注(读), [
+              dot(态色),
+              h('span', { key: 'v' }, 态文本),
+            ]),
+            读数行('src', '来源', '生效值由哪一层给：私有 ＞ 出厂 ＞ 内置兜底', [
+              h('span', { key: 'v', className: 'dshmind-set__mono' },
+                '期限 ' + line(读.响应期限小时来源, '未知') + ' · 开关 ' + line(读.失联限制来源, '未知')),
+            ]),
+          ].filter(Boolean))
+        : null;
+
+      var 坏值块 = 读 && 值不合法
+        ? h('div', { key: 'bad', className: 'dshmind-set__bad' },
+            '⚠ 值不合法：原值 ' + JSON.stringify(读.原值 === undefined ? null : 读.原值)
+            + '（' + line(读.原值来源, '未知') + '）已退回内置兜底 '
+            + (numOf(读.生效响应期限小时) === null ? '72' : numOf(读.生效响应期限小时)) + 'h'
+            + (line(读.不合法说明, '') ? ' —— ' + line(读.不合法说明, '') : ''))
+        : null;
+
+      // 表单：一个开关 + 一个数字 + 保存。控件一律带类名（不许裸默认样式）。
+      var 表单块 = h('div', { key: 'rows2', className: 'dshmind-set__rows' }, [
+        行('sw', '失联保险', '关掉后不再判定失联（机制停用会被如实记录）', [
+          h('select', {
+            key: 'sel', className: 'dshmind-set__select',
+            'aria-label': '失联保险',
+            value: form.开关,
+            onChange: function (event) {
+              var next = event && event.target ? String(event.target.value) : '是';
+              setForm({ 开关: next === '否' ? '否' : '是', 小时: form.小时 });
+            },
+          }, [
+            h('option', { key: 'y', value: '是' }, '是（开启）'),
+            h('option', { key: 'n', value: '否' }, '否（关闭）'),
+          ]),
+        ]),
+        行('hrs', '响应期限小时', '自最后一次交互起超过这个时长未响应 ⇒ 自动标记失联', [
+          h('input', {
+            key: 'inp', className: 'dshmind-set__number',
+            type: 'number', min: 1, step: 1,
+            'aria-label': '响应期限小时',
+            placeholder: '1 ~ 876000',
+            value: form.小时,
+            onChange: function (event) {
+              setForm({ 开关: form.开关, 小时: event && event.target ? String(event.target.value) : '' });
+            },
+            onKeyDown: function (event) {
+              if (event && event.key === 'Enter') 保存();
+            },
+          }),
+        ]),
+      ]);
+
+      return h('section', { className: 'dshmind-set__' }, [
+        h('h2', { key: 'h', className: 'dshmind-set__title' }, '心智'),
+        h('p', { key: 's', className: 'dshmind-set__lede' },
+          '失联限制与响应期限：写入本部署的私有设置，随时可关。'),
+
+        // 顺序：标题 → 说明 → 表单 → 操作。未接入提示紧凑地插在说明之后。
+        未接入块,
+
+        表单块,
+
+        h('div', { key: 'acts', className: 'dshmind-set__actions' }, [
+          h('button', {
+            key: 'save', type: 'button', className: 'dshmind-set__btn dshmind-set__btn--primary',
+            disabled: snap.保存中 === true,
+            onClick: function () { 保存(); },
+          }, snap.保存中 ? '保存中…' : '保存'),
+          h('button', {
+            key: 'read', type: 'button', className: 'dshmind-set__btn',
+            onClick: function () { setNonce(function (value) { return value + 1; }); },
+          }, '重新读取'),
+          close
+            ? h('button', { key: 'close', type: 'button', className: 'dshmind-set__btn', onClick: function () { close(); } }, '关闭')
+            : null,
+        ].filter(Boolean)),
+
+        // 写失败 / 回读不一致：**明说没写进去**，绝不许显示成功。
+        snap.提示
+          ? h('div', {
+              key: 'toast',
+              className: 'dshmind-set__toast ' + (snap.提示调 === 'ok' ? 'dshmind-set__toast--ok' : 'dshmind-set__toast--warn'),
+            }, snap.提示)
+          : null,
+
+        坏值块,
+        读数块,
+
+        h('div', { key: 'foot', className: 'dshmind-set__foot' }, [
+          h('span', { key: 'c' }, '命令 ' + PRESENCE_COMMAND),
+          snap.设置文件 ? h('span', { key: 'f', className: 'dshmind-set__mono' }, '设置文件 ' + snap.设置文件) : null,
+        ].filter(Boolean)),
+      ].filter(Boolean));
+    }
+
     // ── 插件体 ──────────────────────────────────────────────────────────────
     /**
-     * 两处注册，一个面板：
-     *  1. `main`（keyed，声明方 `@deepseek-ai/dsh-client-ui-layout`）—— 面板本体；
-     *  2. `sidebar.panellist`（list，声明方 `@deepseek-ai/dsh-client-ui-sidebar`）—— 侧边栏里的面板入口。
+     * 三处注册，两种东西：
+     *  1. `main`（keyed，声明方 `@deepseek-ai/dsh-client-ui-layout`）—— 看板面板本体；
+     *  2. `sidebar.panellist`（list，声明方 `@deepseek-ai/dsh-client-ui-sidebar`）—— 侧边栏里的面板入口；
+     *  3. `settings.section`（list，声明方 `@deepseek-ai/dsh-client-ui-settings-*`）—— 官方设置页里的
+     *     「心智设置」分区。
+     *
+     * ⚠️ **看板面板 ≠ 设置页**，这是两件被分开的东西，别再合并回去：
+     * 面板是常驻运维视图，§9 工作台只读 ⇒ 面板里**一个写控件都没有**；
+     * 而失联限制 / 响应期限小时是要人改的设置 ⇒ 它住在设置页那一格（第 3 处注册）。
+     * 所以「看板搬出设置页」这条历史决定说的是**面板**，不是「本组件永不注册设置页」。
      *
      * 入口排在**插件入口下面**：插件那一行的 `order` 是 0，本组件是 10。
-     * 不留 `settings.section`：看板是常驻运维视图，不是一项设置。
      */
     function apply(ctx) {
       var slots = null;
@@ -1017,6 +1744,16 @@ window.__ModuleLoader__.load({
           // 标签由侧边栏渲染（`span.panelTitle`），我这份只在窄轨的工具提示里用到。
           label: function () { return '心智 · 数字组织'; },
         }, MindGlyph);
+      });
+      登记('settings.section', function () {
+        return slots.register({
+          name: 'settings.section',
+          id: SETTINGS_SECTION_ID,
+          // 官方设置页里各分区的先后：本组件排在后面，不抢「通用」那一档的位置。
+          order: 60,
+          // 分区标签由设置页渲染；主人只传 `{close}` 给组件（见 心智设置）。
+          label: function () { return SETTINGS_SECTION_LABEL; },
+        }, 心智设置);
       });
 
       var disposed = false;

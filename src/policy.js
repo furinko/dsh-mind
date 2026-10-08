@@ -18,7 +18,7 @@
 import { readTextOrNull } from './kernel/fsx.js';
 import { digest } from './kernel/text.js';
 import { Denied, Fault, NeedsApproval } from './kernel/errors.js';
-import { evaluateSovereignPresence } from './kernel/time.js';
+import { resolveResponseDeadline, evaluateSovereignPresence, BUILTIN_RESPONSE_DEADLINE_HOURS } from './kernel/time.js';
 import { RULE_FILES } from './paths.js';
 import { parseDocument } from './tags.js';
 
@@ -47,6 +47,16 @@ export const SUBJECT_KINDS = ['主权者', '出厂作者', 'Lead', '成员', '�
 /** 介入度四档（§4），只影响自治档。 */
 export const INTERVENTION = ['零参与', '事后抽检', '变更预审', '逐条审批'];
 
+/**
+ * 运行态默认值键的**封闭清单**（白名单）：出厂件可以写任意给人看的文档键
+ * （`说明` 之类），但只有这些键会进运行态。
+ *
+ * 为什么必须是白名单而不是黑名单：`说明` 被整份并入后会随 `/mind status` 与工作台
+ * 序列化出去 —— 读的人分不清「这是文档」还是「这是一条生效的设置」；
+ * 而黑名单永远漏一个（写个 `备注` / `note` / 中文的新叫法就绕过去了）。
+ */
+const RUNTIME_DEFAULT_KEYS = ['介入度', '失联限制', '响应期限小时', '工具总范围', '安全类'];
+
 const ALWAYS_INVARIANTS = '宪章 不可违背原则（§3 永不 + §12 约束清单）';
 
 /**
@@ -60,13 +70,15 @@ export class PolicyEngine {
     this.layout = spec.layout;
     this.clock = spec.clock;
     this.audit = spec.audit ?? null;
-    /** @type {{ ok: boolean, error: string|null, at: string|null, rules: object[], defaults: object, identity: object, establishment: object, digests: Record<string,string> }} */
+    /** @type {{ ok: boolean, error: string|null, at: string|null, rules: object[], defaults: object, defaults来源: Record<string,string>, 忽略的默认值键: string[], identity: object, establishment: object, digests: Record<string,string> }} */
     this.state = {
       ok: false,
       error: '尚未加载',
       at: null,
       rules: [],
       defaults: {},
+      defaults来源: {},
+      忽略的默认值键: [],
       identity: { members: {}, sovereign: { lastInteraction: null }, denylist: [] },
       establishment: { roles: [], mode: '独立会审' },
       digests: {},
@@ -79,7 +91,7 @@ export class PolicyEngine {
   async reload() {
     try {
       const { rules, digests } = await this.#loadRules();
-      const defaults = await this.#loadDefaults();
+      const { defaults, defaults来源, 忽略的默认值键 } = await this.#loadDefaults();
       const identity = await this.#loadIdentity();
       const establishment = await this.#loadEstablishment();
       this.grants = collectGrants(rules);
@@ -89,6 +101,8 @@ export class PolicyEngine {
         at: this.clock.iso(),
         rules,
         defaults,
+        defaults来源,
+        忽略的默认值键,
         identity,
         establishment,
         digests,
@@ -118,6 +132,10 @@ export class PolicyEngine {
       loadedAt: this.state.at,
       rules: this.state.rules.map((r) => ({ id: r.id, authority: r.authority, zone: r.zone, digest: r.digest })),
       defaults: this.state.defaults,
+      // 「生效值来自哪一层」与「哪些文档键被剔掉了」都要能看见：这两个问题的答案
+      // 以前只能靠读源码猜，而「改了不生效」正是这套设置最容易出的事故。
+      defaults来源: this.state.defaults来源 ?? {},
+      忽略的默认值键: this.state.忽略的默认值键 ?? [],
       grants: this.grants.length,
       digests: this.state.digests,
     };
@@ -201,13 +219,85 @@ export class PolicyEngine {
     return { ok: true };
   }
 
-  /** 当前是否处于失联（§4 失联：所有自治变更冻结）。 */
+  /**
+   * 当前是否处于失联（§4 失联：所有自治变更冻结）。
+   *
+   * 两个键都出自**同一份出厂件** `defaults/响应期限.json`（私有区 `部署.json` 可压过它）：
+   *  `失联限制` ＝ 这个失联保险本身；`响应期限小时` ＝ 期限。
+   * **`失联限制` 恒在**（开也返回 `true`、关返回 `false`）：它不是一个「只在关时才出现的标记」——
+   *  读的人（设置页、工作台、夹具）先问的就是「开关现在什么状态」，键缺席只能被读成「未知」。
+   *  开状态不给这个键曾经造成两个真缺陷：设置页把开关显示成「未知」；而写「开关=是」之后的
+   *  **回读判据**（拿请求与回读逐字段比）读不出这个键，于是每一次「打开」都被报成
+   *  「没写进去：回读与请求不一致」——写其实成功了。修法是**让读数把键给全**，
+   *  不是把回读判据放宽成「读不出就不算不一致」（那等于把判据拆了）。
+   * 开关关掉时如实报 `已关闭: true` —— **不许把「关了」伪装成「在线」**，
+   * 否则读的人分不清「主权者一直在」和「这个机制被停掉了」。
+   *
+   * 只认**严格 `false`** 是 fail-safe：手改 JSON 写成字符串 `"false"` 这类含糊值时，
+   * 失联保险保持**开着**（冻结照旧），不会因为写法含糊就把保护悄悄摘掉。
+   *
+   * 读数里带**来源**与**坏值标记**，因为「生效值来自哪一层」正是这两个设置最该有的透明度：
+   *  - `响应期限小时来源` / `失联限制来源` ∈ '出厂' | '私有' | '内置兜底'（生效值是谁给的）；
+   *  - `生效响应期限小时` ＝ 真正拿去判的期限（坏值已折成 72）；
+   *  - `值不合法` ＋ `原值` ＋ `原值来源` ＋ `不合法说明` ＝ 你写的值无效，已退回 72 ——
+   *    没有这几个字段时，「写了个坏值」和「一切正常」在读数上长得一模一样（§3.6 不许静默失败）。
+   *
+   * **本方法永不抛**：它是 `/mind status` 与工作台的必经之路，一抛就是整条读数链一起废
+   * （而引擎还会报 healthy）。所以时间戳/期限算不出确定结论时，一律给**确定读数**：
+   * 拿不准就退回内置兜底重算，再不成按最严判失联，并把原因写进 `判定说明`。
+   *
+   * @returns {{ 失联限制: boolean, lost: boolean, 已关闭?: boolean, hours: number|null, since: string|null, deadline: string|null, 生效响应期限小时: number, 响应期限小时来源: string, 失联限制来源: string, 值不合法: boolean, 原值?: unknown, 原值来源?: string, 不合法说明?: string, 判定说明?: string }}
+   */
   presence() {
-    return evaluateSovereignPresence({
+    const 来源 = this.state.defaults来源 ?? {};
+    const 开关原值 = this.state.defaults?.失联限制;
+    const 期限 = resolveResponseDeadline(this.state.defaults?.响应期限小时);
+    const 读数 = {
+      // 坏值的生效值来自内置兜底，所以来源如实报「内置兜底」（不是「私有」）——
+      // 哪一层写了坏值，由 `原值来源` 交代。
+      响应期限小时来源: 期限.不合法 ? '内置兜底' : (来源.响应期限小时 ?? '内置兜底'),
+      失联限制来源: 来源.失联限制 ?? '内置兜底',
+      生效响应期限小时: 期限.生效,
+      值不合法: 期限.不合法,
+      ...(期限.不合法
+        ? {
+            原值: 期限.原值,
+            原值来源: 来源.响应期限小时 ?? '内置兜底',
+            不合法说明: `响应期限小时 的原值 ${JSON.stringify(期限.原值)} 不合法（${期限.理由}），已退回内置兜底 ${期限.生效}。`,
+          }
+        : {}),
+    };
+    if (开关原值 === false) {
+      return { 失联限制: false, lost: false, 已关闭: true, hours: 0, since: null, deadline: null, ...读数 };
+    }
+    const 时间输入 = {
       lastInteraction: this.state.identity?.sovereign?.lastInteraction ?? null,
-      responseDeadlineHours: this.state.defaults?.响应期限小时 ?? 72,
       now: this.clock.now(),
-    });
+    };
+    let 判定;
+    try {
+      判定 = evaluateSovereignPresence({ ...时间输入, responseDeadlineHours: 期限.生效 });
+    } catch (error) {
+      // 保险丝（正常路径走不到这里：判据本体已经不抛）：拿不准就退回内置兜底 72 重算；
+      // 再不成 ⇒ 按最严判失联并如实说明。**永不抛**是这一层的唯一职责。
+      const 原因 = error instanceof Error ? error.message : String(error);
+      try {
+        判定 = {
+          ...evaluateSovereignPresence({ ...时间输入, responseDeadlineHours: BUILTIN_RESPONSE_DEADLINE_HOURS }),
+          判定说明: `失联判定首次失败（${原因}），已退回内置兜底 ${BUILTIN_RESPONSE_DEADLINE_HOURS} 小时重算。`,
+        };
+      } catch (再错) {
+        判定 = {
+          lost: true,
+          since: null,
+          deadline: null,
+          hours: null,
+          判定说明: `失联判定算不出来（${原因}；退回兜底后又失败：${再错 instanceof Error ? 再错.message : String(再错)}），按最严判失联（fail-safe，§12.2 查不到 = 最严）。`,
+        };
+      }
+    }
+    // `失联限制: true` 恒在（开状态也要给键）—— 见方法头注释里的两个真缺陷。
+    return { 失联限制: true, ...判定, ...读数 };
   }
 
   /** @returns {string} 当前介入度档位 */
@@ -495,32 +585,98 @@ export class PolicyEngine {
     return { rules, digests };
   }
 
+  /**
+   * 默认值合并：**低 → 高**，同一区内后读的赢。
+   *
+   *  ① 内置兜底（下面 `merged` 的初值 —— 整块出厂区都丢了也还有一份能跑的默认；
+   *     兜底值引用 `src/kernel/time.js` 的 `BUILTIN_RESPONSE_DEADLINE_HOURS`，**不在这里另写一份 72**）
+   *  ② 出厂 `介入度.json`（只承载介入度）
+   *  ③ 出厂 `响应期限.json`（`失联限制` / `响应期限小时` 的唯一出厂源）
+   *  ④ 出厂 `安全类探针.json`（安全类探针声明）
+   *  ⑤ 私有 `部署.json`（**最后覆盖**，全键统一 —— 主权者改的那份优先级最高，`安全类` 也不例外）
+   *
+   * **次序的事实核对（Batch 2.5 复核官逐行核过 HEAD）**：旧实现里探针声明是在第一次迭代
+   * （`zone === '出厂'` 分支内）赋值的，私有 `部署.json` 的 `Object.assign` 发生在第二次迭代 ⇒
+   * **旧代码里私有 `安全类` 本来就压得过出厂声明**，并非"压不过"。这次把次序写成
+   * 「出厂三份 → 探针声明 → 私有」只是让合并序在代码里一眼可见，**行为面是 no-op**。
+   * 而且运行态 `state.defaults.安全类` 这一格**当前没有任何消费者**
+   * （`probes.js` 直接读出厂声明文件，不读运行态这一格）—— 别照着旧注释再"修"一遍。
+   *
+   * 层次序的另一半：出厂区内 `介入度.json` 在 `响应期限.json` 之前读，所以老部署若在
+   * `介入度.json` 里留了一份 `响应期限小时`，**以 `响应期限.json` 为准** —— 这是有意的
+   * （单源＝`响应期限.json`；见 `src/paths.js` 的 `DEFAULT_FILES` 注释与 test/presence.test.js ⑬）。
+   *
+   * 为什么把 `响应期限.json` 真读进来：以前它只是**看着像真源**的幽灵件
+   * （出厂 README 写着「主权者可改它」，实际生效的是 `介入度.json` 里重复的一份
+   * ＋ 这里的硬编码 72）—— 主权者照 README 改，静默无效。
+   *
+   * **坏 JSON 一律响亮抛错**（§3.6 不许静默失败）：退回内置默认会把「主权者的设置被无视了」
+   * 伪装成「一切正常」。文件**缺失**才退回内置默认 —— 全新部署里它本来就不该有私有那份。
+   * 抛错的后果由 `reload()` 兜住：引擎不健康 ⇒ 全部写动作 fail-closed 被拒。
+   *
+   * **纯文档键不进运行态**（白名单式）：出厂件里的 `说明` 只为给人看，一旦被整份
+   * `Object.assign` 进来，它就会随 `/mind status` 与工作台序列化出去，看起来像一条能生效的设置。
+   * 剔掉的键名记在 `忽略的默认值键` 里 —— 剔除也不许静默（否则键名写错的人会以为设置生效了）。
+   *
+   * @returns {Promise<{ defaults: object, defaults来源: Record<string,string>, 忽略的默认值键: string[] }>}
+   */
   async #loadDefaults() {
-    const merged = { 介入度: '零参与', 响应期限小时: 72, 工具总范围: '全部', 安全类: [] };
-    for (const zone of ['出厂', '私有']) {
-      const file =
-        zone === '出厂' ? this.layout.factoryDefault('介入度') : this.layout.deploymentPrefs();
+    // 兜底 72 只写一份：引用 `src/kernel/time.js` 的常量（两处字面量迟早会漂）。
+    const merged = { 介入度: '零参与', 失联限制: true, 响应期限小时: BUILTIN_RESPONSE_DEADLINE_HOURS, 工具总范围: '全部', 安全类: [] };
+    /** 生效值来自哪一层（'出厂' | '私有' | '内置兜底'）—— 「改了不生效」要能一眼看出源。 */
+    const 来源 = Object.fromEntries(Object.keys(merged).map((键) => [键, '内置兜底']));
+    /** 被剔除的文档键（只留名字，不留正文：正文正是它不该进运行态的原因）。 */
+    const 忽略键 = new Set();
+    /**
+     * @param {string} file
+     * @param {string} 标注 出错时用的可读来源
+     * @param {'出厂'|'私有'} 层 生效值来自哪一层
+     */
+    const 并入 = async (file, 标注, 层) => {
       const text = await readTextOrNull(file);
-      if (text === null) continue;
+      if (text === null) return; // 缺失 ⇒ 保留上一层（全新部署合理）
       let parsed;
       try {
         parsed = JSON.parse(text);
       } catch (error) {
-        throw new Error(`${zone}区默认值无法解析：${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`${标注}无法解析：${error instanceof Error ? error.message : String(error)}`);
       }
-      Object.assign(merged, parsed);
-      if (zone === '出厂') {
-        const probeText = await readTextOrNull(this.layout.probeDeclaration());
-        if (probeText !== null) {
-          try {
-            merged.安全类 = JSON.parse(probeText).探针 ?? [];
-          } catch (error) {
-            throw new Error(`出厂安全类探针声明无法解析：${error instanceof Error ? error.message : String(error)}`);
-          }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error(`${标注}必须是一个 JSON 对象。`);
+      }
+      for (const [键, 值] of Object.entries(parsed)) {
+        if (!RUNTIME_DEFAULT_KEYS.includes(键)) {
+          忽略键.add(键);
+          continue;
         }
+        merged[键] = 值;
+        来源[键] = 层;
       }
+    };
+
+    // 出厂区：介入度 与 响应期限 **各读各的**（单源），后读的 响应期限.json 赢。
+    await 并入(this.layout.factoryDefault('介入度'), '出厂默认值 介入度.json', '出厂');
+    await 并入(this.layout.factoryDefault('响应期限'), '出厂默认值 响应期限.json', '出厂');
+    // 出厂安全类探针声明：文件里的键叫 `探针`，运行态叫 `安全类`（只改键名，不改行为）。
+    const probeText = await readTextOrNull(this.layout.probeDeclaration());
+    if (probeText !== null) {
+      let 声明;
+      try {
+        声明 = JSON.parse(probeText);
+      } catch (error) {
+        throw new Error(`出厂安全类探针声明无法解析：${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (!声明 || typeof 声明 !== 'object' || Array.isArray(声明)) {
+        throw new Error('出厂安全类探针声明必须是一个 JSON 对象。');
+      }
+      for (const 键 of Object.keys(声明)) if (键 !== '探针') 忽略键.add(键);
+      merged.安全类 = 声明.探针 ?? [];
+      来源.安全类 = '出厂';
     }
-    return merged;
+    // 私有区最后覆盖：主权者优先。**放在最后**，于是它压得过上面每一份（安全类也压得过）。
+    await 并入(this.layout.deploymentPrefs(), '私有区 部署.json', '私有');
+
+    return { defaults: merged, defaults来源: 来源, 忽略的默认值键: [...忽略键].sort() };
   }
 
   async #loadIdentity() {
