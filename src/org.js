@@ -22,6 +22,7 @@ import { RoleRegistry } from './registry.js';
 import { UpgradeManager } from './upgrade.js';
 import { ProbeRunner } from './probes.js';
 import { ReviewProtocol } from './review.js';
+import { DebateService } from './debate.js';
 import { projectWorkbench, sliceForViewer } from './workbench.js';
 
 /** 默认项目键。名字即目录名（§14.4-5）。 */
@@ -62,6 +63,7 @@ export class Org {
     const upgrade = new UpgradeManager({ layout, policy, audit, clock });
     const probes = new ProbeRunner({ layout, policy, audit, clock, capability });
     const review = new ReviewProtocol({ layout, policy, audit, clock, tasks, bus, random: spec.random });
+    const debate = new DebateService({ layout, policy, audit, clock, tasks, bus, review });
 
     const org = new Org({
       layout,
@@ -77,6 +79,7 @@ export class Org {
       upgrade,
       probes,
       review,
+      debate,
       project: spec.project ?? DEFAULT_PROJECT,
       logger: spec.logger ?? console,
     });
@@ -143,6 +146,13 @@ export class Org {
     const views = await this.#views(项目, spec.审计条数 ?? 20);
     const 健康 = await this.probes.evaluateHealth();
     const 最近一次 = await this.probes.latest();
+    // 会审讨论段（W2）：有「讨论」子状态的节点，把它线程（=节点id）的当前消息
+    // 喂给纯投影——投影自己算 本轮消息数/可收敛提示，本层只取数（readRaw：内部读，
+    // 过闸与留痕属于编排动作，不属于投影取数）。
+    const 讨论消息 = {};
+    for (const n of snapshot.节点) {
+      if (n.讨论) 讨论消息[n.id] = await this.bus.readRaw({ 项目, 线程: n.id });
+    }
     const view = projectWorkbench({
       项目,
       节点: snapshot.节点,
@@ -155,6 +165,7 @@ export class Org {
       // 让「面板要读的那个键」在输入里就存在（只靠投影那一侧的兜底太隐蔽，见 workbench.js 的注释）。
       策略: { ...this.policy.describe(), 错误: this.policy.state.error, 介入度: this.policy.intervention(), 失联: this.policy.presence() },
       记忆: await this.memory.activity({ 项目 }),
+      讨论消息,
       生成于: this.clock.iso(),
     });
     return spec.读者 ? sliceForViewer(view, spec.读者) : view;

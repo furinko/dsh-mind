@@ -89,6 +89,8 @@
 | 完整血缘（契约A 2026-10-09）：来源引用 fail-closed 存在性校验 + 派生自自动记录 + 闭包 ≤3 层环安全 | `memory.remember`/`#verifyRefs` + `buildLineageIndex`/`lineageClosure`（纯投影）+ `memory.lineage`（读面契约B 同款） | contracts-a：血缘七例 |
 | 物理删除三步化（契约A · §C8 阻断）：待删除状态行 + 下游隔离闭包 + 审计含隔离清单；隔离/待删除退出默认召回（粘性） | `memory.purge` + `fold` 两态 + `口径.隔离条目数` | contracts-a：建链/深度/旧数据三例 |
 | 披露拦截入账 + 空清单显式关闭留痕（契约C 骑手①② 2026-10-09） | `memory.promoteCrossProject` 拒绝路径 append「披露拦截」；`policy.#warnIfDisclosureDisabled` 按状态迁移记告警 | contracts-a：骑手两例 |
+| 会审讨论段（W2 2026-10-09）：任务图事件流为权威、bus 只承载消息；齐卷重算 + 预算快照冻结 + 轮边界系统消息切轮 | `src/debate.js`（编排 + 预算纯函数）+ `tasks.js` 三事件 fold `讨论` 子状态 + `bus.readRaw` 内部读 + `policy` 的 `会审讨论` 键加载期校验 | debate：16 例 |
+| 讨论软约束（W2）：讨论中仍可 review，投影标注「讨论未收敛」——不把「Lead 不收敛」变成死锁 | `workbench.讨论小节`（现算读数）+ board `debateView` 渲染 | debate：投影标注例 |
 | 审计日志：只增、无条件写、不承担回滚 | `src/audit.js` | safety：审计 |
 | 记忆四类归属（知识双标签 / 经历账本 / 偏好部署 / 作答实例） | `MemoryService.remember` | flow：记忆标签 |
 | 作答归档后的可读性矩阵 | `memory.readableBy` + `query` 默认面 | flow：归档可读性 |

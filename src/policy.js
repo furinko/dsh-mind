@@ -56,7 +56,14 @@ export const INTERVENTION = ['零参与', '事后抽检', '变更预审', '逐�
  * 序列化出去 —— 读的人分不清「这是文档」还是「这是一条生效的设置」；
  * 而黑名单永远漏一个（写个 `备注` / `note` / 中文的新叫法就绕过去了）。
  */
-const RUNTIME_DEFAULT_KEYS = ['介入度', '失联限制', '响应期限小时', '工具总范围', '安全类', '披露敏感模式'];
+const RUNTIME_DEFAULT_KEYS = ['介入度', '失联限制', '响应期限小时', '工具总范围', '安全类', '披露敏感模式', '会审讨论'];
+
+/**
+ * 会审讨论段的预算默认值（W2 规格 2026-10-09）。
+ * 私有 `部署.json` 的 `会审讨论` 键**部分覆盖**（缺的键用这里的默认），加载期校验：
+ * 坏值（非对象 / 键非 ≥1 整数）⇒ 响亮抛错 ⇒ 引擎不健康（fail-closed，§3.6）。
+ */
+export const DEFAULT_DEBATE_BUDGET = { 轮次上限: 2, 人数上限: 8, 每轮消息上限: 24, 每人每轮字符上限: 4000 };
 
 const ALWAYS_INVARIANTS = '宪章 不可违背原则（§3 永不 + §12 约束清单）';
 
@@ -735,7 +742,7 @@ export class PolicyEngine {
    */
   async #loadDefaults() {
     // 兜底 72 只写一份：引用 `src/kernel/time.js` 的常量（两处字面量迟早会漂）。
-    const merged = { 介入度: '零参与', 失联限制: true, 响应期限小时: BUILTIN_RESPONSE_DEADLINE_HOURS, 工具总范围: '全部', 安全类: [] };
+    const merged = { 介入度: '零参与', 失联限制: true, 响应期限小时: BUILTIN_RESPONSE_DEADLINE_HOURS, 工具总范围: '全部', 安全类: [], 会审讨论: { ...DEFAULT_DEBATE_BUDGET } };
     /** 生效值来自哪一层（'出厂' | '私有' | '内置兜底'）—— 「改了不生效」要能一眼看出源。 */
     const 来源 = Object.fromEntries(Object.keys(merged).map((键) => [键, '内置兜底']));
     /** 被剔除的文档键（只留名字，不留正文：正文正是它不该进运行态的原因）。 */
@@ -795,6 +802,12 @@ export class PolicyEngine {
     // 全部写动作 fail-closed（§3.6 不许静默失败——静默退回默认清单等于把主权者
     // 写下的收窄无视掉，静默跳过坏条目等于少拦一道，两头都比响亮拒绝更危险）。
     validateDisclosurePatterns(merged.披露敏感模式, 来源.披露敏感模式);
+
+    // W2（2026-10-09）·会审讨论预算：部署.json 的 `会审讨论` 是**部分覆盖**（缺键用默认），
+    // 加载期校验 + 规范化成全键对象——消费方（src/debate.js）拿到的永远是四键齐全的有效值。
+    // 坏值响亮抛错（§3.6）：静默退回默认等于把主权者写下的收紧/放宽无视掉。
+    validateDebateBudget(merged.会审讨论, 来源.会审讨论);
+    merged.会审讨论 = { ...DEFAULT_DEBATE_BUDGET, ...(merged.会审讨论 ?? {}) };
 
     return { defaults: merged, defaults来源: 来源, 忽略的默认值键: [...忽略键].sort() };
   }
@@ -908,6 +921,30 @@ async function mtimeMsOrNull(file) {
     return (await stat(file)).mtimeMs;
   } catch {
     return null;
+  }
+}
+
+/**
+ * 校验部署.json 的 `会审讨论`（W2 会审讨论段，2026-10-09）。
+ *
+ * 形状：`{ 轮次上限?, 人数上限?, 每轮消息上限?, 每人每轮字符上限? }`——**部分覆盖**
+ * （缺的键用 `DEFAULT_DEBATE_BUDGET` 的默认）。给的键必须是 ≥1 的整数；
+ * 其余任何形状 ⇒ 抛错，后果由 `reload()` 兜住：引擎不健康 ⇒ 全部写动作 fail-closed。
+ *
+ * @param {unknown} value
+ * @param {string} 来源 '出厂' | '私有' | '内置兜底'（仅用于报错指路）
+ */
+function validateDebateBudget(value, 来源) {
+  if (value === undefined || value === null) return;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`部署.json 的 会审讨论 必须是对象 {轮次上限, 人数上限, 每轮消息上限, 每人每轮字符上限}（部分覆盖，缺键用默认），当前是 ${Array.isArray(value) ? '数组' : typeof value}（来源：${来源}）。`);
+  }
+  for (const 键 of Object.keys(DEFAULT_DEBATE_BUDGET)) {
+    if (!(键 in value)) continue;
+    const v = value[键];
+    if (!Number.isInteger(v) || v < 1) {
+      throw new Error(`部署.json 的 会审讨论.${键} 必须是 ≥1 的整数，收到 ${JSON.stringify(v)}。修好 部署.json 后重载即恢复。`);
+    }
   }
 }
 

@@ -483,6 +483,25 @@ window.__ModuleLoader__.load({
         零分歧依据: line(firstOf(r, ['零分歧依据', '依据']), ''),
         复核三态: line(firstOf(r, ['复核三态', '三态']), ''),
         复核者: line(firstOf(r, ['复核者', 'reviewer']), ''),
+        // W2 会审讨论段（2026-10-09）：投影给什么渲染什么——没有讨论段（并行分担等）
+        // 就是 null，界面一个字都不多画。
+        讨论: debateView(firstOf(r, ['讨论', 'debate'])),
+      };
+    }
+
+    /** 讨论小节 → 渲染形状；没开讨论返回 null（并行分担全程不带这个字段）。 */
+    function debateView(raw) {
+      var d = obj(raw);
+      if (!d) return null;
+      return {
+        状态: line(firstOf(d, ['状态', 'state']), '未知'),
+        轮次: line(firstOf(d, ['轮次', 'round']), ''),
+        本轮消息数: line(firstOf(d, ['本轮消息数', 'roundMessages']), ''),
+        可收敛: boolOf(firstOf(d, ['可收敛', 'convergable'])) === true,
+        可收敛说明: line(firstOf(d, ['可收敛说明', 'convergeHint']), ''),
+        讨论未收敛: boolOf(firstOf(d, ['讨论未收敛', 'unconverged'])) === true,
+        复核时讨论未收敛: boolOf(firstOf(d, ['复核时讨论未收敛'])) === true,
+        表态消息id: line(firstOf(d, ['表态消息id', 'closingMessage']), ''),
       };
     }
 
@@ -1746,6 +1765,20 @@ window.__ModuleLoader__.load({
                   h('div', { key: 'zero', className: row.零分歧 ? 'dshmind-anomaly' : 'dshmind-consensus' },
                     (row.零分歧 ? '⚠ 零分歧（全票一致）—— §10：这是趋同异常信号，应转人工抽检' : '存在分歧（正常）')
                       + (row.零分歧依据 ? ' · 依据：' + row.零分歧依据 : '')),
+                  // W2 会审讨论段：状态 · 轮次 · 本轮预算 · 可收敛提示。讨论未收敛而复核已过
+                  // 是「Lead 不收敛」的可见信号——软约束不拦 review，但面板必须喊出来。
+                  row.讨论
+                    ? h('div', {
+                        key: 'debate',
+                        className: row.讨论.讨论未收敛 ? 'dshmind-lock' : 'dshmind-consensus',
+                      }, (row.讨论.状态 === '讨论中'
+                        ? '💬 讨论：进行中 · 轮次 ' + (row.讨论.轮次 || '-') + ' · 本轮 ' + (row.讨论.本轮消息数 || '-')
+                          + (row.讨论.可收敛 ? ' · 可收敛' : '')
+                          + (row.讨论.讨论未收敛 ? ' · 讨论未收敛' : '')
+                          + (row.讨论.复核时讨论未收敛 ? '（复核已过而讨论未收敛——软约束，不拦复核但在此标注）' : '')
+                        : '💬 讨论：已收敛' + (row.讨论.表态消息id ? ' · 末位表态 ' + row.讨论.表态消息id : ''))
+                        + (row.讨论.可收敛说明 ? ' · ' + row.讨论.可收敛说明 : ''))
+                    : null,
                 ].filter(Boolean));
               }))
             : h('div', { key: 'none', className: 'dshmind-empty' }, '没有进行中的会审。'),

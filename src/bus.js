@@ -102,6 +102,22 @@ export class MessageBus {
       项目: query.项目,
       详情: { 服务: 'bus.read', 线程: query.线程 },
     });
+    return this.readRaw(query);
+  }
+
+  /**
+   * 内部读取（**不过闸、不入审计**）：折叠后的当前视图，与 `read()` 读同一条线程账本、
+   * 走同一段折叠逻辑——同一事实源，只是没有调用方的判定与留痕。
+   *
+   * 为什么要有它（W2 2026-10-09）：编排层（讨论预算闸、工作台投影）要**现算**线程内容，
+   * 走公开 `read()` 会让每次内部计算都过判定并落一条「只读服务调用」——预算闸的读数
+   * 会被自己的审计噪音淹没。留痕属于编排动作本身（debate_say 落消息走 bus.send 的
+   * 既有审计路径），不属于这一次内部读。
+   *
+   * @param {{ 项目: string, 线程: string, 收件?: string, 未投递?: boolean, limit?: number }} query
+   * @returns {Promise<object[]>}
+   */
+  async readRaw(query) {
     const rows = await readJsonl(this.layout.busThread(query.项目, query.线程));
     // 只增账按 id 折叠成当前视图（E2）：投递是追加一条同 id 新行，
     // 不折的话一条消息出现两行、「未投递」查询永远命中旧行，状态机不生效。

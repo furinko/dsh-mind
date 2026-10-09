@@ -21,6 +21,7 @@
  * 任何讨论内容（§7「不做讨论、不做权威记录」）。
  */
 import { judgeZeroDivergence } from './review.js';
+import { 本轮发言, 可收敛判定 } from './debate.js';
 
 /** 任务状态 → 分组计数用的桶。 */
 const 进行中 = new Set(['已派发', '执行中']);
@@ -49,6 +50,8 @@ export function projectWorkbench(input) {
   const 升级 = 节点.filter((n) => n.升级);
   const 探针 = input.探针 ?? { 状态: '未知', 结果: [] };
   const 见红 = (探针.结果 ?? []).filter((r) => r.状态 === '红');
+  // 会审讨论段（W2）：线程消息由组装层喂进来（讨论消息[nodeId]），投影自己算读数。
+  const 讨论消息 = input.讨论消息 ?? {};
 
   return {
     项目: input.项目,
@@ -88,7 +91,7 @@ export function projectWorkbench(input) {
       节点: 节点.map(任务行),
     },
 
-    会审: 节点.filter((n) => (n.负责人 ?? []).length > 1 || (n.独立答案 ?? []).length > 0).map(会审行),
+    会审: 节点.filter((n) => (n.负责人 ?? []).length > 1 || (n.独立答案 ?? []).length > 0).map((n) => 会审行(n, 讨论消息[n.id] ?? [])),
 
     // 记忆读数：宿主没给就不装懂（null），给了就原样投影——数字由 MemoryService.activity 保证真实。
     记忆: input.记忆
@@ -307,8 +310,11 @@ function 交卷进度(node) {
  *
  * 盲标与揭名：未交齐时只给「成员 A/B/C」；交齐后两者都给。
  * 这条规矩是 §10 的，不是界面的——投影照做，界面照显示。
+ *
+ * @param {object} node
+ * @param {object[]} [线程消息] 该节点讨论线程的折叠消息（组装层喂的，纯投影不取数）
  */
-function 会审行(node) {
+function 会审行(node, 线程消息 = []) {
   const 进度 = 交卷进度(node);
   const 答案 = (node.独立答案 ?? []).map((a, i) => ({
     盲标: `成员 ${String.fromCharCode(65 + i)}`,
@@ -332,5 +338,34 @@ function 会审行(node) {
     零分歧依据: 判定.依据,
     复核三态: 复核?.三态 ?? null,
     复核者: 复核?.复核者 ?? null,
+    ...(node.讨论 ? { 讨论: 讨论小节(node.讨论, 线程消息, 复核) } : {}),
+  };
+}
+
+/**
+ * 会审行的「讨论」小节（W2 2026-10-09）：{状态, 轮次/上限, 本轮消息数/上限,
+ * 可收敛提示, 讨论未收敛标注}。读数全部现算（纯投影），预算用**开启时冻结的快照**。
+ *
+ * 「讨论未收敛」标注：讨论进行中就挂 true——复核对讨论是软约束（讨论中仍可 review），
+ * 但读面板的人必须看得见「这条复核背后的讨论还没收敛」，否则「Lead 不收敛」
+ * 会被静默漂过。不许把它做成 review 的硬闸（设计取舍已定）。
+ *
+ * @param {object} 讨论 node.讨论（fold 出的子状态）
+ * @param {object[]} 线程消息
+ * @param {object|null} 复核 最近的复核经过（可为 null）
+ */
+function 讨论小节(讨论, 线程消息, 复核) {
+  const 本轮 = 本轮发言(线程消息);
+  const 提示 = 可收敛判定(本轮, 讨论.参与者 ?? []);
+  const 未收敛 = 讨论.状态 === '讨论中';
+  return {
+    状态: 讨论.状态,
+    轮次: `${讨论.轮次 ?? 0}/${讨论.轮次上限 ?? '?'}`,
+    本轮消息数: `${本轮.length}/${讨论.预算快照?.每轮消息上限 ?? '?'}`,
+    可收敛: 提示.可收敛,
+    可收敛说明: 提示.说明,
+    ...(未收敛 ? { 讨论未收敛: true } : {}),
+    ...(复核 && 未收敛 ? { 复核时讨论未收敛: true } : {}),
+    表态消息id: 讨论.表态消息id ?? null,
   };
 }

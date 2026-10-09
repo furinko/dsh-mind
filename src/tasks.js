@@ -239,6 +239,83 @@ export class TaskGraph {
     return this.get(id, { 项目: spec.项目 });
   }
 
+  // ── W2 会审讨论段（2026-10-09）：事件流是状态权威，bus 只承载消息 ────────────
+  // 三个方法只做「状态机判定 + 事件追加」；编排（揭名/预算/消息）在 src/debate.js。
+
+  /**
+   * 讨论开启事件。前置由 DebateService 编排层算好（齐卷判据与 bus_unlock 同款重算），
+   * 这里守任务图自己的一面：节点存在、模式是独立会审、没开过讨论、参与者与预算快照入事件。
+   * @param {string} id
+   * @param {{ subject: object, 项目: string, 参与者: string[], 轮次上限: number, 预算快照: object }} spec
+   */
+  async debateOpened(id, spec) {
+    const node = await this.#require(id, spec.项目);
+    if (node.模式 !== '独立会审') {
+      throw new Denied('会审讨论段 · 只属于独立会审（§10）', `节点 ${id} 的模式是「${node.模式 ?? '未声明'}」：并行分担没有盲评与讨论环节。`, {
+        howToChange: '讨论段只对独立会审节点开放；并行分担节点直接交卷、复核。',
+      });
+    }
+    if (node.讨论) {
+      throw new Denied('会审讨论段 · 状态机', `节点 ${id} 的讨论已${node.讨论.状态 === '已收敛' ? '收敛' : '开启'}，不能重复开启。`, {
+        howToChange: node.讨论.状态 === '已收敛' ? '讨论已收敛：走复核（review）。' : '讨论进行中：发言用 debate_say，换轮 debate_round，收敛 debate_converge。',
+      });
+    }
+    await this.#checkWrite(id, node, spec);
+    await this.#append(spec.项目, {
+      kind: 'debate_opened',
+      id,
+      参与者: spec.参与者,
+      轮次上限: spec.轮次上限,
+      预算快照: spec.预算快照,
+    }, spec.subject, '讨论开启');
+    return this.get(id, { 项目: spec.项目 });
+  }
+
+  /**
+   * 讨论换轮事件。轮次上限在此守（状态机面）：用尽即拒并提示收敛。
+   * @param {string} id
+   * @param {{ subject: object, 项目: string, 轮次: number }} spec
+   */
+  async debateRounded(id, spec) {
+    const node = await this.#require(id, spec.项目);
+    if (!node.讨论 || node.讨论.状态 !== '讨论中') {
+      throw new Denied('会审讨论段 · 状态机', `节点 ${id} 没有「讨论中」的讨论段（未开启或已收敛）。`, {
+        howToChange: '先 debate_open 开启讨论；已收敛的讨论不能再换轮。',
+      });
+    }
+    if (node.讨论.轮次 >= node.讨论.轮次上限) {
+      throw new Denied(
+        '会审讨论段 · 轮次用尽，须收敛',
+        `节点 ${id} 的讨论轮次 ${node.讨论.轮次}/${node.讨论.轮次上限} 已到上限，不能再换轮。`,
+        {
+          requireAuthority: 'Lead',
+          howToChange: '由 Lead 执行 debate_converge 收敛讨论（末位表态会落消息并记进事件）；轮次上限可在私有 部署.json 的 会审讨论 键调整（只影响之后开启的讨论——预算快照在开启时冻结）。',
+          detail: { 轮次: node.讨论.轮次, 轮次上限: node.讨论.轮次上限 },
+        },
+      );
+    }
+    await this.#checkWrite(id, node, spec);
+    await this.#append(spec.项目, { kind: 'debate_round', id, 轮次: spec.轮次 }, spec.subject, '讨论换轮');
+    return this.get(id, { 项目: spec.项目 });
+  }
+
+  /**
+   * 讨论收敛事件。Lead 的末位表态消息 id 记进事件（收敛时刻可回溯）。
+   * @param {string} id
+   * @param {{ subject: object, 项目: string, 表态消息id: string }} spec
+   */
+  async debateConverged(id, spec) {
+    const node = await this.#require(id, spec.项目);
+    if (!node.讨论 || node.讨论.状态 !== '讨论中') {
+      throw new Denied('会审讨论段 · 状态机', `节点 ${id} 没有「讨论中」的讨论段（未开启或已收敛）。`, {
+        howToChange: '先 debate_open 开启讨论。',
+      });
+    }
+    await this.#checkWrite(id, node, spec);
+    await this.#append(spec.项目, { kind: 'debate_converged', id, 表态消息id: spec.表态消息id }, spec.subject, '讨论收敛');
+    return this.get(id, { 项目: spec.项目 });
+  }
+
   /**
    * @param {string} id
    * @param {{ 项目: string }} spec
@@ -284,8 +361,8 @@ export class TaskGraph {
 
   // ── 内部 ────────────────────────────────────────────────────────────────────
 
-  /** @param {string} 项目 @param {object} event @param {object} subject */
-  async #append(项目, event, subject) {
+  /** @param {string} 项目 @param {object} event @param {object} subject @param {string} [审计动作] 覆盖默认的「状态变更」（讨论段三事件按 W2 规格记各自动作名，档位由 ACTION_GRADE 定） */
+  async #append(项目, event, subject, 审计动作 = '状态变更') {
     const file = this.layout.taskLog(项目);
     await withLock(this.layout.taskLock(项目), async () => {
       const rows = await readJsonl(file);
@@ -302,7 +379,7 @@ export class TaskGraph {
       await appendLines(file, [{ seq: rows.length + 1, at, by, ...event }]);
     });
     await this.audit.append({
-      动作: '状态变更',
+      动作: 审计动作,
       主体: subject,
       对象: { id: event.id, kind: '任务' },
       依据: '任务图事件流',
@@ -425,6 +502,25 @@ export function fold(rows) {
         break;
       case 'escalated':
         node.升级 = row.升级;
+        break;
+      // ── W2 会审讨论段（2026-10-09）：讨论是节点的**子状态**，不动节点主状态
+      //    （已交卷保持——讨论中仍可 review，软约束不许变成死锁）。
+      case 'debate_opened':
+        node.讨论 = {
+          状态: '讨论中',
+          轮次: 1,
+          轮次上限: row.轮次上限,
+          参与者: row.参与者 ?? [],
+          // 预算快照在开启时冻结（判据冻结同哲学）：之后改部署.json 不影响进行中的讨论。
+          预算快照: row.预算快照 ?? {},
+          开于: row.at,
+        };
+        break;
+      case 'debate_round':
+        if (node.讨论) node.讨论 = { ...node.讨论, 轮次: row.轮次 };
+        break;
+      case 'debate_converged':
+        if (node.讨论) node.讨论 = { ...node.讨论, 状态: '已收敛', 表态消息id: row.表态消息id ?? null, 收敛于: row.at };
         break;
       default:
         break;

@@ -496,6 +496,55 @@ await runAction({ org, 项目, subject, 主体, args: { action, ...args }, 面: 
   拉回说明。
 - 旧行（无血缘字段）下游闭包为空 ⇒ purge 行为与旧版完全一致（不回归）。
 
+### 2.15 W2 · 会审讨论段（2026-10-09 规格冻结）——协作环路的最后一块
+
+> 实现落点：`src/debate.js`（编排层 `DebateService` + 预算/轮次纯函数）、`src/tasks.js`
+> （`debate_opened / debate_round / debate_converged` 三事件 + fold 的 `讨论` 子状态
+> + 三个受控追加方法）、`src/bus.js`（`readRaw` 内部读）、`src/policy.js`（预算键加载）、
+> `src/org.js` / `src/workbench.js`（投影）、`lib/actions.js` + schema + 冻结清单（工具面）。
+
+#### 2.15.1 状态机（任务图事件流为权威，bus 只承载消息）
+
+- 新事件 `debate_opened / debate_round / debate_converged`；fold 后节点长
+  `讨论 = { 状态: '讨论中'|'已收敛', 轮次, 轮次上限, 参与者, 预算快照, 表态消息id? }`——
+  **节点主状态不动**（已交卷保持：讨论中仍可 review 的软约束由此成立）。
+- `debate_open` 前置：节点 状态=已交卷 且 独立答案**齐**（从事件流重算，**不信自报**——
+  与 `bus_unlock` 同判据）；参与者 = 独立答案成员数，超过 `人数上限` 拒（提示拆会审）；
+  开启时 `review.reveal` 揭名并**冻结预算快照**（判据冻结同哲学：之后改 部署.json
+  不影响进行中的讨论）。模式闸：并行分担节点没有讨论段（`debate_opened` 前置拒）。
+- `debate_say`：仅参与者、仅讨论中；类型 ∈ **{分歧, 表态, 答复}**；经 `bus.send`
+  （**线程 = 节点 id**）落消息；预算闸**现算**（`bus.readRaw` 读线程，不引入第二事实源）：
+  本轮消息数 < `每轮消息上限`、该成员本轮累计字符 + 新内容 ≤ `每人每轮字符上限`，
+  超限 `Denied` 给读数（`x/y`）。**轮边界靠消息流内部的系统边界消息**
+  （`[debate-round] n`，换轮时落线）切轮，不靠时钟对齐。
+- `debate_round`：轮次 < `轮次上限` 才放行（上限判定在任务图状态机面），否则
+  `Denied`「轮次用尽，须收敛」；返回 `结束轮可收敛` 提示 =（本轮零新「分歧」消息
+  **且** 每个参与者都发过「表态」）。
+- `debate_converge`：**仅 Lead**；Lead 末位 `bus.send`（类型=表态，发件=lead）记消息 id
+  进事件；此后 `debate_say` 拒（讨论已收敛）。
+- **对 review 是软约束**（设计取舍已定，不许改成硬闸）：讨论中仍可 review，
+  工作台会审行标注 `讨论未收敛` / `复核时讨论未收敛`。
+
+#### 2.15.2 预算（部署.json 键 `会审讨论`）
+
+- 默认 `{ 轮次上限: 2, 人数上限: 8, 每轮消息上限: 24, 每人每轮字符上限: 4000 }`
+  （`policy.js` 的 `DEFAULT_DEBATE_BUDGET`）；部署.json 的 `会审讨论` 键**部分覆盖**
+  （缺键用默认），进 `RUNTIME_DEFAULT_KEYS`，加载期校验：非对象 / 键非 ≥1 整数 ⇒
+  响亮抛错 ⇒ 引擎不健康（fail-closed，§3.6）。
+- `debate_open` 时把 `每轮消息上限 / 每人每轮字符上限` 冻结进事件（预算快照）；
+  进行中的讨论不受之后部署值变化影响；`轮次上限` 取开启时刻的值入事件。
+
+#### 2.15.3 审计与工具面
+
+- 审计：`讨论开启 / 讨论换轮 / 讨论收敛` 各一条（`ACTION_GRADE` 登记 = **记汇总**）；
+  `debate_say` 的审计走 `bus.send` 既有路径（规格明定，不另记）。
+- 工具面：`debate_open / debate_say / debate_round / debate_converge` 四动作进
+  `lib/actions.js` 的 `ACTIONS` + `mind` 工具 schema；主体走批次3身份链（成员发言用
+  成员主体）；`test/presence.test.js` 的冻结清单同步登记（白名单关卡，先红后绿）。
+- 工作台投影：会审行加 `讨论` 小节 `{状态, 轮次, 本轮消息数, 可收敛, 可收敛说明,
+  讨论未收敛?, 复核时讨论未收敛?, 表态消息id}`（读数现算，纯投影；并行分担节点无此
+  小节）；board 渲染层同步（`reviewRow` 的 `debateView`）。
+
 ## 3 · 验收
 
 - `node --test test/` 全绿（Lead 写测试）。

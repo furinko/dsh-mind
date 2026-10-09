@@ -69,6 +69,10 @@ const 冻结动作表 = [
   'upgrade_pending',
   'review_zero',
   'bus_unlock',
+  'debate_open',
+  'debate_say',
+  'debate_round',
+  'debate_converge',
 ];
 // sovereign_interaction 不在工具面：它是命令面专属（与 presence 同一张 B 清单），
 // 失联判定的「事实源」——主权者在线——只能由人声明（/mind sovereign_interaction）。

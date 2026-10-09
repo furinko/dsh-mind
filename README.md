@@ -131,6 +131,7 @@ capability_list · capability_resolve · capability_read · capability_publish
 bus_send · bus_read · audit_tail · audit_verify
 registry_list · registry_can · registry_assign · registry_seal · registry_revoke
 upgrade_pending · review_zero · bus_unlock
+debate_open · debate_say · debate_round · debate_converge
 ```
 
 命令面还多两个**专属动作**（工具 schema 里没有它们——模型没有这只手）：
@@ -283,7 +284,7 @@ node --test components/board/test/client.test.js     # 看板：6 条结构断�
 
 | 数 | 产出者 | 怎么看 |
 |---|---|---|
-| **206** | `node --test "test/*.test.js"`（`npm test` 的后半段） | `ℹ tests 206` / `ℹ pass 206` / `ℹ fail 0` |
+| **222** | `node --test "test/*.test.js"`（`npm test` 的后半段） | `ℹ tests 222` / `ℹ pass 222` / `ℹ fail 0` |
 | **307** | `components/board/test/client-harness.mjs` 自己打印 | 末行 `client-harness: 307 条断言全部通过` |
 | **6** | `node --test components/board/test/client.test.js` | `ℹ tests 6` / `ℹ pass 6` / `ℹ fail 0` |
 
@@ -327,3 +328,12 @@ node --test components/board/test/client.test.js     # 看板：6 条结构断�
   （记汇总：主体+命中模式名，不抄原文）——拦截企图是安全信号；部署.json
   `披露敏感模式: []` 是主权者显式关闭这道闸——合法且生效，但引擎按状态迁移记一条
   告警档审计（持续关闭不刷屏，再关再喊），不许静默关闭。
+- **会审有讨论段，预算冻结在开启时刻（W2 2026-10-09）**：独立会审交齐后
+  `debate_open` 揭名开讨论（齐卷判据与 `bus_unlock` 同款重算，不信自报）；成员用
+  `debate_say` 落 分歧/表态/答复（线程=节点 id，预算现算：每轮消息数与每人每轮字符
+  双闸，超限拒并给 `x/y` 读数）；`debate_round` 换轮（默认上限 2，用尽须收敛），
+  `debate_converge` 仅 Lead、末位表态记进事件。预算默认
+  `{轮次2·人数8·每轮24条·每人4000字}`，部署.json `会审讨论` 键部分覆盖（坏值
+  fail-closed）；**开启时冻结快照**——之后改部署不追溯进行中的讨论。复核对讨论是
+  **软约束**：讨论中仍可 review，工作台会审行标注「讨论未收敛」——「Lead 不收敛」
+  是要在面板上看得见的信号，不是组织死锁。

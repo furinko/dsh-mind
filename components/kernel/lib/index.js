@@ -195,7 +195,7 @@ function mindTool({ org, 项目, 项目键 }) {
         线程: { type: 'string' },
         发件: { type: 'string' },
         收件: { type: 'string', description: '收件人，多个用逗号分隔' },
-        类型: { type: 'string', description: '消息类型' },
+        类型: { type: 'string', description: '消息类型（bus_send）；debate_say 只认 分歧/表态/答复' },
         暂不投递: { type: 'boolean' },
         延后: { type: 'boolean' },
         引用: { type: 'string' },
