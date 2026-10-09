@@ -44,8 +44,8 @@
 | 只有主权者能回滚文本版本 | `store.rollback` 的 `textVersion` 检查 | objects：非主权者不能回滚 |
 | 失联：超过响应期限未响应 ⇒ 冻结自治 | `evaluateSovereignPresence` + 自治档检查 | policy：失联冻结 |
 | 安全类封闭清单 + 五道配套 | `CLOSED_LIST` + `probeDeclaration`（`src/probes.js`） | safety：探针封闭清单 |
-| 探针红 ⇒ 回滚到「全绿最近一版」 | `probes.autoRollback` | safety：回滚目标 |
-| 自动回滚 = 无条件执行 + 无条件入账 | `autoRollback` 不问策略引擎、直接记账 | safety：回滚入账 |
+| 探针红 ⇒ 回滚到「全绿最近一版」 | `probes.autoRollback` 只定位回滚目标，不改文件 | safety：回滚目标 |
+| 自动回滚的定性（甲′裁决 2026-10-09） | 定位全绿最近一版＋无条件入账＋告警升级主权者（`autoRollback` 不问策略引擎、直接记账）；运行态不自动改文件——执行面＝主权者经版本管理（git/包版本）装回 | safety：回滚入账 |
 | 恒红 / 恒绿都要报警 | `probes.evaluateHealth` | safety：探针健康 |
 | 影响面声明 | `probes.impactStatement` | safety：影响面声明 |
 

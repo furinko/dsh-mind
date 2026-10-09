@@ -115,6 +115,18 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
     assert.equal(green.全绿, true, `应全绿，实际：${JSON.stringify(green.见红)}`);
     assert.deepEqual(green.结果.map((r) => r.探针), CLOSED_LIST);
 
+    // 全绿 run 的审计动作名必须是「探针巡检」：全绿是常态巡检，不是异常（权限矩阵：机制内置）。
+    // 用「对象」定位当次追加：篡改用例里 seq=999 的伪造行会把 .at(-1) 顶掉，不能靠尾行定位。
+    const greenRows = await f.audit.read({});
+    const 巡检 = greenRows.filter((r) => r.对象?.id === '红线索兵').at(-1);
+    assert.ok(巡检, '全绿 run 也必须落账（无条件入账）');
+    assert.equal(巡检.动作, '探针巡检', '全绿 ⇒ 动作名「探针巡检」');
+    assert.notEqual(巡检.动作, '探针异常', '反例：全绿 run 的当次审计追加不许是「探针异常」');
+    assert.equal(巡检.告警, false, '全绿不告警');
+    assert.equal(巡检.结果, '全绿', '结果文案与动作名自洽');
+    assert.equal(巡检.档位, '全记', '巡检与异常同档：机制内置、无条件入账（审计要求「全记」行）');
+    assert.ok(greenRows.every((r) => r.动作 !== '探针异常'), '全绿之后，账里不出现「探针异常」');
+
     // 篡改审计：追加一条 prev/hash 对不上的行。
     const month = new Date().toISOString().slice(0, 7);
     const auditFile = f.layout.auditLog(month);
@@ -123,6 +135,9 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
     const tampered = await probes.run({ 机制版本: 'mech-2' });
     assert.equal(tampered.全绿, false);
     assert.ok(tampered.见红.some((r) => r.探针 === '审计链'));
+    const 异常 = (await f.audit.read({})).filter((r) => r.对象?.id === '红线索兵').at(-1);
+    assert.equal(异常.动作, '探针异常', '见红 ⇒ 动作名「探针异常」');
+    assert.equal(异常.告警, true, '见红要告警');
 
     // 闸不在位：删掉一个规则件再重载。
     const { rm } = await import('node:fs/promises');
@@ -133,17 +148,18 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
     assert.equal(f.policy.healthy, false);
   });
 
-  it('探针红 ⇒ 定位「全绿的最近一版」并入账；制品未定义前不假装执行过（F2）', async () => {
+  it('探针红 ⇒ 定位「全绿的最近一版」并入账、升级主权者；运行态不自动改文件（甲′）', async () => {
     const snapshots = await readdir(f.layout.probeSnapshotDir());
     assert.ok(snapshots.length >= 3);
     const result = await probes.autoRollback();
-    assert.equal(result.执行, false, '回滚制品未定义：只有定位，没有执行面');
+    assert.equal(result.执行, false, '运行态不自动改文件：只有定位，没有执行面');
     assert.equal(result.已定位, true);
-    assert.equal(result.目标版本, 'mech-1', '跨过见红的 mech-2/mech-3，回到全绿的最近一版');
+    assert.equal(result.目标版本, 'mech-1', '跨过见红的 mech-2/mech-3，定位到全绿的最近一版');
     const rows = await f.audit.read({});
     const 回滚 = rows.filter((r) => r.动作 === '自动回滚');
     assert.ok(回滚.length >= 1, '无条件入账');
-    assert.match(String(回滚.at(-1).结果), /已定位回滚目标 mech-1.*待执行/);
+    assert.match(String(回滚.at(-1).结果), /已定位回滚目标 mech-1.*入账并升级主权者/);
+    assert.doesNotMatch(String(回滚.at(-1).结果), /待执行|回滚制品未定义|待批次4/, '审计口径已按甲′裁决改实');
     assert.doesNotMatch(String(回滚.at(-1).结果), /mech-\d+ → mech-\d+/, '不许再写「x → y」这种像真回滚过的口径');
   });
 

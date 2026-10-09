@@ -30,7 +30,7 @@ dsh-mind/                        ← 插件列表里的那张卡（不插自己�
 | 组件 | 包 | 装什么 | 关掉它的后果 |
 |---|---|---|---|
 | **内核** | `dsh-mind-kernel` | 八件基础设施的对外两个面：`mind` 工具 · `/mind` 命令 · 工具范围闸 · 审计钩子 · 系统提示段 | 这张卡只剩空壳，所以别关 |
-| **安全类** | `dsh-mind-guard` | 四道封闭探针 · 探针见红**定位**回滚目标（只定位入账，执行面待批次4裁决） · 条款级升级裁决（`mind_guard` 工具 · `/mind-guard` 命令） | 判定与记账照常，没有机制自检与升级运维 |
+| **安全类** | `dsh-mind-guard` | 四道封闭探针 · 探针见红**定位**回滚目标（只定位入账＋告警升级主权者；运行态不自动改文件，装回由主权者经版本管理执行） · 条款级升级裁决（`mind_guard` 工具 · `/mind-guard` 命令） | 判定与记账照常，没有机制自检与升级运维 |
 | **看板** | `dsh-mind-board` | 主内容区独立面板 + 左侧边栏下方入口 | 组织照常跑，只是没有可视化 |
 
 **浏览器半区为什么挂在看板包上**：一个包的 `dsh.client` 是包级的，只有被某一行引用的包才会进 roster。
@@ -67,7 +67,7 @@ dsh-mind/                        ← 插件列表里的那张卡（不插自己�
 | 记忆服务 | [`src/memory.js`](src/memory.js) | 写入必带「谁记的 + 怎么知道的」 · 不许改写只能追加 |
 | 审计日志 | [`src/audit.js`](src/audit.js) | 只增（链哈希可验篡改）· 写入无条件 · 不承担回滚 |
 
-外加上层机制：对象存储与版本回滚（[`src/store.js`](src/store.js)）、升级的条款级合并（[`src/upgrade.js`](src/upgrade.js)）、安全类探针与回滚目标定位（[`src/probes.js`](src/probes.js)：见红只定位入账，执行面待批次4裁决）、复核与反趋同（[`src/review.js`](src/review.js)）、BM25 检索（[`src/retrieval.js`](src/retrieval.js)）。
+外加上层机制：对象存储与版本回滚（[`src/store.js`](src/store.js)）、升级的条款级合并（[`src/upgrade.js`](src/upgrade.js)）、安全类探针与回滚目标定位（[`src/probes.js`](src/probes.js)：见红只定位入账并升级主权者，装回由主权者经版本管理执行）、复核与反趋同（[`src/review.js`](src/review.js)）、BM25 检索（[`src/retrieval.js`](src/retrieval.js)）。
 
 ## 看板显示什么（以及为什么只显示这些）
 

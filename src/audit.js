@@ -27,6 +27,8 @@ const ACTION_GRADE = {
   状态变更: GRADE.全记,
   不可逆操作: GRADE.全记,
   自动回滚: GRADE.全记,
+  // 探针巡检（全绿常态）也全记：权限矩阵主体表「机制内置，无条件入账」——表内有名，不静默走表外 fallback。
+  探针巡检: GRADE.全记,
   探针异常: GRADE.全记,
   零分歧异常: GRADE.全记,
   失联: GRADE.全记,
