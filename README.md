@@ -126,7 +126,7 @@ $DSH_HOME/mind-data/mind-private/       ← 私有区（首次启动自动引导
 ```
 status · workbench · policy_check
 task_create · task_dispatch · task_start · task_submit · task_review · task_pending · task_resolve
-memory_write · memory_query · memory_lifecycle
+memory_write · memory_query · memory_lineage · memory_lifecycle
 capability_list · capability_resolve · capability_read · capability_publish
 bus_send · bus_read · audit_tail · audit_verify
 registry_list · registry_can · registry_assign · registry_seal · registry_revoke
@@ -283,7 +283,7 @@ node --test components/board/test/client.test.js     # 看板：6 条结构断�
 
 | 数 | 产出者 | 怎么看 |
 |---|---|---|
-| **196** | `node --test "test/*.test.js"`（`npm test` 的后半段） | `ℹ tests 196` / `ℹ pass 196` / `ℹ fail 0` |
+| **206** | `node --test "test/*.test.js"`（`npm test` 的后半段） | `ℹ tests 206` / `ℹ pass 206` / `ℹ fail 0` |
 | **307** | `components/board/test/client-harness.mjs` 自己打印 | 末行 `client-harness: 307 条断言全部通过` |
 | **6** | `node --test components/board/test/client.test.js` | `ℹ tests 6` / `ℹ pass 6` / `ℹ fail 0` |
 
@@ -316,3 +316,14 @@ node --test components/board/test/client.test.js     # 看板：6 条结构断�
   豁免参数 `披露豁免=true` **仅 Lead**（主权者也不在豁免面——裁决原文如此）；豁免与命中
   模式名一起进审计，但**不抄敏感原文**（抄进账本等于二次披露）。机械检查宁可误拦：
   被拦的内容走豁免或改写，不需要放宽默认清单。
+- **记忆有完整血缘（契约A 2026-10-09，评审稿 §C2/§C8）**：条目带 `来源引用`（证据链，
+  写入时存在性校验——悬空引用当场拒；`artifact-` 前缀本批不校验）与 `派生自`（推翻
+  替换链，`overturn` 自动写、不可自报）。`memory_lineage` 查上下游闭包（≤3 层、环安全）；
+  索引是纯投影，从账本重算，不另立真源。**物理删除三步化**：先给源记「待删除」、
+  按血缘把下游（引用它的+派生自它的）逐条「隔离」（退出默认召回、粘性、`含失效: true`
+  可拉回、口径单报 `隔离条目数`），再物理抹源——「删了源头、引用它的下游还顶着有效
+  知识的面目」这个空窗从此关死。
+- **披露拦截与显式关闭都留痕（契约C 骑手①② 2026-10-09）**：命中被拒记「披露拦截」
+  （记汇总：主体+命中模式名，不抄原文）——拦截企图是安全信号；部署.json
+  `披露敏感模式: []` 是主权者显式关闭这道闸——合法且生效，但引擎按状态迁移记一条
+  告警档审计（持续关闭不刷屏，再关再喊），不许静默关闭。

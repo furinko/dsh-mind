@@ -51,6 +51,7 @@ const 冻结动作表 = [
   'task_resolve',
   'memory_write',
   'memory_query',
+  'memory_lineage',
   'memory_lifecycle',
   'capability_list',
   'capability_resolve',

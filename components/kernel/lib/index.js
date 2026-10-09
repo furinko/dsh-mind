@@ -176,6 +176,7 @@ function mindTool({ org, 项目, 项目键 }) {
         类: { type: 'string', enum: ['知识', '经历', '偏好', '作答'] },
         内容: { type: 'string' },
         来源: { type: 'string', description: '怎么知道的；记忆写入必填（谁记的默认取主体）' },
+        来源引用: { type: 'string', description: '证据/来源对象 id，多个用逗号分隔（契约A 血缘）；know-/exp-/pref-/answ- 查账本、task- 查任务图、artifact- 本批不校验，悬空拒写' },
         岗位: { type: 'string' },
         标签: { type: 'string' },
         文本: { type: 'string', description: '检索查询词' },
@@ -215,7 +216,7 @@ function mindTool({ org, 项目, 项目键 }) {
       render: (_args, value) => [{ type: 'text', text: value }],
     },
     // 只有只读动作允许并发：写动作会把「读-改-写」排成一队，避免并发自伤。
-    isConcurrencySafe: (args) => ['status', 'workbench', 'memory_query', 'capability_list', 'capability_resolve', 'capability_read', 'bus_read', 'audit_tail', 'audit_verify', 'registry_list', 'registry_can', 'probe_health', 'upgrade_pending', 'policy_check'].includes(args?.action),
+    isConcurrencySafe: (args) => ['status', 'workbench', 'memory_query', 'memory_lineage', 'capability_list', 'capability_resolve', 'capability_read', 'bus_read', 'audit_tail', 'audit_verify', 'registry_list', 'registry_can', 'probe_health', 'upgrade_pending', 'policy_check'].includes(args?.action),
     async execute(args, exec) {
       const 主体 = agentSubject(exec);
       try {
@@ -509,7 +510,7 @@ function agentSubject(exec) {
 
 /** 把工具入参里的逗号串与 JSON 串规整成动作表要的形状。 */
 function normalizeArgs(args) {  const out = { ...args };
-  for (const key of ['负责人', '判据', '依赖', '分歧清单', '反例面', '产出物引用', '适用岗位', '收件', '标签']) {
+  for (const key of ['负责人', '判据', '依赖', '分歧清单', '反例面', '产出物引用', '适用岗位', '收件', '标签', '来源引用']) {
     const value = out[key];
     if (typeof value === 'string') {
       if (value.trim().startsWith('[')) {

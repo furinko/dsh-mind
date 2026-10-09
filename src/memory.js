@@ -58,7 +58,15 @@ export class MemoryService {
   /**
    * 记一条。写入时校验正文结构与来源；不合规拒写，不做事后修补。
    *
-   * @param {{ subject: object, 类: string, 内容: string, 来源: string|{谁?: string, 怎么知道: string}, 项目?: string, 岗位?: string, 标签?: string[], 标题?: string, 轮?: string, 任务?: object }} input
+   * 契约A（评审稿 §C2，2026-10-09）·完整血缘：
+   *  - `来源引用: string[]`——这条记忆的证据/来源对象 id 列表。写入时**存在性校验
+   *    fail-closed**：know-/exp-/pref-/answ- 前缀必须在账本 fold 得到、task- 前缀必须
+   *    在任务图事件流里出现过、artifact- 前缀本批不校验（INTERFACES 写明），
+   *    其余前缀无法校验 ⇒ 按悬空引用拒写。
+   *  - `派生自: string|null`——推翻替换链（新条目记被推翻者的 id）。这是 **overturn 的
+   *    内部参数**：调用方不传，也不从工具面透传——血缘是「谁推翻谁」的事实，不是自报项。
+   *
+   * @param {{ subject: object, 类: string, 内容: string, 来源: string|{谁?: string, 怎么知道: string}, 项目?: string, 岗位?: string, 标签?: string[], 标题?: string, 轮?: string, 任务?: object, 来源引用?: string|string[], 派生自?: string }} input
    * @returns {Promise<{ id: string, 类: string, 归属: string, 账本: string, 项目: string|null, 岗位: string|null }>}
    */
   async remember(input) {
@@ -85,6 +93,10 @@ export class MemoryService {
       throw new InvalidBody('作答必须有项目归属：它是某个项目里的一次作答。');
     }
 
+    // 契约A：来源引用在写入前校验存在性——悬空引用当场拒，不留给检索面去猜。
+    const 来源引用 = normalizeRefs(input.来源引用);
+    if (来源引用.length > 0) await this.#verifyRefs(来源引用);
+
     const scope = kind === '经历' || kind === '偏好' ? DIR.跨项目 : 项目;
     const target = memoryTarget(kind, scope, 项目);
     await this.policy.check({
@@ -106,6 +118,10 @@ export class MemoryService {
       标题: input.标题 ?? text.slice(0, 40),
       内容: text,
       来源,
+      // 契约A 血缘字段：旧行没有这两个键照常 fold（向后兼容——normalizeRefs 折 []、
+      // 派生自 折 null），新行写明空值也写键，读的人不用猜「缺键是不是丢了」。
+      来源引用,
+      派生自: typeof input.派生自 === 'string' && input.派生自 ? input.派生自 : null,
       归属: scope,
       项目,
       // 知识：项目标签恒打；岗位标签默认不打（由 Lead 判定「这条跨项目可复用」后追加）。
@@ -155,13 +171,24 @@ export class MemoryService {
 
     // ── 契约C 披露机械检查：标题 + 内容 + 标签 三个面一起过 ──────────────────
     // 顺序在 policy.check 之后：先由唯一判定点确认「这个主体有权晋升」，
-    // 再由这道内容闸拦「这段文本值不值得扩散」。命中拒绝不入豁免审计——
-    // 豁免审计只记「真的越过这道闸」的决定（与 purge 域内闸的先例同口径）。
+    // 再由这道内容闸拦「这段文本值不值得扩散」。命中拒绝记「披露拦截」审计
+    // （骑手① 2026-10-09：拦截企图是安全信号）；豁免放行另记「披露豁免」。
     const 命中 = this.#disclosureHits(entry);
     let 豁免留痕 = null;
     if (命中.length > 0) {
       const 命中模式 = 命中.map((h) => h.名);
       if (spec.披露豁免 === true && spec.subject?.kind !== 'Lead') {
+        // 骑手①（契约C 补强 2026-10-09）：披露拦截也入账——「有人试过扩散敏感内容
+        // 被拦」是安全信号，不入账的话复核者永远看不到这次企图。只记模式名，不抄原文。
+        await this.audit.append({
+          动作: '披露拦截',
+          主体: spec.subject,
+          对象: { id, kind: '知识' },
+          依据: '契约C 补强：豁免越权使用（披露豁免仅 Lead）',
+          结果: '拒绝',
+          项目: entry.项目,
+          详情: { 命中模式, 拒绝类型: '豁免越权' },
+        });
         throw new Denied(
           '法律 披露豁免仅 Lead（契约C 2026-10-09）',
           `披露豁免是 Lead 专属参数：${spec.subject?.kind ?? '未知'} 不得使用。命中模式：${命中模式.join('、')}。`,
@@ -173,6 +200,16 @@ export class MemoryService {
         );
       }
       if (spec.披露豁免 !== true) {
+        // 骑手①：同上——命中被拒入账（主体 + 命中模式名，不抄敏感原文）。
+        await this.audit.append({
+          动作: '披露拦截',
+          主体: spec.subject,
+          对象: { id, kind: '知识' },
+          依据: '契约C 补强：披露机械检查命中，未带豁免',
+          结果: '拒绝',
+          项目: entry.项目,
+          详情: { 命中模式, 拒绝类型: '命中未豁免' },
+        });
         throw new Denied(
           '法律 知识晋升披露机械检查（契约C 2026-10-09）',
           `该条知识的标题/内容/标签命中敏感模式：${命中模式.join('、')}。跨项目晋升会把这条知识扩散到产生它的项目之外。`,
@@ -285,20 +322,30 @@ export class MemoryService {
     // 同一秒里「先失效、后降权」会让最终状态变成 `已降权`，于是被判错过的条目又回到召回面。
     // 方向也一致：降权的意思是「冷」，不是「错」（§7「冷 ⇒ 追加降权状态，不删」），
     // 而「错」是事实判断，不该被后来的优先级判断撤销。
+    //
+    // 契约A（§C8）：「隔离 / 待删除」与已失效同为粘性——源对象被物理删除后，
+    // 血缘波及的下游不许再以「有效知识」的面目出现在默认召回里。
     const 已被否 = (entry) =>
       entry.状态 === '已失效' ||
       entry.状态 === '被推翻' ||
-      (entry.历史 ?? []).some((s) => s.追加 === 'invalid' || s.追加 === '推翻');
+      entry.状态 === '已隔离' ||
+      entry.状态 === '待删除' ||
+      (entry.历史 ?? []).some((s) => ['invalid', '推翻', '隔离', '待删除'].includes(s.追加));
     const 撤回 = visible.filter(已被否);
     const 可召回 = query.含失效 === true ? visible : visible.filter((entry) => !已被否(entry));
 
     // `排除失效` 只报**实际被排除**的条数：带 `含失效: true` 时一条都没排除，
     // 那里还写个 1 就是一句假读数（这个组织里假读数比没读数更贵）。
     // 「一共有几条失效」另用 `失效条目数` 报，两个问题分开答。
+    // 契约A：`隔离条目数` 单独报——「被血缘阻断波及」与「自身被判错」是两族原因，
+    // 读账的人要能区分「这条被隔离是因为它的源被物理删除了」。
+    const 被隔离 = (entry) =>
+      entry.状态 === '已隔离' || entry.状态 === '待删除' || (entry.历史 ?? []).some((s) => s.追加 === '隔离' || s.追加 === '待删除');
     const 口径数 = {
       文档数: visible.length,
       可召回数: 可召回.length,
-      失效条目数: 撤回.length,
+      失效条目数: 撤回.filter((e) => !被隔离(e)).length,
+      隔离条目数: 撤回.filter(被隔离).length,
       排除失效: query.含失效 === true ? 0 : 撤回.length,
     };
 
@@ -311,6 +358,16 @@ export class MemoryService {
     const 条目口径 = { 条目截断, 条目总数: visible.length, 条数上限 };
 
     if (!query.文本) {
+      // 无文本面也要给「被当前有效视图挡住」的读数与拉回办法——只在检索分支说，
+      // 全量浏览的人就会以为「不存在」，而其实是被隔离/失效挡住了（同一句两处用）。
+      const 视图说明 = 撤回.length > 0 && query.含失效 !== true
+        ? `另有 ${撤回.length} 条已失效/被推翻/待删除/已隔离的条目按「当前有效视图」未进召回${口径数.隔离条目数 > 0 ? `（其中 ${口径数.隔离条目数} 条因源对象物理删除被血缘隔离）` : ''}；要看它们请带 含失效: true。`
+        : '';
+      const 说明 = [
+        ...(条目截断 ? [`条目 共 ${visible.length} 条，超出上限 ${条数上限}，只回传最新 ${条数上限} 条；带 条数上限 可调。`] : []),
+        ...(视图说明 ? [视图说明] : []),
+        ...(query.显式 === true ? ['已显式包含归档作答。'] : []),
+      ].join(' ');
       return {
         命中: [],
         条目,
@@ -318,8 +375,7 @@ export class MemoryService {
         条目总数: visible.length,
         条数上限,
         口径: { 搜索面: '记忆服务', 查询词: '', 范围: wanted.join('/'), ...口径数, 命中数: 0, ...条目口径 },
-        ...(条目截断 ? { 说明: `条目 共 ${visible.length} 条，超出上限 ${条数上限}，只回传最新 ${条数上限} 条；带 条数上限 可调。` } : {}),
-        ...(query.显式 === true ? { 说明: '已显式包含归档作答。' } : {}),
+        ...(说明 ? { 说明 } : {}),
       };
     }
     const index = buildIndex(可召回.map((entry) => ({ id: entry.id, 正文: entry.内容, 标签: [entry.类, entry.岗位 ?? ''], 来源: entry.归属 })));
@@ -328,7 +384,9 @@ export class MemoryService {
     if (result.命中.length === 0) result.说明 = formatMiss(result.口径);
     if (撤回.length > 0 && query.含失效 !== true) {
       // 「0 命中」与「有材料但被当前有效视图挡住」是两件事，不许折成同一句话。
-      result.说明 = [result.说明, `另有 ${撤回.length} 条已失效/被推翻的条目按「当前有效视图」未进召回；要看它们请带 含失效: true。`]
+      // 隔离条目单独点名拉回办法（契约A）：被隔离的条目要看也是带 含失效: true。
+      const 隔离数 = 口径数.隔离条目数;
+      result.说明 = [result.说明, `另有 ${撤回.length} 条已失效/被推翻/待删除/已隔离的条目按「当前有效视图」未进召回${隔离数 > 0 ? `（其中 ${隔离数} 条因源对象物理删除被血缘隔离）` : ''}；要看它们请带 含失效: true。`]
         .filter(Boolean)
         .join(' ');
     }
@@ -346,6 +404,38 @@ export class MemoryService {
   }
 
   /**
+   * 契约A · 血缘查询（只读）：这条记忆的上下游（引用关系 + 推翻替换链）。
+   *
+   * 契约B 同款读面收窄：`subject` 必带过 `policy.check`（action 'read'），
+   * 放行记一条「只读服务调用」审计（档位=记汇总，一次调用一条）。
+   * 索引是**纯投影**（不变式 #4：可重建、不另立真源）——每次从账本行现算，
+   * 传递闭包深度上限 3（`lineageClosure`），环安全（visited 集）。
+   *
+   * @param {{ subject: object, id: string }} spec
+   * @returns {Promise<{ id: string, 上游: Array<{id: string, 深: number, 关系: '引用'|'派生'}>, 下游: Array<{id: string, 深: number, 关系: '引用'|'派生'}>, 深度读数: object }>}
+   */
+  async lineage(spec) {
+    await this.policy.check({
+      subject: spec.subject,
+      action: 'read',
+      target: { id: `记忆/血缘/${spec.id}`, kind: '记忆', authority: '自治', zone: '私有', domain: '集体', project: null },
+      context: {},
+    });
+    await this.audit.append({
+      动作: '只读服务调用',
+      主体: spec.subject,
+      对象: { id: `记忆/血缘/${spec.id}`, kind: '记忆' },
+      依据: '契约A（2026-10-09）血缘查询：读面也过唯一判定点',
+      结果: '放行',
+      详情: { 服务: 'memory.lineage', id: spec.id },
+    });
+    const entry = await this.#folded(spec.id);
+    if (!entry) throw new InvalidBody(`没有这条记忆：${spec.id}`);
+    const closure = lineageClosure(await this.#lineageIndex(), spec.id);
+    return { id: spec.id, ...closure };
+  }
+
+  /**
    * 失效：追加 `invalid` 状态，不改原条目（§7「错误 / 过期」）。
    * @param {string} id
    * @param {{ subject: object, 原因: string }} spec
@@ -353,7 +443,6 @@ export class MemoryService {
   async invalidate(id, spec) {
     return this.#appendState(id, 'invalid', spec);
   }
-
   /**
    * 冷：追加降权状态，不删（§7「冷」）。
    * @param {string} id
@@ -365,6 +454,10 @@ export class MemoryService {
 
   /**
    * 被推翻：追加状态并追加新条目，双份留痕（§7「被推翻」）。
+   *
+   * 契约A：新条目自动写 `派生自 = 被推翻者 id`——推翻替换链由机制记录，
+   * 调用方不传（血缘是「谁推翻谁」的事实，不是自报项）。
+   *
    * @param {string} id
    * @param {{ subject: object, 新条目: string, 理由: string }} spec
    */
@@ -378,6 +471,8 @@ export class MemoryService {
       来源: { 谁: spec.subject?.id, 怎么知道: `推翻 ${id}：${spec.理由}` },
       项目: entry.项目,
       岗位: entry.岗位 ?? undefined,
+      来源引用: entry.来源引用 ?? [],
+      派生自: id,
     });
     await this.#appendState(id, '推翻', spec, { 新条目: created.id });
     return { id, 状态: '被推翻', 新条目: created.id };
@@ -393,13 +488,21 @@ export class MemoryService {
    * （记录 id 与理由，不记录内容本身——否则等于没删）；③ **扫遍出现过该 id 的每一本账**
    * （晋升过的知识同时住在项目账与跨项目账上，只删一本等于没删）。
    *
+   * 契约A（评审稿 §C8）·阻断语义——purge 三步化，承诺范围升格为「含下游隔离」：
+   *  ① 追加 `待删除` 状态行入账；按血缘算**下游闭包**（引用它的 + 派生自它的，传递
+   *     ≤3 层、环安全），逐条追加「隔离」状态行（依据写「源对象物理删除·血缘阻断」）；
+   *  ② 物理抹源条目（沿用多账本扫描——状态行 id 是 ledger- 前缀，不会被抹）；
+   *  ③ 不可逆操作审计记 清理覆盖 + 下游隔离清单；返回值加 `下游隔离`。
+   *  隔离 ≠ 删除：下游条目那行字节不动，只是退出默认召回（粘性），`含失效: true` 可拉回。
+   *  旧行（无血缘字段）下游闭包为空 ⇒ 行为与旧版完全一致（不回归）。
+   *
    * 闸的动作为什么是 'write' 而不是 'delete'：'delete' 是主权者专属（宪章 §3.2），
    * 而敏感数据清除是不能排队等主权者的安全动作；'write' 闸把失联冻结、介入度、
    * 复核者只读这些边界接进来，「仅限敏感数据 / 主权者明确要求」由上面的域内闸收口。
    *
    * @param {string} id
    * @param {{ subject: object, 理由: string, 敏感?: boolean }} spec
-   * @returns {Promise<{ id: string, 已删除: true, 依据: string }>}
+   * @returns {Promise<{ id: string, 已删除: true, 依据: string, 清理覆盖: string[], 下游隔离: string[] }>}
    */
   async purge(id, spec) {
     if (typeof spec.理由 !== 'string' || !spec.理由.trim()) {
@@ -422,6 +525,37 @@ export class MemoryService {
       context: { id, 状态: '物理删除' },
     });
 
+    // ── ① 血缘阻断：先算下游闭包（此刻源条目还在账上，索引完整），再逐条隔离 ──────
+    const 下游 = await this.#downstreamClosure(id);
+    const 隔离行 = [];
+    for (const child of 下游) {
+      const childEntry = await this.#folded(child.id);
+      // 闭包算出时在、写时已不在的（并发被删）跳过——它的账本留痕由那次删除自己负责。
+      if (!childEntry) continue;
+      隔离行.push({
+        账本: this.layout.memoryLog(childEntry.归属, childEntry.类),
+        行: {
+          id: objectId('账目', `${child.id}:隔离`, { at: this.clock.ms() }),
+          指向: child.id,
+          追加: '隔离',
+          追于: this.clock.iso(),
+          依据: '源对象物理删除·血缘阻断',
+          主体: spec.subject,
+        },
+      });
+    }
+    // 源对象自身的「待删除」状态行：物理抹除只抹 条目行（按 id 过滤），状态行留在账上
+    // 作为「这里发生过一次物理删除」的只增留痕。
+    await appendLines(this.layout.memoryLog(entry.归属, entry.类), [
+      { id: objectId('账目', `${id}:待删除`, { at: this.clock.ms() }), 指向: id, 追加: '待删除', 追于: this.clock.iso(), 依据: spec.理由, 主体: spec.subject },
+    ]);
+    // 同账本的隔离行合并成一次追加；跨账本逐本追加（appendLines 本身带锁）。
+    const 按账本 = new Map();
+    for (const { 账本, 行 } of 隔离行) 按账本.set(账本, [...(按账本.get(账本) ?? []), 行]);
+    for (const [账本, 行s] of 按账本) await appendLines(账本, 行s);
+    const 隔离ids = 隔离行.map((x) => x.行.指向);
+
+    // ── ② 物理抹源条目 ─────────────────────────────────────────────────────────
     // 同一个 id 可以同时躺在两本账上：知识晋升会把它复制进「跨项目」，
     // 而原条目仍留在产生它的那个项目账里（§7「双份留痕」）。
     // 所以物理删除必须扫**所有**出现过它的账本——只删 `归属` 那一本，
@@ -448,16 +582,18 @@ export class MemoryService {
         await atomicWrite(file, kept.length ? `${kept.join('\n')}\n` : '');
       });
     }
+
+    // ── ③ 不可逆操作审计：清理覆盖 + 下游隔离清单 ───────────────────────────────
     await this.audit.append({
       动作: '不可逆操作',
       主体: spec.subject,
       对象: { id, kind: entry.类 },
       依据: 敏感 ? '记忆处置表：敏感数据' : '记忆处置表：主权者明确要求',
-      结果: `物理删除（内容已抹掉；覆盖 ${覆盖.length} 本账：${覆盖.map((x) => x.scope).join(' / ')}）`,
+      结果: `物理删除（内容已抹掉；覆盖 ${覆盖.length} 本账：${覆盖.map((x) => x.scope).join(' / ')}；下游隔离 ${隔离ids.length} 条）`,
       项目: entry.项目,
-      详情: { 理由: spec.理由, 类: entry.类, 清理覆盖: 覆盖.map((x) => x.file) },
+      详情: { 理由: spec.理由, 类: entry.类, 清理覆盖: 覆盖.map((x) => x.file), 下游隔离: 隔离ids },
     });
-    return { id, 已删除: true, 依据: spec.理由, 清理覆盖: 覆盖.map((x) => x.scope) };
+    return { id, 已删除: true, 依据: spec.理由, 清理覆盖: 覆盖.map((x) => x.scope), 下游隔离: 隔离ids };
   }
 
   /**
@@ -583,6 +719,73 @@ export class MemoryService {
   }
 
   /**
+   * 契约A · 来源引用存在性校验（fail-closed）。
+   *
+   * 每个前缀的校验面（INTERFACES §2.14 写明）：
+   *  - know-/exp-/pref-/answ-：记忆账本 fold 得到；
+   *  - task-：任务图事件流里出现过该节点 id；
+   *  - artifact-：**本批不校验**（产物库尚无独立账本可查，写了「已校验」就是谎）；
+   *  - 其余前缀：无法校验 ⇒ 拒——不能验证的引用等于悬空引用。
+   * @param {string[]} refs
+   */
+  async #verifyRefs(refs) {
+    for (const ref of refs) {
+      if (ref.startsWith('artifact-')) continue;
+      if (ref.startsWith('task-')) {
+        if (!(await this.#taskExists(ref))) {
+          throw new InvalidBody(`悬空引用：任务图里没有 ${ref}。引用必须指向真实存在的对象（fail-closed）。`, { detail: { 引用: ref, 校验面: '任务图' } });
+        }
+        continue;
+      }
+      if (/^(know|exp|pref|answ)-/.test(ref)) {
+        if (!(await this.#folded(ref))) {
+          throw new InvalidBody(`悬空引用：账本里折不到 ${ref}。引用必须指向真实存在的记忆（fail-closed）。`, { detail: { 引用: ref, 校验面: '记忆账本' } });
+        }
+        continue;
+      }
+      throw new InvalidBody(
+        `无法校验的引用：${ref}。可校验前缀：know-/exp-/pref-/answ-（记忆账本）、task-（任务图）、artifact-（本批不校验）。`,
+        { detail: { 引用: ref } },
+      );
+    }
+  }
+
+  /**
+   * 任务节点是否在任务图事件流里出现过（跨全部项目——引用不该被项目墙挡住）。
+   * @param {string} taskId
+   * @returns {Promise<boolean>}
+   */
+  async #taskExists(taskId) {
+    const { listFiles } = await import('./kernel/fsx.js');
+    const root = this.layout.private(DIR.基础设施, DIR.任务图);
+    for (const rel of await listFiles(root, { recursive: true, filter: (n) => n.endsWith('tasks.jsonl') })) {
+      const rows = await readJsonl(`${root}/${rel}`);
+      if (rows.some((row) => row?.id === taskId)) return true;
+    }
+    return false;
+  }
+
+  /** 扫全部记忆账本行，构建血缘索引（纯投影，不落盘——不变式 #4：可重建、不另立真源）。 */
+  async #lineageIndex() {
+    const rows = [];
+    for (const kind of MEMORY_KINDS) {
+      for (const scope of [DIR.跨项目, ...(await this.#projectScopes())]) {
+        rows.push(...(await readJsonl(this.layout.memoryLog(scope, kind))));
+      }
+    }
+    return buildLineageIndex(rows);
+  }
+
+  /**
+   * 下游闭包（purge 阻断用）：引用它的 + 派生自它的，传递 ≤3 层、环安全。
+   * @param {string} id
+   * @returns {Promise<Array<{id: string, 深: number, 关系: string}>>}
+   */
+  async #downstreamClosure(id) {
+    return lineageClosure(await this.#lineageIndex(), id).下游;
+  }
+
+  /**
    * 严格递增的时刻，只给 id 用。
    *
    * 为什么需要它：id 的种子去掉了正文，只剩「类 + 主体 + 时刻」。
@@ -685,6 +888,11 @@ export function fold(rows) {
     else if (state.追加 === '推翻') entry.状态 = '被推翻';
     else if (state.追加 === '归档') entry.归档 = true;
     else if (state.追加 === '物理删除') entry.状态 = '物理删除';
+    // 契约A 两态（评审稿 §C8 阻断语义）：「隔离」＝源对象被物理删除、血缘阻断波及本条；
+    // 「待删除」＝本条正是被物理删除的源（状态行留在账上，条目行已被抹）。
+    // 两者都退出默认召回（判据粘性同 已失效）。
+    else if (state.追加 === '隔离') entry.状态 = '已隔离';
+    else if (state.追加 === '待删除') entry.状态 = '待删除';
   }
   return [...entries.values()];
 }
@@ -692,6 +900,7 @@ export function fold(rows) {
 /**
  * 同 id 的两份条目行合成一份（E1）。带岗位标签的那份（晋升副本）优先，
  * 它缺的键从另一份补——两份正文本来就该一致，差异只在 归属/岗位/跨项目判定。
+ * 契约A：来源引用 / 派生自 随 spread 自然继承（晋升副本的血缘与原件是同一份事实）。
  * @param {object} a @param {object} b
  */
 function mergeEntryRows(a, b) {
@@ -700,6 +909,122 @@ function mergeEntryRows(a, b) {
     ...lose,
     ...Object.fromEntries(Object.entries(win).filter(([, v]) => v !== undefined && v !== null)),
     账本出现于: [...new Set([...(a.账本出现于 ?? []), ...(b.账本出现于 ?? []), a.归属, b.归属])].filter(Boolean),
+  };
+}
+
+/**
+ * 契约A · 把 来源引用 入参折成 string[]（接受单个串或数组；旧行无此字段折 []）。
+ * @param {string|string[]|null|undefined} value
+ * @returns {string[]}
+ */
+function normalizeRefs(value) {
+  if (value === null || value === undefined) return [];
+  const list = Array.isArray(value) ? value : [value];
+  return list.map((v) => String(v).trim()).filter(Boolean);
+}
+
+/**
+ * 契约A · 血缘索引（纯函数，不变式 #4：可重建、不另立真源）。
+ *
+ * 扫账本行（经 `fold` 折成当前视图后）出双向关系：
+ *  - `引用`: id → 它的 来源引用 列表（上游边，指向被引对象）；
+ *  - `被引用`: id → 引用它的条目列表（下游边）；
+ *  - `派生自`: id → 它推翻替换的对象（上游边）；
+ *  - `派生下家`: id → 派生自它的条目（下游边）。
+ * 只建索引不做闭包——闭包遍历在 `lineageClosure`，两者分开是为了让「建图」
+ * 这一纯投影可独立测试（环安全/深度上限是遍历的职责，不是建图的）。
+ *
+ * @param {object[]} rows 账本原始行（条目行 + 状态行混排）
+ * @returns {{ 引用: Map<string,string[]>, 被引用: Map<string,string[]>, 派生自: Map<string,string|null>, 派生下家: Map<string,string[]>, ids: string[] }}
+ */
+export function buildLineageIndex(rows) {
+  /** @type {Map<string, string[]>} */
+  const 引用 = new Map();
+  /** @type {Map<string, string[]>} */
+  const 被引用 = new Map();
+  /** @type {Map<string, string|null>} */
+  const 派生自 = new Map();
+  /** @type {Map<string, string[]>} */
+  const 派生下家 = new Map();
+  for (const entry of fold(rows)) {
+    const refs = Array.isArray(entry.来源引用) ? entry.来源引用.filter((r) => typeof r === 'string' && r) : [];
+    引用.set(entry.id, refs);
+    for (const ref of refs) 被引用.set(ref, [...(被引用.get(ref) ?? []), entry.id]);
+    const parent = typeof entry.派生自 === 'string' && entry.派生自 ? entry.派生自 : null;
+    派生自.set(entry.id, parent);
+    if (parent) 派生下家.set(parent, [...(派生下家.get(parent) ?? []), entry.id]);
+  }
+  return { 引用, 被引用, 派生自, 派生下家, ids: [...引用.keys()] };
+}
+
+/** 血缘闭包的传递深度上限（契约A）：过深的链在此截断并在深度读数里如实标注。 */
+export const LINEAGE_MAX_DEPTH = 3;
+
+/**
+ * 契约A · 从 `start` 出发的双向闭包（BFS，最短深度；visited 集环安全）。
+ *
+ * 上游边 ＝ 它引用的（来源引用）＋ 它派生自的；下游边 ＝ 引用它的 ＋ 派生自它的。
+ * `深度读数` 如实报两侧最深层与是否截断——「图还有更多没走」不许伪装成「图就这么大」。
+ *
+ * @param {ReturnType<typeof buildLineageIndex>} index
+ * @param {string} start
+ * @param {{ maxDepth?: number }} [options]
+ * @returns {{ 上游: Array<{id: string, 深: number, 关系: '引用'|'派生'}>, 下游: Array<{id: string, 深: number, 关系: '引用'|'派生'}>, 深度读数: { 深度上限: number, 上游最深层: number, 下游最深层: number, 上游截断: boolean, 下游截断: boolean, 走过节点数: number } }}
+ */
+export function lineageClosure(index, start, options = {}) {
+  const maxDepth = Number.isFinite(options.maxDepth) && options.maxDepth > 0 ? Math.floor(options.maxDepth) : LINEAGE_MAX_DEPTH;
+  /** @param {string} id @returns {Array<[string, '引用'|'派生']>} */
+  const 上游邻居 = (id) => [
+    ...(index.引用.get(id) ?? []).map((x) => /** @type {['引用']} */ ([x, '引用'])),
+    ...(index.派生自.get(id) ? [[index.派生自.get(id), '派生']] : []),
+  ];
+  /** @param {string} id @returns {Array<[string, '引用'|'派生']>} */
+  const 下游邻居 = (id) => [
+    ...(index.被引用.get(id) ?? []).map((x) => ([x, '引用'])),
+    ...(index.派生下家.get(id) ?? []).map((x) => ([x, '派生'])),
+  ];
+  /**
+   * @param {(id: string) => Array<[string, '引用'|'派生']>} neighborsOf
+   * @returns {{ nodes: Array<{id: string, 深: number, 关系: '引用'|'派生'}>, 截断: boolean }}
+   */
+  const walk = (neighborsOf) => {
+    const visited = new Set([start]);
+    const nodes = [];
+    let frontier = [start];
+    let 截断 = false;
+    for (let depth = 1; depth <= maxDepth; depth += 1) {
+      const next = [];
+      for (const cur of frontier) {
+        for (const [nbr, 关系] of neighborsOf(cur)) {
+          // 环安全：进过的不重进——环形账本在这里退化为「已见过的边不重复走」。
+          if (visited.has(nbr)) continue;
+          visited.add(nbr);
+          nodes.push({ id: nbr, 深: depth, 关系 });
+          next.push(nbr);
+        }
+      }
+      if (next.length === 0) break;
+      if (depth === maxDepth) {
+        // 最后一层还有没访问过的邻居 ⇒ 图比深度上限大，如实报截断。
+        截断 = next.some((cur) => neighborsOf(cur).some(([nbr]) => !visited.has(nbr)));
+      }
+      frontier = next;
+    }
+    return { nodes, 截断 };
+  };
+  const 上游 = walk(上游邻居);
+  const 下游 = walk(下游邻居);
+  return {
+    上游: 上游.nodes,
+    下游: 下游.nodes,
+    深度读数: {
+      深度上限: maxDepth,
+      上游最深层: 上游.nodes.reduce((m, n) => Math.max(m, n.深), 0),
+      下游最深层: 下游.nodes.reduce((m, n) => Math.max(m, n.深), 0),
+      上游截断: 上游.截断,
+      下游截断: 下游.截断,
+      走过节点数: 上游.nodes.length + 下游.nodes.length,
+    },
   };
 }
 

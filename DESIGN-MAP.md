@@ -86,6 +86,9 @@
 | 记忆服务：写入必带来源、不许改写只能追加、写入时校验结构 | `src/memory.js` | flow：记忆三例 |
 | 只读面收窄（契约B 2026-10-09）：query / bus.read / capability.resolve 也过判定，放行一次调用一条「记汇总」审计 | `memory.query` + `bus.read` + `capability.resolve` 的 `policy.check`；`ACTION_GRADE` 登记档位 | contracts-bc：契约B 七例 |
 | 知识晋升披露机械检查（契约C 2026-10-09）：标题+内容+标签过敏感模式，豁免仅 Lead 且豁免+命中模式进审计 | `memory.promoteCrossProject` + `DEFAULT_DISCLOSURE_PATTERNS`；部署.json `披露敏感模式` 在 `policy.#loadDefaults` 加载期校验（非法正则 = fail-closed） | contracts-bc：契约C 九例 |
+| 完整血缘（契约A 2026-10-09）：来源引用 fail-closed 存在性校验 + 派生自自动记录 + 闭包 ≤3 层环安全 | `memory.remember`/`#verifyRefs` + `buildLineageIndex`/`lineageClosure`（纯投影）+ `memory.lineage`（读面契约B 同款） | contracts-a：血缘七例 |
+| 物理删除三步化（契约A · §C8 阻断）：待删除状态行 + 下游隔离闭包 + 审计含隔离清单；隔离/待删除退出默认召回（粘性） | `memory.purge` + `fold` 两态 + `口径.隔离条目数` | contracts-a：建链/深度/旧数据三例 |
+| 披露拦截入账 + 空清单显式关闭留痕（契约C 骑手①② 2026-10-09） | `memory.promoteCrossProject` 拒绝路径 append「披露拦截」；`policy.#warnIfDisclosureDisabled` 按状态迁移记告警 | contracts-a：骑手两例 |
 | 审计日志：只增、无条件写、不承担回滚 | `src/audit.js` | safety：审计 |
 | 记忆四类归属（知识双标签 / 经历账本 / 偏好部署 / 作答实例） | `MemoryService.remember` | flow：记忆标签 |
 | 作答归档后的可读性矩阵 | `memory.readableBy` + `query` 默认面 | flow：归档可读性 |

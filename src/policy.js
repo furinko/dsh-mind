@@ -87,6 +87,13 @@ export class PolicyEngine {
     /** 已加载的授权块（法律件里那份），热更新时整体替换。 */
     this.grants = [];
     /**
+     * 上次 reload 时「披露敏感模式」是否为显式空数组（骑手②的去重标志）。
+     * 只在**状态迁移**时记告警（非空→空、首次加载即空）；同一状态反复 reload
+     * 不刷账本——身份档案 mtime 一变就触发 reload，每次交互都记就成了告警洪水。
+     * 「关闭」这件事必留痕，「持续关闭」不重复喊。
+     */
+    this.disclosureEmptyWarned = false;
+    /**
      * 上次 reload 时身份档案的 mtimeMs（档案缺失记 null）。
      * 为什么放在实例上：decide 热路径要用它判断「档案在加载之后被谁改过」。
      */
@@ -113,6 +120,11 @@ export class PolicyEngine {
         establishment,
         digests,
       };
+      // 骑手②（契约C 补强 2026-10-09）：部署.json 披露敏感模式=[] 是主权者**显式关闭**
+      // 这道安全闸——合法，但绝不许静默：状态迁移进「空清单」时记一条告警档审计。
+      // 留痕失败不让 reload 失败（账本故障另有探针盯着），但用 console 喊出来——
+      // 「关闭了却没喊成」比「reload 失败」更接近 §3.6 说的静默失败。
+      await this.#warnIfDisclosureDisabled(defaults, defaults来源);
     } catch (error) {
       // fail-closed：加载失败 ⇒ 引擎不健康，之后所有判定走 Fault（拒绝 + 告警）。
       this.state = {
@@ -126,6 +138,42 @@ export class PolicyEngine {
     // 会看到「mtime 没变」而跳过重载——把一个可能已修复的引擎卡死在不健康状态。
     this.identityMtimeMs = await mtimeMsOrNull(this.layout.identityFile());
     return this.state.ok;
+  }
+
+  /**
+   * 骑手②（契约C 补强 2026-10-09）：`披露敏感模式: []` 的响亮留痕。
+   *
+   * 空数组是主权者的**显式决定**（整体覆盖默认清单后一条模式都不剩），所以它合法；
+   * 但「安全闸被关掉」这件事必须入账（告警档）——否则下一次复核时，谁也答不出
+   * 「披露机械检查是什么时候、被谁关掉的」。去重口径见构造器里 `disclosureEmptyWarned`
+   * 的注释：只在状态**迁移**时喊（非空→空、首次即空），持续关闭不重复喊。
+   *
+   * @param {object} defaults 本次加载合并后的默认值
+   * @param {Record<string,string>} defaults来源 键的生效来源（'出厂' | '私有' | '内置兜底'）
+   */
+  async #warnIfDisclosureDisabled(defaults, defaults来源) {
+    const 空清单 = Array.isArray(defaults.披露敏感模式) && defaults.披露敏感模式.length === 0;
+    if (!空清单) {
+      this.disclosureEmptyWarned = false; // 恢复非空 ⇒ 标志复位，下次再关会再喊。
+      return;
+    }
+    if (this.disclosureEmptyWarned) return; // 持续关闭：不重复。
+    this.disclosureEmptyWarned = true;
+    try {
+      await this.audit?.append?.({
+        动作: '披露机械检查已显式关闭',
+        告警: true,
+        主体: { id: 'system', kind: '系统' },
+        对象: { id: this.layout.deploymentPrefs(), kind: '设置文件' },
+        依据: '契约C 补强（2026-10-09）：部署.json 披露敏感模式=[] 为主权者显式关闭——合法，但不许静默',
+        结果: '已显式关闭（空清单，知识晋升披露机械检查不再拦截任何模式）',
+        详情: { 生效来源: defaults来源.披露敏感模式 ?? '内置兜底' },
+      });
+    } catch (error) {
+      // 账本坏了不该让引擎装死（fail-closed 会冻住全部写动作，包括把清单改回去的手）；
+      // 但喊不出来也绝不吞声——console 是这里的最后出口。
+      console.warn?.(`[dsh-mind] 披露敏感模式为空数组（显式关闭），且告警入账失败：${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /** @returns {boolean} */
