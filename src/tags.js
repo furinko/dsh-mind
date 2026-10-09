@@ -126,12 +126,19 @@ export function parseSimpleYaml(raw) {
  * `["a` / `b"` / `c]` 三段——`unquote` 认不出没闭合的引号，于是 meta 里出现半截引号串，
  * 而 errors 还是空的（静默改坏）。切分与引号规则必须成对，否则修了一半等于没修。
  *
+ * **空元素的折中**（W3 批5·2026-10-09）：只丢**不带引号**的空元素，带引号的空串保留。
+ *  - `[a, , b]`（legacy 手写）⇒ 空段照旧丢掉 → `['a','b']`（老行为不变）；
+ *  - `[""]`（写侧对空串的表示）⇒ 保留成 `['']`（往返闭合）。
+ * 一律丢会让 `['']` 往返成 `[]`（复核反例）；一律留会让 legacy 的 `a, ,b` 多出一个空串。
+ *
  * @param {string} raw 不含外层 `[` `]` 的文本
  * @returns {string[]}
  */
 function splitArrayItems(raw) {
+  /** @type {Array<{text: string, quoted: boolean}>} */
   const 段 = [];
   let 当前 = '';
+  let 见过引号 = false;
   let quote = null;
   for (let i = 0; i < raw.length; i += 1) {
     const ch = raw[i];
@@ -149,18 +156,23 @@ function splitArrayItems(raw) {
     }
     if (ch === '"' || ch === "'") {
       quote = ch;
+      见过引号 = true;
       当前 += ch;
       continue;
     }
     if (ch === ',') {
-      段.push(当前);
+      段.push({ text: 当前, quoted: 见过引号 });
       当前 = '';
+      见过引号 = false;
       continue;
     }
     当前 += ch;
   }
-  段.push(当前);
-  return 段.map((s) => unquote(s.trim())).filter((s) => s !== '');
+  段.push({ text: 当前, quoted: 见过引号 });
+  return 段
+    .map(({ text, quoted }) => ({ v: unquote(text.trim()), quoted }))
+    .filter(({ v, quoted }) => quoted || v !== '')
+    .map(({ v }) => v);
 }
 
 /**

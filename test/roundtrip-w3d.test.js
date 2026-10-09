@@ -77,6 +77,22 @@ describe('W3 批4 · 写-读往返闭合', () => {
     assert.equal(普通, '---\nid: 甲卡\nkind: 能力\nauthority: 自治\nzone: 私有\ndomain: 集体\nversion: 1\n---\n');
     // 数组元素各自判断：只有含逗号那个被引号化
     assert.equal(formatFrontMatter({ refs: ['a', 'b,c'] }), '---\nrefs: [a, "b,c"]\n---\n');
+    // 空串元素（W3 批5 复核反例）：`['']` 写成 `[""]`，读回必须还是 `['']`
+    for (const 数据 of [{ refs: [''] }, { refs: ['a', ''] }, { refs: ['', ''] }, { 摘要: '' }]) {
+      assert.deepEqual(读回(`${formatFrontMatter(数据)}\n# 正文\n`), 数据, `空串往返必须闭合：${JSON.stringify(数据)}`);
+    }
+    assert.equal(formatFrontMatter({ refs: [''] }), '---\nrefs: [""]\n---\n');
+  });
+
+  it('①数组空元素折中：带引号的空串保留，legacy 裸空段照旧丢', () => {
+    // legacy 手写（不带引号）⇒ 老行为不变
+    assert.deepEqual(parseSimpleYaml('refs: [a, , b]').data, { refs: ['a', 'b'] });
+    assert.deepEqual(parseSimpleYaml('refs: [,]').data, { refs: [] });
+    assert.deepEqual(parseSimpleYaml('refs: []').data, { refs: [] });
+    // 带引号的空串是**写侧对空串的表示** ⇒ 必须留住（否则 `['']` 往返成 `[]`）
+    assert.deepEqual(parseSimpleYaml('refs: [""]').data, { refs: [''] });
+    assert.deepEqual(parseSimpleYaml('refs: ["", a]').data, { refs: ['', 'a'] });
+    assert.deepEqual(parseSimpleYaml("refs: ['']").data, { refs: [''] });
   });
 
   it('①出厂件 front matter 走一遍 format+parse：**逐字节不变**（升级层靠字节比对）', async () => {
@@ -182,8 +198,16 @@ describe('W3 批4 · 四条门禁', () => {
     const 未齐 = 投影(一致两份);
     assert.equal(未齐.零分歧, undefined, '未交齐不投影（批3 的遮罩）');
     assert.equal(judgeZeroDivergence(一致两份).零分歧, true, '判定用的是**全量答案**（同一个纯函数），只是不投影');
+    // W3 批5：未交齐时补的**机械读数**——它由全量答案算得、不含任何人的结论文本。
+    // 没有它，「判定读的是全量还是遮罩后的行」在未交齐场景下没有任何可观察判据
+    // （复核实测：把判定改成读遮罩行仍然全绿）。遮罩行没有结论 ⇒ 基数会塌成 0。
+    assert.equal(未齐.零分歧判定基数, 2, '未交齐（2/3）时基数 = 全量答案里带结论的条数（2）');
+    assert.deepEqual(未齐.独立答案, [{ 盲标: '成员 A' }, { 盲标: '成员 B' }], '同时答案行只有盲标（遮罩仍在）');
+    assert.doesNotMatch(JSON.stringify(未齐), /用会话命令/, '机械读数不许把结论带出来');
+
     const 齐 = 投影([...一致两份, { 成员: 'member-c', 结论: '用会话命令', 反例面: [] }]);
     assert.equal(齐.零分歧, true, '齐后照给');
+    assert.equal(齐.零分歧判定基数, undefined, '齐后给的是判定值本身，不需要基数这个旁证');
 
     // 反向：结论不同 ⇒ false。这条能识别「拿遮罩后的行去判」那种实现——
     // 遮罩行没有 成员/结论，`结论层` 会塌成一个空串，于是任何会审都被判成"零分歧"。
