@@ -11,6 +11,7 @@
  * 于是退到更朴素、也更可验证的机制：**同一进程 + 同一模块实例 + 一个键控缓存**。
  * 键取「私有区根 + 项目」，因此同一次启动里的多个组件必然共享，重启后自然重建（§12.4）。
  */
+import { join, resolve } from 'node:path';
 import { Org, DEFAULT_PROJECT } from './org.js';
 
 /** @type {Map<string, Promise<Org>>} */
@@ -41,11 +42,21 @@ export function shareOrg(spec) {
 
 /**
  * 共享键：私有区根 + 项目键。两者任一不同就是不同的组织。
+ *
+ * **路径先归一（W3 批1·2026-10-09）**：私有区根有两个来源——有的组件自己按
+ * `home` 拼，有的把 `Layout.privateRoot` 原样传进来，而 `Layout` 用的是 `path.join`
+ * （Windows 下是反斜杠）。`C:\x\mind-data\mind-private` 与 `C:/x/mind-data/mind-private`
+ * 指向同一个目录却是两个键 ⇒ 缓存里装配出**两个 Org 实例**，同一个审计账出现两个写者，
+ * 链头各算各的（这正是本缓存存在的理由被绕过）。
+ * 所以拼键前先过 `path.resolve`：分隔符、尾斜杠、`.`/`..` 一律折成同一条绝对路径。
+ * 归一的是**同一台机器上的同一个目录**，不涉及大小写折叠（Windows 大小写不敏感，
+ * 但那是「另一个隐患」，本批不动）。
+ *
  * @param {{ privateRoot?: string, home?: string, factoryRoot?: string, project?: string }} spec
  * @returns {string}
  */
 export function shareKey(spec) {
-  const 私有根 = spec.privateRoot ?? `${spec.home ?? ''}/mind-data/mind-private`;
+  const 私有根 = resolve(spec.privateRoot ?? join(spec.home ?? '', 'mind-data', 'mind-private'));
   return `${私有根}::${spec.project ?? DEFAULT_PROJECT}`;
 }
 

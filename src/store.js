@@ -9,7 +9,7 @@
  * 只管**文档类**对象（规则 / 身份 / 能力 / 产物）。账目类（任务 / 消息 / 记忆 / 审计）
  * 走各自的 append-only 服务，因为它们的真相是「事件序列」而不是「当前文本」。
  */
-import { listFiles, readJsonOrNull, readTextOrNull, atomicWrite, mutateLocked } from './kernel/fsx.js';
+import { listFiles, readJsonOrNull, readTextOrNull, atomicWrite, mutateLocked, withLock } from './kernel/fsx.js';
 import { InvalidBody } from './kernel/errors.js';
 import { parseVersionName } from './kernel/ids.js';
 import { digest } from './kernel/text.js';
@@ -77,61 +77,69 @@ export class ObjectStore {
       });
     }
 
-    const existing = await this.read(kind, id, { subject: spec.subject });
-    // version 从 front matter 里读回来是**字符串**；不转数字就会得到 v1 → v11 这种版本号。
-    const previous = existing ? Number(existing.meta.version ?? 1) : null;
-    const authority = existing?.authority ?? meta.authority ?? '自治';
-    meta.authority = meta.authority ?? authority;
+    // 对象级锁（W3 批1·2026-10-09）：read-existing → keepVersion → atomicWrite →
+    // recordPointer 全程包进按对象锁（照 bus 线程锁 `${file}.lock` 先例）。不锁的话
+    // 两个并发 write 同 id 会算出同一个 version、互相覆盖正文、留下撕开的版本史。
+    // 锁路径与目标文件同目录同主名——path 只由 id/authority/zone 决定（不含 version），
+    // 所以在算 version 之前就能定。
+    const lockPath = `${this.#pathFor(kind, { id }, zone, meta.authority ?? '自治')}.lock`;
+    return withLock(lockPath, async () => {
+      const existing = await this.read(kind, id, { subject: spec.subject });
+      // version 从 front matter 里读回来是**字符串**；不转数字就会得到 v1 → v11 这种版本号。
+      const previous = existing ? Number(existing.meta.version ?? 1) : null;
+      const authority = existing?.authority ?? meta.authority ?? '自治';
+      meta.authority = meta.authority ?? authority;
 
-    await this.policy.check({
-      subject: spec.subject,
-      action: existing ? 'write' : 'create',
-      target: {
+      await this.policy.check({
+        subject: spec.subject,
+        action: existing ? 'write' : 'create',
+        target: {
+          id,
+          kind,
+          authority: meta.authority,
+          zone,
+          domain: meta.domain ?? '集体',
+          project: meta.project ?? null,
+          segment: spec.segment ?? null,
+        },
+        // 任务节点要一起传下去：§2「成员任务内全权，任务外无」——
+        // 成员写下自己的产出物正是「交卷」，没有这个上下文它会被判成「任务外」而拒写。
+        context: { reason: spec.reason, task: spec.task ?? null },
+      });
+
+      const version = previous === null ? 1 : previous + 1;
+      meta.version = version;
+      const text = `${formatFrontMatter(meta)}${document.body.startsWith('\n') ? document.body.slice(1) : document.body}`;
+      const parsed = parseDocument(text, { defaultAuthority: meta.authority });
+      assertStructure(kind, parsed);
+
+      const path = this.#pathFor(kind, meta, zone, meta.authority);
+      if (!path) throw new InvalidBody(`对象存储没有 ${kind} 的落点`);
+      if (existing) await this.#keepVersion(id, existing, previous);
+
+      await atomicWrite(path, text);
+      const pointer = { id, kind, zone, version, digest: digest(text), at: this.clock.iso(), path };
+      await this.#recordPointer(id, pointer);
+      await this.audit.append({
+        动作: '状态变更',
+        主体: spec.subject,
+        对象: { id, kind },
+        依据: spec.reason,
+        结果: previous === null ? `创建 v${version}` : `v${previous} → v${version}`,
+        项目: meta.project ?? null,
+        详情: { 版本指针: `${id}@v${version}`, 摘要: pointer.digest, 区: zone },
+      });
+
+      return {
         id,
-        kind,
+        version,
+        zone: /** @type {'私有'} */ (zone),
+        path,
         authority: meta.authority,
-        zone,
-        domain: meta.domain ?? '集体',
-        project: meta.project ?? null,
-        segment: spec.segment ?? null,
-      },
-      // 任务节点要一起传下去：§2「成员任务内全权，任务外无」——
-      // 成员写下自己的产出物正是「交卷」，没有这个上下文它会被判成「任务外」而拒写。
-      context: { reason: spec.reason, task: spec.task ?? null },
+        previous,
+        digest: pointer.digest,
+      };
     });
-
-    const version = previous === null ? 1 : previous + 1;
-    meta.version = version;
-    const text = `${formatFrontMatter(meta)}${document.body.startsWith('\n') ? document.body.slice(1) : document.body}`;
-    const parsed = parseDocument(text, { defaultAuthority: meta.authority });
-    assertStructure(kind, parsed);
-
-    const path = this.#pathFor(kind, meta, zone, meta.authority);
-    if (!path) throw new InvalidBody(`对象存储没有 ${kind} 的落点`);
-    if (existing) await this.#keepVersion(id, existing, previous);
-
-    await atomicWrite(path, text);
-    const pointer = { id, kind, zone, version, digest: digest(text), at: this.clock.iso(), path };
-    await this.#recordPointer(id, pointer);
-    await this.audit.append({
-      动作: '状态变更',
-      主体: spec.subject,
-      对象: { id, kind },
-      依据: spec.reason,
-      结果: previous === null ? `创建 v${version}` : `v${previous} → v${version}`,
-      项目: meta.project ?? null,
-      详情: { 版本指针: `${id}@v${version}`, 摘要: pointer.digest, 区: zone },
-    });
-
-    return {
-      id,
-      version,
-      zone: /** @type {'私有'} */ (zone),
-      path,
-      authority: meta.authority,
-      previous,
-      digest: pointer.digest,
-    };
   }
 
   /**

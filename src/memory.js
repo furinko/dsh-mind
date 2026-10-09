@@ -111,37 +111,41 @@ export class MemoryService {
     // （评审稿 §A8/§C8：删除凭据应是随机对象 ID，不保留原文，也不保留可枚举的敏感标题）。
     // 所以种子只用「类 + 主体 + 时刻」；人可读的标题另存 `标题` 字段——
     // 它是账本里的一行，`purge` 能连带抹掉，而 id 里的东西抹不掉。
-    const id = objectId(kind, `${kind}/${input.subject?.id ?? 'unknown'}`, { at: this.#nextStamp() });
-    const row = {
-      id,
-      类: kind,
-      标题: input.标题 ?? text.slice(0, 40),
-      内容: text,
-      来源,
-      // 契约A 血缘字段：旧行没有这两个键照常 fold（向后兼容——normalizeRefs 折 []、
-      // 派生自 折 null），新行写明空值也写键，读的人不用猜「缺键是不是丢了」。
-      来源引用,
-      派生自: typeof input.派生自 === 'string' && input.派生自 ? input.派生自 : null,
-      归属: scope,
-      项目,
-      // 知识：项目标签恒打；岗位标签默认不打（由 Lead 判定「这条跨项目可复用」后追加）。
-      岗位: kind === '知识' ? null : (input.岗位 ?? null),
-      标签: input.标签 ?? [],
-      状态: '有效',
-      记于: this.clock.iso(),
-      轮: input.轮 ?? null,
-    };
-    await appendLines(this.layout.memoryLog(scope, kind), [row]);
+    // 时刻与 id 都挪进锁内算（W3 批1）：锁外算好在多实例同毫秒下会撞 id，两条记忆静默合一。
+    const file = this.layout.memoryLog(scope, kind);
+    const row = await this.#appendEntry(file, {
+      kind,
+      seed: `${kind}/${input.subject?.id ?? 'unknown'}`,
+      build: (id) => ({
+        id,
+        类: kind,
+        标题: input.标题 ?? text.slice(0, 40),
+        内容: text,
+        来源,
+        // 契约A 血缘字段：旧行没有这两个键照常 fold（向后兼容——normalizeRefs 折 []、
+        // 派生自 折 null），新行写明空值也写键，读的人不用猜「缺键是不是丢了」。
+        来源引用,
+        派生自: typeof input.派生自 === 'string' && input.派生自 ? input.派生自 : null,
+        归属: scope,
+        项目,
+        // 知识：项目标签恒打；岗位标签默认不打（由 Lead 判定「这条跨项目可复用」后追加）。
+        岗位: kind === '知识' ? null : (input.岗位 ?? null),
+        标签: input.标签 ?? [],
+        状态: '有效',
+        记于: this.clock.iso(),
+        轮: input.轮 ?? null,
+      }),
+    });
     await this.audit.append({
       动作: '状态变更',
       主体: input.subject,
-      对象: { id, kind: '知识' === kind ? '知识' : kind },
+      对象: { id: row.id, kind: '知识' === kind ? '知识' : kind },
       依据: '记忆服务：写入必带谁记的 + 怎么知道的',
       结果: `记入${scope}`,
       项目,
       详情: { 类: kind, 来源: 来源.怎么知道 },
     });
-    return { id, 类: kind, 归属: scope, 账本: this.layout.memoryLog(scope, kind), 项目, 岗位: row.岗位 };
+    return { id: row.id, 类: kind, 归属: scope, 账本: file, 项目, 岗位: row.岗位 };
   }
 
   /**
@@ -228,7 +232,7 @@ export class MemoryService {
 
     // 双份留痕：本项目那份保留原样，跨项目那份追一条同 id 的条目，
     // 这样「它产生于本项目」与「它对本岗位可复用」两个事实都在。
-    await appendLines(this.layout.memoryLog(DIR.跨项目, '知识'), [
+    await this.#appendLedger(this.layout.memoryLog(DIR.跨项目, '知识'), [
       {
         ...entry,
         归属: DIR.跨项目,
@@ -546,13 +550,13 @@ export class MemoryService {
     }
     // 源对象自身的「待删除」状态行：物理抹除只抹 条目行（按 id 过滤），状态行留在账上
     // 作为「这里发生过一次物理删除」的只增留痕。
-    await appendLines(this.layout.memoryLog(entry.归属, entry.类), [
+    await this.#appendLedger(this.layout.memoryLog(entry.归属, entry.类), [
       { id: objectId('账目', `${id}:待删除`, { at: this.clock.ms() }), 指向: id, 追加: '待删除', 追于: this.clock.iso(), 依据: spec.理由, 主体: spec.subject },
     ]);
-    // 同账本的隔离行合并成一次追加；跨账本逐本追加（appendLines 本身带锁）。
+    // 同账本的隔离行合并成一次追加；跨账本逐本追加（#appendLedger 带锁，与下面的重写同一把）。
     const 按账本 = new Map();
     for (const { 账本, 行 } of 隔离行) 按账本.set(账本, [...(按账本.get(账本) ?? []), 行]);
-    for (const [账本, 行s] of 按账本) await appendLines(账本, 行s);
+    for (const [账本, 行s] of 按账本) await this.#appendLedger(账本, 行s);
     const 隔离ids = 隔离行.map((x) => x.行.指向);
 
     // ── ② 物理抹源条目 ─────────────────────────────────────────────────────────
@@ -612,7 +616,7 @@ export class MemoryService {
     const rows = await readJsonl(file);
     const open = rows.filter((row) => !isStateRow(row));
     if (open.length === 0) return { 归档条数: 0, 账本: file };
-    await appendLines(file, open.map((row) => ({ id: objectId('账目', row.id, { at: this.clock.ms() }), 指向: row.id, 追加: '归档', 追于: this.clock.iso(), 依据: spec.任务 ?? '任务结束', 主体: spec.subject })));
+    await this.#appendLedger(file, open.map((row) => ({ id: objectId('账目', row.id, { at: this.clock.ms() }), 指向: row.id, 追加: '归档', 追于: this.clock.iso(), 依据: spec.任务 ?? '任务结束', 主体: spec.subject })));
     await this.audit.append({
       动作: '状态变更',
       主体: spec.subject,
@@ -792,11 +796,60 @@ export class MemoryService {
    * 若同一毫秒内、同一主体写两条，哈希输入完全相同 ⇒ **撞 id**，
    * 而 `fold()` 是按 id 归并的，撞 id 会让两条记忆静默合成一条。
    * 所以这里保证「后一次调用拿到的时刻严格大于前一次」。
+   *
+   * 它只管**本实例内**（`#lastStamp` 是实例字段）：多实例/多进程同毫秒仍会算出同一个
+   * 时刻，兜底在 `#appendEntry`——锁内读账本查重，撞了就再 bump 一次重算。
    */
   #nextStamp() {
     const now = this.clock.ms();
     this.#lastStamp = this.#lastStamp !== undefined && now <= this.#lastStamp ? this.#lastStamp + 1 : now;
     return this.#lastStamp;
+  }
+
+  /**
+   * 账本追加的**唯一入口**（W3 批1·2026-10-09）：所有 `appendLines` 都从 `${file}.lock` 里过。
+   *
+   * 为什么必须统一：`purge` 的物理抹是「读全文 → 滤掉目标 id → 整文件重写」，
+   * 它自己上了锁；而写入面（remember / 状态行 / 隔离行 / 归档行）此前是裸 `appendLines`。
+   * 一边加锁一边不加锁，锁就等于不存在：抹除的读-改-写窗口里插进来的追加行，
+   * 会被整文件重写**静默盖掉**——「内容已抹掉」的审计与「那条新记忆不见了」同时为真。
+   * 锁路径与 `purge` 的 `${file}.lock` 逐字相同（先例：`bus.send` 的线程锁）。
+   *
+   * @param {string} file 账本文件
+   * @param {Array<object|string>} lines
+   * @returns {Promise<Array<object|string>>} 实际落线的行
+   */
+  async #appendLedger(file, lines) {
+    const list = Array.isArray(lines) ? lines : [lines];
+    if (list.length === 0) return list;
+    await withLock(`${file}.lock`, async () => {
+      await appendLines(file, list);
+    });
+    return list;
+  }
+
+  /**
+   * 条目行追加：**在同一把账本锁内**读现有行、算 id、查重、追加（W3 批1·2026-10-09）。
+   *
+   * 为什么查重必须在锁内：`#nextStamp` 的严格递增只是本实例的保证，
+   * 两个实例（同进程两个组件 / 两个进程）同毫秒、同主体、同类会算出**同一个 id**，
+   * 而 `fold()` 按 id 归并 ⇒ 两条记忆静默合成一条，谁都看不出来少了一条。
+   * 锁内读到「这个 id 已在账上」就 bump 时刻重算，直到算出一个新 id——不静默、不合并。
+   *
+   * @param {string} file 账本文件
+   * @param {{ kind: string, seed: string, build: (id: string) => object }} spec
+   * @returns {Promise<object>} 实际落线的行
+   */
+  async #appendEntry(file, spec) {
+    return withLock(`${file}.lock`, async () => {
+      const rows = await readJsonl(file);
+      const 已用 = new Set(rows.map((row) => row?.id).filter((id) => typeof id === 'string'));
+      let id = objectId(spec.kind, spec.seed, { at: this.#nextStamp() });
+      while (已用.has(id)) id = objectId(spec.kind, spec.seed, { at: this.#nextStamp() });
+      const row = spec.build(id);
+      await appendLines(file, [row]);
+      return row;
+    });
   }
 
   /** @param {string} kind @param {string|undefined} 项目 */
@@ -844,7 +897,7 @@ export class MemoryService {
       target: memoryTarget(entry.类, entry.归属, entry.项目),
       context: { id, 状态 },
     });
-    await appendLines(this.layout.memoryLog(entry.归属, entry.类), [
+    await this.#appendLedger(this.layout.memoryLog(entry.归属, entry.类), [
       { id: objectId('账目', `${id}:${状态}`, { at: this.clock.ms() }), 指向: id, 追加: 状态, 追于: this.clock.iso(), 依据: spec.原因, 主体: spec.subject, ...extra },
     ]);
     await this.audit.append({

@@ -170,12 +170,33 @@ export async function withLock(lockPath, fn, options = {}) {
   for (;;) {
     try {
       const handle = await open(lockPath, 'wx');
+      // 持有令牌：pid+at 双字段。验后删靠它比对——同进程并发抢同一路径时 pid 相同，
+      // at（毫秒级时刻）区分两次持有。
+      const token = { pid: process.pid, at: new Date().toISOString() };
+      await handle.writeFile(JSON.stringify(token));
       try {
-        await handle.writeFile(JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
         return await fn();
       } finally {
         await handle.close();
-        await rm(lockPath, { force: true });
+        // **验后删**（W3 批1·2026-10-09）：删除前读回锁文件，令牌还是自己的才 rm。
+        // 此前的无条件 rm 有三方同进洞：持有者 A 超时（fn 慢）⇒ 等待者 B 判 stale 抢锁
+        // 并建出新锁文件 ⇒ A 的 finally 这时才跑，无条件 rm 删掉的是 **B 的锁** ⇒
+        // 第三个等待者 C 又能建锁进入——A/B/C 三方同在临界区。
+        const current = await readFile(lockPath, 'utf8').catch(() => null);
+        let mine = false;
+        try {
+          const parsed = JSON.parse(current ?? '{}');
+          mine = parsed.pid === token.pid && parsed.at === token.at;
+        } catch {
+          mine = false; // 读不懂 = 不是自己的令牌（或已损坏），一律不删。
+        }
+        if (mine) {
+          await rm(lockPath, { force: true });
+        } else {
+          // 不是自己的锁：说明持有权已被夺走，删它就是上面的洞。留痕不吞声（§3.6）——
+          // fsx 是底座没有审计依赖，console 是这里的唯一出口。
+          console.warn(`[dsh-mind] withLock(${lockPath})：锁已易主（自己的令牌不在锁文件里），跳过删除以保护新持有者。`);
+        }
       }
     } catch (error) {
       // Windows 的已知行为：对已存在文件 open('wx') 常抛 EPERM 而非 EEXIST

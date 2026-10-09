@@ -192,9 +192,15 @@ export class TaskGraph {
     if (TERMINAL.has(node.状态)) {
       throw new Denied('任务图 · 状态机', `节点 ${id} 已到终态 ${node.状态}，不能再打回。`, { howToChange: '终态节点只能追加更正，不能回到环路里。' });
     }
-    const 次数 = (node.打回次数 ?? 0) + 1;
-    await this.#append(spec.项目, { kind: 'rejected', id, 打回次数: 次数, 理由: spec.理由 }, spec.subject);
-    if (次数 >= 2) {
+    // 打回次数以**锁内**折叠视图重算（W3 批1）：锁外预读的 node 在并发 reject 下
+    // 会算出同一个次数，两个「第 2 次」落进链里——升级判定（≥2）就漂了。
+    const rejected = await this.#append(spec.项目, { kind: 'rejected', id, 理由: spec.理由 }, spec.subject, '状态变更', (nodeInLock) => ({
+      kind: 'rejected',
+      id,
+      打回次数: (nodeInLock?.打回次数 ?? 0) + 1,
+      理由: spec.理由,
+    }));
+    if ((rejected.打回次数 ?? 0) >= 2) {
       await this.#append(spec.项目, { kind: 'escalated', id, 升级: { 原因: '打回≥2', 至: '主权者' } }, { id: 'system', kind: '系统' });
     }
     return this.get(id, { 项目: spec.项目 });
@@ -361,9 +367,16 @@ export class TaskGraph {
 
   // ── 内部 ────────────────────────────────────────────────────────────────────
 
-  /** @param {string} 项目 @param {object} event @param {object} subject @param {string} [审计动作] 覆盖默认的「状态变更」（讨论段三事件按 W2 规格记各自动作名，档位由 ACTION_GRADE 定） */
-  async #append(项目, event, subject, 审计动作 = '状态变更') {
+  /**
+   * @param {string} 项目 @param {object} event @param {object} subject @param {string} [审计动作] 覆盖默认的「状态变更」（讨论段三事件按 W2 规格记各自动作名，档位由 ACTION_GRADE 定）
+   * @param {(nodeInLock: object|null) => object} [eventBuilder] 用**锁内**折叠视图重算事件字段——
+   *   打回次数这类「从当前状态推导」的值必须以锁内读到的为准（W3 批1·2026-10-09）：
+   *   锁外算好再进锁，两个并发 reject 会算出同一个次数，链上少一次打回。
+   * @returns {Promise<object>} 实际落线的事件（调用方接着用同一份，不许两处各算各的）
+   */
+  async #append(项目, event, subject, 审计动作 = '状态变更', eventBuilder = null) {
     const file = this.layout.taskLog(项目);
+    let finalEvent = event;
     await withLock(this.layout.taskLock(项目), async () => {
       const rows = await readJsonl(file);
       const node = fold(rows).get(event.id);
@@ -374,19 +387,21 @@ export class TaskGraph {
           howToChange: '判据要变就新开一个节点；改判据等于让验收标准追着结果跑。',
         });
       }
+      if (eventBuilder) finalEvent = eventBuilder(node);
       const at = this.clock.iso();
       const by = subject && typeof subject === 'object' ? { id: String(subject.id), kind: String(subject.kind ?? '未知') } : { id: String(subject), kind: '未知' };
-      await appendLines(file, [{ seq: rows.length + 1, at, by, ...event }]);
+      await appendLines(file, [{ seq: rows.length + 1, at, by, ...finalEvent }]);
     });
     await this.audit.append({
       动作: 审计动作,
       主体: subject,
-      对象: { id: event.id, kind: '任务' },
+      对象: { id: finalEvent.id, kind: '任务' },
       依据: '任务图事件流',
-      结果: event.kind,
+      结果: finalEvent.kind,
       项目,
-      详情: { 事件: event.kind, 状态: event.状态 ?? null },
+      详情: { 事件: finalEvent.kind, 状态: finalEvent.状态 ?? null },
     });
+    return finalEvent;
   }
 
   /** @param {string} id @param {string} 项目 */
