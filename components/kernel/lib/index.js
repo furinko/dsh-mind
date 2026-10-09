@@ -203,7 +203,8 @@ function mindTool({ org, 项目, 项目键 }) {
         target: { type: 'string', description: 'policy_check 的目标 JSON：{"id","kind","authority","zone"}' },
         代: { type: 'number' },
         审计条数: { type: 'number' },
-        limit: { type: 'number', description: '返回条数上限（memory_query / bus_read / audit_tail）' },
+        limit: { type: 'number', description: '返回条数上限（memory_query 的命中 / bus_read / audit_tail）' },
+        条数上限: { type: 'number', description: 'memory_query 返回 条目 的回传条数上限（默认 50；超出截断并附 条目截断: true 与总数）' },
       },
       required: ['action'],
       additionalProperties: false,
@@ -475,7 +476,7 @@ function 挂主权者交互(ctx, org, logger) {
       if (type !== 'user/message') return;
       org.registry.markInteraction({}).catch((error) => logger.warn?.(`[dsh-mind] 记录主权者交互失败：${error.message}`));
     } catch {
-      // 事件形状变了不该影响会话；失联判定还有 `mind` 工具的 sovereign_interaction 兜底。
+      // 事件形状变了不该影响会话；失联判定还有 `/mind sovereign_interaction`（命令面专属）兜底。
     }
   });
 }

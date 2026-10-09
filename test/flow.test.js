@@ -15,6 +15,7 @@ import { buildIndex, formatMiss, runRegression, search } from '../src/retrieval.
 import { Denied, InvalidBody } from '../src/kernel/errors.js';
 import { readJsonl } from '../src/kernel/fsx.js';
 import { Clock } from '../src/kernel/time.js';
+import { runAction } from '../lib/actions.js';
 
 /** @type {Awaited<ReturnType<typeof makeFixture>>} */
 let f;
@@ -117,6 +118,52 @@ describe('主干环路', () => {
     assert.equal(resolved.状态, '已交卷');
     assert.equal(resolved.已决.决定, '用出厂版');
     assert.deepEqual(resolved.待决记录.map((r) => r.决定), ['用出厂版']);
+  });
+
+  it('动作面 bus_unlock：未交齐被拒；交齐后解锁并广播可见', async () => {
+    const MEMBER_B = { id: 'member-b', kind: '成员', roleId: '插件工程' };
+    const node = await tasks.create({ subject: LEAD, 项目: P, 描述: '会审接线演示', 负责人: ['member-a', 'member-b'], 判据: ['x'], 模式: '独立会审' });
+    await tasks.dispatch(node.id, { subject: LEAD, 项目: P });
+    await tasks.start(node.id, { subject: MEMBER, 项目: P });
+    // runAction 只需要这两只手（主体是 Lead，不做成员身份档案核验）。
+    const org = { tasks, bus, registry: { identity: async () => ({ members: {} }) } };
+    const 敲解锁 = () => runAction({ org, 项目: P, subject: LEAD, args: { action: 'bus_unlock', id: node.id, 线程: 't-unlock' } });
+
+    // 谁都没交：拒，且理由要点名「全员」。
+    await assert.rejects(敲解锁, (e) => e.name === 'Denied' && /全员/.test(e.message), '未交齐必须被拒');
+    // 交了一份还有一份没交：仍拒（自报绕不过——「全员已交」由任务图重算，不从调用方接）。
+    await tasks.submit(node.id, { subject: MEMBER, 项目: P, 结论: 'A 案' });
+    await assert.rejects(敲解锁, (e) => e.name === 'Denied' && /1\/2/.test(e.message), '只交一份仍必须被拒');
+    // 交齐：解锁成功，广播在总线上读得到。
+    await tasks.submit(node.id, { subject: MEMBER_B, 项目: P, 结论: 'B 案' });
+    const 结果 = await 敲解锁();
+    assert.equal(结果.结果.解锁, true, JSON.stringify(结果));
+    const rows = await bus.read({ 项目: P, 线程: 't-unlock' });
+    const 广播 = rows.find((m) => m.类型 === '广播');
+    assert.ok(广播, '解锁广播必须在总线上可见');
+    assert.deepEqual(广播.收件.sort(), ['member-a', 'member-b'], '广播要发给全体负责人');
+  });
+
+  it('记忆 query 的条目预算：默认最多 50 条并如实标注截断；条数上限 可调', async () => {
+    // 造 55 条可见条目（空 query 的全量回传正是要加预算的那条路）。
+    for (let i = 0; i < 55; i += 1) {
+      await memory.remember({ subject: LEAD, 类: '偏好', 内容: `预算演示第 ${i} 条`, 来源: '测试' });
+    }
+    const 默认 = await memory.query({ 类: ['偏好'] });
+    assert.equal(默认.条目.length, 50, '默认最多回传 50 条');
+    assert.equal(默认.条目截断, true, '截断要如实标注');
+    assert.equal(默认.条目总数, 55, '总数要给全，别让人以为只有 50 条');
+    assert.match(默认.说明 ?? '', /55/, '说明里要有总数');
+
+    const 调宽 = await memory.query({ 类: ['偏好'], 条数上限: 100 });
+    assert.equal(调宽.条目.length, 55, '条数上限 调宽后不截断');
+    assert.equal(调宽.条目截断, false, '没截断就不许标 true');
+
+    const 调窄 = await memory.query({ 类: ['偏好'], 条数上限: 5 });
+    assert.equal(调窄.条目.length, 5, '条数上限=5 只回 5 条');
+    assert.equal(调窄.条目截断, true);
+    // 预算只管 条目：口径里的 文档数 仍是真总数。
+    assert.equal(调窄.口径.文档数, 55, '口径（命中逻辑）不受预算影响');
   });
 
   it('消息总线：线程隔离、暂不投递、会审解锁的硬边界', async () => {

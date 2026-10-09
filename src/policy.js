@@ -15,6 +15,7 @@
  *  第三层 · 出厂默认值（介入度 / 响应期限 / 工具总范围）
  *  兜底   · 无匹配 ⇒ 拒绝
  */
+import { stat } from 'node:fs/promises';
 import { readTextOrNull } from './kernel/fsx.js';
 import { digest } from './kernel/text.js';
 import { Denied, Fault, NeedsApproval } from './kernel/errors.js';
@@ -85,6 +86,11 @@ export class PolicyEngine {
     };
     /** 已加载的授权块（法律件里那份），热更新时整体替换。 */
     this.grants = [];
+    /**
+     * 上次 reload 时身份档案的 mtimeMs（档案缺失记 null）。
+     * 为什么放在实例上：decide 热路径要用它判断「档案在加载之后被谁改过」。
+     */
+    this.identityMtimeMs = null;
   }
 
   /** 热更新入口：宿主在文件变更时调用；失败不改变「不健康」这个事实。 */
@@ -116,6 +122,9 @@ export class PolicyEngine {
         at: this.clock.iso(),
       };
     }
+    // 不论成败都记下「这次加载看到的档案时刻」：失败时也记，否则下一次 decide
+    // 会看到「mtime 没变」而跳过重载——把一个可能已修复的引擎卡死在不健康状态。
+    this.identityMtimeMs = await mtimeMsOrNull(this.layout.identityFile());
     return this.state.ok;
   }
 
@@ -148,6 +157,15 @@ export class PolicyEngine {
    * @returns {Promise<{ verdict: 'allow'|'deny'|'confirm', rule: string, reason: string, requireAuthority: string, howToChange: string, detail?: object, authority?: string, alarm?: boolean }>}
    */
   async decide(input) {
+    // 身份档案新鲜度（审查 B2 半边）：把「写完档案要 reload」从**纪律级**（靠 registry
+    // 写完自觉调用）升级为**机制级**——任何绕过 registry 的写入（手改 JSON、外部工具）
+    // 也必须在下一次判定前生效，否则封存/撤回的成员继续拿到旧快照的权限。
+    // 热路径只花**一次 stat**（不重读不解析）；档案缺失 = 沿用 #loadIdentity 的兜底语义
+    // （「没有任何登记在案的身份」，不是抛错），mtime 记 null，null == null 视为无变化。
+    const mtime = await mtimeMsOrNull(this.layout.identityFile());
+    if (mtime !== this.identityMtimeMs) {
+      await this.reload();
+    }
     if (!this.healthy) {
       const fault = new Fault('POLICY_NOT_LOADED', `策略引擎不健康：${this.state.error ?? '未知原因'}`).toDecision();
       await this.#auditFault(input, fault);
@@ -824,8 +842,21 @@ export function extractPolicyBlock(body) {
   return merged;
 }
 
-/** 把各法律件里的 grants 摊平并编上序号（拒绝理由要能指回条款）。 */
-function collectGrants(rules) {
+/**
+ * 身份档案的 mtimeMs；不存在（或 stat 不出）时返回 null（decide 承诺永不抛）。
+ * 只做一次 stat，不读内容——新鲜度检查是判定热路径，重读解析就是把它变成 reload。
+ * @param {string} file
+ * @returns {Promise<number|null>}
+ */
+async function mtimeMsOrNull(file) {
+  try {
+    return (await stat(file)).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+/** 把各法律件里的 grants 摊平并编上序号（拒绝理由要能指回条款）。 */function collectGrants(rules) {
   const out = [];
   for (const rule of rules) {
     const parsed = parseDocument(rule.text, { defaultAuthority: rule.authority });

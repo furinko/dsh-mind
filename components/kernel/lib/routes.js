@@ -252,14 +252,26 @@ export function workbench路由({ org, 项目 }) {
 /**
  * `/plugins/dsh-mind/ping`：**通路自检**（浏览器侧拿它做诊断，主人截图就能看到通路状态）。
  * 只回状态，不吃参数、不跑动作 —— 同样不许被当成通用代理。
- * @param {{ org: object }} spec
+ *
+ * `有webServer` 不许写死为 true：路由挂上只说明**挂的那一刻**webServer 在位，
+ * 之后宿主上的服务可能又不在了。自检要如实反映**此刻**取不取得到，读不到就报
+ * `webServer未接入`，而不是回一份假绿。
+ * @param {{ org: object, ctx?: object }} spec
  */
-export function ping路由({ org }) {
+export function ping路由({ org, ctx }) {
   return async function ping端点(req, res) {
     const 方法 = String(req?.method ?? 'GET').toUpperCase();
     if (方法 !== 'GET' && 方法 !== 'HEAD') return 回方法不对(res, 方法, 'GET');
     if (!同源读请求(req)) return 回拒绝(res, 403, '跨站读取被拒：这个端点只服务同源页面。', '从本机页面访问该端点。');
-    回JSON(res, 200, { 成功: true, 组件: 组件名, 有webServer: true, 时间: 当前ISO(org) });
+    const ws = ctx ? 取webServer(ctx) : null;
+    const 有webServer = Boolean(ws && typeof ws.register === 'function');
+    回JSON(res, 200, {
+      成功: 有webServer,
+      组件: 组件名,
+      有webServer,
+      ...(有webServer ? {} : { 状态: 'webServer未接入', 说明: '宿主上此刻取不到 webServer 服务；面板/设置页可能空白，诊断见宿主日志。' }),
+      时间: 当前ISO(org),
+    });
   };
 }
 
@@ -319,7 +331,7 @@ export function 挂同源路由(spec) {
       try {
         新挂.push(ws.register({ kind: 'exact', path: 端点表.presence, handler: presence路由({ org, 项目 }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.workbench, handler: workbench路由({ org, 项目 }) }));
-        新挂.push(ws.register({ kind: 'exact', path: 端点表.ping, handler: ping路由({ org }) }));
+        新挂.push(ws.register({ kind: 'exact', path: 端点表.ping, handler: ping路由({ org, ctx }) }));
       } catch (error) {
         // 挂到一半失败：把已挂的撤掉，别在宿主的注册表里留半个我们。
         for (const 撤 of 新挂) {
@@ -354,9 +366,19 @@ export function 挂同源路由(spec) {
     if (现在挂()) return 收尾;
     定时器 = setInterval(() => {
       试了 += 1;
-      if (现在挂() || 试了 >= 次数) {
+      const 挂上了 = 现在挂();
+      if (挂上了 || 试了 >= 次数) {
         clearInterval(定时器);
         定时器 = null;
+        if (!挂上了) {
+          // 不许静默：20 次都拿不到 webServer，等于浏览器半区整个没接线。
+          // 影响面说清楚 —— 面板与设置页会一直空白，而插件侧看起来「激活正常」。
+          logger.warn?.(
+            `[dsh-mind] 同源路由放弃挂载：轮询 ${次数} 次（${间隔毫秒}ms/次）都没拿到 webServer。`
+            + ` 未注册的端点：${端点表.presence}（设置页读写）、${端点表.workbench}（看板投影）、${端点表.ping}（自检）。`
+            + ` 影响面：工作台面板与设置页将保持空白/读取中，命令面（/mind）不受影响。`,
+          );
+        }
       }
     }, 间隔毫秒);
     if (typeof 定时器.unref === 'function') 定时器.unref();

@@ -284,8 +284,9 @@ export function sliceForViewer(view, 读者)
 
 ```js
 // lib/actions.js
-export const COMMAND_ONLY_ACTIONS = ['presence'];   // 只有人能敲，模型没有这只手
+export const COMMAND_ONLY_ACTIONS = ['presence', 'sovereign_interaction'];   // 只有人能敲，模型没有这只手
 export const COMMAND_ACTIONS = [...ACTIONS, ...COMMAND_ONLY_ACTIONS];
+// sovereign_interaction：声明主权者在线（失联判定的事实源只能由人声明）。
 ```
 
 - **面**：`presence` **不在** `ACTIONS` 里 ⇒ `mind` 工具的 `enum` 里没有它 ⇒ **模型面够不着**。

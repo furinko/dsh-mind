@@ -67,8 +67,10 @@ const 冻结动作表 = [
   'registry_revoke',
   'upgrade_pending',
   'review_zero',
-  'sovereign_interaction',
+  'bus_unlock',
 ];
+// sovereign_interaction 不在工具面：它是命令面专属（与 presence 同一张 B 清单），
+// 失联判定的「事实源」——主权者在线——只能由人声明（/mind sovereign_interaction）。
 
 /** 相对现在的小时数 → ISO 串。 */
 const 前 = (小时) => new Date(Date.now() - 小时 * 3600_000).toISOString();

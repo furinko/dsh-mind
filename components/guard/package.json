@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "心智 · 数字组织 —— 安全类组件：四道封闭探针、探针见红自动回滚到全绿最近一版、条款级升级合并的裁决面",
+  "description": "心智 · 数字组织 —— 安全类组件：四道封闭探针、探针见红定位回滚目标（只定位入账，执行面待批次4裁决）、条款级升级合并的裁决面",
   "license": "MIT",
   "main": "lib/index.js",
   "exports": {
@@ -12,7 +12,7 @@
   },
   "meta": {
     "title": "心智 · 安全类",
-    "description": "看住机制本身：四道封闭探针、自动回滚、升级挂起 diff 的裁决。"
+    "description": "看住机制本身：四道封闭探针、回滚目标定位（执行面待批次4裁决）、升级挂起 diff 的裁决。"
   },
   "files": [
     "lib"

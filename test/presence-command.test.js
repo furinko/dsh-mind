@@ -257,6 +257,18 @@ describe('presence 设置入口：命令面专属 + 状态条四态', () => {
       assert.equal(回复.kind, 'success', 回复.text);
       assert.equal(包.成功, true);
       assert.equal(t.org.policy.presence().已关闭, true, '命令面这一侧是真能改的（不是「两侧都不能用」）');
+
+      // sovereign_interaction 同属命令面专属（B2/B3：失联判定的事实源只能由人声明）。
+      assert.ok(COMMAND_ONLY_ACTIONS.includes('sovereign_interaction'), 'sovereign_interaction 必须在「命令面专属」清单里');
+      assert.ok(!枚举.includes('sovereign_interaction'), '工具 schema 不许暴露 sovereign_interaction：模型没有这只手');
+      const 工具回复2 = JSON.parse(await t.工具.execute({ action: 'sovereign_interaction' }, fakeExec({ name: 'mind' })));
+      assert.equal(工具回复2.成功, false, '工具面调用 sovereign_interaction 必须失败');
+      assert.match(String(工具回复2.理由), /命令面/, '理由要说清「这是命令面专属」');
+      assert.match(JSON.stringify(工具回复2), /主权者在线的事实只能由人声明/, '拒绝信息要说清：主权者在线的事实只能由人声明');
+      // 命令面正例：人敲得动（markInteraction 真的落账）。
+      const 敲回复 = await t.命令.handler({ agent: {}, rawInput: 'sovereign_interaction' });
+      assert.equal(敲回复.kind, 'success', 敲回复.text);
+      assert.equal(JSON.parse(敲回复.text).成功, true);
     } finally {
       await t.清理();
     }

@@ -156,7 +156,8 @@ export class MemoryService {
    * 默认还按「当前有效视图」召回：已失效 / 被推翻的条目留在 `条目` 里供追溯，但不进 `命中`；
    * 要看它们就带 `含失效: true`。
    *
-   * @param {{ 类?: string[], 项目?: string, 岗位?: string, 文本?: string, 显式?: boolean, 含失效?: boolean, 读者?: object, limit?: number }} [query]
+   * @param {{ 类?: string[], 项目?: string, 岗位?: string, 文本?: string, 显式?: boolean, 含失效?: boolean, 读者?: object, limit?: number, 条数上限?: number }} [query]
+   *   `limit` 管 `命中` 条数；`条数上限` 管 `条目` 回传条数（默认 50，超出截断并标注）。
    * @returns {Promise<{ 命中: object[], 口径: object, 条目: object[], 说明?: string }>}
    */
   async query(query = {}) {
@@ -206,11 +207,23 @@ export class MemoryService {
       排除失效: query.含失效 === true ? 0 : 撤回.length,
     };
 
+    // `条目` 的回传预算：全量 visible 可能把整个账本塞进一次回复
+    // （空 query 分支曾无条件回传全部），于是默认只回最新的 N 条并如实标注。
+    // 命中（`命中`）与口径（`口径`）不受影响：预算只管 `条目` 这一栏。
+    const 条数上限 = Number.isFinite(query.条数上限) && query.条数上限 > 0 ? Math.floor(query.条数上限) : 50;
+    const 条目截断 = visible.length > 条数上限;
+    const 条目 = 条目截断 ? visible.slice(-条数上限) : visible;
+    const 条目口径 = { 条目截断, 条目总数: visible.length, 条数上限 };
+
     if (!query.文本) {
       return {
         命中: [],
-        条目: visible,
-        口径: { 搜索面: '记忆服务', 查询词: '', 范围: wanted.join('/'), ...口径数, 命中数: 0 },
+        条目,
+        条目截断,
+        条目总数: visible.length,
+        条数上限,
+        口径: { 搜索面: '记忆服务', 查询词: '', 范围: wanted.join('/'), ...口径数, 命中数: 0, ...条目口径 },
+        ...(条目截断 ? { 说明: `条目 共 ${visible.length} 条，超出上限 ${条数上限}，只回传最新 ${条数上限} 条；带 条数上限 可调。` } : {}),
         ...(query.显式 === true ? { 说明: '已显式包含归档作答。' } : {}),
       };
     }
@@ -224,7 +237,16 @@ export class MemoryService {
         .filter(Boolean)
         .join(' ');
     }
-    result.条目 = visible;
+    result.条目 = 条目;
+    result.条目截断 = 条目截断;
+    result.条目总数 = visible.length;
+    result.条数上限 = 条数上限;
+    result.口径 = { ...result.口径, ...条目口径 };
+    if (条目截断) {
+      result.说明 = [result.说明, `条目 共 ${visible.length} 条，超出上限 ${条数上限}，只回传最新 ${条数上限} 条；带 条数上限 可调。`]
+        .filter(Boolean)
+        .join(' ');
+    }
     return result;
   }
 
