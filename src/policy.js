@@ -32,6 +32,8 @@ export const ACTIONS = [
   'publish',
   'dispatch',
   'review',
+  // settle（W3 批3·2026-10-09）：结账——环路最后一步，仅 Lead（见 #invariants 的守卫）。
+  'settle',
   'approve',
   'seal',
   'revoke',
@@ -508,6 +510,15 @@ export class PolicyEngine {
         howToChange: '由 Lead 执行该动作；成员只能在自己的任务节点内干活并留下作答与知识。',
       });
     }
+    // 结账是 Lead 的收尾权（W3 批3）：它把节点收进终态**并**归档作答（归档后成员读不到），
+    // 是一次影响面外溢到记忆面的决定。成员/复核者/系统/出厂作者一律拒；
+    // 主权者不拒（§4：主权者随时可介入自治档——把他自己的机制挡在外面是另一回事）。
+    if (action === 'settle' && !['Lead', '主权者'].includes(subject.kind)) {
+      return deny('法律 结账是 Lead 的收尾权（§8 环路最后一步）', `${subject.kind} 不得结账：结账会把节点收进终态，并把该项目的作答归档（归档后成员不可读）。`, {
+        requireAuthority: 'Lead',
+        howToChange: '由 Lead 执行 task_settle；若结论有问题，先走复核（review）再决定采纳或打回。',
+      });
+    }
     if (authority === '只增' && ['write', 'delete', 'publish'].includes(action)) {
       return deny('宪章 §7 只增（主权者也不能改，只能追加更正）', `对象 ${target.id} 是只增账目，${action} 不被允许。`, {
         requireAuthority: '宪章',
@@ -838,6 +849,10 @@ export class PolicyEngine {
     if (text === null) return { roles: [], mode: '独立会审' };
     const parsed = parseDocument(text, { defaultAuthority: '自治' });
     const block = extractPolicyBlock(parsed.body);
+    // 编制件的坏块同样响亮（W3 批3）：编制决定「谁在册」，静默丢块＝在册名单悄悄变空。
+    if (block?.解析错误?.length) {
+      throw new Error(`编制件（${path} 或出厂那份）的 \`\`\`policy 块无法解析：${block.解析错误.join('；')}。修好该文件后重载即恢复。`);
+    }
     return {
       roles: block?.roles ?? [],
       mode: block?.mode ?? '独立会审',
@@ -888,25 +903,40 @@ export function normalizeSubject(subject) {
 
 /**
  * 从正文中取出 ```policy 块并解析成授权表。
+ *
+ * 坏块**折进 `解析错误[]`，不再 `continue` 掉**（W3 批3·2026-10-09）：静默跳过它的后果是
+ * 「整部法律的授权块被丢，而引擎照样报 healthy」——判定随后按三档默认走，谁也看不出
+ * 法律件里的授权面已经空了。调用方（`collectGrants` / `#loadEstablishment`）拿到非空
+ * `解析错误` 就抛错 ⇒ `reload()` 的 catch 落 `state.error` ⇒ describe/健康面见红 +
+ * 全部写动作 fail-closed（与 `validateDebateBudget` 同一层，不另开上报通道）。
+ *
  * @param {string} body
- * @returns {{ grants?: object[], roles?: string[], mode?: string }|null}
+ * @returns {{ grants?: object[], roles?: string[], mode?: string, 解析错误: string[] }|null}
  */
 export function extractPolicyBlock(body) {
   const blocks = [...String(body).matchAll(/```policy\r?\n([\s\S]*?)```/g)];
   if (blocks.length === 0) return null;
   const merged = {};
-  for (const [, raw] of blocks) {
+  /** @type {string[]} */
+  const 解析错误 = [];
+  blocks.forEach(([, raw], index) => {
     let parsed;
     try {
       parsed = JSON.parse(raw);
-    } catch {
-      continue;
+    } catch (error) {
+      解析错误.push(`\`\`\`policy 块 #${index + 1} 不是合法 JSON：${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      解析错误.push(`\`\`\`policy 块 #${index + 1} 必须是 JSON 对象，收到 ${Array.isArray(parsed) ? '数组' : typeof parsed}`);
+      return;
     }
     for (const key of Object.keys(parsed)) {
       if (Array.isArray(parsed[key])) merged[key] = [...(merged[key] ?? []), ...parsed[key]];
       else merged[key] = parsed[key];
     }
-  }
+  });
+  merged.解析错误 = 解析错误;
   return merged;
 }
 
@@ -982,11 +1012,16 @@ function validateDisclosurePatterns(value, 来源) {
   }
 }
 
-/** 把各法律件里的 grants 摊平并编上序号（拒绝理由要能指回条款）。 */function collectGrants(rules) {
+/** 把各法律件里的 grants 摊平并编上序号（拒绝理由要能指回条款）。 */
+function collectGrants(rules) {
   const out = [];
   for (const rule of rules) {
     const parsed = parseDocument(rule.text, { defaultAuthority: rule.authority });
     const block = extractPolicyBlock(parsed.body);
+    // 坏授权块 ⇒ 响亮抛错（W3 批3）：跳过它等于「整部法律的授权块被丢，引擎还报 healthy」。
+    if (block?.解析错误?.length) {
+      throw new Error(`规则件 ${rule.id}（${rule.zone}区）的 \`\`\`policy 授权块无法解析：${block.解析错误.join('；')}。修好该文件后重载即恢复（当前按引擎不健康处理：全部写动作被拒）。`);
+    }
     if (!block?.grants) continue;
     block.grants.forEach((grant, index) => {
       out.push({

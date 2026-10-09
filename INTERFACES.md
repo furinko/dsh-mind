@@ -90,6 +90,9 @@ export class TaskGraph {
   async review(id, { subject, 结论, 分歧清单, 反例面, 复核者 })
   /** 打回：同一节点打回 ≥2 次 ⇒ 升级主权者（节点上出现 升级={原因:'打回≥2'}）。 */
   async reject(id, { subject, 理由 })
+  /** 结账（W3 批3）：环路最后一步。前置=已采纳；仅 Lead（policy 的 `settle` 动作守着）；
+   *  先归档该项目作答（`MemoryService.archiveAnswers`），再落终态「已结账」；审计动作名「结账」（全记）。 */
+  async settle(id, { subject, 项目 })
   /** 待决项是节点状态（§7）。 */
   async markPending(id, { subject, 原因, 待决类型 })
   async resolvePending(id, { subject, 决定 })
@@ -103,9 +106,12 @@ export class TaskGraph {
   async events({ 项目 })
 }
 ```
-存储：`layout.taskLog(project)` + `layout.taskLock(project)`，事件类型 `created|dispatched|started|submitted|reviewed|rejected|pending|resolved|artifact|escalated`。
+存储：`layout.taskLog(project)` + `layout.taskLock(project)`，事件类型 `created|dispatched|started|submitted|reviewed|rejected|pending|resolved|artifact|escalated|settled`。
 每次落盘前 `policy.check({subject, action:'dispatch'|'write'|'review'|... , target:{id, kind:'任务', authority:'自治', project}})`；
-每次落盘后 `audit.append({动作:'状态变更', ...})`。
+每次落盘后 `audit.append({动作:'状态变更', ...})`（结账那一条动作名是「结账」，档位全记）。
+
+**W3 批3**：`create` 的 `依赖` 在锁内校验——指向不存在的节点 ⇒ `InvalidBody`；依赖链成环 ⇒ `Denied`（DFS 三色标记，
+范围说清：新节点自己的边不可能成环，这一关实际拦的是「依赖指向空气」与「依赖链上游已经成环」）。
 
 ### 2.2 `src/bus.js` — 消息总线
 ```js
@@ -174,6 +180,8 @@ W3 批2：索引期预存 `dl[]`，**与 tf/df 取自同一串 token（正文 + 
 tokenize 正文算长度（同一条文标签多时 dl 与 tf 不同源，分母被算小 ⇒ 分数虚高）。改口径必须跑
 `runRegression`，排序差异逐条列出（本批实测：真实语料 5 个查询排序不变、分数按标签量下降；
 对抗语料「正文略长 vs 标签多」排序翻转，见提交说明）。
+W3 批3：`index.field`（口径里的**搜索面**）改为真实字段集 **`'正文+标签'`**——索引一直取这两个字段，
+此前报成 `'正文'`，读的人会以为标签不参与检索。
 
 ### 2.5 `src/capability.js` — 能力库（怎么做）
 ```js
@@ -204,8 +212,9 @@ export class RoleRegistry {
   async get({ id })
   /** 随时能答「这身份能碰什么」。 */
   async canTouch({ id })
-  /** 实例权限只来自岗位。W3 批2 两条守卫：已封存实例 ⇒ Denied（howToChange 指 restore）；
-   *  在岗且同岗位 ⇒ 幂等返回现状（不写盘、不重置代数、不再记「状态变更」）。 */
+  /** 实例权限只来自岗位。W3 批2/批3 的守卫表（都在锁内判）：
+   *  没登记→登记；在岗+同岗位→**幂等**返回现状（不写盘/不重置代数/不记审计）；在岗+不同岗位→**拒**（换岗先停岗）；
+   *  封存+同岗位→**拒**（那是静默复活，还原走 restore）；封存+不同岗位→允许（这就是 seal→assign 的换岗正路）。 */
   async assign({ subject, 岗位, 实例, 代 })
   /** 封存 ≠ 删除。 */
   async seal({ subject, 实例, 理由 })
@@ -292,8 +301,10 @@ export function projectWorkbench(input)
 export function sliceForViewer(view, 读者)
 ```
 W3 批2（遮罩做在投影这一层）：会审行的 `独立答案` 在**未交齐**时只给 `{盲标}`——
-成员、结论、反例面、产出物引用都不出；交齐（`揭名: true`）才全给。`零分歧` 判定仍用全量答案
-现算（判定是机制读数，不是内容），`零分歧依据` 里只有计数，不含人名或结论。
+成员、结论、反例面、产出物引用都不出；交齐（`揭名: true`）才全给。
+W3 批3：未交齐时**`零分歧` / `零分歧依据` 也不投影**——「这两份一致」本身也是内容级信息
+（盲评的意义在于互不可见）；判定照旧用全量答案现算，齐后才给这两个字段。
+`任务.计数` 增加 `已结账` 桶（环路终态之一；不报它会出现「总数 5、各桶加起来 4」）。
 
 ### 2.11 `src/org.js` — 组装（不要动，由 Lead 实现）
 把上面各件组装成 `createOrg({home, factoryRoot, privateRoot, project, subject})`。
@@ -582,6 +593,26 @@ await runAction({ org, 项目, subject, 主体, args: { action, ...args }, 面: 
    meta 里没写 id 仍按文件名兜底）。
 4. **工作台会审遮罩**：见 §2.10。
    另外 `MemoryService.stats()` 改为**跨账合并** fold（晋升过的同 id 只计一次，照 `activity()` 先例）。
+
+### 2.17 W3 批3 · 入口与边界（2026-10-09）
+
+> 记的是**已实现**的对外语义（实现散在各文件，这里只留「读的人必须知道的差异」）。
+
+1. **复核者只读命令白名单（`ReviewProtocol.readonlyCommand`）**：`node --test` **已从白名单移除**——
+   跑测试会落盘（临时文件 / 快照 / 账本），而且「跑哪个测试文件」由调用方自选 ⇒ 等于一条不经判定的
+   写副作用通道，与「只读数，不改」冲突。拒绝时返回 `{允许:false, 依据, howToChange}`，`howToChange`
+   指向沙箱区（`sandboxExperiment`）。
+2. **新动作 `task_settle`（`settle`）**：见 §2.1；权限在 `policy` 的 `settle` 动作里（非 Lead/主权者 ⇒ Denied），
+   审计动作名「结账」档位**全记**（它同时改状态与改可见面）。工具面与命令面都可达（`ACTIONS` 里有它，
+   `test/presence.test.js` 的冻结清单同步登记）。
+3. **`extractPolicyBlock` 坏块不再静默**：解析失败折进 `解析错误[]` ⇒ `collectGrants` / `#loadEstablishment`
+   抛错 ⇒ `reload()` 的 catch 落 `state.error` ⇒ `describe()`/健康面见红 + 全部写动作 fail-closed。
+   修的是「整部法律的授权块被丢，而引擎照样报 healthy」。
+4. **`tags` 转义引号**：`"a \" b"` 的值是 `a " b`（`unquote` 解转义）；注释扫描器同样认转义
+   （`\"` 不结束引号，否则行尾注释会被当值留下）。不带引号的值**不解转义**（Windows 路径不许被吃反斜杠）。
+   写出侧仍不引号化/不转义（值里含 ` # ` 的行在再解析时会被切）——已知边界，未改。
+5. **看板客户端轮询序号**（`components/board/lib/client.js`）：投影与设置两条轮询各有一个递增号，
+   响应回来时号比「已应用」小就整条丢掉——**慢响应后到不许盖新快照**（旧读数看起来正常，最难发现）。
 
 ## 3 · 验收
 

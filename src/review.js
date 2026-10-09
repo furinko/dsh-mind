@@ -278,14 +278,24 @@ export class ReviewProtocol {
 
   /**
    * 复核者的只读命令白名单（§2）。有副作用的命令默认拒绝。
+   *
+   * `node --test` **从白名单里去掉**（W3 批3·2026-10-09）：跑测试不是只读动作——
+   * 它会落盘（临时文件、探针快照、账本行都是副作用），而且「跑哪个测试文件」由调用方自选
+   * ⇒ 等于给复核者一条**不经判定**的写副作用通道，与「只读数，不改」的契约冲突。
+   * 需要落盘的实验走沙箱区（`sandboxExperiment`）：单独授权、任务结束即清、全程入账。
+   *
    * @param {string} command
-   * @returns {{ 允许: boolean, 依据: string }}
+   * @returns {{ 允许: boolean, 依据: string, howToChange?: string }}
    */
   static readonlyCommand(command) {
-    const allowed = ['read', 'list', 'stat', 'search', 'grep', 'find', 'glob', 'cat', 'head', 'tail', 'wc', 'git status', 'git log', 'git diff', 'node --test'];
+    const allowed = ['read', 'list', 'stat', 'search', 'grep', 'find', 'glob', 'cat', 'head', 'tail', 'wc', 'git status', 'git log', 'git diff'];
     const head = String(command).trim();
     const 允许 = allowed.some((a) => head === a || head.startsWith(`${a} `));
-    return { 允许, 依据: 允许 ? '命中只读命令白名单' : '有副作用的命令默认拒绝；需要落盘的实验走沙箱区单独授权' };
+    return {
+      允许,
+      依据: 允许 ? '命中只读命令白名单' : '有副作用的命令默认拒绝（跑测试、写文件都算副作用，哪怕它们"看起来只是看一眼"）',
+      ...(允许 ? {} : { howToChange: '需要落盘的实验走沙箱区（§2 单独授权）：任务结束即清、全程入账，不进持久状态。' }),
+    };
   }
 
   /**

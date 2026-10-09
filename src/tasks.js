@@ -12,7 +12,7 @@
  * 内存里的节点只是它的投影，因此重启后一切都能重算（§12.4）。
  */
 import { appendLines, readJsonl, withLock } from './kernel/fsx.js';
-import { Denied, InvalidBody } from './kernel/errors.js';
+import { Denied, Fault, InvalidBody } from './kernel/errors.js';
 
 /** 一岗多人的两种模式（§10）。 */
 export const MULTI_MODES = ['并行分担', '独立会审'];
@@ -38,21 +38,29 @@ const TRANSITIONS = {
   markPending: ['待派发', '已派发', '执行中', '已交卷', '未验', '已打回'],
   resolvePending: ['待决'],
   attach: ['待派发', '已派发', '执行中', '已交卷', '未验', '已打回', '待决'],
+  // settle（W3 批3）：结账是环路的**最后一步**，只从「已采纳」出发——
+  // 复核没过就打回重做，没采纳的节点不许结账（那会把未验收的工作收进终态）。
+  settle: ['已采纳'],
 };
 
 export class TaskGraph {
   /**
-   * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock }} spec
+   * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock, memory?: import('./memory.js').MemoryService }} spec
+   *   `memory` 只被 `settle`（结账归档作答）用；装配点（org.js）负责接上。
    */
   constructor(spec) {
     this.layout = spec.layout;
     this.policy = spec.policy;
     this.audit = spec.audit;
     this.clock = spec.clock;
+    this.memory = spec.memory ?? null;
   }
 
   /**
    * 建节点。判据是必填项，不是可选说明。
+   *
+   * 依赖校验（W3 批3·2026-10-09）在**锁内**做（见 `#assertDependencies`）：
+   * 依赖指向空气会让派发永远等不到前置；依赖链成环会让「先做谁」这件事没有解。
    *
    * @param {{ subject: object, 描述: string, 负责人: string|string[], 判据: string|string[], 依赖?: string[], 项目: string, 模式?: string }} input
    * @returns {Promise<object>} 节点投影
@@ -66,6 +74,7 @@ export class TaskGraph {
     if (负责人.length > 1 && !MULTI_MODES.includes(input.模式)) {
       throw new InvalidBody(`一岗多人必须显式声明模式：${MULTI_MODES.join(' / ')}。`, { missing: ['模式'] });
     }
+    const 依赖 = normalizeList(input.依赖);
 
     // 节点 id 要**短**到能在命令行里念出来（§14.4-1「稳定、短、kebab」）：
     // 描述里取 16 字做前缀便于认人，后缀取时间戳末 5 位 base36 保证同一毫秒内不撞。
@@ -77,16 +86,22 @@ export class TaskGraph {
       target: { id, kind: '任务', authority: '自治', zone: '私有', domain: '集体', project: input.项目 },
       context: {},
     });
-    await this.#append(input.项目, {
+    const 事件 = {
       kind: 'created',
       id,
       描述: input.描述,
       负责人,
       判据,
-      依赖: input.依赖 ?? [],
+      依赖,
       模式: input.模式 ?? (负责人.length > 1 ? null : '独立会审'),
       状态: '待派发',
-    }, input.subject);
+    };
+    // 校验挂在 eventBuilder 上，是为了**在锁内**跑（锁外预读会与并发 create 打架：
+    // 刚建好的依赖读不到 ⇒ 误拒一个完全合法的节点）。builder 只校验、原样返回事件。
+    await this.#append(input.项目, 事件, input.subject, '状态变更', (_node, rows) => {
+      this.#assertDependencies(依赖, id, fold(rows));
+      return 事件;
+    });
     return this.get(id, { 项目: input.项目 });
   }
 
@@ -369,9 +384,11 @@ export class TaskGraph {
 
   /**
    * @param {string} 项目 @param {object} event @param {object} subject @param {string} [审计动作] 覆盖默认的「状态变更」（讨论段三事件按 W2 规格记各自动作名，档位由 ACTION_GRADE 定）
-   * @param {(nodeInLock: object|null) => object} [eventBuilder] 用**锁内**折叠视图重算事件字段——
+   * @param {(nodeInLock: object|null, rows: object[]) => object} [eventBuilder] 用**锁内**折叠视图重算事件字段——
    *   打回次数这类「从当前状态推导」的值必须以锁内读到的为准（W3 批1·2026-10-09）：
    *   锁外算好再进锁，两个并发 reject 会算出同一个次数，链上少一次打回。
+   *   第二个参数是**锁内的原始事件行**：跨节点判定（依赖图这类）也必须在锁内做，
+   *   锁外预读会与并发 create 打架（W3 批3·2026-10-09）。builder 抛错即拒写。
    * @returns {Promise<object>} 实际落线的事件（调用方接着用同一份，不许两处各算各的）
    */
   async #append(项目, event, subject, 审计动作 = '状态变更', eventBuilder = null) {
@@ -387,7 +404,7 @@ export class TaskGraph {
           howToChange: '判据要变就新开一个节点；改判据等于让验收标准追着结果跑。',
         });
       }
-      if (eventBuilder) finalEvent = eventBuilder(node);
+      if (eventBuilder) finalEvent = eventBuilder(node, rows);
       const at = this.clock.iso();
       const by = subject && typeof subject === 'object' ? { id: String(subject.id), kind: String(subject.kind ?? '未知') } : { id: String(subject), kind: '未知' };
       await appendLines(file, [{ seq: rows.length + 1, at, by, ...finalEvent }]);
@@ -409,6 +426,85 @@ export class TaskGraph {
     const node = await this.get(id, { 项目 });
     if (!node) throw new InvalidBody(`没有这个任务节点：${id}（项目 ${项目}）`);
     return node;
+  }
+
+  /**
+   * 依赖校验（W3 批3·2026-10-09）：①依赖必须指向本项目里**真实存在**的节点；
+   * ②依赖链不许成环（DFS，三色标记）。
+   *
+   * 范围说清（别把它当成比实际更强的保证）：新节点的 id 是刚生成的，调用方不可能
+   * 提前拿它当依赖 ⇒ 这一关**实际拦的是**「依赖指向空气」与「依赖链上游已经成环」
+   * （手写事件流 / 旧数据 / 将来某处漏判留下的环）——两者都会让「先做谁」没有解。
+   *
+   * @param {string[]} 依赖
+   * @param {string} 新节点id
+   * @param {Map<string, object>} 节点 锁内 fold 出来的节点表
+   */
+  #assertDependencies(依赖, 新节点id, 节点) {
+    if (依赖.length === 0) return;
+    const 缺 = 依赖.filter((d) => !节点.has(d));
+    if (缺.length > 0) {
+      throw new InvalidBody(`依赖的节点不存在：${缺.join('、')}。依赖是「先做谁」的事实，指向空气的依赖会让这个节点永远等不到前置。`, {
+        missing: 缺,
+        detail: { 项目节点数: 节点.size, 已知节点: [...节点.keys()].slice(0, 20) },
+      });
+    }
+    /** 边：新节点 → 它的依赖；既有节点 → 它自己的依赖。 */
+    const 出边 = (id) => (id === 新节点id ? 依赖 : 节点.get(id)?.依赖 ?? []);
+    /** 0 未访问 / 1 在当前递归栈上 / 2 已查完（无环）。 */
+    const 色 = new Map();
+    const 栈 = [];
+    const 找环 = (id) => {
+      if (色.get(id) === 1) return [...栈.slice(栈.indexOf(id)), id];
+      if (色.get(id) === 2) return null;
+      色.set(id, 1);
+      栈.push(id);
+      for (const 下 of 出边(id)) {
+        const 环 = 找环(下);
+        if (环) return 环;
+      }
+      栈.pop();
+      色.set(id, 2);
+      return null;
+    };
+    const 环 = 找环(新节点id);
+    if (环) {
+      throw new Denied('任务图 · 依赖不许成环（§7 任务依赖）', `依赖链成环：${环.join(' → ')}。「先做谁」在环里没有解，派发与验收都会永远悬着。`, {
+        howToChange: '把环里某一条依赖去掉，或新开一个节点承担被环占住的那一步。',
+        detail: { 环 },
+      });
+    }
+  }
+
+  /**
+   * 结账：环路的最后一步（W3 批3·2026-10-09）。
+   *
+   * 前置 = **已采纳**（复核判「过」之后的终态）；动作面是 `task_settle`，权限仅 Lead
+   * （policy 的 `settle` 动作）。做两件事，顺序有意：
+   *  ① 归档该项目的作答（§7：作答在任务结束时归档，归档后成员不可读、默认检索面不再返回）；
+   *  ② 落终态「已结账」——「这件事收尾了」是 Lead 的显式拍板，不是自动推进。
+   * 归档先于落终态：若归档被拒（策略/权限），节点**不许**显示成已结账（否则账上写着结账、
+   * 作答却还敞着）。
+   *
+   * @param {string} id
+   * @param {{ subject: object, 项目: string }} spec
+   * @returns {Promise<object>}
+   */
+  async settle(id, spec) {
+    const node = await this.#require(id, spec.项目);
+    this.#requireTransition(node, 'settle');
+    await this.policy.check({
+      subject: spec.subject,
+      action: 'settle',
+      target: { id, kind: '任务', authority: '自治', zone: '私有', project: spec.项目 },
+      context: { task: node },
+    });
+    if (!this.memory) {
+      throw new Fault('SETTLE_NO_MEMORY', '结账要归档作答，但装配时没把记忆服务接进任务图（org.js 的接线问题，不是调用问题）。');
+    }
+    const 归档 = await this.memory.archiveAnswers({ 项目: spec.项目, 任务: id, subject: spec.subject });
+    await this.#append(spec.项目, { kind: 'settled', id, 状态: '已结账', 归档条数: 归档.归档条数 }, spec.subject, '结账');
+    return this.get(id, { 项目: spec.项目 });
   }
 
   /** @param {object} node @param {keyof TRANSITIONS} op */
@@ -517,6 +613,13 @@ export function fold(rows) {
         break;
       case 'escalated':
         node.升级 = row.升级;
+        break;
+      // 结账（W3 批3）：环路的终态。归档条数一起折进节点——「结账时归档了几条作答」
+      // 是这条终态的读数，读面板的人不用再去翻记忆账本。
+      case 'settled':
+        node.状态 = row.状态 ?? '已结账';
+        node.结账于 = row.at;
+        node.归档条数 = row.归档条数 ?? 0;
         break;
       // ── W2 会审讨论段（2026-10-09）：讨论是节点的**子状态**，不动节点主状态
       //    （已交卷保持——讨论中仍可 review，软约束不许变成死锁）。

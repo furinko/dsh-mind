@@ -25,9 +25,11 @@
 //
 // 数据从哪来
 // ----------
-// 客户端服务 `ctx.remote` → `commands.execute(sessionId, '/mind dashboard', [])`
-// → `{ok, value:{result:{kind, text}}}`，`text` 是宿主半边算好的工作台投影 JSON
+// **同源 `fetch` 路由**（Batch 7 换的）：`GET /plugins/dsh-mind/workbench` →
+// `{成功, ...}`，`数据` 就是宿主半边算好的工作台投影 JSON
 // （`src/workbench.js` 的 `projectWorkbench`，字段见 INTERFACES.md §2.10）。
+// ⚠️ 旧的 `ctx.remote` → `commands.execute(sessionId, '/mind dashboard')` 通道**已停用**
+// （真机实测永不返回，见下面「传输层」一节的注释）——别再照旧文档接回去。
 // **任何一环缺失都不许抛**：拿不到就渲染「未连接」+ 上一次已知快照（localStorage）。
 //
 // 降级是合同，不是愿望
@@ -1182,7 +1184,7 @@ window.__ModuleLoader__.load({
     }
 
     // ── 设置页的数据通道：读 / 写 `mind presence` ────────────────────────────
-    /** 设置页命令：与看板同一条通道（`remote.commands.execute`），不同子命令。 */
+    /** 设置页命令：与看板**同一条通道**（同源 `fetch` 路由，见 `runCommand`），不同子命令。 */
     var PRESENCE_COMMAND = '/mind presence';
     /** 没有 remote / 没有会话时给的那条命令：让人自己复制去敲，而不是看一块空白。 */
     var PRESENCE_EXAMPLE = '/mind presence 开关=是 小时=168';
@@ -1208,7 +1210,9 @@ window.__ModuleLoader__.load({
     /**
      * 写设置。
      *
-     * ⚠️ `commands.execute` 的失败会被包成 `{ok:false,error}` 而**不会 reject**，
+     * ⚠️ 传输层的失败会被包成 `{ok:false,error}` 而**不会 reject**
+     * （见 `runCommand`：fetch 拒绝、HTTP 非 2xx、返回体不是 JSON、宿主同形 JSON 里的
+     * `{成功:false}` 都走这条路），
      * 所以「没抛错」绝不等于「写进去了」—— 唯一判据是**回读**。
      * 这里发完写命令立刻再读一次，并把「请求了什么」一起交给界面：
      * 界面按回读值显示，回读与请求不一致就明说「没写进去」。
@@ -1305,8 +1309,8 @@ window.__ModuleLoader__.load({
     /**
      * 内部错误串 → **用户能读的一句人话**。
      *
-     * 为什么必须过一道：错误串是给**排障**写的（里面是 `remote.commands.execute`、
-     * 函数名、`sessions.list` 这类实现细节），而设置页是给**主人**看的。
+     * 为什么必须过一道：错误串是给**排障**写的（里面是 fetch 路由、函数名、`JSON.parse`
+     * 这类实现细节），而设置页是给**主人**看的。
      * 把排障原文直接印上去，等于让用户读我们的栈 —— 主人截图上那句就是这个问题。
      *
      * 认不出原样时**不吞**：先看这句原文是不是**本来就面向人**的（宿主拒绝理由就是这种，
@@ -1383,6 +1387,26 @@ window.__ModuleLoader__.load({
         try { store.订阅者[i](快照); } catch (error) { /* 单个订阅者坏掉不影响别的 */ }
       }
     }
+
+    /**
+     * 轮询序号（W3 批3·2026-10-09）：**慢响应后到不许盖新快照**。
+     *
+     * 为什么必须有：轮询是「发起—等待—写 store」，而等待时长不固定（宿主忙、网络慢、
+     * 第一次请求卡住）。两次请求重叠时，**先发的后到**会把 store 写回旧读数 ——
+     * 面板上显示的时间比实际更早，而"看起来正常"的旧读数正是最难发现的错（§3.6 静默失效）。
+     * 规则：每次发起占一个递增号，响应回来时号比**已应用**的小就整条丢掉（连 resolve 都照走，
+     * 只是不写 store）。
+     */
+    function 序号器() {
+      var 发出 = 0;
+      var 已用 = 0;
+      return {
+        取号: function () { 发出 += 1; return 发出; },
+        该用: function (号) { if (号 < 已用) return false; 已用 = 号; return true; },
+      };
+    }
+    var 投影序号 = 序号器();
+    var 设置序号 = 序号器();
     /** 订阅：**立刻回放当前值**（这样"数据先到、组件后挂载"也能直接显示），返回退订。 */
     function 订阅(store, fn) {
       store.订阅者.push(fn);
@@ -1413,6 +1437,13 @@ window.__ModuleLoader__.load({
         // 退订只在"组件卸载后 store 还在推"时才有意义，代价是几次多余 setState，可接受。
         return 订阅(store, 设值);
       }, []);
+      // 「重复订阅」核实（W3 批3·2026-10-09）：两条路**互斥**，不是重复订阅 ——
+      //   · 走上面那条：`React.useEffect` 是个函数（真跑）⇒ `缺失的钩子` 里没有 'useEffect'
+      //     ⇒ 这里不订阅；
+      //   · 走这里：`React.useEffect` 不是函数 ⇒ `hook()` 已把 'useEffect' 记进 `缺失的钩子`，
+      //     而退化的 `useEffect` 是空实现（`function () {}`）⇒ 上面那个回调**根本不会执行**。
+      // 所以「同一组件订阅两次」这条假设路径不存在；真要发生，得先有一个"是函数但从不跑回调"
+      // 的 useEffect —— 那种情况下两条路都不订阅（缺的是订阅，不是重复）。这里维持原样。
       if (缺失的钩子.indexOf('useEffect') >= 0) {
         // effect 不跑 ⇒ 没人订阅 ⇒ 值永远是订阅那一刻的快照。这里补一次同步订阅兜住。
         try { 订阅(store, 设值); } catch (error) { /* 订阅不上就算了：至少初次回放拿到了当前值 */ }
@@ -1423,19 +1454,23 @@ window.__ModuleLoader__.load({
     /** 拉一次工作台投影并写进 store（失败保留旧快照，只是标 stale）。 */
     function 刷新投影() {
       var ctx = activeCtx;
+      var 号 = 投影序号.取号();
       return new Promise(function (resolve) {
         var session = { id: '', source: '' };
         try { session = resolveSessionId(ctx); } catch (error) { session = { id: '', source: '' }; }
         if (!session.id) {
           var cached = readCache();
-          发通知(投影store, {
-            phase: 'nosession', view: cached ? normalizeView(cached.view) : null, at: cached ? cached.at : '',
-            error: '', sessionId: '', source: '', stale: !!cached,
-          });
+          if (投影序号.该用(号)) {
+            发通知(投影store, {
+              phase: 'nosession', view: cached ? normalizeView(cached.view) : null, at: cached ? cached.at : '',
+              error: '', sessionId: '', source: '', stale: !!cached,
+            });
+          }
           resolve();
           return;
         }
         fetchView(ctx, session.id).then(function (out) {
+          if (!投影序号.该用(号)) { resolve(); return; } // 旧响应：丢掉，不覆盖更新的快照
           if (out.ok) {
             writeCache(out.view.原始);
             发通知(投影store, {
@@ -1452,6 +1487,7 @@ window.__ModuleLoader__.load({
           });
           resolve();
         }, function (error) {
+          if (!投影序号.该用(号)) { resolve(); return; }
           发通知(投影store, Object.assign({}, 投影store.快照, {
             phase: 'error', error: '工作台投影不可用：' + line(error && error.message, String(error)),
           }));
@@ -1463,18 +1499,22 @@ window.__ModuleLoader__.load({
     /** 拉一次设置读数并写进 store。**保留** `保存中 / 提示`（那是交互状态，不该被轮询抹掉）。 */
     function 刷新设置() {
       var ctx = activeCtx;
+      var 号 = 设置序号.取号(); // 与投影同一个道理：慢响应后到不许盖新读数（含"保存后的回读"）
       return new Promise(function (resolve) {
         var session = { id: '', source: '' };
         try { session = resolveSessionId(ctx); } catch (error) { session = { id: '', source: '' }; }
         var 旧 = 设置store.快照;
         if (!session.id) {
-          发通知(设置store, Object.assign({}, 旧, {
-            phase: 'nosession', 读数: null, 设置文件: '', error: '定位不到会话 id，无法读取设置',
-          }));
+          if (设置序号.该用(号)) {
+            发通知(设置store, Object.assign({}, 旧, {
+              phase: 'nosession', 读数: null, 设置文件: '', error: '定位不到会话 id，无法读取设置',
+            }));
+          }
           resolve();
           return;
         }
         readPresence(ctx, session.id).then(function (out) {
+          if (!设置序号.该用(号)) { resolve(); return; }
           if (!out.ok) {
             发通知(设置store, Object.assign({}, 旧, {
               phase: 'error', 读数: null, error: out.error,
@@ -1487,6 +1527,7 @@ window.__ModuleLoader__.load({
           }));
           resolve();
         }, function (error) {
+          if (!设置序号.该用(号)) { resolve(); return; }
           发通知(设置store, Object.assign({}, 旧, {
             phase: 'error', 读数: null, error: '读设置失败：' + line(error && error.message, String(error)),
           }));
@@ -1938,7 +1979,7 @@ window.__ModuleLoader__.load({
      * 而失联限制 / 响应期限小时是主权者要改的**设置**：它需要一个能写的地方，
      * 那个地方就是这里，和只读面板分开，两边互不破对方的规矩。
      *
-     * 数据通道与看板**复用同一条**（`remote.commands.execute`，见 `runCommand`），
+     * 数据通道与看板**复用同一条**（同源 `fetch` 路由，见 `runCommand`），
      * 命令是 `mind presence`：读不带参数、写带 `开关=` / `小时=`。
      * 页面自己只维护「表单草稿 + 最近一次读数」，值一律以**回读**为准。
      *

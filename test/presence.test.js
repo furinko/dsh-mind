@@ -49,6 +49,9 @@ const 冻结动作表 = [
   'task_review',
   'task_pending',
   'task_resolve',
+  // task_settle（W3 批3）：结账——环路最后一步，仅 Lead（policy 的 settle 动作守着）。
+  // 它是**工具面可达**的：收尾必须是 Lead 显式拍板的一步，藏进 review 内部就没有独立动作记录了。
+  'task_settle',
   'memory_write',
   'memory_query',
   'memory_lineage',

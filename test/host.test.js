@@ -162,6 +162,9 @@ describe('dsh-mind 宿主半区', () => {
     assert.equal(last.动作, '工具调用失败');
     assert.equal(last.档位, '全记');
     assert.equal(last.详情.原因, '命令失败');
+    // 主体必须是**真实会话**（W3 批3）：此前恒记 `{id:'lead'}` —— 成员踩的坑被记到 Lead 头上。
+    assert.match(String(last.主体?.id), /^session-/, `主体要取真实会话，实际 ${last.主体?.id}`);
+    assert.equal(last.主体?.kind, 'Lead', '根会话的执行者仍是 Lead（只是不再丢掉"哪一个会话"）');
   });
 
   it('轮汇总按轮落一条，且只统计写工具的成功调用', async () => {
@@ -174,6 +177,16 @@ describe('dsh-mind 宿主半区', () => {
     assert.equal(汇总.length, 1, '一轮只落一条汇总');
     assert.equal(汇总[0].详情.成功调用, 1, '只读调用不逐次记，也不进成功计数');
     assert.equal(汇总[0].档位, '记汇总');
+    assert.match(String(汇总[0].主体?.id), /^session-round|^session-/, '轮汇总的主体同样取真实会话（不再恒记 lead）');
+
+    // 轮键统一（W3 批3）：会话 id 取不到时，`tools/result` 与 `turn/end` 必须落到**同一个**兜底键 ——
+    // 否则前者的桶在后者里永远找不到（汇总永不落，Map 只增不减）。
+    host.触发('tools/result', { name: 'pwsh', callId: 'call-无会话' }, { isError: false });
+    host.触发('turn/end', {});
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const rows2 = (await readFile(join(home, 'mind-private', '集体L2-共享基础设施', '审计日志', `audit-${new Date().toISOString().slice(0, 7)}.jsonl`), 'utf8')).split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const 兜底 = rows2.filter((r) => r.动作 === '工具调用成功' && r.轮 === 'unknown-turn');
+    assert.equal(兜底.length, 1, '无会话 id 时两处必须对齐到同一个兜底键（修前各算各的 ⇒ 汇总永远不落）');
   });
 
   it('出厂区缺失时仍然装配成功，但策略引擎不在位且写动作被 fail-closed 拒绝', async () => {

@@ -1795,6 +1795,45 @@ export async function runHarness() {
   passed.push(check(fresh.timers.cleared.length >= 1,
     '③ 轮询计时器在 dispose 时被清掉（clearInterval 被调用）', String(fresh.timers.cleared.length)));
 
+  // ⑥b 轮询序号（W3 批3）：**慢响应后到不许盖新快照**
+  //   构造：第一次工作台请求挂着不回（模拟慢响应），手动触发第二次（新读数）先到，
+  //   再放行第一次的旧响应 —— 面板必须还显示新读数。
+  //   为什么要这条：轮询是「发起—等待—写 store」，等待时长不固定；先发的后到会把 store
+  //   写回旧读数，而"看起来正常"的旧读数正是最难发现的错（§3.6 静默失效）。
+  {
+    const 新读数 = sampleView();
+    新读数.项目 = '新读数';
+    const 旧读数 = sampleView();
+    旧读数.项目 = '旧读数';
+    let 工作台第几次 = 0;
+    const 放行旧响应 = [];
+    // ⚠️ `makeRemote` 的 handler 签名是 `(sessionId, 命令, attachments)`（老夹具形状），
+    //    第一个参数不是命令 —— 写成 `function (命令)` 会永远走"设置页那条"分支。
+    const 慢桥 = makeRemote(function (_sessionId, 命令) {
+      if (命令 !== COMMAND) return okReply({ 读数: { lost: false } }); // 设置页那条不掺和
+      工作台第几次 += 1;
+      if (工作台第几次 === 1) {
+        return new Promise(function (resolve) { 放行旧响应.push(function () { resolve(okReply(旧读数)); }); });
+      }
+      return okReply(新读数);
+    });
+    const 慢 = boot({ services: Object.assign(session(), { fetch: 慢桥.fetch }) });
+    await settle();
+    const 轮 = 慢.timers.intervals.find((t) => t.ms === REFRESH_MS);
+    check(!!轮, '⑥b 轮询器已注册');
+    轮.fn(); // 第二次请求：新读数立刻到
+    await settle();
+    放行旧响应.forEach(function (放) { 放(); }); // 第一次的慢响应这时才到
+    await settle();
+    const r慢 = mountDashboard(慢);
+    r慢.flush();
+    const 慢文本 = collect(r慢.tree, { skipStyle: true }).text;
+    passed.push(check(慢文本.indexOf('新读数') >= 0, '⑥b 慢响应后到时保留新快照', 慢文本.slice(0, 80)));
+    passed.push(check(慢文本.indexOf('旧读数') < 0, '⑥b 旧响应不许盖掉新读数（轮询序号）', 慢文本.slice(0, 80)));
+    r慢.unmount();
+    慢.disposer();
+  }
+
   // ⑦ 六条降级路径（都带缓存，所以既能报「未连接」也能显示旧快照）
   // ⚠️ 传输层换了（`remote.commands.execute` → 同源 `fetch`），这一表也跟着换了"失败长相"：
   //    原来的「宿主命令服务不可用 / 读取 remote 服务失败」不再存在，取而代之的是

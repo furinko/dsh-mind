@@ -355,7 +355,7 @@ describe('主干环路', () => {
 
     const miss = search(index, '完全不存在的词汇zzz', { limit: 3 });
     assert.equal(miss.命中.length, 0);
-    assert.equal(miss.口径.搜索面, '正文');
+    assert.equal(miss.口径.搜索面, '正文+标签', '搜索面要报**真实字段集**：索引取的是正文+标签，不是只取正文');
     assert.equal(miss.口径.查询词.length > 0, true);
     assert.equal(miss.口径.范围.length > 0, true);
     assert.match(formatMiss(miss.口径), /搜索面|范围/);

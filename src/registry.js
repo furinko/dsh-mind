@@ -137,12 +137,20 @@ export class RoleRegistry {
   /**
    * 登记一个实例。岗位必须存在——实例权限只来自岗位。
    *
-   * 两条守卫（W3 批2·2026-10-09），都在**锁内**判（锁外预读会与并发 assign 打架）：
-   *  ① **已封存实例不许靠 assign 复活**：此前 assign 会把它写回 `在岗` 并把 `代` 重置成
-   *     `spec.代 ?? 1` —— 一次「补登记」就把停岗决定静默撤销了，而封存的唯一还原路径是
-   *     `restore`（走的是显式还原闸与自己的留痕）。这里拒，并把 howToChange 指到 restore。
-   *  ② **在岗且同岗位 ⇒ 幂等**：重复登记不该产生第二次写入、不该重置代数、不该再记一条
-   *     「状态变更」（那会让账上出现两次「第 1 代」）。返回现状，不动盘。
+   * 三条守卫，都在**锁内**判（锁外预读会与并发 assign 打架）。这张表就是「assign 能做什么」的全部：
+   *  | 实例现状 | 目标岗位 | 结果 |
+   *  |---|---|---|
+   *  | 没登记 | 任意（岗位卡存在） | 登记（在岗，第 `代` 代） |
+   *  | 在岗 | 同岗位 | **幂等**：返回现状，不写盘、不重置代数、不记审计 |
+   *  | 在岗 | 不同岗位 | **拒**：换岗要先停岗（否则一次 assign 就把第 N 代抹成第 1 代） |
+   *  | 封存 | 同岗位 | **拒**：那是「静默复活」，还原走 `restore` |
+   *  | 封存 | 不同岗位 | 允许：这就是**换岗的正路**（`seal` → `assign` 到新岗位） |
+   *
+   * 为什么封存那一行要分岗位（W3 批3·2026-10-09，两条裁决的接缝）：批2 定的规则是
+   * 「封存实例不许靠 assign 复活」（指 restore），批3 定的规则是「在岗换岗位 ⇒ 拒，先 seal 再 assign」。
+   * 两条都按字面执行的话，换岗会**无路可走**（seal 之后 assign 被拒、restore 之后 assign 又被拒）。
+   * 所以封存那一格按目标岗位分流：同岗位 = 复活（拒，指 restore）；不同岗位 = 换岗（放行，
+   * 且 `代` 由调用方显式给、留一条「登记到岗位 X」的审计）。
    *
    * @param {{ subject: object, 岗位: string, 实例: string, 代?: number }} spec
    */
@@ -164,15 +172,24 @@ export class RoleRegistry {
     let 幂等现状 = null;
     const updated = await this.#mutateIdentity((current) => {
       const 现存 = current.members[spec.实例];
-      if (现存?.status === '封存') {
-        throw new Denied('角色注册表 · 封存实例不得靠 assign 复活（§7）', `实例 ${spec.实例} 已封存：assign 会把它静默写回在岗，并把代数重置成 ${spec.代 ?? 1}（停岗决定被一次「补登记」撤销）。`, {
+      if (现存?.status === '封存' && 现存.岗位 === spec.岗位) {
+        throw new Denied('角色注册表 · 封存实例不得靠 assign 复活（§7）', `实例 ${spec.实例} 已封存在「${现存.岗位}」：assign 到**同一个岗位**会把它静默写回在岗，并把代数重置成 ${spec.代 ?? 1}（停岗决定被一次「补登记」撤销）。`, {
           requireAuthority: 'Lead',
-          howToChange: '封存实例走 registry_restore（显式的还原路径，有自己的留痕与闸）；确要换岗位也先 restore 再 assign。',
+          howToChange: '复岗走 registry_restore（显式的还原路径，有自己的留痕与闸）；要换到别的岗位则 assign 到那个新岗位（那正是 seal → assign 的换岗路）。',
         });
       }
       if (现存 && 现存.status === '在岗' && 现存.岗位 === spec.岗位) {
         幂等现状 = 现存;
         return current; // 原样返回 ⇒ #mutateIdentity 不写盘、不重载、不记审计
+      }
+      // 在岗换岗位 ⇒ 拒（W3 批3·2026-10-09）：此前 assign 会直接覆盖岗位并把 `代` 重置成
+      // `spec.代 ?? 1` —— 一次「换个岗」就把「第 N 代」抹成「第 1 代」，两代之间的断点在账上消失。
+      // 换岗是一次身份变更，必须留下停岗这一步（与封存那条同款：先停、再登）。
+      if (现存 && 现存.status === '在岗' && 现存.岗位 !== spec.岗位) {
+        throw new Denied('角色注册表 · 在岗实例换岗位要先停岗（§7）', `实例 ${spec.实例} 正在「${现存.岗位}」在岗：assign 直接改岗位会把它写进「${spec.岗位}」并重置代数（第 ${现存.代 ?? 1} 代 → 第 ${spec.代 ?? 1} 代），换岗这件事在账上就没了断点。`, {
+          requireAuthority: 'Lead',
+          howToChange: `先 registry_seal 停掉「${现存.岗位}」岗，再 assign 到「${spec.岗位}」——停岗那一步就是换岗的留痕。`,
+        });
       }
       return { ...current, members: { ...current.members, [spec.实例]: { id: spec.实例, 岗位: spec.岗位, 代: spec.代 ?? 1, status: '在岗', 登记于: this.clock.iso() } } };
     });

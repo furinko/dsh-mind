@@ -245,7 +245,7 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
     assert.equal(n1.判据冻结, true);
     assert.deepEqual(n1.交卷, { 已交: 0, 应交: 1, 齐: false });
     assert.equal(a.任务.节点.find((n) => n.id === 'n3').打回次数, 2);
-    assert.deepEqual(a.任务.计数, { 待派发: 0, 进行中: 1, 已交卷: 0, 已采纳: 0, 已打回: 1, 未验: 0, 待决: 1 });
+    assert.deepEqual(a.任务.计数, { 待派发: 0, 进行中: 1, 已交卷: 0, 已采纳: 0, 已打回: 1, 未验: 0, 已结账: 0, 待决: 1 });
 
     const after = await readdir(f.privateRoot, { recursive: true });
     assert.deepEqual(after, before, '工作台在磁盘上不留任何东西（无存储）');
@@ -269,7 +269,9 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
     assert.deepEqual(未齐.交卷, { 已交: 2, 应交: 3, 齐: false });
     assert.equal(未齐.揭名, false, '未交齐 ⇒ 不揭名');
     assert.deepEqual(未齐.独立答案.map((a) => a.盲标), ['成员 A', '成员 B'], 'N 份答案都留下来了');
-    assert.equal(未齐.零分歧, false, '有人给了反例面 ⇒ 不是零分歧');
+    // W3 批3：未交齐时**零分歧也不投影**（「这两份一致」本身就是内容级信息，盲评要互不可见）。
+    assert.equal(未齐.零分歧, undefined, '未交齐 ⇒ 零分歧/依据都不出');
+    assert.equal(未齐.零分歧依据, undefined);
 
     // 交齐且**无人给反例面** ⇒ 零分歧（全票一致 = 异常信号）
     const 齐节点 = {

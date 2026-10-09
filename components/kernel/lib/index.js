@@ -216,7 +216,10 @@ function mindTool({ org, 项目, 项目键 }) {
       render: (_args, value) => [{ type: 'text', text: value }],
     },
     // 只有只读动作允许并发：写动作会把「读-改-写」排成一队，避免并发自伤。
-    isConcurrencySafe: (args) => ['status', 'workbench', 'memory_query', 'memory_lineage', 'capability_list', 'capability_resolve', 'capability_read', 'bus_read', 'audit_tail', 'audit_verify', 'registry_list', 'registry_can', 'probe_health', 'upgrade_pending', 'policy_check'].includes(args?.action),
+    // `probe_health` 曾在这张表里（W3 批3 清掉）：它是**安全类组件**的工具名，
+    // 不属于本工具的动作面（`ACTIONS` 里没有它）——留在这里是一条永远匹配不上的死条目，
+    // 读的人会以为「探针巡检在这个工具上是并发安全的」。
+    isConcurrencySafe: (args) => ['status', 'workbench', 'memory_query', 'memory_lineage', 'capability_list', 'capability_resolve', 'capability_read', 'bus_read', 'audit_tail', 'audit_verify', 'registry_list', 'registry_can', 'upgrade_pending', 'policy_check'].includes(args?.action),
     async execute(args, exec) {
       const 主体 = agentSubject(exec);
       try {
@@ -363,6 +366,14 @@ function 闸判定(exec, 项目) {
   if (ENVELOPE_STATE.允许.length > 0 && !ENVELOPE_STATE.允许.includes(工具) && !工具.startsWith('mind')) {
     return `[dsh-mind] 工具「${工具}」未被允许：当前工具总范围是白名单模式。要改请让主权者修改 工具总范围.json。`;
   }
+  // `mind*` 为什么无条件放行（W3 批3 补的注释，此前只有一行代码、没有理由）：
+  // 工具总范围管的是**宿主工具**（read / write / bash / 第三方插件的工具）——
+  // 那是主权者对「这台机器上能碰什么」的设定；而 `mind` 是本组织自己的入口
+  // （status / workbench / memory_query / 各动作）。白名单一开就把 `mind` 关掉，
+  // 等于组织看不见自己的状态、也读不到自己的记忆，而唯一的恢复手段恰恰要经这个工具
+  // ⇒ 自我锁死。所以这一格不在主权者的名单管辖内，不是"漏了校验"。
+  // 边界如实说：`/mind` 命令面走的是另一条路（`runCommand` → `runAction`），
+  // 本来就不经过这道闸；这里的放行只影响模型侧的工具调用。
   void 项目;
   return undefined;
 }
@@ -409,8 +420,21 @@ function 挂审计(ctx, org, logger) {
   /** @type {Map<string, {成功: number, 失败: number, 工具: Map<string, number>}>} */
   const 轮 = new Map();
 
-  function 轮键(exec) {
-    return String(exec?.agent?.session?.id ?? exec?.callId ?? 'unknown-turn');
+  /**
+   * 轮键：**两处取法必须同一份**（W3 批3·2026-10-09）。
+   *
+   * 此前 `tools/result` 的兜底用的是**单次调用的 id**（形如 `call-xxxx`），而 `turn/end`
+   * 用的是「会话 id 取不到就一个固定兜底键」：两边算出不同的键，于是 `tools/result` 存的桶
+   * 在 `turn/end` 里**永远找不到、也永远删不掉**——Map 只增不减（长时间运行就是缓慢泄漏），
+   * 而且汇总条目永远不会落。
+   * 现在只认「会话 id」（单次调用的 id 拿它当轮键本来就错：每次调用会开一个新桶），
+   * 取不到就都用 `'unknown-turn'`，两端必然对齐。
+   *
+   * @param {any} source `tools/result` 的 exec 或 `turn/end` 的 payload
+   * @returns {string}
+   */
+  function 轮键(source) {
+    return String(source?.agent?.session?.id ?? source?.session?.id ?? source?.sessionId ?? 'unknown-turn');
   }
 
   ctx.on('tools/result', (exec, result) => {
@@ -424,7 +448,9 @@ function 挂审计(ctx, org, logger) {
         org.audit
           .append({
             动作: '工具调用失败',
-            主体: { id: 'lead', kind: 'Lead' },
+            // 主体取**真实调用者**（W3 批3）：此前恒记 `{id:'lead'}`，任何一次失败看起来
+            // 都是 Lead 干的——成员踩的坑被记到 Lead 头上，排障与追责都跟着错。
+            主体: agentSubject(exec),
             对象: { id: 工具, kind: '工具' },
             依据: '审计要求：失败全记（失败是最贵的学习信号）',
             结果: '失败',
@@ -445,14 +471,15 @@ function 挂审计(ctx, org, logger) {
   // 轮 = 一次任务实例从派发到交卷的一次执行段；交卷（回合结束）时落一条汇总。
   ctx.on('turn/end', (payload) => {
     try {
-      const key = String(payload?.session?.id ?? payload?.sessionId ?? 'unknown-turn');
+      const key = 轮键(payload);
       const bucket = 轮.get(key);
       if (!bucket || (bucket.成功 === 0 && bucket.失败 === 0)) return;
       轮.delete(key);
       org.audit
         .append({
           动作: '工具调用成功',
-          主体: { id: 'lead', kind: 'Lead' },
+          // 汇总条目的主体同样取真实会话（此前恒记 Lead：轮汇总与失败记录一样会张冠李戴）。
+          主体: agentSubject({ agent: { session: payload?.session ?? (payload?.sessionId ? { id: payload.sessionId } : undefined) } }),
           对象: { id: key, kind: '轮' },
           依据: '轮定义：一次任务实例从派发到交卷的一次执行段；成功的工具调用按轮汇总',
           结果: `成功 ${bucket.成功} / 失败 ${bucket.失败}`,
@@ -501,11 +528,16 @@ function 组织说明(org) {
   ].join('\n');
 }
 
-/** 从执行上下文里取主体；取不到就按 Lead 处理（根会话的执行者就是 Lead）。 */
+/**
+ * 从执行上下文里取主体；取不到会话就按 Lead 处理（根会话的执行者就是 Lead）。
+ *
+ * W3 批3：去掉一处恒等三元（「值 === 'lead' ? 同一个值 : 那个值」的写法——两边同一个字符串，
+ * 是重构残留）。语义不变，只是别再让读的人以为这里有个分支。
+ * @param {any} exec
+ */
 function agentSubject(exec) {
-  const 会话 = exec?.agent?.session;
-  const 实例 = 会话?.id ? `session-${String(会话.id).slice(0, 8)}` : 'lead';
-  return subjectFor({ 根会话: true, 实例: 实例 === 'lead' ? 'lead' : 实例 });
+  const 会话id = exec?.agent?.session?.id;
+  return subjectFor({ 根会话: true, 实例: 会话id ? `session-${String(会话id).slice(0, 8)}` : 'lead' });
 }
 
 /** 把工具入参里的逗号串与 JSON 串规整成动作表要的形状。 */

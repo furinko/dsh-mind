@@ -50,7 +50,10 @@ export function buildIndex(docs) {
     }
   });
 
-  return { docs: list, df, postings, dl, avgdl: list.length ? total / list.length : 0, field: '正文' };
+  // `field` 是**口径里报给读的人的搜索面**，必须写真实字段集（W3 批3·2026-10-09）：
+  // 索引一直取「正文 + 标签」，却报成 `'正文'` —— 读的人以为标签不参与检索，
+  // 于是「为什么这条标签命中了」永远解释不通（口径不实＝读数不实）。
+  return { docs: list, df, postings, dl, avgdl: list.length ? total / list.length : 0, field: '正文+标签' };
 }
 
 /**

@@ -51,6 +51,10 @@ export function highestAuthority(list, fallback = '自治') {
  * `摘要: "a` —— 值被静默改坏，而且坏得很隐蔽（`unquote` 认不出没闭合的引号，
  * 于是存进 meta 的是带半个引号的字符串，谁也不报错）。`#` 在引号里就是值的一部分。
  *
+ * 转义引号也要认（W3 批3·2026-10-09）：`"a \" b" # 注释` 里那个 `\"` 不结束引号——
+ * 否则扫描器会在它那里"闭合"，又被后面那个真正的 `"` 重新打开 ⇒ 行尾注释反而被当值留下，
+ * 于是注释文本混进 meta（`unquote` 再怎么解转义也救不回来）。
+ *
  * @param {string} line
  * @returns {string}
  */
@@ -59,6 +63,10 @@ function stripInlineComment(line) {
   for (let i = 0; i < line.length; i += 1) {
     const ch = line[i];
     if (quote) {
+      if (ch === '\\') {
+        i += 1; // 转义：下一个字符是值的一部分（哪怕它长得像引号）
+        continue;
+      }
       if (ch === quote) quote = null;
       continue;
     }
@@ -115,12 +123,20 @@ export function parseSimpleYaml(raw) {
   return { data, errors };
 }
 
-/** @param {string} value */
+/**
+ * 去掉值的引号，并把**转义引号解回原字符**（W3 批3·2026-10-09）。
+ *
+ * 引号里的 `\"` / `\'` / `\\` 是转义写法：`"a \" b"` 的值是 `a " b`，不是 `a \" b`。
+ * 只对**带引号的值**解转义——不带引号的值（例如 Windows 路径 `C:\Users\k`）原样保留，
+ * 免得把反斜杠当转义吃掉（`\U` 不在转义集里，本来也留得住，但整条规则更清楚）。
+ *
+ * @param {string} value
+ * @returns {string}
+ */
 function unquote(value) {
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-    return value.slice(1, -1);
-  }
-  return value;
+  const 带引号 = (value.startsWith('"') && value.endsWith('"') && value.length >= 2) || (value.startsWith("'") && value.endsWith("'") && value.length >= 2);
+  if (!带引号) return value;
+  return value.slice(1, -1).replace(/\\(["'\\])/g, '$1');
 }
 
 /**
