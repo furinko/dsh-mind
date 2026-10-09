@@ -1834,6 +1834,40 @@ export async function runHarness() {
     慢.disposer();
   }
 
+  // ⑥c 设置页轮询序号（W3 批4）：**设置读数那条**同样不许被慢响应盖回去。
+  //   ⑥b 只覆盖了投影那条；设置页是「失联限制 / 响应期限小时」的唯一写入口，
+  //   它的读数被旧值盖回会让人照着旧值做决定（§3.6 静默失效的另一种长相）。
+  {
+    const 新读数袋 = 真读数('在位');
+    新读数袋.生效响应期限小时 = 168; // 可观察标记：页面显示「生效期限 168 小时」
+    const 旧读数袋 = 真读数('在位');
+    旧读数袋.生效响应期限小时 = 72;
+    let 设置第几次 = 0;
+    const 放行旧读数 = [];
+    const 慢桥设置 = makeRemote(function (_sessionId, 命令) {
+      if (命令 !== PRESENCE_COMMAND) return okReply(sampleView()); // 投影那条不掺和
+      设置第几次 += 1;
+      if (设置第几次 === 1) {
+        return new Promise(function (resolve) { 放行旧读数.push(function () { resolve(okReply({ 读数: 旧读数袋, 设置文件: SETTINGS_FILE, 说明: '读：慢响应' })); }); });
+      }
+      return okReply({ 读数: 新读数袋, 设置文件: SETTINGS_FILE, 说明: '读：新读数' });
+    });
+    const 慢设置 = boot({ store, services: Object.assign(session(), { remote: 慢桥设置.remote }) });
+    await settle();
+    const 轮设置 = 慢设置.timers.intervals.find((t) => t.ms === REFRESH_MS);
+    check(!!轮设置, '⑥c 轮询器已注册');
+    轮设置.fn(); // 第二次设置请求：新读数（168）先到
+    await settle();
+    放行旧读数.forEach(function (放) { 放(); }); // 第一次的慢响应这时才到（72）
+    await settle();
+    const sr慢 = mountSettings(慢设置);
+    const 设置慢文本 = await textAfterLoad(sr慢);
+    passed.push(check(设置慢文本.indexOf('生效期限 168 小时') >= 0, '⑥c 设置读数：慢响应后到时保留新读数', 设置慢文本.slice(0, 140)));
+    passed.push(check(设置慢文本.indexOf('生效期限 72 小时') < 0, '⑥c 旧响应不许盖掉新设置读数（轮询序号）', 设置慢文本.slice(0, 140)));
+    sr慢.unmount();
+    慢设置.disposer();
+  }
+
   // ⑦ 六条降级路径（都带缓存，所以既能报「未连接」也能显示旧快照）
   // ⚠️ 传输层换了（`remote.commands.execute` → 同源 `fetch`），这一表也跟着换了"失败长相"：
   //    原来的「宿主命令服务不可用 / 读取 remote 服务失败」不再存在，取而代之的是

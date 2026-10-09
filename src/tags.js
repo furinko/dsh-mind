@@ -109,11 +109,7 @@ export function parseSimpleYaml(raw) {
     const [, key, rest] = m;
     const value = rest.trim();
     if (value.startsWith('[') && value.endsWith(']')) {
-      data[key] = value
-        .slice(1, -1)
-        .split(',')
-        .map((s) => unquote(s.trim()))
-        .filter((s) => s !== '');
+      data[key] = splitArrayItems(value.slice(1, -1));
     } else if (value === '') {
       data[key] = [];
     } else {
@@ -124,9 +120,53 @@ export function parseSimpleYaml(raw) {
 }
 
 /**
- * 去掉值的引号，并把**转义引号解回原字符**（W3 批3·2026-10-09）。
+ * 切分数组字面量的内部文本：**逗号只在引号外才算分隔符**（W3 批4·2026-10-09）。
  *
- * 引号里的 `\"` / `\'` / `\\` 是转义写法：`"a \" b"` 的值是 `a " b`，不是 `a \" b`。
+ * 为什么必须这样：写侧现在会把含逗号的元素引号化成 `["a,b", c]`；按逗号裸切会得到
+ * `["a` / `b"` / `c]` 三段——`unquote` 认不出没闭合的引号，于是 meta 里出现半截引号串，
+ * 而 errors 还是空的（静默改坏）。切分与引号规则必须成对，否则修了一半等于没修。
+ *
+ * @param {string} raw 不含外层 `[` `]` 的文本
+ * @returns {string[]}
+ */
+function splitArrayItems(raw) {
+  const 段 = [];
+  let 当前 = '';
+  let quote = null;
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (quote) {
+      当前 += ch;
+      if (ch === '\\') {
+        if (i + 1 < raw.length) {
+          当前 += raw[i + 1];
+          i += 1;
+        }
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      当前 += ch;
+      continue;
+    }
+    if (ch === ',') {
+      段.push(当前);
+      当前 = '';
+      continue;
+    }
+    当前 += ch;
+  }
+  段.push(当前);
+  return 段.map((s) => unquote(s.trim())).filter((s) => s !== '');
+}
+
+/**
+ * 去掉值的引号，并把**转义序列解回原字符**（W3 批3 起，批4 补 `\n`/`\r`/`\t`）。
+ *
+ * 引号里的 `\"` / `\'` / `\\` / `\n` 是转义写法：`"a \" b"` 的值是 `a " b`，不是 `a \" b`。
  * 只对**带引号的值**解转义——不带引号的值（例如 Windows 路径 `C:\Users\k`）原样保留，
  * 免得把反斜杠当转义吃掉（`\U` 不在转义集里，本来也留得住，但整条规则更清楚）。
  *
@@ -136,12 +176,47 @@ export function parseSimpleYaml(raw) {
 function unquote(value) {
   const 带引号 = (value.startsWith('"') && value.endsWith('"') && value.length >= 2) || (value.startsWith("'") && value.endsWith("'") && value.length >= 2);
   if (!带引号) return value;
-  return value.slice(1, -1).replace(/\\(["'\\])/g, '$1');
+  return value.slice(1, -1).replace(/\\(["'\\nrt])/g, (_m, 码) => ({ n: '\n', r: '\r', t: '\t' }[码] ?? 码));
+}
+
+/**
+ * 一个值**必须**引号化吗（W3 批4·2026-10-09）。
+ *
+ * 判据只有一条：**不引号化的话，读回来会不一样**。写侧此前从不引号化，于是
+ * `名: 甲 # 乙` 落盘后再读回是 `甲`（`#` 被当行内注释切掉）、`摘要: # 标题式值` 读成空列表、
+ * 首尾空白被吃掉、`"引号值"` 被 unquote 剥壳、`[x]` 被当数组——**全部静默**，errors 为空。
+ *
+ * 为什么不能一律引号化：出厂件要靠**字节比对**判断「有没有被改过」（升级层的判据），
+ * 一律引号化会让每一件既有出厂文件当场漂移。所以只对「会读坏的值」动手，普通值逐字节不变。
+ *
+ * @param {string} s
+ * @returns {boolean}
+ */
+function needsQuote(s) {
+  if (s === '') return true; // 裸空值读回是 `[]`（数组），空串必须写成 `""`
+  if (/^\s|\s$/.test(s)) return true; // 首尾空白会被 trim 掉
+  if (/[\n\r]/.test(s)) return true; // 换行会把一行拆成两行
+  if (s.startsWith('#')) return true; // 行首 `#` 被当整行注释
+  if (/\s#/.test(s)) return true; // `#` 前有空白 ⇒ 行内注释的起点
+  if (/["'\\]/.test(s)) return true; // 引号会被当引号边界剥壳；反斜杠会被当转义
+  if (/^\[[\s\S]*\]$/.test(s)) return true; // 读侧把 `[...]` 当数组
+  return false;
+}
+
+/** 引号化：转义 `\` 与 `"`，换行折成 `\n`（读侧 unquote 对称解回）。 */
+function quoteValue(s) {
+  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r')}"`;
 }
 
 /**
  * 把对象元数据写成 front matter。键顺序固定，保证同一份内容两次写出字节一致
  * （升级层要靠字节比对判断「出厂有没有改」）。
+ *
+ * **写-读往返闭合**（W3 批4·2026-10-09）：需要时才引号化（见 `needsQuote`），
+ * 数组**逐元素**判断（元素含逗号也必须引号化，否则读侧的数组切分会把它切成两个）——
+ * 与读侧的 `unquote` / 数组切分对称。普通值（出厂件里那些 id/kind/authority…）
+ * 一个字节都不动。
+ *
  * @param {Record<string, any>} data
  * @returns {string}
  */
@@ -150,9 +225,18 @@ export function formatFrontMatter(data) {
   const keys = [...order.filter((k) => data[k] !== undefined), ...Object.keys(data).filter((k) => !order.includes(k)).sort()];
   const lines = keys.map((key) => {
     const value = data[key];
-    if (Array.isArray(value)) return `${key}: [${value.join(', ')}]`;
+    if (Array.isArray(value)) {
+      return `${key}: [${value
+        .map((item) => {
+          const s = String(item);
+          // 数组元素多一条判据：逗号是分隔符，含逗号不引号化就会被切成两个元素。
+          return needsQuote(s) || s.includes(',') ? quoteValue(s) : s;
+        })
+        .join(', ')}]`;
+    }
     if (value === null || value === undefined) return `${key}:`;
-    return `${key}: ${value}`;
+    const s = String(value);
+    return `${key}: ${needsQuote(s) ? quoteValue(s) : s}`;
   });
   return `---\n${lines.join('\n')}\n---\n`;
 }

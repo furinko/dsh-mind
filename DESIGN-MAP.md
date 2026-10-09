@@ -10,7 +10,7 @@
 | 主权者 / 出厂作者 / Lead / 成员 / 复核者 五类主体 | `SUBJECT_KINDS`（`src/policy.js`） | policy：未知主体 |
 | 复核者由主权者确认（Lead 可提名） | `review.nominate` / `review.appoint`（`src/review.js`） | — |
 | 复核者只读数，不改，不参与提案 | 法律档规则（`src/policy.js` `#tierRule`） | policy：复核者只读数 |
-| 复核者跑命令限只读白名单；有副作用默认拒绝 | `ReviewProtocol.readonlyCommand`（`src/review.js`） | — |
+| 复核者跑命令限只读白名单；有副作用默认拒绝 | `ReviewProtocol.readonlyCommand`（`src/review.js`）——⚠️ **口径/纪律件：尚无运行时调用点，待接线**（W3 批4 复核 grep：定义之外 0 调用，动作面无承载；别当成活门禁） | w3c：①readonlyCommand 白名单 |
 | 落盘实验走沙箱区，任务结束即清、全程入账 | `review.sandboxExperiment`（`src/review.js`） | policy：复核者 sandbox |
 | 复核者能力/经验存私有区独立命名空间，被验方不可读 | `layout.roleCardDir('自治')` + 成员切片（`src/workbench.js`） | safety：成员只读一片 |
 | 知识挂岗位，不挂实例 | 角色卡 `个体L2` 只存能力引用（`src/capability.js` `referencesFor`） | objects：岗位→能力引用 |
