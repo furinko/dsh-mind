@@ -211,13 +211,19 @@ export class ObjectStore {
   async rollback(kind, id, version, spec) {
     const text = await this.readVersion(id, version);
     if (text === null) throw new InvalidBody(`版本历史里没有 ${id}@v${version}`);
+    const parsed = parseDocument(text);
+    // authority 取**被回滚版本自己写的**（W3 批2·2026-10-09）：此前硬编码 '法律'，
+    // 那既不是这个对象的实际档位，也不是任何一版正文的属性——它让判定拿到一个
+    // 谁都没声明过的值（回滚一个自治能力卡，却按法律档过闸）。
+    // 取值口径与 `store.write`/`read` 一致：段标记推出的档位（parsed.authority），
+    // 没有段标记时用 front matter 声明的 authority 兜底。
+    const authority = parsed.meta.authority ?? parsed.authority ?? '自治';
     await this.policy.check({
       subject: spec.subject,
       action: 'rollback',
-      target: { id, kind, authority: '法律', zone: '私有', textVersion: true },
+      target: { id, kind, authority, zone: '私有', textVersion: true },
       context: { reason: spec.reason, version },
     });
-    const parsed = parseDocument(text);
     const result = await this.write(kind, { meta: parsed.meta, body: parsed.body }, { ...spec, reason: `${spec.reason}（回滚自 v${version}）` });
     await this.#recordPointer(id, {
       id,
@@ -269,8 +275,18 @@ export class ObjectStore {
   /** @param {string} kind @param {string} id @param {'出厂'|'私有'} zone @param {string} path @param {string} text */
   #decorate(kind, id, zone, path, text) {
     const parsed = parseDocument(text);
+    // 文件名与 meta.id 不一致 ⇒ 响亮拒（W3 批2·2026-10-09）：此前是 `parsed.meta.id ?? id`，
+    // 于是「按 a 去读，拿到 b 的正文」这件事被静默咽下——调用方以为读到的是 a。
+    // 对象 id 是引用的凭据（§14.4-1「引用一律用 id」），两处各说各话时读取必须失败，
+    // 而不是悄悄换一个身份。meta 里没写 id 仍按文件名兜底（旧件兼容）。
+    const 元数据id = parsed.meta.id === undefined || parsed.meta.id === null ? null : String(parsed.meta.id);
+    if (元数据id !== null && 元数据id !== String(id)) {
+      throw new InvalidBody(`${path} 的文件名（${id}）与元数据 id（${元数据id}）不一致：对象 id 是引用凭据，两处各说各话时读取必须响亮拒绝，不许静默换 id。`, {
+        detail: { 文件名id: String(id), 元数据id, path },
+      });
+    }
     return {
-      id: parsed.meta.id ?? id,
+      id: 元数据id ?? String(id),
       kind,
       zone,
       path,

@@ -58,6 +58,7 @@ authorityOfSegment(doc, heading)
 // src/audit.js
 GRADE, AuditLog, RoundRecorder, entryFingerprint(row)
 // AuditLog: .append(entry) .read(query) .verify() .months() .clearQueue(spec) .gradeOf(action)
+// verify() 除链内自洽外还读 anchor 查「尾部截断」（W3 批2，见 §2.16）；read() 排序键 =(月, seq)
 
 // src/policy.js
 ACTIONS, SUBJECT_KINDS, INTERVENTION, PolicyEngine, normalizeSubject, extractPolicyBlock
@@ -131,7 +132,9 @@ export class MemoryService {
    * 类 ∈ 知识/经历/偏好/作答。归属按 §7 表：知识=岗位+项目双标签；经历=组织账本；偏好=部署；作答=实例。 */
   async remember({ subject, 类, 内容, 来源, 项目, 岗位, 标签, 来源引用 })
   /** 契约B（2026-10-09）：subject 必带并过 policy.check（action 'read'）；
-   *  放行记一条「只读服务调用」审计（档位=记汇总，一次调用一条，不随命中条数膨胀）。 */
+   *  放行记一条「只读服务调用」审计（档位=记汇总，一次调用一条，不随命中条数膨胀）。
+   *  W3 批2：口径里 `文档数`＝检索面实算的候选数、`条目数`＝账本侧可见条数，**两个数分开报**
+   *  （同名覆盖会让 `formatMiss` 的「候选文档数」虚高）。 */
   async query({ subject, 类, 项目, 岗位, 文本, 显式, 读者 })
   /** 契约A（2026-10-09）·血缘查询：上下游闭包 ≤3 层（引用 + 推翻替换链），环安全；
    *  读面与契约B 同款（subject 过判定 + 「只读服务调用」汇总审计）。详见 §2.14。 */
@@ -167,6 +170,10 @@ export async function runRegression({ 回归集, 基线, 执行 })
   // -> {通过, 用例:[{查询, 期望, 实际, 通过}], 差异}
 ```
 要求：`k1=1.2, b=0.75`；长度归一化必须体现在打分里（§11 治「分母膨胀」）；打分各维同量纲；相同输入必须给出相同排序（稳定排序，分数相同按 id 升序）。
+W3 批2：索引期预存 `dl[]`，**与 tf/df 取自同一串 token（正文 + 标签）**——`search` 不再自己
+tokenize 正文算长度（同一条文标签多时 dl 与 tf 不同源，分母被算小 ⇒ 分数虚高）。改口径必须跑
+`runRegression`，排序差异逐条列出（本批实测：真实语料 5 个查询排序不变、分数按标签量下降；
+对抗语料「正文略长 vs 标签多」排序翻转，见提交说明）。
 
 ### 2.5 `src/capability.js` — 能力库（怎么做）
 ```js
@@ -197,7 +204,8 @@ export class RoleRegistry {
   async get({ id })
   /** 随时能答「这身份能碰什么」。 */
   async canTouch({ id })
-  /** 实例权限只来自岗位。 */
+  /** 实例权限只来自岗位。W3 批2 两条守卫：已封存实例 ⇒ Denied（howToChange 指 restore）；
+   *  在岗且同岗位 ⇒ 幂等返回现状（不写盘、不重置代数、不再记「状态变更」）。 */
   async assign({ subject, 岗位, 实例, 代 })
   /** 封存 ≠ 删除。 */
   async seal({ subject, 实例, 理由 })
@@ -283,6 +291,9 @@ export function projectWorkbench(input)
 /** 成员只读自己任务那片。 */
 export function sliceForViewer(view, 读者)
 ```
+W3 批2（遮罩做在投影这一层）：会审行的 `独立答案` 在**未交齐**时只给 `{盲标}`——
+成员、结论、反例面、产出物引用都不出；交齐（`揭名: true`）才全给。`零分歧` 判定仍用全量答案
+现算（判定是机制读数，不是内容），`零分歧依据` 里只有计数，不含人名或结论。
 
 ### 2.11 `src/org.js` — 组装（不要动，由 Lead 实现）
 把上面各件组装成 `createOrg({home, factoryRoot, privateRoot, project, subject})`。
@@ -550,6 +561,27 @@ await runAction({ org, 项目, subject, 主体, args: { action, ...args }, 面: 
 - 工作台投影：会审行加 `讨论` 小节 `{状态, 轮次, 本轮消息数, 可收敛, 可收敛说明,
   讨论未收敛?, 复核时讨论未收敛?, 表态消息id}`（读数现算，纯投影；并行分担节点无此
   小节）；board 渲染层同步（`reviewRow` 的 `debateView`）。
+
+### 2.16 W3 批2 · 口径与静默失效（2026-10-09）——四条对外语义
+
+> 这一节记的是**已实现**的对外语义变更（实现散在各文件，这里只留「读的人必须知道的差异」）。
+
+1. **审计自检口径（`src/audit.js`）**
+   - `verify()` 逐月除了验链内自洽，还要把**月尾**与 `layout.auditAnchor(month)` 对照：
+     `broken[].类型 ∈ {链断裂, 尾部截断, 锚缺失}`。为什么必须这样：砍掉尾部若干行之后，
+     剩下的链**仍然自洽**（每行 prev/hash 都对得上它前面那行），删掉「最后一次写入」
+     恰好是自检唯一查不出的形状；anchor 是链外的独立留痕。
+   - 边界（如实说明）：写入进程若死在 `appendLines` 与 `#writeAnchor` 之间，这一档也会亮——
+     它报的是同一件事「尾部那几行没有链外留痕覆盖」，方向是响亮而非静默。
+   - `read()` 的排序键是 **(月, seq)**：`seq` 逐月从 1 开始，按它全局排会把两个月交错
+     （1 月的第 7 条排到 2 月的第 2 条后面）。`limit` 取的是**最新**的那几条（末月末尾）。
+2. **`registry.assign` 守卫**：见 §2.6（封存拒 + 在岗同岗幂等）。
+3. **`store.rollback` 的 authority**：取**被回滚版本自己写的**档位
+   （`parsed.meta.authority ?? parsed.authority ?? '自治'`），不再硬编码 `法律`；
+   `#decorate` 在「文件名 ≠ meta.id」时抛 `InvalidBody`（对象 id 是引用凭据，不许静默换 id；
+   meta 里没写 id 仍按文件名兜底）。
+4. **工作台会审遮罩**：见 §2.10。
+   另外 `MemoryService.stats()` 改为**跨账合并** fold（晋升过的同 id 只计一次，照 `activity()` 先例）。
 
 ## 3 · 验收
 

@@ -346,7 +346,12 @@ export class MemoryService {
     const 被隔离 = (entry) =>
       entry.状态 === '已隔离' || entry.状态 === '待删除' || (entry.历史 ?? []).some((s) => s.追加 === '隔离' || s.追加 === '待删除');
     const 口径数 = {
-      文档数: visible.length,
+      // `条目数` = 账本侧可见条数（含被当前有效视图挡住的失效/隔离条目）；
+      // **不要叫 `文档数`**（W3 批2·2026-10-09）：检索面的 `文档数` 是 search 实算的
+      // 候选数（= 可召回数），此前这里用同名键把它盖掉，于是 `formatMiss` 报出的
+      // 「候选文档数」虚高——读的人以为检索扫了 55 条，实际只扫了 40 条。
+      // 两个数答的是两个问题（账本里有多少 / 检索扫了多少），分开报，谁也不覆盖谁。
+      条目数: visible.length,
       可召回数: 可召回.length,
       失效条目数: 撤回.filter((e) => !被隔离(e)).length,
       隔离条目数: 撤回.filter(被隔离).length,
@@ -384,6 +389,8 @@ export class MemoryService {
     }
     const index = buildIndex(可召回.map((entry) => ({ id: entry.id, 正文: entry.内容, 标签: [entry.类, entry.岗位 ?? ''], 来源: entry.归属 })));
     const result = search(index, query.文本, { limit: query.limit ?? 10, 范围: `${wanted.join('/')}@${query.项目 ?? '全部项目'}` });
+    // 合并顺序与键名都守着「两个数分开报」：检索面的 `文档数`（候选文档数）保留 search 的实算值，
+    // 账本侧的可见条数走 `条目数`——同名覆盖会让 `formatMiss` 的「候选文档数」虚高（W3 批2）。
     result.口径 = { ...result.口径, ...口径数 };
     if (result.命中.length === 0) result.说明 = formatMiss(result.口径);
     if (撤回.length > 0 && query.含失效 !== true) {
@@ -644,17 +651,23 @@ export class MemoryService {
 
   /**
    * 记忆规模：供工作台与探针使用。
+   *
+   * 计数按**跨账本合并**的 fold 算（W3 批2·2026-10-09，照 `activity()` 的先例）：
+   * 晋升过的知识在项目账与跨项目账上各有一行同 id 的条目（§7 双份留痕），
+   * 按账分开 fold 会把它数两遍——「存量 100」里有 20 条是同一条记忆的两个副本。
+   * 假读数比没读数贵，所以合并一次再数。
+   *
    * @param {{ 项目?: string }} [query]
    */
   async stats(query = {}) {
     /** @type {Record<string, number>} */
     const 计数 = {};
     for (const kind of MEMORY_KINDS) {
-      let n = 0;
+      const rows = [];
       for (const scope of await this.#scopesFor(kind, query.项目)) {
-        n += fold(await readJsonl(this.layout.memoryLog(scope, kind))).filter((e) => e.状态 !== '物理删除').length;
+        rows.push(...(await readJsonl(this.layout.memoryLog(scope, kind))));
       }
-      计数[kind] = n;
+      计数[kind] = fold(rows).filter((e) => e.状态 !== '物理删除').length;
     }
     return { 计数, 合计: Object.values(计数).reduce((a, b) => a + b, 0) };
   }

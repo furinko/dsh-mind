@@ -15,8 +15,16 @@ const B = 0.75;
 /**
  * 建索引。语料是小规模本地文本，用倒排表足矣；上向量化要同时满足§11 的两个条件。
  *
+ * **长度与词频必须同字段集**（W3 批2·2026-10-09）：tf 取自「正文 + 标签」，
+ * 那么长度 `dl` 也必须取自同一串 token——此前 `search` 里的 dl 只 tokenize 正文，
+ * 标签多的文档 tf 大、dl 却小，长度归一化（`B` 项）把分母算小 ⇒ 分数虚高。
+ * 分数是唯一排序量纲，量纲错了就是排序错了。所以 dl 在索引期算一次、与 tf 同源。
+ *
+ * 顺带：`search` 的内层循环此前对**每个 term × 每个候选**都重跑一次 tokenize，
+ * 复杂度是 O(词数 × 候选数 × 正文长度)。预存 dl 之后那里一次也不用算了。
+ *
  * @param {Array<{ id: string, 正文: string, 标签?: string[], 来源?: string, 时间?: string }>} docs
- * @returns {{ docs: object[], df: Map<string, number>, postings: Map<string, Map<number, number>>, avgdl: number, field: string }}
+ * @returns {{ docs: object[], df: Map<string, number>, postings: Map<string, Map<number, number>>, dl: number[], avgdl: number, field: string }}
  */
 export function buildIndex(docs) {
   const list = docs.map((doc) => ({ ...doc, 正文: String(doc.正文 ?? '') }));
@@ -24,11 +32,14 @@ export function buildIndex(docs) {
   const df = new Map();
   /** @type {Map<string, Map<number, number>>} */
   const postings = new Map();
+  /** @type {number[]} 每条文档的长度（与 tf/df 同一串 token） */
+  const dl = [];
   let total = 0;
 
   list.forEach((doc, index) => {
     const tokens = tokenize(`${doc.正文} ${(doc.标签 ?? []).join(' ')}`);
     total += tokens.length;
+    dl.push(Math.max(1, tokens.length));
     /** @type {Map<string, number>} */
     const tf = new Map();
     for (const token of tokens) tf.set(token, (tf.get(token) ?? 0) + 1);
@@ -39,7 +50,7 @@ export function buildIndex(docs) {
     }
   });
 
-  return { docs: list, df, postings, avgdl: list.length ? total / list.length : 0, field: '正文' };
+  return { docs: list, df, postings, dl, avgdl: list.length ? total / list.length : 0, field: '正文' };
 }
 
 /**
@@ -78,7 +89,8 @@ export function search(index, query, options = {}) {
       const tf = posting.get(i);
       if (!tf) continue;
       const doc = index.docs[i];
-      const dl = Math.max(1, tokenize(doc.正文).length);
+      // dl 直接取索引期算好的（与 tf/df 同字段集）——这里不再重算，也不再每 term × 每候选重跑 tokenize。
+      const dl = index.dl?.[i] ?? Math.max(1, tokenize(`${doc.正文} ${(doc.标签 ?? []).join(' ')}`).length);
       const norm = 1 - B + B * (index.avgdl > 0 ? dl / index.avgdl : 1);
       const score = idf * ((tf * (K1 + 1)) / (tf + K1 * norm));
       scoreById.set(doc.id, (scoreById.get(doc.id) ?? 0) + score);

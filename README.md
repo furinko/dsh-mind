@@ -76,7 +76,7 @@ dsh-mind/                        ← 插件列表里的那张卡（不插自己�
 | 面板上的块 | 依据 |
 |---|---|
 | **待你决定**（首屏） | §7 唯一点名「工作台把它投影出来」的东西就是待决项；这里再并上打回升级 / 挂起 diff / 探针见红。每项附**该敲的命令**——§9 硬规则③「工作台只读」，所以给命令不给按钮 |
-| **会审** | §10：独立答案（交卷前只有盲标，交齐才揭名）· 分歧清单 · 反例面 · 零分歧告警。**零分歧按异常呈现**，因为「全票一致 = 异常信号」 |
+| **会审** | §10：独立答案（**交齐前投影里只有盲标**——真名、结论、反例面、产出物引用都不出；交齐才全给，W3 批2 把遮罩做在投影这一层）· 分歧清单 · 反例面 · 零分歧告警。**零分歧按异常呈现**，因为「全票一致 = 异常信号」 |
 | **任务** | 投影的两个来源之一（§7「能从任务图 + 日志重算」）：判据 / 冻结 / 打回次数 / 产物引用 / 交卷进度 |
 | **审计尾** | 另一个来源；事实记录，不是讨论 |
 | **状态条** | 闸 / 介入度 / 失联 / 探针——取**已有记录**（探针取最近一次快照），不现场重跑 |
@@ -275,7 +275,7 @@ Done in 425ms using pnpm v10.34.5          ← exit=0
 
 ```powershell
 cd E:\dsh-mind
-npm test                                             # preflight 门禁 + 内核用例 136 条
+npm test                                             # preflight 门禁 + 内核用例 244 条
 node components/board/test/client-harness.mjs        # 看板：307 条行为断言
 node --test components/board/test/client.test.js     # 看板：6 条结构断言
 ```
@@ -284,7 +284,7 @@ node --test components/board/test/client.test.js     # 看板：6 条结构断�
 
 | 数 | 产出者 | 怎么看 |
 |---|---|---|
-| **222** | `node --test "test/*.test.js"`（`npm test` 的后半段） | `ℹ tests 222` / `ℹ pass 222` / `ℹ fail 0` |
+| **244** | `node --test "test/*.test.js"`（`npm test` 的后半段） | `ℹ tests 244` / `ℹ pass 244` / `ℹ fail 0` |
 | **307** | `components/board/test/client-harness.mjs` 自己打印 | 末行 `client-harness: 307 条断言全部通过` |
 | **6** | `node --test components/board/test/client.test.js` | `ℹ tests 6` / `ℹ pass 6` / `ℹ fail 0` |
 

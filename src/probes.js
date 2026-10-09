@@ -35,12 +35,28 @@ export class ProbeRunner {
   /**
    * 出厂声明：主权者声明探针集合，出厂作者实现它们。
    * 声明与封闭清单不一致时**报错而不是兜底**——那是安全类被绕过的第一个信号。
+   *
+   * 坏 JSON 不许把巡检整条带崩（W3 批2·2026-10-09）：此前 `JSON.parse` 裸调用，
+   * 一个手滑写坏的声明文件会让 `declare()` 抛 ⇒ `run()` 在第一步就炸 ⇒
+   * **快照与审计全都没有**——「声明坏了」这件事反而变成看不见的事（静默失败最坏的一种）。
+   * 现在坏 JSON 折成一条「问题」，`一致=false`、巡检照跑照落快照照入账，见红。
+   *
    * @returns {Promise<{声明: string[], 已实现: string[], 一致: boolean, 问题: string[]}>}
    */
   async declare() {
     const text = await readTextOrNull(this.layout.probeDeclaration());
-    const 声明 = text ? JSON.parse(text).探针 ?? [] : [];
     const 问题 = [];
+    let 声明 = [];
+    if (text) {
+      try {
+        const 解析 = JSON.parse(text);
+        声明 = Array.isArray(解析?.探针) ? 解析.探针 : [];
+        if (!Array.isArray(解析?.探针)) 问题.push('声明文件的 探针 字段不是数组（或缺失）：安全类声明面读不出探针集合。');
+      } catch (error) {
+        // 只报「解析不了 + 原始原因」，不吞：坏声明等于探针集合失去约束。
+        问题.push(`声明文件无法解析（${error.message}）：安全类声明面坏了等于探针集合失去约束。`);
+      }
+    }
     for (const name of 声明) {
       if (!CLOSED_LIST.includes(name)) 问题.push(`声明了清单外的探针「${name}」：安全类不许「等其他类似情况」兜底。`);
     }

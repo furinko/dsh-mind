@@ -45,10 +45,41 @@ export function highestAuthority(list, fallback = '自治') {
 }
 
 /**
+ * 剥离行内注释：`#` 前要有空白（或它在行首），且**不许切进引号内**。
+ *
+ * 为什么不能继续用 `/\s+#.*$/`（W3 批2·2026-10-09）：`摘要: "a # b"` 会被切成
+ * `摘要: "a` —— 值被静默改坏，而且坏得很隐蔽（`unquote` 认不出没闭合的引号，
+ * 于是存进 meta 的是带半个引号的字符串，谁也不报错）。`#` 在引号里就是值的一部分。
+ *
+ * @param {string} line
+ * @returns {string}
+ */
+function stripInlineComment(line) {
+  let quote = null;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === '#' && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i);
+  }
+  return line;
+}
+
+/**
  * 解析极小 YAML 子集（对象元数据只有标量与短列表，不需要完整 YAML）。
  *
  * 为什么不用 YAML 依赖：§12.5「出厂件不含任何用户特定信息」之外还有一条现实约束——
  * 插件要在没有安装步骤的情况下被宿主直接 import。零依赖是最强的可装载性保证。
+ *
+ * 入口先归一换行（W3 批2·2026-10-09）：CRLF 文本按 `\n` 切行后每行尾部留着 `\r`，
+ * 会让 `id: 宪章\r` 这种值带着回车进 meta（比对、路径、哈希全跟着错）。
+ * 只归一**读入**；写出仍走 LF（`formatFrontMatter`），字节稳定性不受影响。
  *
  * @param {string} raw front matter 内部文本（不含 `---` 行）
  * @returns {{ data: Record<string, any>, errors: string[] }}
@@ -57,8 +88,8 @@ export function parseSimpleYaml(raw) {
   /** @type {Record<string, any>} */
   const data = {};
   const errors = [];
-  for (const rawLine of String(raw).split('\n')) {
-    const line = rawLine.replace(/\s+#.*$/, '').trimEnd();
+  for (const rawLine of String(raw).replace(/\r\n?/g, '\n').split('\n')) {
+    const line = stripInlineComment(rawLine).trimEnd();
     if (!line.trim() || line.trim().startsWith('#')) continue;
     // 键允许中文：对象元数据里有 `名`、`摘要` 这类人读字段，
     // 只认 ASCII 会让它们**静默丢失** —— 那比报错更难查。
@@ -113,6 +144,11 @@ export function formatFrontMatter(data) {
 /**
  * 解析一份对象文档。
  *
+ * **入口归一换行**（W3 批2·2026-10-09）：此前 `source.startsWith('---\n')` 对 CRLF 文本
+ * 判 false ⇒ front matter **整段不被识别**，`meta` 空、`body` 是全文，然后 `assertStructure`
+ * 报「缺少 id」——真正的原因（换行符）在报错里一个字都看不到。
+ * 现在统一折成 LF 再解析；写出侧仍是 LF，所以同一份内容两次写出的字节不变。
+ *
  * @param {string} text 全文
  * @param {{ defaultAuthority?: string }} [options]
  * @returns {{
@@ -125,7 +161,7 @@ export function formatFrontMatter(data) {
  * }}
  */
 export function parseDocument(text, options = {}) {
-  const source = String(text);
+  const source = String(text).replace(/\r\n?/g, '\n');
   const fallback = options.defaultAuthority ?? '自治';
   const errors = [];
   let meta = {};

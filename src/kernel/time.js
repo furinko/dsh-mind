@@ -123,14 +123,14 @@ export function resolveResponseDeadline(raw) {
  *   `lost` 按最严取 `true`，`deadline` 取 `null`（表示不出来），原因写进 `判定说明`。
  */
 export function evaluateSovereignPresence(input) {
-  const now = input.now === undefined ? Date.now() : new Date(input.now).getTime();
+  const now = toMs(input.now === undefined ? Date.now() : input.now);
   // 坏值在这里就已经被折成合法值（同一份判据），调用方拿到的是「生效值」，不是原值。
   const hours = resolveResponseDeadline(input.responseDeadlineHours).生效;
   const deadlineMs = hours * 3600_000;
   if (input.lastInteraction === null || input.lastInteraction === undefined) {
     return { lost: true, since: null, deadline: null, hours: 0 };
   }
-  const since = new Date(input.lastInteraction).getTime();
+  const since = toMs(input.lastInteraction);
   if (!Number.isFinite(since)) {
     // 时刻解析不出来 ⇒ 按「从未交互」判失联（fail-safe），并如实给 null 而不是一个假时间。
     return { lost: true, since: null, deadline: null, hours: 0 };
@@ -147,10 +147,57 @@ export function evaluateSovereignPresence(input) {
       判定说明: `到期时刻超出可表示范围（lastInteraction=${toIso(since)} 加上期限 ${hours} 小时会越过 Date 上界 ${DATE_MAX_MS}ms），按最严判失联（fail-safe，§12.2 查不到 = 最严）。`,
     };
   }
+  if (!Number.isFinite(now)) {
+    // 「现在」解析不出来（input.now 是坏值）时，`now > deadline` 得 false ⇒ **判在线**，
+    // 那是 fail-open：一个坏读数就能把失联保护整个关掉。与 lastInteraction 侧同一条先例
+    // （§12.2 查不到 = 最严）：按最严判失联，并给出可查的原因（W3 批2·2026-10-09）。
+    return {
+      lost: true,
+      since: toIso(since),
+      deadline: toIso(deadline),
+      hours: null,
+      判定说明: `「当前时刻」解析不出（now=${显示坏值(input.now)}）：无法与到期时刻比较，按最严判失联（fail-safe，§12.2 查不到 = 最严）。`,
+    };
+  }
   return {
     lost: now > deadline,
     since: toIso(since),
     deadline: toIso(deadline),
     hours: Math.floor((now - since) / 3600_000),
   };
+}
+
+/**
+ * 时刻 → 毫秒。解析不出来一律折成 `NaN`，**永不抛**：
+ * `new Date(Symbol())` / `new Date(1n)` 会抛 TypeError，而本函数的调用方
+ * （`presence()` → `/mind status` / 工作台）是读数链的必经之路——
+ * 一个坏输入把读数面整个打死，比给出「未知」糟糕得多。
+ * @param {unknown} value
+ * @returns {number}
+ */
+function toMs(value) {
+  try {
+    return new Date(/** @type {any} */ (value)).getTime();
+  } catch {
+    return Number.NaN;
+  }
+}
+
+/**
+ * 把坏值显示成一行可读文本（诊断用，同样永不抛）。
+ * @param {unknown} value
+ * @returns {string}
+ */
+function 显示坏值(value) {
+  try {
+    const s = JSON.stringify(value);
+    if (typeof s === 'string') return s;
+  } catch {
+    // 循环引用 / BigInt 之类：退回 String。
+  }
+  try {
+    return String(value);
+  } catch {
+    return '(无法显示的值)';
+  }
 }

@@ -131,21 +131,40 @@ export class AuditLog {
    */
   async read(query = {}) {
     const months = query.months ?? (await this.months());
-    const out = [];
+    // 排序键是 **(月, seq)**（W3 批2·2026-10-09）：`seq` 是**逐月**从 1 开始的，
+    // 拿它当全局键会把两个月交错成一团（1 月的第 7 条排在 2 月的第 2 条后面，
+    // 而 2 月那条第 2 条其实更晚）。所以按月分组的结构先留住，再逐月按 seq 排。
+    const 组 = [];
     for (const month of months) {
-      out.push(...(await readJsonl(this.layout.auditLog(month))));
+      for (const row of await readJsonl(this.layout.auditLog(month))) 组.push({ month, row });
     }
-    let rows = out;
-    if (query.grade) rows = rows.filter((r) => r.档位 === query.grade);
-    if (query.project) rows = rows.filter((r) => r.项目 === query.project);
-    if (query.subject) rows = rows.filter((r) => String(r.主体?.id ?? r.主体) === query.subject);
-    if (query.since) rows = rows.filter((r) => r.时间 >= query.since);
-    rows.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0) || String(a.时间).localeCompare(String(b.时间)));
+    let 条目 = 组;
+    if (query.grade) 条目 = 条目.filter((x) => x.row.档位 === query.grade);
+    if (query.project) 条目 = 条目.filter((x) => x.row.项目 === query.project);
+    if (query.subject) 条目 = 条目.filter((x) => String(x.row.主体?.id ?? x.row.主体) === query.subject);
+    if (query.since) 条目 = 条目.filter((x) => x.row.时间 >= query.since);
+    条目.sort(
+      (a, b) =>
+        a.month.localeCompare(b.month) ||
+        (a.row.seq ?? 0) - (b.row.seq ?? 0) ||
+        String(a.row.时间).localeCompare(String(b.row.时间)),
+    );
+    const rows = 条目.map((x) => x.row);
     return query.limit ? rows.slice(-query.limit) : rows;
   }
 
   /**
-   * 链自检：逐月验证 prev 指针与本节哈希。这是「审计被篡改」这一安全类的检测手段。
+   * 链自检：逐月验证 prev 指针与本节哈希，并把**月尾**与 anchor 对照。
+   * 这是「审计被篡改」这一安全类的检测手段。
+   *
+   * 为什么必须读 anchor（W3 批2·2026-10-09）：只验链内自洽的话，**砍掉尾部若干行**
+   * 之后剩下的还是一根自洽的链（每一行的 prev/hash 都对得上它前面的那行）——
+   * 删掉「最后一次写入」是审计里最值得做的事（那一条正是不想被看见的那条），
+   * 而它恰好是自检唯一查不出的形状。`#writeAnchor` 每次追加都落一份「写到哪儿了」，
+   * 那是链外的独立留痕：月尾 hash/seq 与 anchor 不一致 ⇒ 尾部被动过 ⇒ 进 broken。
+   * 边界（如实说明，不吞）：写入进程若恰好死在 `appendLines` 与 `#writeAnchor` 之间，
+   * 这一档也会亮——它报的是同一件事「尾部那几行没有链外留痕覆盖」，方向是响亮而非静默。
+   *
    * @returns {Promise<{ ok: boolean, months: number, entries: number, broken: object[] }>}
    */
   async verify() {
@@ -159,9 +178,27 @@ export class AuditLog {
         entries++;
         const expected = chainHash(prev, { ...row, hash: undefined });
         if (row.prev !== prev || row.hash !== expected) {
-          broken.push({ month, seq: row.seq ?? null, expected, actual: row.hash ?? null });
+          broken.push({ month, seq: row.seq ?? null, 类型: '链断裂', expected, actual: row.hash ?? null });
         }
         prev = row.hash ?? null;
+      }
+      // 尾部截断：anchor 是「这一片最后写到哪」的链外留痕。
+      const anchor = await readJsonOrNull(this.layout.auditAnchor(month));
+      if (anchor?.hash) {
+        const tail = rows[rows.length - 1] ?? null;
+        if (!tail || tail.hash !== anchor.hash || (tail.seq ?? null) !== (anchor.seq ?? null)) {
+          broken.push({
+            month,
+            seq: tail?.seq ?? null,
+            类型: '尾部截断',
+            expected: anchor.hash,
+            actual: tail?.hash ?? null,
+            锚定: { seq: anchor.seq ?? null, hash: anchor.hash, at: anchor.at ?? null },
+          });
+        }
+      } else if (rows.length > 0) {
+        // 有账却无锚：锚文件被删同样让「尾部截断」无法被发现，按最严报出来（§12.2 查不到 = 最严）。
+        broken.push({ month, seq: rows[rows.length - 1]?.seq ?? null, 类型: '锚缺失', expected: null, actual: rows[rows.length - 1]?.hash ?? null });
       }
     }
     return { ok: broken.length === 0, months: months.length, entries, broken };

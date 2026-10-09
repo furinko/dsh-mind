@@ -136,6 +136,14 @@ export class RoleRegistry {
 
   /**
    * 登记一个实例。岗位必须存在——实例权限只来自岗位。
+   *
+   * 两条守卫（W3 批2·2026-10-09），都在**锁内**判（锁外预读会与并发 assign 打架）：
+   *  ① **已封存实例不许靠 assign 复活**：此前 assign 会把它写回 `在岗` 并把 `代` 重置成
+   *     `spec.代 ?? 1` —— 一次「补登记」就把停岗决定静默撤销了，而封存的唯一还原路径是
+   *     `restore`（走的是显式还原闸与自己的留痕）。这里拒，并把 howToChange 指到 restore。
+   *  ② **在岗且同岗位 ⇒ 幂等**：重复登记不该产生第二次写入、不该重置代数、不该再记一条
+   *     「状态变更」（那会让账上出现两次「第 1 代」）。返回现状，不动盘。
+   *
    * @param {{ subject: object, 岗位: string, 实例: string, 代?: number }} spec
    */
   async assign(spec) {
@@ -152,10 +160,25 @@ export class RoleRegistry {
       target: { id: spec.实例, kind: '身份', authority: '自治', zone: '私有', domain: '个体', project: null },
       context: {},
     });
-    const updated = await this.#mutateIdentity((current) => ({
-      ...current,
-      members: { ...current.members, [spec.实例]: { id: spec.实例, 岗位: spec.岗位, 代: spec.代 ?? 1, status: '在岗', 登记于: this.clock.iso() } },
-    }));
+    /** @type {object|null} */
+    let 幂等现状 = null;
+    const updated = await this.#mutateIdentity((current) => {
+      const 现存 = current.members[spec.实例];
+      if (现存?.status === '封存') {
+        throw new Denied('角色注册表 · 封存实例不得靠 assign 复活（§7）', `实例 ${spec.实例} 已封存：assign 会把它静默写回在岗，并把代数重置成 ${spec.代 ?? 1}（停岗决定被一次「补登记」撤销）。`, {
+          requireAuthority: 'Lead',
+          howToChange: '封存实例走 registry_restore（显式的还原路径，有自己的留痕与闸）；确要换岗位也先 restore 再 assign。',
+        });
+      }
+      if (现存 && 现存.status === '在岗' && 现存.岗位 === spec.岗位) {
+        幂等现状 = 现存;
+        return current; // 原样返回 ⇒ #mutateIdentity 不写盘、不重载、不记审计
+      }
+      return { ...current, members: { ...current.members, [spec.实例]: { id: spec.实例, 岗位: spec.岗位, 代: spec.代 ?? 1, status: '在岗', 登记于: this.clock.iso() } } };
+    });
+    if (幂等现状) {
+      return { 实例: spec.实例, 岗位: 幂等现状.岗位, 代: 幂等现状.代 ?? 1, 状态: '在岗', 幂等: true, 说明: '该实例已在同一岗位在岗：没有写盘、没有重置代数、没有新增留痕。' };
+    }
     await this.audit.append({
       动作: '状态变更',
       主体: spec.subject,
@@ -308,16 +331,24 @@ export class RoleRegistry {
    * @param {(current: object) => object} apply
    * 写完身份档案后立即 `policy.reload()`：判定读的是加载时的快照，
    * 不重载的话「封存实例照常全权 / 失联冻得住解不开」都会发生（B2）。
+   *
+   * **apply 原样返回 current ⇒ 不写盘、不重载**（W3 批2·2026-10-09）：这是「幂等操作」
+   * 的落点——重复登记不该产生一次无变化的原子写，更不该让判定快照无谓重载。
+   * 其余调用方都返回新对象，行为不变。
    */
   async #mutateIdentity(apply) {
     const file = this.layout.identityFile();
     let result;
+    let 已写 = false;
     await withLock(this.layout.identityLock(), async () => {
       const current = await this.#identity();
       result = apply(current);
-      await atomicWrite(file, `${JSON.stringify(result, null, 2)}\n`);
+      if (result !== current) {
+        await atomicWrite(file, `${JSON.stringify(result, null, 2)}\n`);
+        已写 = true;
+      }
     });
-    await this.policy.reload();
+    if (已写) await this.policy.reload();
     return result;
   }
 }
