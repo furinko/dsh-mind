@@ -193,7 +193,7 @@ function mindTool({ org, 项目, 项目键 }) {
         适用岗位: { type: 'string' },
         依据: { type: 'string' },
         线程: { type: 'string' },
-        发件: { type: 'string' },
+        发件: { type: 'string', description: '已忽略（W2 安全修复）：发件人恒为真实主体 id，自报无效——冒充发件人是伪造轮边界的第一步' },
         收件: { type: 'string', description: '收件人，多个用逗号分隔' },
         类型: { type: 'string', description: '消息类型（bus_send）；debate_say 只认 分歧/表态/答复' },
         暂不投递: { type: 'boolean' },

@@ -11,7 +11,7 @@
  * 消息 `authority = 只增`（§6）：总线里没有修改与删除。
  */
 import { appendLines, readJsonl, withLock } from './kernel/fsx.js';
-import { InvalidBody } from './kernel/errors.js';
+import { InvalidBody, Denied } from './kernel/errors.js';
 import { objectId } from './kernel/ids.js';
 
 /** 消息类型（§9 接口契约里 `类型` 的取值面）。 */
@@ -41,6 +41,21 @@ export class MessageBus {
     if (!MESSAGE_TYPES.includes(类型)) throw new InvalidBody(`未知消息类型：${类型}`, { missing: ['类型'] });
     const 内容 = String(message.内容 ?? '').trim();
     if (!内容) throw new InvalidBody('空消息不入总线。');
+    // 「系统」类型是机制保留字（W2 安全修复 2026-10-09）：会审讨论的轮边界消息靠
+    // 发件='system'+类型='系统'+内容前缀 [debate-round] 认定，预算闸按它切轮。
+    // 任何已知主体自报这三件套都能落线的话，参与者就能伪造轮边界**洗掉预算**
+    // （消息数与字符两道闸一起重置）——所以类型='系统' 只许系统主体发，
+    // 其余一律 Denied（unlock 广播类型='广播'、debate.round 真边界 subject.kind='系统'，均不受影响）。
+    if (类型 === '系统' && message.subject?.kind !== '系统') {
+      throw new Denied(
+        '消息总线 · 系统类型仅系统主体可发（W2 安全修复 2026-10-09）',
+        `${message.subject?.kind ?? '未知'} 不得发送类型为「系统」的消息：系统类型是机制保留字（轮边界等），伪造它会洗掉讨论预算。`,
+        {
+          howToChange: '讨论发言用 分歧 / 表态 / 答复；轮边界由 debate_round 机制落线，不接受任何调用方伪造。',
+          detail: { 类型, 主体种类: message.subject?.kind ?? '未知' },
+        },
+      );
+    }
 
     const id = objectId('消息', `${message.线程}/${message.发件}/${内容.slice(0, 24)}`, { at: this.clock.ms() });
     await this.policy.check({
