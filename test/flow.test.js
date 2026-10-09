@@ -138,7 +138,7 @@ describe('主干环路', () => {
     await tasks.submit(node.id, { subject: MEMBER_B, 项目: P, 结论: 'B 案' });
     const 结果 = await 敲解锁();
     assert.equal(结果.结果.解锁, true, JSON.stringify(结果));
-    const rows = await bus.read({ 项目: P, 线程: 't-unlock' });
+    const rows = await bus.read({ subject: LEAD, 项目: P, 线程: 't-unlock' });
     const 广播 = rows.find((m) => m.类型 === '广播');
     assert.ok(广播, '解锁广播必须在总线上可见');
     assert.deepEqual(广播.收件.sort(), ['member-a', 'member-b'], '广播要发给全体负责人');
@@ -149,17 +149,17 @@ describe('主干环路', () => {
     for (let i = 0; i < 55; i += 1) {
       await memory.remember({ subject: LEAD, 类: '偏好', 内容: `预算演示第 ${i} 条`, 来源: '测试' });
     }
-    const 默认 = await memory.query({ 类: ['偏好'] });
+    const 默认 = await memory.query({ subject: LEAD, 类: ['偏好'] });
     assert.equal(默认.条目.length, 50, '默认最多回传 50 条');
     assert.equal(默认.条目截断, true, '截断要如实标注');
     assert.equal(默认.条目总数, 55, '总数要给全，别让人以为只有 50 条');
     assert.match(默认.说明 ?? '', /55/, '说明里要有总数');
 
-    const 调宽 = await memory.query({ 类: ['偏好'], 条数上限: 100 });
+    const 调宽 = await memory.query({ subject: LEAD, 类: ['偏好'], 条数上限: 100 });
     assert.equal(调宽.条目.length, 55, '条数上限 调宽后不截断');
     assert.equal(调宽.条目截断, false, '没截断就不许标 true');
 
-    const 调窄 = await memory.query({ 类: ['偏好'], 条数上限: 5 });
+    const 调窄 = await memory.query({ subject: LEAD, 类: ['偏好'], 条数上限: 5 });
     assert.equal(调窄.条目.length, 5, '条数上限=5 只回 5 条');
     assert.equal(调窄.条目截断, true);
     // 预算只管 条目：口径里的 文档数 仍是真总数。
@@ -171,12 +171,12 @@ describe('主干环路', () => {
     await bus.send({ subject: LEAD, 项目: P, 线程: 't-2', 发件: 'lead', 收件: ['member-a'], 类型: '派活', 内容: '做 B' });
     await bus.send({ subject: LEAD, 项目: P, 线程: 't-1', 发件: 'lead', 收件: ['member-a'], 类型: '表态', 内容: '稍后投递', 暂不投递: true });
 
-    const t1 = await bus.read({ 项目: P, 线程: 't-1' });
+    const t1 = await bus.read({ subject: LEAD, 项目: P, 线程: 't-1' });
     assert.equal(t1.length, 2);
     assert.ok(t1.every((m) => m.线程 === 't-1'), '不得跨线程返回');
-    const t2 = await bus.read({ 项目: P, 线程: 't-2' });
+    const t2 = await bus.read({ subject: LEAD, 项目: P, 线程: 't-2' });
     assert.equal(t2.length, 1);
-    assert.equal((await bus.read({ 项目: P, 线程: 't-1', 未投递: true })).length, 1);
+    assert.equal((await bus.read({ subject: LEAD, 项目: P, 线程: 't-1', 未投递: true })).length, 1);
 
     const deferred = t1.find((m) => m.状态 === '暂不投递');
     const delivered = await bus.deliver({ 项目: P, 线程: 't-1', id: deferred.id, subject: LEAD });
@@ -221,7 +221,7 @@ describe('主干环路', () => {
     await memory.demote(entry.id, { subject: LEAD, 原因: '冷' });
     const after = await readFile(file, 'utf8');
     assert.ok(after.startsWith(before), '原条目那段字节必须原样在前，追加只能发生在尾部');
-    const folded = await memory.query({ 类: ['经历'] });
+    const folded = await memory.query({ subject: LEAD, 类: ['经历'] });
     const target = folded.条目.find((e) => e.id === entry.id);
     assert.equal(target.状态, '已降权');
     assert.equal(target.历史.length, 2);
@@ -255,7 +255,7 @@ describe('主干环路', () => {
     for (const file of [本账, 跨账]) {
       assert.ok(!(await readJsonl(file)).some((r) => r.id === entry.id), `${file} 上不许留有内容副本`);
     }
-    const 检索 = await memory.query({ 类: ['知识'], 项目: P, 文本: '兼容回退' });
+    const 检索 = await memory.query({ subject: LEAD, 类: ['知识'], 项目: P, 文本: '兼容回退' });
     assert.equal(检索.命中.length, 0, '删除后不许还能搜到');
   });
 
@@ -296,7 +296,7 @@ describe('主干环路', () => {
     const a = await m.remember({ subject: LEAD, 类: '偏好', 内容: '同一毫秒的第一条', 来源: '测试' });
     const b = await m.remember({ subject: LEAD, 类: '偏好', 内容: '同一毫秒的第二条', 来源: '测试' });
     assert.notEqual(a.id, b.id, '撞 id 会让 fold() 把两条静默合成一条');
-    const 两条 = await m.query({ 类: ['偏好'] });
+    const 两条 = await m.query({ subject: LEAD, 类: ['偏好'] });
     assert.ok(两条.条目.some((e) => e.内容 === '同一毫秒的第一条' && e.id === a.id));
     assert.ok(两条.条目.some((e) => e.内容 === '同一毫秒的第二条' && e.id === b.id));
   });
@@ -305,20 +305,20 @@ describe('主干环路', () => {
     const entry = await memory.remember({ subject: LEAD, 类: '知识', 内容: '乙案：这条结论后来作废了', 来源: '测试', 项目: P });
     await memory.invalidate(entry.id, { subject: LEAD, 原因: '被新证据推翻' });
 
-    const 当前 = await memory.query({ 类: ['知识'], 项目: P, 文本: '作废' });
+    const 当前 = await memory.query({ subject: LEAD, 类: ['知识'], 项目: P, 文本: '作废' });
     assert.equal(当前.命中.length, 0, '失效条目不进默认召回');
     assert.ok(当前.条目.some((e) => e.id === entry.id), '但要留在 条目 里供追溯');
     assert.equal(当前.口径.排除失效, 1, '口径必须点名排除了几条，不许折成「没找到」');
     assert.match(当前.说明 ?? '', /含失效/, '说明要给出把它拉回来的办法');
 
-    const 历史 = await memory.query({ 类: ['知识'], 项目: P, 文本: '作废', 含失效: true });
+    const 历史 = await memory.query({ subject: LEAD, 类: ['知识'], 项目: P, 文本: '作废', 含失效: true });
     assert.equal(历史.命中.length, 1, '含失效: true 要能召回');
     assert.equal(历史.口径.失效条目数, 1, '「有几条失效」要报');
     assert.equal(历史.口径.排除失效, 0, '一条都没排除时不许报成排除了 —— 假读数比没读数更贵');
 
     // 「冷」不许撤销「错」：后来追加的降权不能把它放回当前召回面。
     await memory.demote(entry.id, { subject: LEAD, 原因: '这条冷下来了' });
-    const 降权后 = await memory.query({ 类: ['知识'], 项目: P, 文本: '作废' });
+    const 降权后 = await memory.query({ subject: LEAD, 类: ['知识'], 项目: P, 文本: '作废' });
     assert.equal(降权后.命中.length, 0, '失效是事实判断，降权是优先级判断，降权不许复活它');
     assert.equal(降权后.条目.find((e) => e.id === entry.id).状态, '已降权', '但状态读数要如实反映最后一次处置');
   });
@@ -328,9 +328,9 @@ describe('主干环路', () => {
     const archived = await memory.archiveAnswers({ 项目: P, 任务: 'task-x', subject: LEAD });
     assert.ok(archived.归档条数 >= 1);
 
-    const 默认面 = await memory.query({ 项目: P });
+    const 默认面 = await memory.query({ subject: LEAD, 项目: P });
     assert.ok(!默认面.条目.some((e) => e.id === answer.id), '归档作答不进默认检索面');
-    const 显式面 = await memory.query({ 项目: P, 显式: true });
+    const 显式面 = await memory.query({ subject: LEAD, 项目: P, 显式: true });
     assert.ok(显式面.条目.some((e) => e.id === answer.id), '可显式检索');
     assert.match(显式面.说明 ?? '', /显式/);
 

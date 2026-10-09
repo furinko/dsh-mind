@@ -64,10 +64,28 @@ export class CapabilityLibrary {
    * 按名解析。**同名不合并**：两条都返回，标注来源，默认指向自治版，
    * 冲突时把选择权留给 Lead（本方法不替它决定）。
    *
-   * @param {{ subject?: object, 名: string }} spec
+   * 契约B（主权者裁决 2026-10-09）·只读面收窄：解析也过唯一判定点。
+   * `subject` 缺失或未知 ⇒ 引擎拒绝（fail-closed），不另设默认主体；
+   * 放行按「一次调用一条」入账（档位「记汇总」）。
+   *
+   * @param {{ subject: object, 名: string }} spec
    * @returns {Promise<{ 名: string, 条目: object[], 默认: string|null, 冲突: boolean, 说明: string }>}
    */
   async resolve(spec) {
+    await this.policy.check({
+      subject: spec.subject,
+      action: 'read',
+      target: { id: `能力/解析/${spec.名}`, kind: '能力', authority: '自治', zone: '私有', domain: '集体', project: null },
+      context: {},
+    });
+    await this.audit.append({
+      动作: '只读服务调用',
+      主体: spec.subject,
+      对象: { id: `能力/解析/${spec.名}`, kind: '能力' },
+      依据: '契约B（2026-10-09）只读面收窄：能力解析也过唯一判定点',
+      结果: '放行',
+      详情: { 服务: 'capability.resolve', 名: spec.名 },
+    });
     const all = await this.list();
     const 条目 = all.filter((c) => c.id === spec.名 || c.名 === spec.名);
     if (条目.length === 0) {

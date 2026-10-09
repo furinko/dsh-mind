@@ -11,7 +11,7 @@
  * 偏好 = 部署（永不外流）；作答 = 实例（私有区内部，任务结束归档）。
  */
 import { appendLines, exists, listDirs, readJsonl, readTextOrNull, atomicWrite, withLock } from './kernel/fsx.js';
-import { InvalidBody, Denied } from './kernel/errors.js';
+import { InvalidBody, Denied, Fault } from './kernel/errors.js';
 import { objectId } from './kernel/ids.js';
 import { buildIndex, formatMiss, search } from './retrieval.js';
 import { DIR, MEMORY_KINDS } from './paths.js';
@@ -21,6 +21,25 @@ const ANSWER_READERS = ['主权者', 'Lead', '复核者'];
 
 /** 记录档位：条目行 vs 状态行。用「有没有 `指向`」区分，避免再加一个字段。 */
 const isStateRow = (row) => typeof row?.指向 === 'string' && typeof row?.追加 === 'string';
+
+/**
+ * 契约C（主权者裁决 2026-10-09）·披露机械检查的**出厂默认清单**。
+ *
+ * 晋升跨项目知识（`promoteCrossProject`）会把一条知识扩散到产生它的项目之外，
+ * 唯一闸此前是 Lead 肉眼；这张清单把「肉眼」换成「机械模式 + 显式豁免」。
+ * 私有 `部署.json` 的 `披露敏感模式` 键（`[{名, 正则}]`）**整体覆盖**这份默认清单——
+ * 形状与正则合法性在 `policy.js` 的加载期校验，非法正则 ⇒ 引擎不健康（fail-closed），
+ * 不许静默跳过（§3.6）。
+ *
+ * 匹配统一大小写不敏感（`password` 也要拦住 `PASSWORD` / `Token`）。
+ */
+export const DEFAULT_DISCLOSURE_PATTERNS = [
+  { 名: 'Windows 绝对路径/盘符', 正则: '[A-Za-z]:\\\\' },
+  { 名: 'UNC 路径', 正则: '\\\\\\\\' },
+  { 名: '环境变量引用', 正则: '%[A-Za-z_][A-Za-z0-9_]*%' },
+  { 名: 'email', 正则: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}' },
+  { 名: '凭据词', 正则: 'password|secret|token|凭据|密码|密钥' },
+];
 
 export class MemoryService {
   /** id 用的严格递增时刻（只在内存里；见 `#nextStamp`）。 */
@@ -113,8 +132,14 @@ export class MemoryService {
    * 由 Lead 判定「这条跨项目可复用」后追加岗位标签（默认不打，不是漏打）。
    * 追加本身也是一条状态记录，因此可追溯是谁判断的。
    *
+   * 契约C（主权者裁决 2026-10-09）·披露机械检查：晋升会把这条知识扩散到产生它的
+   * 项目之外，此前唯一闸是 Lead 肉眼；现在**先过机械敏感模式**（标题+内容+标签），
+   * 命中即拒（Denied 指向豁免面），只有 Lead 的**显式豁免**能放行——豁免与命中模式
+   * 一起进审计（`披露豁免`，全记）。清单：出厂默认 `DEFAULT_DISCLOSURE_PATTERNS`，
+   * 私有 `部署.json` 的 `披露敏感模式` 整体覆盖（非法正则在策略引擎加载期已响亮抛错）。
+   *
    * @param {string} id
-   * @param {{ subject: object, 岗位: string, 理由: string }} spec
+   * @param {{ subject: object, 岗位: string, 理由: string, 披露豁免?: boolean }} spec
    * @returns {Promise<{ id: string, 岗位: string }>}
    */
   async promoteCrossProject(id, spec) {
@@ -127,6 +152,43 @@ export class MemoryService {
       target: memoryTarget('知识', DIR.跨项目, entry.项目),
       context: { id },
     });
+
+    // ── 契约C 披露机械检查：标题 + 内容 + 标签 三个面一起过 ──────────────────
+    // 顺序在 policy.check 之后：先由唯一判定点确认「这个主体有权晋升」，
+    // 再由这道内容闸拦「这段文本值不值得扩散」。命中拒绝不入豁免审计——
+    // 豁免审计只记「真的越过这道闸」的决定（与 purge 域内闸的先例同口径）。
+    const 命中 = this.#disclosureHits(entry);
+    let 豁免留痕 = null;
+    if (命中.length > 0) {
+      const 命中模式 = 命中.map((h) => h.名);
+      if (spec.披露豁免 === true && spec.subject?.kind !== 'Lead') {
+        throw new Denied(
+          '法律 披露豁免仅 Lead（契约C 2026-10-09）',
+          `披露豁免是 Lead 专属参数：${spec.subject?.kind ?? '未知'} 不得使用。命中模式：${命中模式.join('、')}。`,
+          {
+            requireAuthority: 'Lead',
+            howToChange: '由 Lead 核实该条知识确属可披露后，以 Lead 身份带 披露豁免=true 执行晋升。',
+            detail: { 命中模式 },
+          },
+        );
+      }
+      if (spec.披露豁免 !== true) {
+        throw new Denied(
+          '法律 知识晋升披露机械检查（契约C 2026-10-09）',
+          `该条知识的标题/内容/标签命中敏感模式：${命中模式.join('、')}。跨项目晋升会把这条知识扩散到产生它的项目之外。`,
+          {
+            requireAuthority: 'Lead',
+            howToChange: '两条路：① 先改写条目去掉敏感内容（或让产生它的项目继续私有持有）再晋升；② Lead 核实确属可披露后带 披露豁免=true 重试——豁免与命中模式会一起进审计。',
+            detail: { 命中模式 },
+          },
+        );
+      }
+      // Lead 显式豁免：放行，但「越过披露闸」这件事必须与命中模式一起留痕。
+      // 审计只记模式名，不抄命中片段——把敏感原文再抄进账本等于二次披露。
+      // 留痕挂在局部变量上（不用实例字段：并发晋升两个条目会互相覆盖）。
+      豁免留痕 = { 命中模式 };
+    }
+
     // 双份留痕：本项目那份保留原样，跨项目那份追一条同 id 的条目，
     // 这样「它产生于本项目」与「它对本岗位可复用」两个事实都在。
     await appendLines(this.layout.memoryLog(DIR.跨项目, '知识'), [
@@ -139,6 +201,17 @@ export class MemoryService {
         跨项目判定: { 由: spec.subject?.id ?? 'unknown', 理由: spec.理由, 于: this.clock.iso() },
       },
     ]);
+    if (豁免留痕) {
+      await this.audit.append({
+        动作: '披露豁免',
+        主体: spec.subject,
+        对象: { id, kind: '知识' },
+        依据: '契约C（2026-10-09）：Lead 显式豁免披露机械检查，放行跨项目晋升',
+        结果: `豁免放行（命中 ${豁免留痕.命中模式.join('、')}）`,
+        项目: entry.项目,
+        详情: { 命中模式: 豁免留痕.命中模式, 岗位: spec.岗位, 理由: spec.理由 },
+      });
+    }
     await this.audit.append({
       动作: '状态变更',
       主体: spec.subject,
@@ -156,11 +229,33 @@ export class MemoryService {
    * 默认还按「当前有效视图」召回：已失效 / 被推翻的条目留在 `条目` 里供追溯，但不进 `命中`；
    * 要看它们就带 `含失效: true`。
    *
-   * @param {{ 类?: string[], 项目?: string, 岗位?: string, 文本?: string, 显式?: boolean, 含失效?: boolean, 读者?: object, limit?: number, 条数上限?: number }} [query]
+   * 契约B（主权者裁决 2026-10-09）·只读面收窄：查询也过唯一判定点。
+   * `subject` 缺失或未知 ⇒ 引擎按「未知主体」拒绝（fail-closed），这里**不另设默认主体**——
+   * 读者可见性（归档作答）仍由 `读者` 承担，判定（能不能查）由 `subject` 承担。
+   * 放行条目按「一次调用一条」入账（档位「记汇总」），不随命中条数膨胀。
+   *
+   * @param {{ subject: object, 类?: string[], 项目?: string, 岗位?: string, 文本?: string, 显式?: boolean, 含失效?: boolean, 读者?: object, limit?: number, 条数上限?: number }} query
    *   `limit` 管 `命中` 条数；`条数上限` 管 `条目` 回传条数（默认 50，超出截断并标注）。
    * @returns {Promise<{ 命中: object[], 口径: object, 条目: object[], 说明?: string }>}
    */
   async query(query = {}) {
+    await this.policy.check({
+      subject: query.subject,
+      action: 'read',
+      target: { id: `记忆/检索/${query.项目 ?? '全部项目'}`, kind: '记忆', authority: '自治', zone: '私有', domain: '集体', project: query.项目 ?? null },
+      context: { 类: query.类 ?? null },
+    });
+    // 一次调用一条（档位由 ACTION_GRADE 的「只读服务调用=记汇总」定）：
+    // 查询命中 50 条 ≠ 50 条审计。拒绝路径不入这条账——引擎的「策略拒绝」已全记。
+    await this.audit.append({
+      动作: '只读服务调用',
+      主体: query.subject,
+      对象: { id: `记忆/检索/${query.项目 ?? '全部项目'}`, kind: '记忆' },
+      依据: '契约B（2026-10-09）只读面收窄：检索也过唯一判定点',
+      结果: '放行',
+      项目: query.项目 ?? null,
+      详情: { 服务: 'memory.query', 类: query.类 ?? null, 带查询词: Boolean(query.文本) },
+    });
     const wanted = query.类 ?? MEMORY_KINDS;
     const rows = [];
     for (const kind of wanted) {
@@ -463,6 +558,29 @@ export class MemoryService {
   }
 
   // ── 内部 ────────────────────────────────────────────────────────────────────
+
+  /**
+   * 契约C 披露机械检查本体：对 标题+内容+标签 三个面跑敏感模式。
+   *
+   * @param {object} entry 折叠后的记忆条目
+   * @returns {Array<{名: string}>} 命中的模式（只带名，不带命中片段——片段正是敏感本体）
+   */
+  #disclosureHits(entry) {
+    const 面数 = [entry?.标题, entry?.内容, ...(Array.isArray(entry?.标签) ? entry.标签 : [])].filter((s) => typeof s === 'string').join('\n');
+    const 清单 = this.policy.state.defaults?.披露敏感模式 ?? DEFAULT_DISCLOSURE_PATTERNS;
+    const 命中 = [];
+    for (const { 名, 正则 } of 清单) {
+      // 加载期已校验可编译；这里仍兜住编译/执行异常——机械检查自己炸了不许静默放行。
+      let re;
+      try {
+        re = new RegExp(正则, 'i');
+      } catch {
+        throw new Fault('DISCLOSURE_PATTERN_BROKEN', `披露敏感模式[${名}] 在执行期无法编译：${正则}。按 fail-closed 拒绝本次晋升；请修好部署.json 后重载。`, { detail: { 名 } });
+      }
+      if (re.test(面数)) 命中.push({ 名 });
+    }
+    return 命中;
+  }
 
   /**
    * 严格递增的时刻，只给 id 用。

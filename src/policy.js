@@ -56,7 +56,7 @@ export const INTERVENTION = ['零参与', '事后抽检', '变更预审', '逐�
  * 序列化出去 —— 读的人分不清「这是文档」还是「这是一条生效的设置」；
  * 而黑名单永远漏一个（写个 `备注` / `note` / 中文的新叫法就绕过去了）。
  */
-const RUNTIME_DEFAULT_KEYS = ['介入度', '失联限制', '响应期限小时', '工具总范围', '安全类'];
+const RUNTIME_DEFAULT_KEYS = ['介入度', '失联限制', '响应期限小时', '工具总范围', '安全类', '披露敏感模式'];
 
 const ALWAYS_INVARIANTS = '宪章 不可违背原则（§3 永不 + §12 约束清单）';
 
@@ -741,6 +741,13 @@ export class PolicyEngine {
     // 私有区最后覆盖：主权者优先。**放在最后**，于是它压得过上面每一份（安全类也压得过）。
     await 并入(this.layout.deploymentPrefs(), '私有区 部署.json', '私有');
 
+    // 契约C（主权者裁决 2026-10-09）·披露机械检查：部署.json 的 `披露敏感模式` 是
+    // 知识晋升前敏感模式清单的**整体覆盖**（出厂默认清单在 src/memory.js）。
+    // 在加载期校验形状与正则可编译性：非法 ⇒ 这里抛错 ⇒ reload 失败 ⇒ 引擎不健康 ⇒
+    // 全部写动作 fail-closed（§3.6 不许静默失败——静默退回默认清单等于把主权者
+    // 写下的收窄无视掉，静默跳过坏条目等于少拦一道，两头都比响亮拒绝更危险）。
+    validateDisclosurePatterns(merged.披露敏感模式, 来源.披露敏感模式);
+
     return { defaults: merged, defaults来源: 来源, 忽略的默认值键: [...忽略键].sort() };
   }
 
@@ -853,6 +860,40 @@ async function mtimeMsOrNull(file) {
     return (await stat(file)).mtimeMs;
   } catch {
     return null;
+  }
+}
+
+/**
+ * 校验部署.json 的 `披露敏感模式`（契约C，主权者裁决 2026-10-09）。
+ *
+ * 形状：`[{ 名: string, 正则: string }, ...]`，写明来源是因为坏值要能指回是哪一层写的。
+ * 值为 undefined / null（没写）⇒ 合法，消费方（memory.promoteCrossProject）用出厂默认清单。
+ * 其余任何形状（非数组 / 项非对象 / 名或正则缺失非串 / 正则编译不过）⇒ 抛错，
+ * 后果由 `reload()` 兜住：引擎不健康 ⇒ 全部写动作 fail-closed。
+ *
+ * @param {unknown} value
+ * @param {string} 来源 '出厂' | '私有' | '内置兜底'（仅用于报错指路）
+ */
+function validateDisclosurePatterns(value, 来源) {
+  if (value === undefined || value === null) return;
+  if (!Array.isArray(value)) {
+    throw new Error(`部署.json 的 披露敏感模式 必须是数组（[{名, 正则}]，整体覆盖出厂默认清单），当前是 ${typeof value}（来源：${来源}）。`);
+  }
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error(`部署.json 的 披露敏感模式 每一项必须是 {名, 正则} 对象，收到 ${JSON.stringify(item)}。`);
+    }
+    if (typeof item.名 !== 'string' || !item.名.trim()) {
+      throw new Error(`部署.json 的 披露敏感模式 每一项的 名 必须是非空字符串（命中报读与豁免审计都要用它指认模式），收到 ${JSON.stringify(item.名)}。`);
+    }
+    if (typeof item.正则 !== 'string') {
+      throw new Error(`披露敏感模式[${item.名}] 的 正则 必须是字符串，收到 ${typeof item.正则}。`);
+    }
+    try {
+      new RegExp(item.正则, 'i');
+    } catch (error) {
+      throw new Error(`披露敏感模式[${item.名}] 的正则非法：${item.正则}（${error instanceof Error ? error.message : String(error)}）。修好 部署.json 里的这个条目后重载即恢复。`);
+    }
   }
 }
 

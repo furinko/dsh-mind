@@ -81,10 +81,27 @@ export class MessageBus {
   /**
    * 读一个线程。线程隔离是硬边界：这里不会返回别的线程的消息。
    *
-   * @param {{ 项目: string, 线程: string, 读者?: object, 收件?: string, 未投递?: boolean, limit?: number }} query
+   * 契约B（主权者裁决 2026-10-09）·只读面收窄：读取也过唯一判定点。
+   * `subject` 缺失或未知 ⇒ 引擎拒绝（fail-closed），不另设默认主体；
+   * 放行按「一次调用一条」入账（档位「记汇总」）。内部调用方（`deliver`）
+   * 传它自己的主体；纯投影（`summary`）用系统主体——投影不冒充任何人。
+   *
+   * @param {{ subject: object, 项目: string, 线程: string, 读者?: object, 收件?: string, 未投递?: boolean, limit?: number }} query
    * @returns {Promise<object[]>}
    */
   async read(query) {
+    const target = { id: `线程/${query.项目}/${query.线程}`, kind: '线程', authority: '只增', zone: '私有', domain: '集体', project: query.项目 };
+    await this.policy.check({ subject: query.subject, action: 'read', target, context: {} });
+    // 一次调用一条：读 100 条消息 ≠ 100 条审计。拒绝路径不入这条账（引擎的「策略拒绝」已全记）。
+    await this.audit.append({
+      动作: '只读服务调用',
+      主体: query.subject,
+      对象: { id: target.id, kind: '线程' },
+      依据: '契约B（2026-10-09）只读面收窄：线程读取也过唯一判定点',
+      结果: '放行',
+      项目: query.项目,
+      详情: { 服务: 'bus.read', 线程: query.线程 },
+    });
     const rows = await readJsonl(this.layout.busThread(query.项目, query.线程));
     // 只增账按 id 折叠成当前视图（E2）：投递是追加一条同 id 新行，
     // 不折的话一条消息出现两行、「未投递」查询永远命中旧行，状态机不生效。
@@ -106,7 +123,7 @@ export class MessageBus {
    * @returns {Promise<{ id: string, 状态: string }>}
    */
   async deliver(spec) {
-    const rows = await this.read({ 项目: spec.项目, 线程: spec.线程 });
+    const rows = await this.read({ 项目: spec.项目, 线程: spec.线程, subject: spec.subject });
     const target = rows.find((row) => row.id === spec.id);
     if (!target) throw new InvalidBody(`线程 ${spec.线程} 里没有消息 ${spec.id}`);
     if (target.状态 === '已投递') return { id: spec.id, 状态: '已投递' };
@@ -181,13 +198,15 @@ export class MessageBus {
 
   /**
    * 每个线程的规模，供工作台显示。
-   * @param {{ 项目: string }} spec
+   *
+   * @param {{ 项目: string, subject?: object }} spec
    * @returns {Promise<Array<{ 线程: string, 条数: number, 未投递: number }>>}
    */
   async summary(spec) {
     const out = [];
     for (const 线程 of await this.threads(spec)) {
-      const rows = await this.read({ 项目: spec.项目, 线程 });
+      // 投影没有「谁在读」这个事实，用系统主体过闸——不冒充任何真实身份。
+      const rows = await this.read({ 项目: spec.项目, 线程, subject: spec.subject ?? { id: 'system', kind: '系统' } });
       out.push({ 线程, 条数: rows.length, 未投递: rows.filter((r) => r.状态 === '暂不投递').length });
     }
     return out;

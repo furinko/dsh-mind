@@ -169,7 +169,7 @@ describe('审查修复 · 批次3+5（身份链 / 一致性）', () => {
       标签: ['e1'],
     });
     await memory.promoteCrossProject(written.id, { subject: LEAD, 岗位: '插件工程', 理由: '可复用' });
-    const result = await memory.query({ 文本: '晋升标签默认可见' });
+    const result = await memory.query({ subject: LEAD, 文本: '晋升标签默认可见' });
     assert.ok(result.命中.length >= 1, `应命中，口径：${JSON.stringify(result.口径)}`);
     const 视图 = result.条目.find((e) => e.id === written.id);
     assert.ok(视图, '默认视图里要能看到这条知识');
@@ -182,14 +182,14 @@ describe('审查修复 · 批次3+5（身份链 / 一致性）', () => {
   it('E2 投递后消息不重复出现，「未投递」查询不再命中旧行', async () => {
     const bus = new MessageBus({ layout: f.layout, policy: f.policy, audit: f.audit, clock: f.clock });
     const sent = await bus.send({ subject: LEAD, 项目: 'default', 线程: 'e2', 发件: 'lead', 收件: 'member-a', 类型: '表态', 内容: '压一条', 暂不投递: true });
-    assert.equal((await bus.read({ 项目: 'default', 线程: 'e2' })).length, 1);
-    assert.equal((await bus.read({ 项目: 'default', 线程: 'e2', 未投递: true })).length, 1, '投递前状态是暂不投递');
+    assert.equal((await bus.read({ subject: LEAD, 项目: 'default', 线程: 'e2' })).length, 1);
+    assert.equal((await bus.read({ subject: LEAD, 项目: 'default', 线程: 'e2', 未投递: true })).length, 1, '投递前状态是暂不投递');
 
     await bus.deliver({ subject: LEAD, 项目: 'default', 线程: 'e2', id: sent.id });
-    const rows = await bus.read({ 项目: 'default', 线程: 'e2' });
+    const rows = await bus.read({ subject: LEAD, 项目: 'default', 线程: 'e2' });
     assert.equal(rows.length, 1, `同 id 两行必须折成一行，实际 ${rows.length}`);
     assert.equal(rows[0].状态, '已投递');
-    assert.equal((await bus.read({ 项目: 'default', 线程: 'e2', 未投递: true })).length, 0, '投递后「未投递」查询必须为空');
+    assert.equal((await bus.read({ subject: LEAD, 项目: 'default', 线程: 'e2', 未投递: true })).length, 0, '投递后「未投递」查询必须为空');
   });
 
   // ── E3：审计 append 上锁 ────────────────────────────────────────────────────

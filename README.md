@@ -120,7 +120,8 @@ $DSH_HOME/mind-data/mind-private/       ← 私有区（首次启动自动引导
 /mind can 实例=member-a      → 这个身份能碰什么
 ```
 
-**`mind` 工具**（模型用，全部动作走策略引擎）：
+**`mind` 工具**（模型用，全部动作走策略引擎——含只读面：`memory_query` / `bus_read` /
+`capability_resolve` 也过判定并按「一次调用一条」记汇总审计，契约B 2026-10-09）：
 
 ```
 status · workbench · policy_check
@@ -282,7 +283,7 @@ node --test components/board/test/client.test.js     # 看板：6 条结构断�
 
 | 数 | 产出者 | 怎么看 |
 |---|---|---|
-| **136** | `node --test "test/*.test.js"`（`npm test` 的后半段） | `ℹ tests 136` / `ℹ pass 136` / `ℹ fail 0` |
+| **196** | `node --test "test/*.test.js"`（`npm test` 的后半段） | `ℹ tests 196` / `ℹ pass 196` / `ℹ fail 0` |
 | **307** | `components/board/test/client-harness.mjs` 自己打印 | 末行 `client-harness: 307 条断言全部通过` |
 | **6** | `node --test components/board/test/client.test.js` | `ℹ tests 6` / `ℹ pass 6` / `ℹ fail 0` |
 
@@ -305,3 +306,13 @@ node --test components/board/test/client.test.js     # 看板：6 条结构断�
 - **工具范围闸用 `tools.guard()` 而非 `tools/pre-execute`**：前者单调，后来的监听者翻不回放行（§12.1）。
 - **组件的主面不吞异常**：工具注册不上就等于组件没生效，必须让名册如实写「未装载」；
   只有次要面（命令、提示段）才降级为告警。吞掉主面只会得到一个「看起来装好了」的假象。
+- **只读面也过判定，但档位是「记汇总」（契约B 2026-10-09）**：`memory.query` / `bus.read` /
+  `capability.resolve` 的调用链带 subject 过 `policy.check`，放行**一次调用一条**审计——
+  查询命中 50 条 ≠ 50 条审计。介入度调到「变更预审 / 逐条审批」时读面会被判 `confirm`：
+  那是既有 tierRule 语义，收窄时未改动。
+- **知识晋升先过披露机械检查（契约C 2026-10-09）**：`memory_lifecycle op=promote` 对
+  标题+内容+标签 跑敏感模式（盘符/UNC 路径、`%环境变量%`、email、凭据词表），命中即拒；
+  清单可在私有 `部署.json` 的 `披露敏感模式` 键整体覆盖（非法正则 = 引擎 fail-closed，不静默）。
+  豁免参数 `披露豁免=true` **仅 Lead**（主权者也不在豁免面——裁决原文如此）；豁免与命中
+  模式名一起进审计，但**不抄敏感原文**（抄进账本等于二次披露）。机械检查宁可误拦：
+  被拦的内容走豁免或改写，不需要放宽默认清单。

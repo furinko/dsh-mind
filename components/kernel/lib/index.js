@@ -184,6 +184,7 @@ function mindTool({ org, 项目, 项目键 }) {
         全量: { type: 'boolean', description: 'workbench 是否越过「成员只读自己那片」的切片' },
         op: { type: 'string', enum: ['invalidate', 'demote', 'overturn', 'purge', 'promote'], description: '记忆处置；不许改写只能追加' },
         敏感: { type: 'boolean', description: 'op=purge 时显式声明「这是敏感数据」；声明会进审计，不声明只有主权者能物理删除' },
+        披露豁免: { type: 'boolean', description: 'op=promote 时 Lead 显式豁免披露机械检查（仅 Lead 可用）；豁免与命中的敏感模式名会一起进审计' },
         新条目: { type: 'string' },
         原因: { type: 'string' },
         名: { type: 'string' },

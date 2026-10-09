@@ -90,7 +90,7 @@ describe('对象存储 / 能力库 / 角色注册表', () => {
     await writeUnder(f.factoryRoot, '集体L2-共享基础设施/能力库/同名演示.md', 能力卡('同名演示', ['插件工程'], '出厂的做法：先用 grep。'));
     await capability.publish({ subject: LEAD, 名: '同名演示', 适用岗位: ['插件工程'], 正文: '自治的做法：先读设计文档再动手。', 依据: '组织自治' });
 
-    const 解析 = await capability.resolve({ 名: '同名演示' });
+    const 解析 = await capability.resolve({ subject: LEAD, 名: '同名演示' });
     assert.equal(解析.条目.length, 2, '两条都要返回');
     assert.deepEqual(解析.条目.map((c) => c.来源).sort(), ['出厂', '自治']);
     assert.equal(解析.默认, '自治');

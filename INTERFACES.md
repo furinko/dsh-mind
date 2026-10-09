@@ -112,8 +112,9 @@ export class MessageBus {
   constructor({layout, policy, audit, clock})
   /** {线程, 发件, 收件, 类型, 内容, 项目, 暂不投递} -> {id, 状态:'已投递'|'暂不投递', 追加于} */
   async send(message)
-  /** 只返回本线程消息（线程隔离）。 */
-  async read({ 项目, 线程, 读者, 收件 })
+  /** 只返回本线程消息（线程隔离）。契约B（2026-10-09）：subject 必带并过 policy.check
+   *  （action 'read'），放行记一条「只读服务调用」审计（档位=记汇总，一次调用一条）。 */
+  async read({ subject, 项目, 线程, 读者, 收件 })
   async deliver(id)
   /** 会审解锁：任务图报「全员已交」→ 解锁并广播（§9 边界写死）。 */
   async unlock({ 项目, 线程, 全员已交 })
@@ -129,13 +130,19 @@ export class MemoryService {
   /** 写入必带 谁记的 + 怎么知道的；写入时校验正文结构，不合规拒写。
    * 类 ∈ 知识/经历/偏好/作答。归属按 §7 表：知识=岗位+项目双标签；经历=组织账本；偏好=部署；作答=实例。 */
   async remember({ subject, 类, 内容, 来源, 项目, 岗位, 标签 })
-  async query({ 类, 项目, 岗位, 文本, 显式, 读者 })
+  /** 契约B（2026-10-09）：subject 必带并过 policy.check（action 'read'）；
+   *  放行记一条「只读服务调用」审计（档位=记汇总，一次调用一条，不随命中条数膨胀）。 */
+  async query({ subject, 类, 项目, 岗位, 文本, 显式, 读者 })
   /** 不许改写，只能追加：以下四个都是「追加一条状态记录」。 */
   async invalidate(id, { subject, 原因 })
   async demote(id, { subject, 原因 })
   async overturn(id, { subject, 新条目, 理由 })
   /** 物理删除仅限：敏感数据、主权者明确要求。 */
   async purge(id, { subject, 理由 })
+  /** 契约C（2026-10-09）：晋升 = 跨项目发布面变宽，先对 标题+内容+标签 过披露机械检查
+   *  （清单见 §2.13）；命中即拒（Denied 指向豁免面），Lead 带 披露豁免:true 放行并记
+   *  「披露豁免」审计（全记，详情含命中模式名，不含敏感原文）。 */
+  async promoteCrossProject(id, { subject, 岗位, 理由, 披露豁免 })
   /** 作答归档 + 归档后可读性矩阵（§7）。 */
   async archiveAnswers({ 项目, 任务 })
   async readableBy(id, { 读者 })
@@ -162,7 +169,9 @@ export class CapabilityLibrary {
   constructor({layout, policy, audit, clock})
   /** 两区各一份：出厂能力库（随产品更新）+ 自治能力库（组织自治，永不外流）。 */
   async list({ subject, 岗位 })
-  /** 同名不合并：两条都返回并标注来源；默认用自治版；冲突时并列给 Lead 判。 */
+  /** 同名不合并：两条都返回并标注来源；默认用自治版；冲突时并列给 Lead 判。
+   *  契约B（2026-10-09）：subject 必带并过 policy.check（action 'read'）；
+   *  放行记一条「只读服务调用」审计（档位=记汇总，一次调用一条）。 */
   async resolve({ subject, 名 })
   async read({ subject, id })
   /** 发布到自治能力库（永不外流）。 */
@@ -387,6 +396,45 @@ await runAction({ org, 项目, subject, 主体, args: { action, ...args }, 面: 
   Batch 4b 的真缺陷就是设置页这么写了，于是三态（关 / 失联 / 在位）**全渲染成「当前 未知」+ 灰点**，
   `已关闭（不判定失联）` 那个分支在设置页**根本不可达**（面板那一侧没这个错，
   因为它读的是宿主已经归一好的字符串）。判据只有一份：**对象→四态**的归一必须显式做一次。
+
+### 2.13 契约B（只读面收窄）+ 契约C（披露机械检查）——主权者裁决 2026-10-09
+
+> 实现落点：`src/{memory,bus,capability}.js`（服务层判定）、`src/policy.js`（部署键加载校验）、
+> `src/audit.js`（档位登记）、`lib/actions.js` 与 `components/kernel/lib/index.js`（工具面主体传递）。
+
+#### 2.13.1 契约B · 只读面收窄
+
+- **收窄面**（三个，此前直连不过判定）：`memory.query` / `bus.read` / `capability.resolve`。
+- **签名变化**：三者的入参都新增必带 `subject`；缺失 ⇒ 引擎按「未知主体种类」拒绝
+  （fail-closed，`Denied` 带 `rule/reason/requireAuthority/howToChange`），**不设默认主体**。
+- **判定**：`policy.check({ subject, action: 'read', target, context })`——动作用封闭清单里
+  既有的 `'read'`，不新增策略动作。`读者`（归档作答可见性）与 `subject`（判定）分工不变。
+- **审计**：放行记动作 **`只读服务调用`**，档位 **`记汇总`**（`src/audit.js` 的 `ACTION_GRADE`
+  登记）——**一次调用一条**，绝不随返回条数入账；拒绝路径不入这条账（引擎的
+  「策略拒绝」按全记已入账）。表外 fallback 是全记：新只读服务不登记就会记成假档位。
+- **工具面**：`lib/actions.js` 的三个 handler 把 `runAction` 的主体链主体（批次3：成员/
+  复核者必须与身份档案一致，不许 role 自报即真）传进服务；`mind` 工具 schema 复用既有
+  `role` / `实例` 参数，**没有**另开自报主体字段。
+- **交互边界（如实记录）**：介入度调到「变更预审 / 逐条审批」时，`'read'` 走自治档
+  会被判 `confirm`（`NeedsApproval`）——这是既有 tierRule 语义，本契约未改动。
+
+#### 2.13.2 契约C · 披露机械检查（`promoteCrossProject`）
+
+- **检查面**：标题 + 内容 + 标签 三个面拼接后过敏感模式；命中 ⇒ `Denied`
+  （`rule` 含「披露机械检查」，`howToChange` 指向豁免面，`detail.命中模式` 带模式名清单）。
+- **默认清单**（`src/memory.js` 的 `DEFAULT_DISCLOSURE_PATTERNS`，大小写不敏感）：
+  `[A-Za-z]:\`（Windows 盘符绝对路径）、`\\`（UNC 路径）、`%NAME%`（环境变量引用）、
+  email 形态、凭据词表（password / secret / token / 凭据 / 密码 / 密钥）。
+- **部署覆盖键**：私有 `部署.json` 的 **`披露敏感模式`**，形状 `[{ "名": string, "正则": string }]`，
+  **整体覆盖**默认清单（空值=未写=用默认；写了就用写的，哪怕只有一条）。
+  形状坏或正则编译不过 ⇒ `policy.reload()` 响亮抛错 ⇒ 引擎不健康 ⇒ 全部写动作
+  fail-closed（§3.6 不许静默失败）。
+- **豁免**：`promoteCrossProject(id, { subject, 岗位, 理由, 披露豁免: true })`——
+  **仅 `subject.kind === 'Lead'`**（裁决原文如此；主权者不在豁免面，非 Lead 带此参数按越权拒）。
+  豁免放行记动作 **`披露豁免`**（档位 `全记`），详情含命中模式名与晋升理由——
+  **不含命中片段**（把敏感原文抄进账本等于二次披露）。命中拒绝本身不入账
+  （与 `purge` 域内闸同口径；拒绝时引擎侧无「策略拒绝」记录，因为 policy.check 是放行的）。
+- **工具面**：`memory_lifecycle` 的 `op=promote` 透传 `披露豁免`（boolean，缺省折 false）。
 
 ## 3 · 验收
 
