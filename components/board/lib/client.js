@@ -711,6 +711,8 @@ window.__ModuleLoader__.load({
       '.dshmind-meta{display:flex;gap:10px;flex-wrap:wrap;color:var(--dsw-alias-label-tertiary,#81858c);font-size:11px}',
       '.dshmind-criteria{color:var(--dsw-alias-label-secondary,#61666b);font-size:11.5px;line-height:17px;',
       'border-left:2px solid var(--dsw-alias-border-l3,#00000024);padding-left:8px;overflow-wrap:anywhere}',
+      // 优化批⑤：判据值最多两行（纯布局属性，无色值）；全文走值 span 的 title。
+      '.dshmind-criteriaVal{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}',
       '.dshmind-chips{display:flex;gap:4px;flex-wrap:wrap}',
 
       // 审计流
@@ -984,6 +986,19 @@ window.__ModuleLoader__.load({
     var GREY = 'var(--dsw-alias-label-caption,#adb2b8)';
     var BRAND = 'var(--dsw-alias-state-business-primary,#0f1115)';
     var WARN = 'var(--dsw-alias-state-warn-primary,#c47f17)';
+
+    /**
+     * 任务状态 → 徽章色（优化批②·2026-10-12）。只复用上面的色常量，不新造色值。
+     * 口径对齐 `src/workbench.js` 的 `进行中 = new Set(['已派发','执行中'])`，
+     * 状态全集出自 `src/tasks.js` 状态机（待派发/已派发/执行中/已交卷/未验/已采纳/已打回/待决/已结账）。
+     * **查表之外一律保灰**（待派发/已结账/未验/未知/缺失/白名单外）：
+     * 「未验」未验收、「未知」缺数据——都不许画成好态（失联四态同款教训）。
+     */
+    var 状态徽章色 = {
+      已派发: BRAND, 执行中: BRAND, // 进行
+      已交卷: GREEN, 已采纳: GREEN, // 完成 / 过关
+      已打回: WARN, 待决: WARN, // 要返工 / 被卡
+    };
 
     function badge(text, tone) {
       var color = tone === 'red' ? RED : tone === 'green' ? GREEN : tone === 'warn' ? WARN : BRAND;
@@ -1844,10 +1859,19 @@ window.__ModuleLoader__.load({
                   var criteria = arr(task.判据).map(refText).filter(Boolean);
                   var outputs = arr(task.产物 || task.产出物引用).map(refText).filter(Boolean);
                   var cls = 'dshmind-node' + (pending ? ' dshmind-nodePending' : '') + (rejects >= 2 ? ' dshmind-nodeEscalated' : '');
+                  // hasOwnProperty 挡原型链键（'constructor'/'toString' 等字面量查表会返回 truthy 函数，
+                  // 绕过「查表 miss ⇒ 保灰」）——坏值不许因为继承属性画出彩色（失联「值不合法」同族口径）。
+                  var 徽色 = Object.prototype.hasOwnProperty.call(状态徽章色, task.状态) ? 状态徽章色[task.状态] : null;
                   return h('article', { key: line(task.id, 'task-' + index), className: cls }, [
                     h('div', { key: 'top', className: 'dshmind-nodeTop' }, [
                       h('span', { key: 't', className: 'dshmind-nodeTitle' }, line(task.描述 || task.标题 || task.id, '未命名节点')),
-                      h('span', { key: 'st', className: 'dshmind-badge', style: {
+                      h('span', { key: 'st', className: 'dshmind-badge', style: 徽色 ? {
+                        // 着色体例照抄会审交卷徽章：color + borderColor 同色值 + 底色 layer-1。
+                        color: 徽色,
+                        borderColor: 徽色,
+                        background: 'var(--dsw-alias-bg-layer-1,#fff)',
+                      } : {
+                        // 查表之外保灰（现状样式原样）：待派发 / 已结账 / 未验 / 未知 / 缺失 / 白名单外。
                         borderColor: 'var(--dsw-alias-border-l2,#0000001f)',
                         color: 'var(--dsw-alias-label-secondary,#61666b)',
                       } }, line(task.状态, '未知')),
@@ -1861,7 +1885,13 @@ window.__ModuleLoader__.load({
                     ].filter(Boolean)),
                     h('div', { key: 'c', className: 'dshmind-criteria' }, [
                       h('span', { key: 'k', style: { color: 'var(--dsw-alias-label-tertiary,#81858c)' } }, '判据：'),
-                      h('span', { key: 'v' }, criteria.length ? criteria.join('；') : '（缺失 —— 建节点时必填）'),
+                      // 优化批⑤：长判据最多两行（.dshmind-criteriaVal 的 line-clamp），截断不丢信息——
+                      // 有值才挂 title 给全文；「（缺失）」占位不是可展开的信息，那条分支不挂。
+                      h('span', {
+                        key: 'v',
+                        className: 'dshmind-criteriaVal',
+                        title: criteria.length ? criteria.join('；') : undefined,
+                      }, criteria.length ? criteria.join('；') : '（缺失 —— 建节点时必填）'),
                     ]),
                     h('div', { key: 'b', className: 'dshmind-chips' }, [
                       frozen ? badge('判据冻结') : badge('判据可改', 'warn'),

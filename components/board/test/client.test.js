@@ -17,7 +17,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import { CLIENT_PATH, renderView, runHarness, sampleView } from './client-harness.mjs';
+import { CLIENT_PATH, findAllByClass, renderView, runHarness, sampleView, textOf } from './client-harness.mjs';
 
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PACKAGE_PATH = join(PACKAGE_ROOT, 'package.json');
@@ -68,6 +68,87 @@ test('⑮ 强制反对者：真键喂进去 ⇒ 画出来；空串 ⇒ 一个字
   ];
   for (const name of 要的) {
     assert.ok(report.passed.includes(name), '⑮ 渲染断言缺失或未通过：' + name);
+  }
+});
+
+test('优化批 ②⑤⑥：任务徽章按状态着色、判据限行带 title 全文、审计时间恒带短日期（行为判据）', async () => {
+  // 体例同 ⑮：renderView 真渲染一遍，断言页面文本/元素属性（props.style / props.title）。
+  // GREEN 与灰态不改共享夹具——用 sampleView() 拷贝局部改字段构造（任务.计数 无断言消费，已核）。
+  const BRAND = 'var(--dsw-alias-state-business-primary,#0f1115)';
+  const GREEN = 'var(--dsw-alias-state-success-primary,#2f9e44)';
+  const GREY = 'var(--dsw-alias-label-secondary,#61666b)';
+  const 状态徽章 = (card) => {
+    const top = card && findAllByClass(card, 'dshmind-nodeTop')[0];
+    return top ? findAllByClass(top, 'dshmind-badge')[0] : null;
+  };
+  const 卡 = (r, desc) => findAllByClass(r.tree, 'dshmind-node')
+    .find((el) => textOf(el).indexOf(desc) >= 0);
+  const 判据值 = (card) => (card ? findAllByClass(card, 'dshmind-criteriaVal')[0] : undefined);
+
+  // ── ② 真键喂进去 ⇒ 按状态着色。夹具自带：t-1 执行中（BRAND）。
+  const 活 = await renderView(sampleView());
+  const 徽1 = 状态徽章(卡(活, '把工作台投影接上客户端'));
+  assert.ok(!!徽1 && 徽1.props.style.color === BRAND && 徽1.props.style.borderColor === BRAND,
+    '② 执行中 ⇒ 徽章 color+border 都是 BRAND');
+
+  // ── ② GREEN：拷贝改字段（t-1 → 已交卷）。
+  const 绿 = sampleView();
+  绿.任务.节点.find((n) => n.id === 't-1').状态 = '已交卷';
+  const g = await renderView(绿);
+  const 徽2 = 状态徽章(卡(g, '把工作台投影接上客户端'));
+  assert.ok(!!徽2 && 徽2.props.style.color === GREEN, '② 已交卷 ⇒ GREEN');
+
+  // ── ② 空/坏值 ⇒ 保灰：待派发（白名单内灰态）+ 状态缺失（画「未知」）。
+  const 灰 = sampleView();
+  灰.任务.节点.find((n) => n.id === 't-1').状态 = '待派发';
+  delete 灰.任务.节点.find((n) => n.id === 't-2').状态;
+  const y = await renderView(灰);
+  const 徽3 = 状态徽章(卡(y, '把工作台投影接上客户端'));
+  const 徽4 = 状态徽章(卡(y, '校准策略引擎的拒绝理由'));
+  assert.ok(!!徽3 && 徽3.props.style.color === GREY, '② 待派发 ⇒ 保灰（不是 BRAND/GREEN/WARN 任一）');
+  assert.ok(!!徽4 && 徽4.props.style.color === GREY && textOf(徽4) === '未知',
+    '② 状态缺失 ⇒ 画「未知」且保灰（缺数据不许画成好态）');
+  assert.ok(y.text.includes('mind-private') && y.text.includes('任务图'),
+    '前提：改字段后的页面照常渲染（保灰不是整页坏了）');
+
+  // ── ⑤ 判据有值 ⇒ 类名 + title 全文；空值 ⇒ 占位文案且不挂 title。
+  const 值 = 判据值(卡(活, '把工作台投影接上客户端'));
+  assert.ok(!!值 && String(值.props.className).indexOf('dshmind-criteriaVal') >= 0,
+    '⑤ 判据值挂 dshmind-criteriaVal 类名');
+  assert.ok(!!值 && 值.props.title === '刷新后可见实时状态',
+    '⑤ 有判据 ⇒ title=全文（限两行截断不丢信息）');
+  const 缺 = sampleView();
+  缺.任务.节点.find((n) => n.id === 't-1').判据 = [];
+  const k = await renderView(缺);
+  const 值2 = 判据值(卡(k, '把工作台投影接上客户端'));
+  assert.ok(!!值2 && 值2.props.title === undefined && textOf(值2).includes('（缺失'),
+    '⑤ 判据缺失 ⇒ 占位文案照画、不挂 title');
+
+  // ── ⑥ 审计时间口径：喂夹具现有 ISO（Clock.iso 同款秒级 ISO）⇒ 页面文本恒带 MM-DD 前缀。
+  assert.ok(活.text.includes('10-07 17:01:02'),
+    '⑥ 夹具 2026-10-07T17:01:02+08:00 ⇒ 页面画「10-07 17:01:02」（短日期前缀不许丢）');
+
+  // ── 按名点名 harness 本批新增断言（条数式总数看不出某一条没跑）。
+  const report = await runHarness();
+  const 要的 = [
+    '② 执行中任务徽章给进行色 BRAND（color+border 同值+底色 layer-1）',
+    '② 已派发任务徽章同给进行色 BRAND',
+    '② 已交卷任务徽章给完成绿 GREEN',
+    '② 已采纳任务徽章给完成绿 GREEN',
+    '② 已打回任务徽章给告警 WARN',
+    '② 待决任务徽章给告警 WARN',
+    '② 待派发/已结账/未验徽章保灰（未验不是好态）',
+    '② 状态缺失（显示「未知」）徽章保灰——缺数据不是好态',
+    '② 白名单外状态值徽章保灰',
+    '② 原型链键（constructor 等）徽章保灰——查表不得命中继承属性',
+    '⑤ 判据值挂 dshmind-criteriaVal 类名',
+    '⑤ 判据值带 title 全文（截断不丢信息）',
+    '⑤ 样式表注入两行限行规则（-webkit-line-clamp:2）',
+    '⑤ 判据缺失占位分支不挂 title',
+    '⑥ 审计时间恒带 MM-DD 短日期前缀（→ 10-07 17:01:02 形态）',
+  ];
+  for (const name of 要的) {
+    assert.ok(report.passed.includes(name), '优化批 ②⑤⑥ 渲染断言缺失或未通过：' + name);
   }
 });
 

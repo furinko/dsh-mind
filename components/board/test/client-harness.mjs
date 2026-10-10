@@ -2389,6 +2389,133 @@ export async function runHarness() {
     无文档渲染.unmount();
   }
 
+  // ═══ 优化批 ②⑤⑥（2026-10-12）· 任务状态徽章着色 / 判据限行+title / 审计时间口径 ═══
+  //
+  // 判据全部走 renderView 的**行为读数**（喂进去 → 画出来），体例同学 ⑮ 收尾⑥。
+  // 夹具三态（t-1 执行中 / t-2 已打回 / t-3 待决）恰好覆盖 BRAND 与 WARN；
+  // GREEN 与灰态用 sampleView() 拷贝后局部改字段构造（任务.计数 无断言消费，
+  // 页脚只数 tasks.length —— 已 grep 核过，改 状态/判据 字段不牵连交叉断言）。
+  {
+    // 色令牌与 lib/client.js 的常量逐字对应（令牌改名只掉外观，断言名不变）。
+    const 色板 = {
+      BRAND: 'var(--dsw-alias-state-business-primary,#0f1115)',
+      GREEN: 'var(--dsw-alias-state-success-primary,#2f9e44)',
+      WARN: 'var(--dsw-alias-state-warn-primary,#c47f17)',
+      灰: 'var(--dsw-alias-label-secondary,#61666b)',
+    };
+    /** 任务卡里的**状态**徽章（nodeTop 内那一个；chips 区 badge() 生成的不是它）。 */
+    const 状态徽章 = (card) => {
+      const top = card ? findAllByClass(card, 'dshmind-nodeTop')[0] : null;
+      return top ? findAllByClass(top, 'dshmind-badge')[0] : null;
+    };
+    /** 按节点描述找任务卡（id 只进 key，页面上找得到的是描述）。 */
+    const 卡 = (r, desc) => findAllByClass(r.tree, 'dshmind-node')
+      .find((el) => textOf(el).indexOf(desc) >= 0) || null;
+    const 判据值 = (card) => (card ? findAllByClass(card, 'dshmind-criteriaVal')[0] || null : null);
+    const 改状态 = (view, id, 状态) => {
+      const 节点 = view.任务.节点.find((n) => n.id === id);
+      if (状态 === undefined) delete 节点.状态; else 节点.状态 = 状态;
+    };
+
+    // ② 夹具三态：执行中 BRAND、已打回 WARN、待决 WARN（体例：color+border 同值+layer-1 底色）。
+    {
+      const r = await renderView(sampleView());
+      const 徽 = 状态徽章(卡(r, '把工作台投影接上客户端'));
+      passed.push(check(!!徽 && 徽.props.style.color === 色板.BRAND
+        && 徽.props.style.borderColor === 色板.BRAND
+        && 徽.props.style.background === 'var(--dsw-alias-bg-layer-1,#fff)',
+        '② 执行中任务徽章给进行色 BRAND（color+border 同值+底色 layer-1）',
+        JSON.stringify(徽 && 徽.props.style)));
+      const 徽2 = 状态徽章(卡(r, '校准策略引擎的拒绝理由'));
+      passed.push(check(!!徽2 && 徽2.props.style.color === 色板.WARN && 徽2.props.style.borderColor === 色板.WARN,
+        '② 已打回任务徽章给告警 WARN', JSON.stringify(徽2 && 徽2.props.style)));
+      const 徽3 = 状态徽章(卡(r, '审计档位分级落地'));
+      passed.push(check(!!徽3 && 徽3.props.style.color === 色板.WARN && 徽3.props.style.borderColor === 色板.WARN,
+        '② 待决任务徽章给告警 WARN', JSON.stringify(徽3 && 徽3.props.style)));
+      // ⑥ 顺手在同一份活页上钉审计时间口径：夹具 seq1 的 ISO（Clock.iso 同款秒级 ISO）
+      //   `2026-10-07T17:01:02+08:00` 必须画成带 MM-DD 前缀的 `10-07 17:01:02`——
+      //   诊断档「只到时分秒」不成立，这条钉住短日期前缀不许再被「优化」掉。
+      passed.push(check(r.text.indexOf('10-07 17:01:02') >= 0,
+        '⑥ 审计时间恒带 MM-DD 短日期前缀（→ 10-07 17:01:02 形态）', r.text.slice(0, 0)));
+    }
+    // ② GREEN 两态 + 已派发归 BRAND：拷贝夹具局部改字段。
+    {
+      const view = sampleView();
+      改状态(view, 't-1', '已交卷');
+      改状态(view, 't-2', '已采纳');
+      const r = await renderView(view);
+      const 交 = 状态徽章(卡(r, '把工作台投影接上客户端'));
+      const 纳 = 状态徽章(卡(r, '校准策略引擎的拒绝理由'));
+      passed.push(check(!!交 && 交.props.style.color === 色板.GREEN && 交.props.style.borderColor === 色板.GREEN,
+        '② 已交卷任务徽章给完成绿 GREEN', JSON.stringify(交 && 交.props.style)));
+      passed.push(check(!!纳 && 纳.props.style.color === 色板.GREEN && 纳.props.style.borderColor === 色板.GREEN,
+        '② 已采纳任务徽章给完成绿 GREEN', JSON.stringify(纳 && 纳.props.style)));
+    }
+    {
+      const view = sampleView();
+      改状态(view, 't-1', '已派发');
+      const r = await renderView(view);
+      const 徽 = 状态徽章(卡(r, '把工作台投影接上客户端'));
+      passed.push(check(!!徽 && 徽.props.style.color === 色板.BRAND,
+        '② 已派发任务徽章同给进行色 BRAND', JSON.stringify(徽 && 徽.props.style)));
+    }
+    // ② 灰态家族：待派发 / 已结账 / 未验 / 缺失（画「未知」）/ 白名单外 —— 一个都不许画成好态。
+    {
+      const view = sampleView();
+      改状态(view, 't-1', '待派发');
+      改状态(view, 't-2', '已结账');
+      改状态(view, 't-3', '未验');
+      const r = await renderView(view);
+      const 灰们 = [卡(r, '把工作台投影接上客户端'), 卡(r, '校准策略引擎的拒绝理由'), 卡(r, '审计档位分级落地')]
+        .map(状态徽章);
+      passed.push(check(灰们.every((b) => !!b && b.props.style.color === 色板.灰
+        && b.props.style.color !== 色板.GREEN && b.props.style.color !== 色板.BRAND),
+        '② 待派发/已结账/未验徽章保灰（未验不是好态）',
+        JSON.stringify(灰们.map((b) => b && b.props.style.color))));
+    }
+    {
+      const view = sampleView();
+      改状态(view, 't-1', undefined);
+      改状态(view, 't-2', '异维度状态');
+      // 'constructor' 是**原型链键**：字面量查表 `表[k]` 对它返回 truthy 函数（toString/__proto__ 同族），
+      // 能绕过「查表 miss ⇒ 保灰」的分支——白名单外最险的一类值，必须跟普通外来词一起钉死。
+      改状态(view, 't-3', 'constructor');
+      const r = await renderView(view);
+      const 未知徽 = 状态徽章(卡(r, '把工作台投影接上客户端'));
+      const 外来徽 = 状态徽章(卡(r, '校准策略引擎的拒绝理由'));
+      const 原型徽 = 状态徽章(卡(r, '审计档位分级落地'));
+      passed.push(check(!!未知徽 && 未知徽.props.style.color === 色板.灰 && textOf(未知徽) === '未知',
+        '② 状态缺失（显示「未知」）徽章保灰——缺数据不是好态', JSON.stringify(未知徽 && 未知徽.props.style)));
+      passed.push(check(!!外来徽 && 外来徽.props.style.color === 色板.灰,
+        '② 白名单外状态值徽章保灰', JSON.stringify(外来徽 && 外来徽.props.style)));
+      passed.push(check(!!原型徽 && 原型徽.props.style.color === 色板.灰,
+        '② 原型链键（constructor 等）徽章保灰——查表不得命中继承属性',
+        JSON.stringify(原型徽 && 原型徽.props.style)));
+    }
+    // ⑤ 判据值：类名 + title 全文 + 样式表里的两行限行规则（读真注入的 style 元素，不是源码正则）。
+    {
+      const r = await renderView(sampleView());
+      const 值 = 判据值(卡(r, '把工作台投影接上客户端'));
+      passed.push(check(!!值 && String(值.props.className).split(/\s+/).indexOf('dshmind-criteriaVal') >= 0,
+        '⑤ 判据值挂 dshmind-criteriaVal 类名', String(值 && 值.props.className)));
+      passed.push(check(!!值 && 值.props.title === '刷新后可见实时状态',
+        '⑤ 判据值带 title 全文（截断不丢信息）', String(值 && 值.props.title)));
+      const 样式 = r.elements.find((el) => el.type === 'style');
+      const 规则体 = 样式 ? (Array.isArray(样式.props.children) ? 样式.props.children.join('') : String(样式.props.children)) : '';
+      passed.push(check(/\.dshmind-criteriaVal\{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden\}/.test(规则体),
+        '⑤ 样式表注入两行限行规则（-webkit-line-clamp:2）', 规则体.slice(0, 0)));
+    }
+    // ⑤ 缺失分支：占位文案照画，但不挂 title（占位不是可展开的信息）。
+    {
+      const view = sampleView();
+      view.任务.节点.find((n) => n.id === 't-1').判据 = [];
+      const r = await renderView(view);
+      const 值 = 判据值(卡(r, '把工作台投影接上客户端'));
+      passed.push(check(!!值 && 值.props.title === undefined && textOf(值).indexOf('（缺失') >= 0,
+        '⑤ 判据缺失占位分支不挂 title', JSON.stringify(值 && 值.props.title)));
+    }
+  }
+
   return { passed, liveElements: c1.elements.length, liveTexts: c1.texts.length };
 }
 
