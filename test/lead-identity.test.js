@@ -261,13 +261,12 @@ describe('门② agentSubject：Lead 身份由会话事实决定（2026-10-10）
         // 正对照：无父会话的顶层会话 ⇒ Lead（既有的「根会话执行者 = Lead」语义没被改坏）。
         const 根 = 放行主体(await 主体读数(工具, 根会话exec));
         assert.equal(根.kind, 'Lead', `根会话仍是 Lead（门② 不是把 Lead 一起取消了）；实际 ${JSON.stringify(根)}`);
-        // ⚠️ 实例键的**退化形状**（本轮诊断读数，未改门②）：公式 = `session-` + 会话id 前 8 位
-        // （HEAD 的 :540 就是这个写法，不是本批引入）。本夹具的桩 id 以 `session-` 开头
-        // ⇒ 前缀被吃掉一层 ⇒ `session-session-`；而**真实形状**的会话 id 也是
-        // `session-<uuid>`（本机真实会话目录名 `session-80e3fa83-…`）⇒ **同款退化**：
-        // 实例键不携带任何会话信息，「账上不丢哪一个会话」这句在真实形状下不成立。
-        // 已如实记进 `docs/设计债-2026-10-09.md` ⑳ 与回报（B6/B7 读数）。
-        assert.equal(根.id, 'session-session-', `实例键取会话 id 前 8 位（既有公式）；exec.id=${String(根会话exec.agent.session.id)} 实际=${JSON.stringify(根)}`);
+        // ⚠️ 实例键（**B 修 · 2026-10-10 改断言**）：判据本体的语义变了 —— 实例键的用途是
+        // 「唯一标识**哪一个会话**」，修前那条 `'session-' + String(会话id).slice(0,8)`
+        // 在真实形状（`session-<uuid>`）下恒退化成 `session-session-`，一位信息都不带。
+        // 所以这里断言的是**会话 id 原样**，不是为了让测试变绿而放宽（旧断言的"绿"本身
+        // 就是钉住一个坏读数）。完整论证与影响面清点见 ㉒。
+        assert.equal(根.id, String(根会话exec.agent.session.id), `实例键 = 会话 id 原样（唯一标识会话）；实际 ${JSON.stringify(根)}`);
 
         // 子会话：origin=subagent（本仓四处同款判据用的就是它）⇒ 不是 Lead。
         // 这一条**不可能**放行：算成成员后主体链会以「未登记」拒它 —— 于是「不是 Lead」的
@@ -276,7 +275,9 @@ describe('门② agentSubject：Lead 身份由会话事实决定（2026-10-10）
         assert.equal(子读数.成功, false, `子会话不得被当成 Lead 放行，实际 ${JSON.stringify(子读数)}`);
         assert.equal(子读数.主体, undefined, '子会话的读数里没有 Lead 主体（修前这里恒是 Lead）');
         assert.match(String(子读数.理由), /未登记/, `子会话算出来的是「未登记成员」⇒ 档案校验拒；实际 ${子读数.理由}`);
-        assert.match(String(子读数.理由), /session-session-/, '实例键取父会话（可指认「哪个 Lead 起的」）⇒ 拒绝文案里带它');
+        // 子会话的实例键同样 = **它自己的**会话 id（B 修：修前取父会话 ⇒ 两个同父的子会话
+        // 共用一个主体 id）。这里断言的是子会话自己的 id，不是父会话的。
+        assert.match(String(子读数.理由), new RegExp(String(成员会话exec.agent.session.id)), '实例键 = 子会话自己的会话 id ⇒ 拒绝文案里带它');
 
         // exec **整个取不到** ⇒ 倒向安全侧（不认 Lead）：`agentSubject(undefined)` 走第 3 档。
         // 这是本轮唯一的 fail-closed 档 —— 与修前的差别：修前连这一档也恒传 `根会话: true`。
@@ -365,9 +366,11 @@ describe('③ 端到端：子会话主体换轮 / 收敛都拒，根会话放行
         //    内核把 `主体` 显式传给 `runAction` ⇒ `spec.主体 ?? subjectFor({岗位, 实例, …})`
         //    的前半段短路 ⇒ `args.role` / `args.实例` **不再参与主体构造**。实测（本轮，工作树）：
         //      同一个根会话 exec 连交两次卷、分别自报 实例=member-a / member-b ⇒
-        //        交卷1 主体 = {"id":"session-session-","kind":"Lead","roleId":"Lead"}
-        //        交卷2 主体 = {"id":"session-session-","kind":"Lead","roleId":"Lead"}
-        //        独立答案 = ["session-session-"]（**1** 份：按主体 id 折叠）
+        //        交卷1 主体 = {"id":"<根会话id>","kind":"Lead","roleId":"Lead"}
+        //        交卷2 主体 = {"id":"<根会话id>","kind":"Lead","roleId":"Lead"}
+        //        独立答案 = ["<根会话id>"]（**1** 份：按主体 id 折叠）
+        //        （⚠️ 这两行是**修前**读数，那时 id 恒为 `session-session-`；B 修后同一条路
+        //         折叠行为**不变**（仍折叠成 1 份），变的只是 id 现在真的是这个会话。）
         //    ⇒ 「谁交的那一份」不再能靠参数区分。这正是本轮要堵的自报身份面在**同一条路**上的代价，
         //    已进回报的影响面清点与 `docs/设计债-2026-10-09.md` ⑳（成员会话在工具面恒被拒那一条）。
         await org.tasks.submit(节点, { subject: MEMBER_A, 项目, 结论: 'a 案' });
@@ -407,8 +410,9 @@ describe('③ 端到端：子会话主体换轮 / 收敛都拒，根会话放行
         assert.equal((await 节点读数()).表态消息id ?? null, null, '被拒的收敛没有落末位表态');
         assert.equal((await 线程()).length, 前条数, '被拒的收敛一条消息都没落线');
 
-        // ②b 第二个子会话（同父）同样拒：两个子会话的实例键都取父会话 ⇒ 同一个值（这是判据 2 的
-        //     读数，不是 bug）——「不是 Lead」对**每一个**子会话都成立，不靠「只有第一个会话特殊」。
+        // ②b 第二个子会话（同父）同样拒：「不是 Lead」对**每一个**子会话都成立，不靠
+        //     「只有第一个会话特殊」。⚠️ B 修后这两个子会话的实例键**不再相同**
+        //     （修前两档都取父会话 ⇒ 同一个值）；差异本身由下面的 `B-实例键` 用例正面钉住。
         const 子换2 = await 跑({ action: 'debate_round', id: 节点 }, 成员会话exec2);
         assert.equal(子换2.成功, false, '第二个子会话换轮同样拒');
         assert.equal(子换2.主体, undefined, '第二个子会话也没有 Lead 主体');
@@ -446,6 +450,162 @@ describe('③ 端到端：子会话主体换轮 / 收敛都拒，根会话放行
         const 节点2读数 = await parts.tasks.get(节点2, { 项目: P });
         assert.equal(节点2读数.讨论.轮次, 1, '服务面被拒的换轮同样没有推进轮次');
         assert.equal(节点2读数.讨论.状态, '讨论中', '服务面被拒的收敛同样没有收敛');
+      } finally {
+        host.清理();
+        forgetSharedOrg();
+      }
+    } finally {
+      await g.cleanup();
+    }
+  });
+});
+
+describe('B 实例键：唯一标识「哪一个会话」（2026-10-10 P1 补 · 判据带反例面）', () => {
+  /**
+   * **真实形状**的会话 id：`session-<uuid>`。
+   * 形状依据（实测，不是猜）：本机 `E:\DSHOME\sessions\` 下 460 个会话目录里 **208 个**
+   * 形如 `session-<uuid>`（生成端 `brandString(\`session-${randomUUID()}\`)`，
+   * `@deepseek-ai/dsh-api-session-controller/lib/index.js:573/692`）。
+   * 这里用两个同形状的合成 id —— 关键是它们**都在第 8 个字符处结束于 `session-` 前缀**，
+   * 也就是修前那条公式的退化点。
+   */
+  const 真根A = 'session-7fb7087b-c62a-4c64-a6ce-40aab0a78cd9';
+  const 真根B = 'session-80e3fa83-1b2c-4d5e-9f00-aabbccddeeff';
+  /** 两个**同父**的子会话的会话 id（修前它们会算出同一个键 —— 这正是 B 要治的第二半）。 */
+  const 真子A_id = 'session-c1a2b3c4-1111-4222-8333-444455556666';
+  const 真子B_id = 'session-d5e6f7a8-9999-4aaa-8bbb-ccccddddeeee';
+  const 真子A = 桩exec({ cwd: 'C:/ws', createdAt: 2, isSeeded: false, version: 1, origin: 'subagent', parentSession: 真根A, delegationDepth: 1 }, 真子A_id);
+  const 真子B = 桩exec({ cwd: 'C:/ws', createdAt: 3, isSeeded: false, version: 1, origin: 'subagent', parentSession: 真根A, delegationDepth: 1 }, 真子B_id);
+
+  it('B-判据：两个不同会话 ⇒ 不同键；同一会话两次调用 ⇒ 同键（根会话与子会话两面都测）', async () => {
+    const g = await makeFixture();
+    try {
+      const { 工具, host } = await 起宿主(g);
+      try {
+        // ── 反例面（先把「这两个 id 真的能区分」钉住，否则下面的判据可能因为 id 选得不好而假绿）：
+        //    修前那条公式对这两个 id 算出的是**同一个**键。
+        const 旧公式 = (id) => `session-${String(id).slice(0, 8)}`;
+        assert.equal(旧公式(真根A), 'session-session-', `修前公式退化读数（A）；实际 ${旧公式(真根A)}`);
+        assert.equal(旧公式(真根B), 'session-session-', `修前公式退化读数（B）；实际 ${旧公式(真根B)}`);
+        assert.equal(旧公式(真根A), 旧公式(真根B), '反例面前提：修前公式对这两个不同会话给出同一个键');
+
+        // ── 根会话面：两个不同会话 ⇒ 两个不同键（读数原样印出来）。
+        const 根A1 = 放行主体(await 主体读数(工具, 桩exec({ cwd: 'C:/ws', createdAt: 1, isSeeded: false, version: 1 }, 真根A)));
+        const 根B1 = 放行主体(await 主体读数(工具, 桩exec({ cwd: 'C:/ws', createdAt: 1, isSeeded: false, version: 1 }, 真根B)));
+        // eslint-disable-next-line no-console
+        console.log(`[B-读数] 根会话 ${真根A} ⇒ 实例键 ${根A1.id} ; 根会话 ${真根B} ⇒ 实例键 ${根B1.id}`);
+        assert.equal(根A1.id, 真根A, `根会话 A 的实例键 = 它自己的会话 id；实际 ${根A1.id}`);
+        assert.equal(根B1.id, 真根B, `根会话 B 的实例键 = 它自己的会话 id；实际 ${根B1.id}`);
+        assert.notEqual(根A1.id, 根B1.id, `两个不同会话必须给出不同实例键（修前都是 session-session-）；实际 ${根A1.id} / ${根B1.id}`);
+
+        // ── 同一会话两次调用 ⇒ 同一个键（稳定性；键由会话 id 派生，不由调用次序派生）。
+        const 根A2 = 放行主体(await 主体读数(工具, 桩exec({ cwd: 'C:/ws', createdAt: 1, isSeeded: false, version: 1 }, 真根A)));
+        assert.equal(根A2.id, 根A1.id, '同一会话两次调用必须是同一个实例键');
+        // 换一份 header（同一 id、不同 createdAt）也必须是同一个键：键只认会话身份，不认其余 header 字段。
+        const 根A3 = 放行主体(await 主体读数(工具, 桩exec({ cwd: 'C:/other', createdAt: 999, isSeeded: true, version: 3 }, 真根A)));
+        assert.equal(根A3.id, 根A1.id, '同一会话（换 header 其余字段）仍是同一个实例键');
+
+        // ── 子会话面：两个**同父**的子会话 ⇒ 两个不同键（修前它们取父会话 ⇒ 同一个键）。
+        const 子A读数 = await 主体读数(工具, 真子A);
+        const 子B读数 = await 主体读数(工具, 真子B);
+        // 子会话一律被主体链拒（未登记），所以键要从拒绝文案里读（文案形如 `…：<id>（未登记）在档案里…`）。
+        const 键从理由 = (理由) => {
+          const m = /：(\S+?)（/.exec(String(理由));
+          return m ? m[1] : null;
+        };
+        const 子A键 = 键从理由(子A读数.理由);
+        const 子B键 = 键从理由(子B读数.理由);
+        // eslint-disable-next-line no-console
+        console.log(`[B-读数] 子会话 ${真子A_id} ⇒ 实例键 ${子A键} ; 子会话 ${真子B_id} ⇒ 实例键 ${子B键}`);
+        assert.equal(子A键, 真子A_id, `子会话的实例键 = 它**自己**的会话 id（修前取父会话）；实际 ${子A键}`);
+        assert.equal(子B键, 真子B_id, `第二个子会话的实例键 = 它自己的会话 id；实际 ${子B键}`);
+        assert.notEqual(子A键, 子B键, `两个同父子会话必须给出不同实例键（修前都取父会话 ⇒ 同一个）；实际 ${子A键} / ${子B键}`);
+        assert.notEqual(子A键, 真根A, '子会话的键不许退化成父会话的键（否则「哪一个会话」仍丢）');
+
+        // ── 取不到会话 id 的兜底（两条路各自的兜底值，别互相串）。
+        const 无id子 = await 主体读数(工具, { name: 'mind', agent: { session: { header: { origin: 'subagent', version: 1, isSeeded: false } } } });
+        assert.match(String(无id子.理由), /member-unknown/, '子会话取不到会话 id ⇒ 兜底 member-unknown（fail-closed）');
+        const 无id根 = 放行主体(await 主体读数(工具, { name: 'mind', agent: { session: { header: { cwd: 'C:/ws', version: 1, isSeeded: false } } } }));
+        assert.equal(无id根.id, 'lead', `根会话取不到会话 id ⇒ 兜底 lead；实际 ${无id根.id}`);
+      } finally {
+        host.清理();
+        forgetSharedOrg();
+      }
+    } finally {
+      await g.cleanup();
+    }
+  });
+});
+
+describe('A 正对照：岗位确实未登记的会话仍 fail-closed 拒（2026-10-10 P1 补）', () => {
+  it('A-正对照：子会话带着「像岗位名」的 descriptor label 也换不来身份；档案登记成真岗位也仍拒', async () => {
+    const g = await makeFixture();
+    try {
+      const { 工具, org, host } = await 起宿主(g);
+      try {
+        const 子id = 'session-child-a0001';
+        // ── 把该子会话的实例**按真岗位**登记进身份档案（在册在岗），再看它能不能执行。
+        //    这一格钉的是「`lib/actions.js` 的档案对账判据不许放宽」（P1 的成果）：
+        //    登记对了岗位、实例 id 也对得上，仍然拒 —— 因为会话派生的 `roleId` 恒为 `未登记`。
+        await g.writePrivate('身份档案/identity.json', JSON.stringify({
+          members: {
+            [子id]: { id: 子id, 岗位: '插件工程', 代: 1, status: '在岗' },
+            lead: { id: 'lead', 岗位: 'Lead', 代: 1, status: '在岗' },
+          },
+          sovereign: { lastInteraction: new Date().toISOString() },
+          denylist: [],
+        }, null, 2));
+        await org.registry.sync();
+        await org.policy.reload();
+
+        // 会话日志里**带一条 `subagent/descriptor`**，其 `label` 就是角色卡插件那种
+        // `<岗位名>:<成员名>` 形状（本批**不实现**从它取岗位 —— 理由见回报的调研结论）。
+        // 把这条事件摆在 exec 上，是为了让「将来若有人改成读 label 取岗位」当场变红。
+        const 带descriptor = {
+          name: 'mind',
+          agent: {
+            session: {
+              id: 子id,
+              header: { id: 子id, cwd: 'C:/ws', createdAt: 2, isSeeded: false, version: 3, origin: 'subagent', parentSession: 'session-root-0001', delegationDepth: 1 },
+              ownEvents: () => [{ type: 'subagent/descriptor', seq: 1, time: 2, data: { version: 3, mode: 'continuable', provider: 'in-process', label: '插件工程:member-a' } }],
+            },
+          },
+        };
+        const 读数 = await 主体读数(工具, 带descriptor);
+        assert.equal(读数.成功, false, `带 descriptor 的成员子会话仍必须被拒（本批不实现从 label 取岗位）；实际 ${JSON.stringify(读数)}`);
+        assert.equal(读数.主体, undefined, '被拒的读数里没有主体');
+        assert.match(String(读数.理由), /未登记/, `会话派生的 roleId 仍是「未登记」⇒ 与档案里的真岗位对不上 ⇒ 拒；实际 ${读数.理由}`);
+        assert.match(String(读数.理由), new RegExp(子id), '拒绝文案里带的是**这个子会话**的实例键');
+
+        // ── 正对照（同一份档案、同一条 exec，只换「会话事实」）：根会话照常放行。
+        //    证明上面的「拒」来自成员身份那一档，不是整条链坏了。
+        const 根 = 放行主体(await 主体读数(工具, 桩exec({ cwd: 'C:/ws', createdAt: 1, isSeeded: false, version: 1 })));
+        assert.equal(根.kind, 'Lead', `正对照：根会话不受影响；实际 ${JSON.stringify(根)}`);
+
+        // ── 反例面（**本轮实测出的一个反直觉读数，如实钉住**）：把档案里那个实例的岗位写成
+        //    `未登记`，对账判据 `member.岗位 !== 主体.roleId` 就**匹配**了 ⇒ 这条会话被**放行**。
+        //    也就是说「成员子会话恒被拒」这句有一半靠的是「档案里恰好没有一个叫『未登记』的岗位」。
+        //    ⚠️ 但这一格**在 sanctioned 面上不可达**：`registry_assign` 要求目标岗位**有岗位卡**
+        //    （`src/registry.js:177-184`：`岗位「未登记」不存在`），只能靠手写 identity.json 造出来
+        //    （本用例就是这么造的）。下一段直接把 sanctioned 那条路钉住。
+        await g.writePrivate('身份档案/identity.json', JSON.stringify({
+          members: { [子id]: { id: 子id, 岗位: '未登记', 代: 1, status: '在岗' } },
+          sovereign: { lastInteraction: new Date().toISOString() },
+          denylist: [],
+        }, null, 2));
+        await org.registry.sync();
+        const 手写档 = await 主体读数(工具, 带descriptor);
+        assert.equal(手写档.成功, true, `手写档案里的岗位「未登记」与主体 roleId 相同 ⇒ 对账通过（这是手写夹具才能造出的形态，见下）；实际 ${JSON.stringify(手写档)}`);
+        assert.equal(手写档.主体.id, 子id, '放行时主体 id 就是这个子会话的实例键（B 修后不再是父会话）');
+        assert.equal(手写档.主体.roleId, '未登记', '放行时 roleId 仍是「未登记」——身份没被"修好"，只是撞上了对账');
+
+        // ── sanctioned 面：`registry_assign` 到岗位「未登记」⇒ 拒（岗位卡不存在）。
+        //    这是 ⑳ 已实测过的那条读数，本批**复跑**以证明「手写档那一格不可达」。
+        await assert.rejects(
+          () => org.registry.assign({ subject: LEAD, 岗位: '未登记', 实例: 子id, 代: 1 }),
+          (e) => e.name === 'Denied' && /不存在/.test(e.message) && /岗位卡/.test(e.howToChange ?? ''),
+          'sanctioned 面：岗位「未登记」没有岗位卡 ⇒ assign 被拒 ⇒ 上面那一格造不出来',
+        );
       } finally {
         host.清理();
         forgetSharedOrg();

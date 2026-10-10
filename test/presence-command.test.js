@@ -199,7 +199,10 @@ describe('presence 设置入口：命令面专属 + 状态条四态', () => {
       assert.equal(首次.包.成功, true, 首次.回复.text);
       const 一 = await 设置记录();
       assert.equal(一.length, 1, '写动作必须入账（无条件）');
-      assert.equal(一[0].主体.id, 'session-abcd1234', '账上要记**真实主体**（敲命令的那个人）');
+      // ⚠️ 实例键（**B 修 · 2026-10-10 改断言**）：判据本体的语义变了 —— 实例键的用途是
+      // 「唯一标识哪一个会话」。修前这里断言的是 `session-abcd1234`（= `'session-'` + 会话 id
+      // 前 8 位），那是把**唯一键截断**后的形状；现在直接断言会话 id 原样（**更严**，不是放宽）。
+      assert.equal(一[0].主体.id, agent.session.id, '账上要记**真实主体**（敲命令的那个人）——实例键 = 会话 id 原样');
       assert.notEqual(一[0].主体.id, 'sovereign', '不许冒充主权者');
       assert.notEqual(一[0].主体.kind, '主权者', '不许冒充主权者');
       assert.equal(一[0].主体.kind, 'Lead', '根会话的执行者按约定是 Lead');
