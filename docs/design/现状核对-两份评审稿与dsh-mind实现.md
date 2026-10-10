@@ -16,7 +16,7 @@
 | `plugins\dsh-org\` | **不存在**（全盘搜索只有一处知识档残留：`mind-private\L3\projects\plugins\知识\dsh-org\`） |
 | `plugins\dsh-mind\` | 存在。git 仓（tag v0.1.0–v0.1.3）· 3 个组件包 · `src/` 21 模块 · `test/` 15 文件 · `mind/` 出厂区 |
 | 本会话挂载的 | 就是 `dsh-mind`——`mind` 与 `mind_guard` 两个工具在本次会话里可用 |
-| 数据根 | `<DSH_HOME>\mind-data\mind-private\`（`mind-data\mind` 是出厂面）——已自举，与 README §载体 逐目录吻合 |
+| 数据根 | `<DSH_HOME>\mind-data\mind-private\`。出厂面**不在** `mind-data\mind`——`src/paths.js` 的 `kernelFactoryRoot()` 把出厂区定在**插件包内** `dsh-mind\mind\`（原文写「`mind-data\mind` 是出厂面」系笔误/过时：`mind-data\mind` 是旧系统出厂区残留，已于 2026-10-11 归档进 `retired-dshmind-20261008\mind\`，见该处 README） |
 | 门禁（实跑） | `preflight` 通过 · `node --test` **146/146 绿** |
 | `mind status`（实跑） | 探针四盏全绿 · 审计链完整 47 条 · 岗位 5 · 出厂能力 6 / 自治 0 · **任务 0 · 记忆 0**（除本次我写入的一条） |
 
