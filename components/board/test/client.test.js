@@ -263,6 +263,36 @@ test('UI 基础卫生批：读数区不贴边、审计列按内容宽、chip/hin
   }
 });
 
+test('⑦ 消息总线面板：全部线程、未投递高亮、会审讨论段盲评收起、空态给命令（行为判据）', async () => {
+  // 体例同 ①④③：renderView 真渲染，断言页面文本/元素属性；内核投影侧另有 flow.test.js 的用例。
+  const 活 = await renderView(sampleView());
+  const 卡 = findAllByClass(活.tree, 'dshmind-bus').find((el) => textOf(el).includes('跑通测试-20261011'));
+  assert.ok(!!卡 && textOf(卡).includes('3 条') && textOf(卡).includes('未投递 1'),
+    '⑦ 普通线程画线程名+条数，未投递>0 有 warn 徽章');
+  const 讨论卡 = findAllByClass(活.tree, 'dshmind-bus').find((el) => textOf(el).includes('会审讨论段 · 盲评保护'));
+  assert.ok(!!讨论卡 && !textOf(讨论卡).includes('member-') && !textOf(讨论卡).includes('不该被看见'),
+    '⑦ 会审讨论线程不出发件人与正文（盲评遮罩在投影层，界面无从画起）');
+  assert.ok(活.text.includes('消息总线'), '⑦ 分区标题在');
+  const 空 = sampleView();
+  空.消息总线 = [];
+  const e = await renderView(空);
+  assert.ok(e.text.includes('消息总线上还没有消息') && e.text.includes("action:'bus_send'"),
+    '⑦ 空态明说 + 给一条可敲的 bus_send 命令（不给控件）');
+
+  const report = await runHarness();
+  const 要的 = [
+    '⑦ 普通线程画出来（线程名 + 条数）',
+    '⑦ 未投递 >0 高亮（warn 徽章）',
+    '⑦ 最新消息扫描行在（暂不投递带 ⏸ 前缀）',
+    '⑦ 消息行挂 title=摘要全文（截断不丢信息）',
+    '⑦ 会审讨论线程收起正文（无发件人、无正文，只给规模行）',
+    '⑦ 空总线给明说空态 + 一条可敲的 bus_send 命令',
+  ];
+  for (const name of 要的) {
+    assert.ok(report.passed.includes(name), '⑦ 渲染断言缺失或未通过：' + name);
+  }
+});
+
 test('lib/client.js 顶层没有 import / export（经典脚本，否则整站 web 启动失败）', () => {
   const lines = source.split(/\r?\n/);
   const offenders = [];

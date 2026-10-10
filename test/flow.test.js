@@ -16,6 +16,7 @@ import { Denied, InvalidBody } from '../src/kernel/errors.js';
 import { readJsonl } from '../src/kernel/fsx.js';
 import { Clock } from '../src/kernel/time.js';
 import { runAction } from '../lib/actions.js';
+import { projectWorkbench, sliceForViewer } from '../src/workbench.js';
 
 /** @type {Awaited<ReturnType<typeof makeFixture>>} */
 let f;
@@ -188,6 +189,37 @@ describe('主干环路', () => {
     const unlocked = await bus.unlock({ subject: LEAD, 项目: P, 线程: 't-1', 全员已交: true, 参与者: ['member-a'] });
     assert.equal(unlocked.解锁, true);
     assert.ok(unlocked.广播);
+  });
+
+  it('⑦ 消息总线投影：全部线程 + 未投递 + 会审讨论段盲评收起 + 投影取数免审计', async () => {
+    await bus.send({ subject: LEAD, 项目: P, 线程: 'wb-1', 发件: 'lead', 收件: ['member-a'], 类型: '广播', 内容: 'x'.repeat(200) });
+    await bus.send({ subject: LEAD, 项目: P, 线程: 'wb-1', 发件: 'lead', 收件: ['member-a'], 类型: '提问', 内容: '短消息', 暂不投递: true });
+
+    // 免审计（设计债③）：summary 是投影取数，走 readRaw——审计行数前后必须一动不动。
+    const before = (await f.audit.read({})).length;
+    const 汇总 = await bus.summary({ 项目: P });
+    assert.equal((await f.audit.read({})).length, before, 'summary 投影取数零审计（readRaw 内部读）');
+    const wb1 = 汇总.find((t) => t.线程 === 'wb-1');
+    assert.equal(wb1.条数, 2, '条数=折叠后的当前视图（暂不投递也是一条消息）');
+    assert.equal(wb1.未投递, 1);
+    assert.equal(wb1.最新.length, 2);
+    assert.equal(wb1.最新[0].内容.length, 120, '正文截前 120 字（面板扫描行；全文在 bus_read）');
+
+    // 投影：普通线程带最新消息；会审讨论线程（节点带 讨论 子状态）不出正文与发件。
+    const 投影 = (节点) => projectWorkbench({
+      项目: P, 节点, 探针: { 结果: [] }, 策略: { healthy: true, rules: [] },
+      线程: [
+        { 线程: 'wb-1', 条数: 2, 未投递: 1, 最新: wb1.最新 },
+        { 线程: 'n-9', 条数: 5, 未投递: 0, 最新: [{ id: 'm', 发件: 'member-x', 类型: '分歧', 内容: '不该被看见', 状态: '已投递', 追加于: 't' }] },
+      ],
+    });
+    assert.equal(投影([]).消息总线.find((t) => t.线程 === 'wb-1').最新.length, 2, '普通线程带最新消息');
+    const 讨论行 = 投影([{ id: 'n-9', 状态: '执行中', 负责人: ['member-a'], 讨论: { 状态: '讨论中' } }]).消息总线.find((t) => t.线程 === 'n-9');
+    assert.equal(讨论行.会审讨论段, true);
+    assert.equal(讨论行.最新, undefined, '会审讨论线程不出正文（盲评遮罩做在投影层）');
+    // 成员切片：总线正文一律收起（「只读自己那片」——他人发言不是自己那片）。
+    const 成员视图 = sliceForViewer(投影([]), { id: 'member-a', kind: '成员' });
+    assert.ok(成员视图.消息总线.every((t) => !t.最新), '成员切片：总线只给规模行，不给正文');
   });
 
   it('记忆：写入必带来源，项目标签恒打、岗位标签默认不打', async () => {

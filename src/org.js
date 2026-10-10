@@ -157,6 +157,9 @@ export class Org {
     for (const n of snapshot.节点) {
       if (n.讨论) 讨论消息[n.id] = await this.bus.readRaw({ 项目, 线程: n.id });
     }
+    // ⑦（2026-10-11）：消息总线投影——全部线程的规模 + 最新消息 + 未投递数。
+    // summary 内部走 readRaw（免审计，设计债③）：与 讨论消息 同一条投影取数口径。
+    const 线程汇总 = await this.bus.summary({ 项目 });
     const view = projectWorkbench({
       项目,
       节点: snapshot.节点,
@@ -170,6 +173,7 @@ export class Org {
       策略: { ...this.policy.describe(), 错误: this.policy.state.error, 介入度: this.policy.intervention(), 失联: this.policy.presence() },
       记忆: await this.memory.activity({ 项目 }),
       讨论消息,
+      线程: 线程汇总,
       生成于: this.clock.iso(),
     });
     return spec.读者 ? sliceForViewer(view, spec.读者) : view;

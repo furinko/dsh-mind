@@ -617,6 +617,20 @@ export function sampleView() {
     ],
     // 验账读数：人扫一眼页脚就知道记账在正常发生（真源是 MemoryService.activity）。
     记忆: { 存量: 12, 近段: { 窗口天: 7, 新增: 3, 晋升: 1 } },
+    // ⑦（2026-10-11）：消息总线——普通线程（未投递>0）+ 会审讨论线程（投影层已收走正文）。
+    消息总线: [
+      {
+        线程: '跑通测试-20261011', 条数: 3, 未投递: 1,
+        最新: [
+          { id: 'msg-1', 发件: 'lead', 类型: '广播', 内容: '全员注意：批次开始前先对判据。', 状态: '已投递', 追加于: '2026-10-07T17:01:02+08:00' },
+          { id: 'msg-2', 发件: 'member-a', 类型: '表态', 内容: '判据已核对，可以开工。', 状态: '已投递', 追加于: '2026-10-07T17:02:03+08:00' },
+          { id: 'msg-3', 发件: 'member-b', 类型: '提问', 内容: '产物引用给仓内 commit 还是文件路径？', 状态: '暂不投递', 追加于: '2026-10-07T17:03:04+08:00' },
+        ],
+      },
+      {
+        线程: 't-6', 条数: 5, 未投递: 0, 会审讨论段: true,
+      },
+    ],
   };
 }
 
@@ -926,7 +940,7 @@ export async function runHarness() {
   const c0 = collect(r0.tree, { skipStyle: true });
   passed.push(check(c0.elements.length > 60, '首帧元素数 > 60（数据全空也是完整骨架）', String(c0.elements.length)));
   passed.push(check(c0.text.includes(ENTRY_LABEL), '首帧含标题「' + ENTRY_LABEL + '」'));
-  for (const section of ['待你决定', '会审', '任务图', '审计流']) {
+  for (const section of ['待你决定', '会审', '任务图', '审计流', '消息总线']) {
     passed.push(check(c0.text.includes(section), '首帧含分区「' + section + '」'));
   }
   // 空态必须是**明说的话**：没有数据时最坏的结果是「信息少」，不是「猜」。
@@ -2645,6 +2659,31 @@ export async function runHarness() {
         && 主体格.props.title === 'session-d6d8208e-b3e9-42c9-9d4a-75d0f40a7cd9',
         'UI 审计主体显示名截到 session-+8 位（title 全文）',
         JSON.stringify({ t: 主体格 && textOf(主体格), title: 主体格 && 主体格.props.title })));
+    }
+
+    // ⑦ 消息总线（2026-10-11）：全部线程 + 未投递高亮 + 会审讨论段盲评收起 + 空态给命令。
+    {
+      const r = await renderView(sampleView());
+      const 卡 = findAllByClass(r.tree, 'dshmind-bus').filter((el) => textOf(el).includes('跑通测试-20261011'));
+      passed.push(check(卡.length === 1 && textOf(卡[0]).indexOf('3 条') >= 0,
+        '⑦ 普通线程画出来（线程名 + 条数）', '卡数 ' + 卡.length));
+      passed.push(check(卡.length === 1 && textOf(卡[0]).indexOf('未投递 1') >= 0,
+        '⑦ 未投递 >0 高亮（warn 徽章）'));
+      passed.push(check(卡.length === 1 && textOf(卡[0]).indexOf('⏸') >= 0 && textOf(卡[0]).indexOf('判据已核对') >= 0,
+        '⑦ 最新消息扫描行在（暂不投递带 ⏸ 前缀）'));
+      const 行 = 卡.length === 1 ? findAllByClass(卡[0], 'dshmind-busRow').find((el) => textOf(el).indexOf('产物引用给仓内') >= 0) : null;
+      passed.push(check(!!行 && String(行.props.title).indexOf('⏸ ') === 0,
+        '⑦ 消息行挂 title=摘要全文（截断不丢信息）', JSON.stringify(行 && 行.props.title)));
+      const 讨论卡 = findAllByClass(r.tree, 'dshmind-bus').filter((el) => textOf(el).indexOf('会审讨论段 · 盲评保护') >= 0);
+      passed.push(check(讨论卡.length === 1
+        && textOf(讨论卡[0]).indexOf('member-') < 0
+        && textOf(讨论卡[0]).indexOf('盲评口径收起') >= 0,
+        '⑦ 会审讨论线程收起正文（无发件人、无正文，只给规模行）', '卡数 ' + 讨论卡.length));
+      const 空 = sampleView();
+      空.消息总线 = [];
+      const e = await renderView(空);
+      passed.push(check(e.text.indexOf('消息总线上还没有消息') >= 0 && e.text.indexOf("action:'bus_send'") >= 0,
+        '⑦ 空总线给明说空态 + 一条可敲的 bus_send 命令'));
     }
   }
 

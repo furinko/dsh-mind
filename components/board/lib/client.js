@@ -339,6 +339,9 @@ window.__ModuleLoader__.load({
     var MAX_RESPONSE_DEADLINE_HOURS = 876000;
     var TASK_LIMIT = 12;
     var AUDIT_LIMIT = 20;
+    /** ⑦（2026-10-11）：消息总线一次渲染的线程数上限——超出要明说（任务图同款「另有 N」）。 */
+    var BUS_LIMIT = 8;
+    var BUS_MSGS_LIMIT = 5;
     /** 「待你决定」是主子唯一必须看的清单，所以给得比任务卡更宽；超出的部分明说还有多少条。 */
     var DECIDE_LIMIT = 8;
     var REVIEW_LIMIT = 4;
@@ -422,6 +425,8 @@ window.__ModuleLoader__.load({
           };
         }),
         会审: arr(firstOf(v, ['会审', '会审记录'])).map(reviewRow),
+        // ⑦（2026-10-11）：消息总线——投影给什么画什么；会审讨论线程投影已收走正文（盲评保护）。
+        消息总线: arr(firstOf(v, ['消息总线', '总线', 'bus'])).map(busThreadRow),
         审计尾: arr(firstOf(v, ['审计尾', '审计', 'audit'])),
         // 记忆读数：宿主没给就是 null（不装懂）；给了只取四个标量，数字真伪由投影侧负责。
         记忆: 记忆读数Of(firstOf(v, ['记忆', '记忆读数', 'memory'])),
@@ -433,11 +438,35 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 一个总线线程 → 渲染用的形状（⑦·2026-10-11）。
+     * 会审讨论段：投影层已把 正文/发件 收走（盲评保护），这里只认标记位，不补内容。
+     */
+    function busThreadRow(row) {
+      var r = obj(row) || {};
+      return {
+        线程: line(firstOf(r, ['线程', 'thread']), ''),
+        条数: numOf(firstOf(r, ['条数', 'count'])),
+        未投递: numOf(firstOf(r, ['未投递', 'undelivered'])),
+        会审讨论段: r.会审讨论段 === true,
+        最新: arr(firstOf(r, ['最新', 'latest'])).map(function (m) {
+          var x = obj(m) || {};
+          return {
+            id: line(x.id, ''),
+            发件: line(x.发件, ''),
+            类型: line(x.类型, ''),
+            内容: line(x.内容, ''),
+            状态: line(x.状态, ''),
+            追加于: line(x.追加于, ''),
+          };
+        }),
+      };
+    }
+
+    /**
      * 记忆读数袋 → 渲染用的形状。null/非对象 ⇒ null：宿主没给就不画，
      * 与「失联四态」同一纪律——缺数据不许伪装成 0。
      */
-    function 记忆读数Of(bag) {
-      var b = obj(bag);
+    function 记忆读数Of(bag) {      var b = obj(bag);
       if (!b) return null;
       var 近段 = obj(firstOf(b, ['近段'])) || {};
       return {
@@ -688,6 +717,10 @@ window.__ModuleLoader__.load({
       '.dshmind-reviews{display:flex;flex-direction:column;gap:12px}',
       '.dshmind-review{border:.5px solid var(--dsw-alias-border-l1,#0000001f);border-radius:var(--dsw-radius-md,8px);',
       'background:var(--dsw-alias-bg-layer-2,#fff);padding:10px 12px;display:flex;flex-direction:column;gap:8px}',
+      // ⑦ 总线线程卡：样式与 dshmind-review 同一款，但类名**必须分开**——
+      // 「三场会审各一张卡」那条断言按 .dshmind-review 数卡，两个分区共用类名会互相污染计数。
+      '.dshmind-bus{border:.5px solid var(--dsw-alias-border-l1,#0000001f);border-radius:var(--dsw-radius-md,8px);',
+      'background:var(--dsw-alias-bg-layer-2,#fff);padding:10px 12px;display:flex;flex-direction:column;gap:8px}',
       '.dshmind-reviewTop{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
       // 未交齐的锁：它说的就是「不许看人」，所以占整行、显眼、不可错过。
       '.dshmind-lock{padding:6px 10px;border-radius:var(--dsw-radius-sm,6px);font-size:11.5px;',
@@ -745,6 +778,13 @@ window.__ModuleLoader__.load({
       'background:var(--dsw-alias-border-l3,#00000024)}',
       '.dshmind-auditScroll::-webkit-scrollbar-track{background:transparent}',
       '.dshmind-audit{display:flex;flex-direction:column;gap:1px;padding-bottom:2px}',
+      // ⑦ 总线消息扫描行：**独立类名**（审计区按 .dshmind-auditRow 数行恰好 20 条，
+      // 两个分区共用类名会污染那条「不静默裁掉」的断言）；列形也不同——末列是正文不是主体。
+      // 复用 auditScroll 的滚动壳与 auditAction 的换行口径。
+      '.dshmind-busMsgs{display:flex;flex-direction:column;gap:1px;padding-bottom:2px}',
+      '.dshmind-busRow{display:grid;grid-template-columns:max-content max-content max-content minmax(0,1fr);',
+      'gap:10px;align-items:baseline;',
+      'padding:6px 10px;background:var(--dsw-alias-bg-layer-2,#fff);font-size:12px}',
       // UI 卫生批（主人视觉打回「截断」）：时间列固定 88px，而 shortTime 恒为
       // `MM-DD HH:mm:ss`（14 字符，11px 等宽 ≈ 92px）——固定列窄过内容就是叠字/截断。
       // 时间与档位两列改按内容（max-content），动作列吃剩余宽，主体列保持省略（有 title）。
@@ -1723,6 +1763,7 @@ window.__ModuleLoader__.load({
       var tasks = view ? view.任务节点 : [];
       var 待你决定 = view ? view.待你决定 : [];
       var 会审 = view ? view.会审 : [];
+      var 总线 = view ? view.消息总线 : [];
       var audit = view ? view.审计尾.slice(-AUDIT_LIMIT).reverse() : [];
       // 投影里**一共**多少条（用来在框尾说清"看不全是因为投影只有这些/还有多少没列"）。
       var 审计总条数 = view ? view.审计尾.length : 0;
@@ -2078,6 +2119,46 @@ window.__ModuleLoader__.load({
                       '投影共 ' + 审计总条数 + ' 条，已全部列出；框内可滚动。'),
               ]
             : h('div', { className: 'dshmind-empty' }, '审计尾为空 —— 没有事实记录，或工作台投影未附带审计尾。')),
+
+        // ⑤ 消息总线（⑦·2026-10-11）：**全部**有消息的线程（不只未投递）——
+        // 「有没有人想说话」一眼可见；未投递 >0 高亮。会审讨论线程按盲评口径收起正文
+        // （投影层已收走 发件/正文，这里只画标记与规模行——与独立答案的遮罩同一条纪律）。
+        section(5, '消息总线', '§7 结构化通信 · 全部线程 · 未投递高亮 · 投影只读',
+          总线.length ? 总线.length + ' 线程' : '',
+          总线.length
+            ? h('div', { className: 'dshmind-reviews' }, 总线.slice(0, BUS_LIMIT).map(function (row, index) {
+                var 线程id = line(row.线程, 'bus-' + index);
+                return h('article', { key: 线程id, className: 'dshmind-bus' }, [
+                  h('div', { key: 'top', className: 'dshmind-reviewTop' }, [
+                    h('span', { key: 't', className: 'dshmind-nodeTitle', title: row.线程 }, row.线程 || '（未命名线程）'),
+                    h('span', { key: 'c', className: 'dshmind-mono' }, (row.条数 || 0) + ' 条'),
+                    // 未投递高亮：warn 徽章——这是本区唯一要用颜色喊的事。
+                    row.未投递 > 0 ? badge('未投递 ' + row.未投递, 'warn') : null,
+                    row.会审讨论段 ? badge('会审讨论段 · 盲评保护', 'warn') : null,
+                  ].filter(Boolean)),
+                  row.会审讨论段
+                    ? h('div', { key: 'mask', className: 'dshmind-decideWhy' },
+                        '讨论发言按盲评口径收起（未交齐不揭名）；讨论读数见上方会审区。')
+                    : (row.最新.length
+                        ? h('div', { key: 'msgs', className: 'dshmind-auditScroll' },
+                            h('div', { className: 'dshmind-busMsgs' }, row.最新.slice(-BUS_MSGS_LIMIT).map(function (m, i) {
+                              // 扫描行：时间/类型/发件/正文——正文在投影层已截 120 字，
+                              // 这里整行挂 title 给这 120 字全文（截断不丢信息的 UI 卫生口径）。
+                              var 摘要 = (m.状态 === '暂不投递' ? '⏸ ' : '') + (m.内容 || '（空消息）');
+                              return h('div', { key: 'm' + i, className: 'dshmind-busRow', title: 摘要 }, [
+                                h('span', { key: 't', className: 'dshmind-mono', style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary,#81858c)' } },
+                                  shortTime(m.追加于) || '—'),
+                                h('span', { key: 'k', className: 'dshmind-chip' }, m.类型 || '?'),
+                                m.发件 ? h('span', { key: 'f', className: 'dshmind-chip dshmind-mono', title: m.发件 }, 短主体(m.发件)) : null,
+                                h('span', { key: 'c', className: 'dshmind-auditAction' }, 摘要),
+                              ].filter(Boolean));
+                            })))
+                        : null),
+                ].filter(Boolean));
+              }))
+            : emptyGuide('消息总线上还没有消息', '成员间结构化通信走这里（bus_send 落线即出现）',
+              "mind {action:'bus_send', 线程:'通报-示例', 类型:'广播', 内容:'一句话正文', 收件:'lead'}"),
+        ),
 
         // 页脚：只读边界与命令回显
         h('footer', { key: 'foot', className: 'dshmind-foot' }, [

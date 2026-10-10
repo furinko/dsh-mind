@@ -286,17 +286,33 @@ export class MessageBus {
   }
 
   /**
-   * 每个线程的规模，供工作台显示。
+   * 每个线程的规模与最新消息，供工作台显示。
    *
-   * @param {{ 项目: string, subject?: object }} spec
-   * @returns {Promise<Array<{ 线程: string, 条数: number, 未投递: number }>>}
+   * ⑦（2026-10-11）设计债③收口：投影取数改走 `readRaw`（内部读，不过闸、不入审计）——
+   * 与 `讨论消息` 同口径：看板按秒级轮询，走公开 `read()` 会让「只读服务调用」
+   * 按线程×轮询刷屏，淹没真正的留痕；留痕属于编排动作，不属于投影取数。
+   * 正文只给前 120 字：面板是扫一眼的面，全文在 bus_read。
+   *
+   * @param {{ 项目: string, 最新条数?: number }} spec
+   * @returns {Promise<Array<{ 线程: string, 条数: number, 未投递: number, 最新: object[] }>>}
    */
   async summary(spec) {
     const out = [];
     for (const 线程 of await this.threads(spec)) {
-      // 投影没有「谁在读」这个事实，用系统主体过闸——不冒充任何真实身份。
-      const rows = await this.read({ 项目: spec.项目, 线程, subject: spec.subject ?? { id: 'system', kind: '系统' } });
-      out.push({ 线程, 条数: rows.length, 未投递: rows.filter((r) => r.状态 === '暂不投递').length });
+      const rows = await this.readRaw({ 项目: spec.项目, 线程 });
+      out.push({
+        线程,
+        条数: rows.length,
+        未投递: rows.filter((r) => r.状态 === '暂不投递').length,
+        最新: rows.slice(-(spec.最新条数 ?? 5)).map((row) => ({
+          id: row.id,
+          发件: row.发件,
+          类型: row.类型,
+          内容: String(row.内容 ?? '').slice(0, 120),
+          状态: row.状态,
+          追加于: row.追加于,
+        })),
+      });
     }
     return out;
   }
