@@ -11,7 +11,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { shareOrg } from '../../../src/runtime.js';
 import { kernelFactoryRoot } from '../../../src/paths.js';
-import { subjectFor, DEFAULT_PROJECT } from '../../../src/org.js';
+import { DEFAULT_PROJECT } from '../../../src/org.js';
+import { agentSubject } from '../../../src/subject.js';
 import { InvalidBody, describeFailure } from '../../../src/kernel/errors.js';
 
 export const name = 'dsh-mind-guard';
@@ -99,7 +100,11 @@ function guardTool({ org }) {
     isConcurrencySafe: (args) => ['probe_run', 'probe_health', 'upgrade_compare'].includes(args?.action),
     async execute(args, exec) {
       try {
-        return JSON.stringify({ 成功: true, ...(await runGuardAction(org, args, subjectFor({ 根会话: true }))) }, null, 1);
+        // 主体来自会话事实（2026-10-10 · guard 残留面收口）：修前硬编码 subjectFor({ 根会话: true })
+        // ⇒ 任何会话（含成员子会话）调 mind_guard 都按 Lead 执行 —— upgrade_resolve / upgrade_withdraw
+        // 这类裁决动作因此绕过「仅 Lead」授权面（⑳ 门② 堵的是内核 runAction，这里是独立入口）。
+        // 与内核同一份判据（src/subject.js 单源）；exec 缺席 ⇒ fail-closed 落成员 ⇒ 策略拒。
+        return JSON.stringify({ 成功: true, ...(await runGuardAction(org, args, agentSubject(exec))) }, null, 1);
       } catch (error) {
         return JSON.stringify({ 成功: false, ...describeFailure(error) }, null, 1);
       }
@@ -113,9 +118,11 @@ function guardCommand({ org }) {
     name: 'mind-guard',
     description: '心智 · 安全类与升级：探针自检 / 健康 / 回滚 / 挂起裁决',
     input: { hint: '[probe|health|rollback|pending|resolve id=… 选择=…]' },
-    handler: async ({ rawInput }) => {
+    handler: async ({ agent, rawInput }) => {
       const line = String(rawInput ?? '').trim();
-      const 主体 = subjectFor({ 根会话: true });
+      // 与工具面同源（2026-10-10 · guard 残留面收口）：命令面照样有会话事实可用
+      // （`/mind` 命令面就是 handler({agent, rawInput}) → agentSubject({agent})，同款取法）。
+      const 主体 = agentSubject({ agent });
       try {
         const [head, ...rest] = line.split(/\s+/);
         if (head === '' || head === 'health') {

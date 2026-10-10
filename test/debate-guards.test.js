@@ -588,3 +588,126 @@ describe('批c 补漏 · P3：线程键的大小写别名绕过甲（2026-10-10�
     }
   });
 });
+
+describe('㉖ 动作面收窄：任务线程只有负责人与 Lead 可直灌（2026-10-10 收口）', () => {
+  /** 造一个无讨论段、负责人 = member-a（单人）的任务节点 —— 攻击者用**在档**的 member-b（非负责人）。 */
+  async function 任务节点(tasks) {
+    const node = await tasks.create({
+      subject: LEAD, 项目: P, 描述: '㉖ 判据·任务线程', 负责人: ['member-a'], 判据: ['x'], 模式: '并行分担',
+    });
+    return node.id;
+  }
+
+  it('㉖-回归：非负责人成员 bus_send 往别人的任务线程 ⇒ 拒、且没落线（修前 probe 实测放行真落线）', async () => {
+    const g = await makeFixture();
+    try {
+      const parts = 装配(g);
+      const 节点 = await 任务节点(parts.tasks);
+      await assert.rejects(
+        () => runAction({
+          org: 动作面org(parts), 项目: P, subject: LEAD, 主体: MEMBER_B,
+          args: { action: 'bus_send', role: '插件工程', 实例: 'member-b', 线程: 节点, 类型: '表态', 内容: '㉖ 往别人任务线程塞' },
+        }),
+        (e) => e.name === 'Denied'
+          && /任务线程只有负责人与 Lead 可发/.test(e.rule)
+          && /权限矩阵/.test(e.rule)
+          && e.detail?.发件 === 'member-b'
+          && e.detail?.命中 === '精确键',
+        '权限矩阵写的是「任何在岗主体写**自己**线程的消息」—— 他人任务线程不在授权面（文案要说清判据出处）',
+      );
+      const 落线 = (await parts.bus.readRaw({ 项目: P, 线程: 节点 })).filter((m) => m.内容 === '㉖ 往别人任务线程塞');
+      assert.equal(落线.length, 0, '被拒的那条没有落线（不是纸面拒绝）');
+    } finally {
+      await g.cleanup();
+    }
+  });
+
+  it('㉖-等价键：线程 = 节点 id 的大小写变体 ⇒ 同一道判据拦下（与 P3 同款攻击面）', async () => {
+    const g = await makeFixture();
+    try {
+      const parts = 装配(g);
+      const 节点 = await 任务节点(parts.tasks);
+      await assert.rejects(
+        () => runAction({
+          org: 动作面org(parts), 项目: P, subject: LEAD, 主体: MEMBER_B,
+          args: { action: 'bus_send', role: '插件工程', 实例: 'member-b', 线程: 节点.toUpperCase(), 类型: '交卷', 内容: '㉖ 大小写旁路' },
+        }),
+        (e) => e.name === 'Denied' && /任务线程只有负责人与 Lead 可发/.test(e.rule) && /线程等价类/.test(e.detail?.命中),
+        '判定键与落线键同源（线程等价键）—— 大小写别名不许绕过「他人任务线程」这道闸',
+      );
+    } finally {
+      await g.cleanup();
+    }
+  });
+
+  it('㉖-正对照1：负责人自己的任务线程 ⇒ 放行真落线（「写自己线程的消息」的授权面不动）', async () => {
+    const g = await makeFixture();
+    try {
+      const parts = 装配(g);
+      const 节点 = await 任务节点(parts.tasks);
+      const r = await runAction({
+        org: 动作面org(parts), 项目: P, subject: LEAD, 主体: MEMBER_A,
+        args: { action: 'bus_send', role: '插件工程', 实例: 'member-a', 线程: 节点, 类型: '表态', 内容: '负责人自己的发言' },
+      });
+      assert.equal(r.消息.线程, 节点, '负责人直灌自己的任务线程 ⇒ 放行');
+      const 落线 = (await parts.bus.readRaw({ 项目: P, 线程: 节点 })).filter((m) => m.内容 === '负责人自己的发言');
+      assert.equal(落线.length, 1, '真落线');
+      assert.equal(落线[0].发件, 'member-a', '发件仍是主体链真实 id');
+    } finally {
+      await g.cleanup();
+    }
+  });
+
+  it('㉖-正对照2：Lead 跨任务线程发言 ⇒ 放行（受理/表态/派活的既有授权面不动）', async () => {
+    const g = await makeFixture();
+    try {
+      const parts = 装配(g);
+      const 节点 = await 任务节点(parts.tasks);
+      const r = await runAction({
+        org: 动作面org(parts), 项目: P, subject: LEAD, 主体: LEAD,
+        args: { action: 'bus_send', 线程: 节点, 类型: '表态', 内容: 'Lead 派活口径' },
+      });
+      assert.equal(r.消息.线程, 节点, 'Lead 往任务线程写消息 ⇒ 放行');
+      const 落线 = (await parts.bus.readRaw({ 项目: P, 线程: 节点 })).filter((m) => m.内容 === 'Lead 派活口径');
+      assert.equal(落线.length, 1, '真落线');
+      assert.equal(落线[0].发件, 'lead', '发件 = 主体链真实 id（Lead）');
+    } finally {
+      await g.cleanup();
+    }
+  });
+
+  it('㉖-正对照3：非负责人成员往**普通线程**（非节点 id）⇒ 照常放行（普通线程的开放是既有语义，本批不收）', async () => {
+    const g = await makeFixture();
+    try {
+      const parts = 装配(g);
+      await 任务节点(parts.tasks); // 同一部署里同时有任务节点，证明判据只认「命中节点」这一档
+      const r = await runAction({
+        org: 动作面org(parts), 项目: P, subject: LEAD, 主体: MEMBER_B,
+        args: { action: 'bus_send', role: '插件工程', 实例: 'member-b', 线程: 't-㉖-普通', 类型: '表态', 内容: '普通线程开放' },
+      });
+      assert.equal(r.消息.线程, 't-㉖-普通', '普通线程不受㉖ 影响（收窄它属另一条裁决）');
+      const 落线 = (await parts.bus.readRaw({ 项目: P, 线程: 't-㉖-普通' })).filter((m) => m.内容 === '普通线程开放');
+      assert.equal(落线.length, 1, '真落线');
+    } finally {
+      await g.cleanup();
+    }
+  });
+
+  it('㉖-边界：bus_unlock 对别人的已交齐节点 ⇒ 不受㉖ 影响（它有自己的齐卷闸，本判据不挂那只手）', async () => {
+    const g = await makeFixture({ members: 档案(['member-a', 'member-b', 'lead', 'member-c']) });
+    try {
+      const parts = 装配(g);
+      const 节点 = await 交齐会审(parts.tasks, undefined, '㉖ 边界·齐卷无讨论');
+      // 不开讨论段 ⇒ ⑰ 不命中；全员已交 ⇒ 齐卷闸放行 —— ㉖ 不挂 bus_unlock（有意边界，见函数注释）
+      const r = await runAction({
+        org: 动作面org(parts), 项目: P, subject: LEAD, 主体: MEMBER_C,
+        args: { action: 'bus_unlock', id: 节点, 线程: 节点, 内容: '㉖ 边界广播' },
+      });
+      assert.ok(r.结果, '非负责人成员触发齐卷解锁广播 ⇒ 照旧放行（解锁的授权面是齐卷，不是线程归属）');
+      const 落线 = (await parts.bus.readRaw({ 项目: P, 线程: 节点 })).filter((m) => m.内容 === '㉖ 边界广播');
+      assert.equal(落线.length, 1, '广播真落线（发件=system，编排通道）');
+    } finally {
+      await g.cleanup();
+    }
+  });
+});
