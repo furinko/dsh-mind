@@ -231,6 +231,16 @@ test('UI 基础卫生批：读数区不贴边、审计列按内容宽、chip/hin
     '审计时间/档位列按内容宽（MM-DD HH:mm:ss ≈92px，88px 固定列必溢出）');
   assert.doesNotMatch(规则体, /88px 78px/, '审计行不得再用固定 88px 时间列');
   assert.match(规则体, /\.dshmind-toggle\{[^}]*font-family:inherit/, '折叠钮继承面板字体');
+  assert.match(规则体, /\.dshmind-root>\*\{flex:none\}/,
+    '根的子项不许压缩（flex 纵向 + height:100% 下压扁会被分区 overflow 裁掉）');
+
+  const 会话视图 = sampleView();
+  会话视图.审计尾 = [{ seq: 1, 时间: '2026-10-07T17:01:02+08:00', 动作: '状态变更', 主体: 'session-d6d8208e-b3e9-42c9-9d4a-75d0f40a7cd9', 结果: '记入', 档位: '全记' }];
+  const 会话页 = await renderView(会话视图);
+  const 主体格 = 会话页.elements.find((el) => String(el.props.className || '').split(/\s+/).indexOf('dshmind-auditWho') >= 0);
+  assert.ok(!!主体格 && textOf(主体格) === 'session-d6d8208e'
+    && 主体格.props.title === 'session-d6d8208e-b3e9-42c9-9d4a-75d0f40a7cd9',
+    '审计主体显示名截到 session-+8 位（title 全文，不再顶成省略号）');
 
   const 产物chip = 活.elements.find((el) => String(el.props.className || '').indexOf('dshmind-chip') >= 0
     && textOf(el) === 'artifact-1');
@@ -245,6 +255,8 @@ test('UI 基础卫生批：读数区不贴边、审计列按内容宽、chip/hin
     'UI 折叠钮继承面板字体（button 默认 Arial 会混排）',
     'UI 产物 chip 带 title 全文（省略不丢信息）',
     'UI 分区 hint 带 title 全文（窄面板省略不丢信息）',
+    'UI 根的子项不许压缩（flex:none）——压扁即被分区 overflow 裁掉',
+    'UI 审计主体显示名截到 session-+8 位（title 全文）',
   ];
   for (const name of 要的) {
     assert.ok(report.passed.includes(name), 'UI 卫生断言缺失或未通过：' + name);

@@ -2632,6 +2632,19 @@ export async function runHarness() {
       const 提示 = r.elements.find((el) => String(el.props.className || '').split(/\s+/).indexOf('dshmind-secHint') >= 0);
       passed.push(check(!!提示 && 提示.props.title === textOf(提示) && textOf(提示).length > 0,
         'UI 分区 hint 带 title 全文（窄面板省略不丢信息）', JSON.stringify(提示 && 提示.props.title)));
+      // UI 截断事故（2026-10-11）：根是 flex 纵向容器 + height:100%，子项默认会被压扁，
+      // 而分区 overflow:hidden ⇒ 压掉的那截直接裁掉（健康组卡片下半、空态命令块下半）。
+      passed.push(check(/\.dshmind-root>\*\{flex:none\}/.test(规则体),
+        'UI 根的子项不许压缩（flex:none）——压扁即被分区 overflow 裁掉'));
+      // 审计主体：session-<uuid> 长达 38 字符会把主体列顶成省略号——显示截到前 8 位，title 给全文。
+      const 会话视图 = sampleView();
+      会话视图.审计尾 = [{ seq: 1, 时间: '2026-10-07T17:01:02+08:00', 动作: '状态变更', 主体: 'session-d6d8208e-b3e9-42c9-9d4a-75d0f40a7cd9', 结果: '记入', 档位: '全记' }];
+      const 会话页 = await renderView(会话视图);
+      const 主体格 = 会话页.elements.find((el) => String(el.props.className || '').split(/\s+/).indexOf('dshmind-auditWho') >= 0);
+      passed.push(check(!!主体格 && textOf(主体格) === 'session-d6d8208e'
+        && 主体格.props.title === 'session-d6d8208e-b3e9-42c9-9d4a-75d0f40a7cd9',
+        'UI 审计主体显示名截到 session-+8 位（title 全文）',
+        JSON.stringify({ t: 主体格 && textOf(主体格), title: 主体格 && 主体格.props.title })));
     }
   }
 

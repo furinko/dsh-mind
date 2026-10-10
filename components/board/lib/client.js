@@ -556,6 +556,17 @@ window.__ModuleLoader__.load({
       if (!box) return '未知';
       return [line(box.id, '未知'), line(box.kind)].filter(Boolean).join(' · ');
     }
+    /**
+     * 审计主体的**显示名**：`session-<uuid>` 长达 38 字符，会把主体列顶成省略号
+     * （一排 `session-d6d8208e-b3e9-42c...` —— 主人视觉打回「很多被截断」的一族）。
+     * 截到 `session-` + 前 8 位即可人读；全文仍挂 title，截断不丢信息。
+     * @param {string} 主体 actorOf 的结果
+     * @returns {string} 显示用短名
+     */
+    function 短主体(主体) {
+      var m = /^(session-[0-9a-f]{8})[0-9a-f-]+$/i.exec(主体);
+      return m ? m[1] : 主体;
+    }
     function refText(item) {
       if (typeof item === 'string') return item;
       var box = obj(item);
@@ -570,6 +581,11 @@ window.__ModuleLoader__.load({
       'color:var(--dsw-alias-label-primary,#16181d);font-size:13px;line-height:20px;',
       "font-family:var(--ds-font-family-sans,-apple-system,'Segoe UI',system-ui,sans-serif)}",
       '.dshmind-root *{box-sizing:border-box}',
+      // ⚠️ 子项**不许被压缩**（2026-10-11 截断事故）：根是 flex 纵向容器 + height:100%，
+      // 子项默认 flex-shrink:1 ⇒ 内容变高时先**压扁**子项而不是出滚动条，而各分区
+      // 又是 overflow:hidden ⇒ 被压掉的那截**直接裁掉**（健康组卡片下半、空态命令块下半）。
+      // 固定成自然高度后，超出由根的 overflow:auto 滚动接管——裁切与滚动各司其职。
+      '.dshmind-root>*{flex:none}',
       '.dshmind-mono{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Menlo,monospace);',
       'font-variant-numeric:tabular-nums}',
 
@@ -2051,7 +2067,7 @@ window.__ModuleLoader__.load({
                         line(firstOf(row, ['动作', 'action']), '未命名动作'),
                         line(firstOf(row, ['结果', 'result'])) ? h('span', { key: 'r', style: { color: 'var(--dsw-alias-label-tertiary,#81858c)' } }, ' · ' + line(firstOf(row, ['结果', 'result']))) : null,
                       ].filter(Boolean)),
-                      h('span', { key: 'w', className: 'dshmind-auditWho', title: actorOf(row) }, actorOf(row)),
+                      h('span', { key: 'w', className: 'dshmind-auditWho', title: actorOf(row) }, 短主体(actorOf(row))),
                     ]);
                   }))),
                 // 框尾说明：有多少条、看不全就去滚（不让人猜是不是被裁了）。
