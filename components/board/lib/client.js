@@ -728,7 +728,11 @@ window.__ModuleLoader__.load({
       'background:var(--dsw-alias-border-l3,#00000024)}',
       '.dshmind-auditScroll::-webkit-scrollbar-track{background:transparent}',
       '.dshmind-audit{display:flex;flex-direction:column;gap:1px;padding-bottom:2px}',
-      '.dshmind-auditRow{display:grid;grid-template-columns:88px 78px 1fr 150px;gap:10px;align-items:baseline;',
+      // UI 卫生批（主人视觉打回「截断」）：时间列固定 88px，而 shortTime 恒为
+      // `MM-DD HH:mm:ss`（14 字符，11px 等宽 ≈ 92px）——固定列窄过内容就是叠字/截断。
+      // 时间与档位两列改按内容（max-content），动作列吃剩余宽，主体列保持省略（有 title）。
+      '.dshmind-auditRow{display:grid;grid-template-columns:max-content max-content minmax(0,1fr) 150px;',
+      'gap:10px;align-items:baseline;',
       'padding:6px 10px;background:var(--dsw-alias-bg-layer-2,#fff);font-size:12px;border-left:2px solid transparent}',
       '.dshmind-auditFull{border-left-color:var(--dsw-alias-state-error-primary,#d54941)}',
       '.dshmind-auditMid{border-left-color:var(--dsw-alias-state-business-primary,#0f1115)}',
@@ -748,12 +752,16 @@ window.__ModuleLoader__.load({
       '.dshmind-empty{color:var(--dsw-alias-label-tertiary,#81858c);font-size:12px;padding:10px 0}',
       // 优化批④：读数分「身份／健康」两组竖排，组内仍横排——失联详情多行时只撑自己那一格，
       // 不再把身份读数一起拉高（详情贴格的 Batch 8 定案不变）。
-      '.dshmind-readoutGroups{display:flex;flex-direction:column;gap:8px}',
+      // UI 卫生批（主人视觉打回「贴边」）：读数区与 hero 圆角内缘之间要有呼吸（hero 是
+      // overflow:hidden 的容器，格子自己带边框——容器不给内边距时格子直接顶住容器边）。
+      '.dshmind-readoutGroups{display:flex;flex-direction:column;gap:8px;padding:12px 16px 16px}',
       '.dshmind-readoutGroup{display:flex;flex-direction:column;gap:4px}',
       '.dshmind-readoutGroupLabel{font-size:10px;letter-spacing:.14em;color:var(--dsw-alias-label-caption,#adb2b8)}',
       // 优化批③：会审独立答案折叠——切换钮走文字样式（无底无框，只有指针与箭头示意）。
+      // UI 卫生批：button 不声明字体时用浏览器默认（Arial 系），与面板字体混排一眼就穿帮——
+      // 照 .dshmind-btn 的先例 font-family:inherit。
       '.dshmind-toggle{border:none;background:transparent;padding:2px 0;cursor:pointer;font-size:12px;',
-      'text-align:left;color:var(--dsw-alias-label-secondary,#61666b)}',
+      'font-family:inherit;line-height:1.5;text-align:left;color:var(--dsw-alias-label-secondary,#61666b)}',
       '.dshmind-answerSummary{font-size:11.5px;color:var(--dsw-alias-label-tertiary,#81858c);overflow-wrap:anywhere}',
 
       '.dshmind-foot{display:flex;gap:10px;flex-wrap:wrap;align-items:center;color:var(--dsw-alias-label-caption,#adb2b8);',
@@ -1025,7 +1033,8 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dshmind-secHead' }, [
           h('span', { className: 'dshmind-secIdx' }, String(index)),
           h('h3', { className: 'dshmind-secTitle' }, title),
-          hint ? h('span', { className: 'dshmind-secHint' }, hint) : null,
+          // UI 卫生批：hint 是 nowrap+ellipsis 的，窄面板会省略——挂 title 全文，截断不丢信息。
+          hint ? h('span', { className: 'dshmind-secHint', title: hint }, hint) : null,
           count ? h('span', { className: 'dshmind-secCount dshmind-mono' }, count) : null,
         ]),
         h('div', { className: 'dshmind-secBody' }, body),
@@ -1837,7 +1846,7 @@ window.__ModuleLoader__.load({
                   h('div', { key: 'top', className: 'dshmind-decideTop' }, [
                     badge(item.类型, hot ? 'red' : 'warn'),
                     h('span', { key: 'w', className: 'dshmind-decideWhat' }, line(item.描述, '（无描述）')),
-                    item.节点 ? h('span', { key: 'n', className: 'dshmind-chip dshmind-mono' }, item.节点) : null,
+                    item.节点 ? h('span', { key: 'n', className: 'dshmind-chip dshmind-mono', title: item.节点 }, item.节点) : null,
                   ].filter(Boolean)),
                   h('div', { key: 'why', className: 'dshmind-decideWhy' }, '原因：' + item.原因),
                   item.可选项.length
@@ -1905,7 +1914,7 @@ window.__ModuleLoader__.load({
                                   h('span', { key: 'b', className: 'dshmind-badge', style: {
                                     color: BRAND, borderColor: BRAND, background: 'var(--dsw-alias-bg-layer-1,#fff)',
                                   } }, answer.盲标),
-                                  answer.成员 ? h('span', { key: 'm', className: 'dshmind-chip dshmind-mono' }, answer.成员) : null,
+                                  answer.成员 ? h('span', { key: 'm', className: 'dshmind-chip dshmind-mono', title: answer.成员 }, answer.成员) : null,
                                 ].filter(Boolean)),
                                 h('div', { key: 'c', className: 'dshmind-answerBody' }, answer.结论),
                                 answer.反例面.length
@@ -2006,7 +2015,9 @@ window.__ModuleLoader__.load({
                     outputs.length
                       ? h('div', { key: 'chips', className: 'dshmind-chips' },
                           outputs.slice(0, 4).map(function (ref, i) {
-                            return h('span', { key: 'c' + i, className: 'dshmind-chip dshmind-mono' }, ref);
+                            // chip 是 nowrap+ellipsis 的（max-width 230px）：引用长了会省略，
+                            // 挂 title 全文——截断不许丢信息（UI 卫生批）。
+                            return h('span', { key: 'c' + i, className: 'dshmind-chip dshmind-mono', title: refText(ref) }, ref);
                           }))
                       : null,
                   ].filter(Boolean));

@@ -219,6 +219,38 @@ test('优化批 ①④③：空态给可敲命令、读数分身份/健康两组
   }
 });
 
+test('UI 基础卫生批：读数区不贴边、审计列按内容宽、chip/hint 截断带 title（行为判据）', async () => {
+  // 主人视觉验收打回「很多截断、靠边」——CSS 级判据读真注入的 style 元素（体例同 ⑤），
+  // title 是行为判据：nowrap/ellipsis 的位置必须挂全文，省略不丢信息。
+  const 活 = await renderView(sampleView());
+  const 样式 = 活.elements.find((el) => el.type === 'style');
+  const 规则体 = 样式 ? (Array.isArray(样式.props.children) ? 样式.props.children.join('') : String(样式.props.children)) : '';
+  assert.match(规则体, /\.dshmind-readoutGroups\{[^}]*padding:12px 16px 16px/,
+    '读数区有内边距（格子不贴 hero 圆角边）');
+  assert.match(规则体, /grid-template-columns:max-content max-content minmax\(0,1fr\) 150px/,
+    '审计时间/档位列按内容宽（MM-DD HH:mm:ss ≈92px，88px 固定列必溢出）');
+  assert.doesNotMatch(规则体, /88px 78px/, '审计行不得再用固定 88px 时间列');
+  assert.match(规则体, /\.dshmind-toggle\{[^}]*font-family:inherit/, '折叠钮继承面板字体');
+
+  const 产物chip = 活.elements.find((el) => String(el.props.className || '').indexOf('dshmind-chip') >= 0
+    && textOf(el) === 'artifact-1');
+  assert.ok(!!产物chip && 产物chip.props.title === 'artifact-1', '产物 chip 带 title 全文');
+  const 提示 = 活.elements.find((el) => String(el.props.className || '').split(/\s+/).indexOf('dshmind-secHint') >= 0);
+  assert.ok(!!提示 && 提示.props.title === textOf(提示), '分区 hint 带 title 全文');
+
+  const report = await runHarness();
+  const 要的 = [
+    'UI 读数区与 hero 内缘有 12/16px 边距（格子不贴容器圆角边）',
+    'UI 审计时间/档位列按内容宽（固定 88px 装不下 MM-DD HH:mm:ss≈92px）',
+    'UI 折叠钮继承面板字体（button 默认 Arial 会混排）',
+    'UI 产物 chip 带 title 全文（省略不丢信息）',
+    'UI 分区 hint 带 title 全文（窄面板省略不丢信息）',
+  ];
+  for (const name of 要的) {
+    assert.ok(report.passed.includes(name), 'UI 卫生断言缺失或未通过：' + name);
+  }
+});
+
 test('lib/client.js 顶层没有 import / export（经典脚本，否则整站 web 启动失败）', () => {
   const lines = source.split(/\r?\n/);
   const offenders = [];

@@ -2612,6 +2612,27 @@ export async function runHarness() {
       passed.push(check(!!值 && 值.props.title === undefined && textOf(值).indexOf('（缺失') >= 0,
         '⑤ 判据缺失占位分支不挂 title', JSON.stringify(值 && 值.props.title)));
     }
+    // UI 卫生批（2026-10-10 · 主人视觉打回「截断、贴边」）：CSS 规则判据读真注入的 style
+    // 元素（体例同 ⑤），title 是行为判据——截断省略的地方必须挂全文，截断不丢信息。
+    {
+      const r = await renderView(sampleView());
+      const 样式 = r.elements.find((el) => el.type === 'style');
+      const 规则体 = 样式 ? (Array.isArray(样式.props.children) ? 样式.props.children.join('') : String(样式.props.children)) : '';
+      passed.push(check(/\.dshmind-readoutGroups\{[^}]*padding:12px 16px 16px/.test(规则体),
+        'UI 读数区与 hero 内缘有 12/16px 边距（格子不贴容器圆角边）'));
+      passed.push(check(/\.dshmind-auditRow\{[^}]*grid-template-columns:max-content max-content minmax\(0,1fr\) 150px/.test(规则体)
+        && !/88px 78px/.test(规则体),
+        'UI 审计时间/档位列按内容宽（固定 88px 装不下 MM-DD HH:mm:ss≈92px）'));
+      passed.push(check(/\.dshmind-toggle\{[^}]*font-family:inherit/.test(规则体),
+        'UI 折叠钮继承面板字体（button 默认 Arial 会混排）'));
+      const 产物chip = r.elements.find((el) => String(el.props.className || '').indexOf('dshmind-chip') >= 0
+        && textOf(el) === 'artifact-1');
+      passed.push(check(!!产物chip && 产物chip.props.title === 'artifact-1',
+        'UI 产物 chip 带 title 全文（省略不丢信息）', JSON.stringify(产物chip && 产物chip.props.title)));
+      const 提示 = r.elements.find((el) => String(el.props.className || '').split(/\s+/).indexOf('dshmind-secHint') >= 0);
+      passed.push(check(!!提示 && 提示.props.title === textOf(提示) && textOf(提示).length > 0,
+        'UI 分区 hint 带 title 全文（窄面板省略不丢信息）', JSON.stringify(提示 && 提示.props.title)));
+    }
   }
 
   return { passed, liveElements: c1.elements.length, liveTexts: c1.texts.length };
