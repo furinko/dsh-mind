@@ -37,9 +37,10 @@
 // 这个页面最坏的结果只能是「信息少」，绝不能是「空白」或「抛错」。
 
 window.__ModuleLoader__.load({
-  // ⚠️ 这个 id **必须等于本包的包名**：宿主是按包名去模块表里取这个 factory 的。
+  // ⚠️ 这个 id **必须等于被安装包的包名**：宿主是按包名去模块表里取这个 factory 的。
   // 写错不会「本插件不显示」，而是整站 web 启动失败 —— 改名前先看 package.json。
-  id: 'dsh-mind-board',
+  // （2026-10-11 单包化：浏览器半区归属根包 dsh-mind，不再是独立的 dsh-mind-board 包。）
+  id: 'dsh-mind',
   factory: function (require) {
     var React = require('react');
 
@@ -2492,6 +2493,6 @@ window.__ModuleLoader__.load({
       return disposeAll;
     }
 
-    return { name: 'dsh-mind-board', inject: ['slots'], apply: apply };
+    return { name: 'dsh-mind', inject: ['slots'], apply: apply };
   },
 });

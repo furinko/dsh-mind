@@ -1,7 +1,6 @@
 {
   "name": "dsh-mind",
   "version": "1.0.0",
-  "private": true,
   "type": "module",
   "description": "心智 · 数字组织 —— 一张插件卡，三个组件：内核 / 安全类 / 看板",
   "keywords": [
@@ -18,6 +17,10 @@
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
+    "./kernel": "./components/kernel/lib/index.js",
+    "./guard": "./components/guard/lib/index.js",
+    "./board": "./components/board/lib/index.js",
+    "./client": "./components/board/lib/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json",
     "./locale/zh.json": "./locale/zh.json",
@@ -32,17 +35,20 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [],
+      "immediately": true
     }
-  },
-  "dependencies": {
-    "dsh-mind-kernel": "link:./components/kernel",
-    "dsh-mind-guard": "link:./components/guard",
-    "dsh-mind-board": "link:./components/board"
   },
   "files": [
     "lib",
     "src",
     "mind",
+    "components/kernel/lib",
+    "components/guard/lib",
+    "components/board/lib",
     "locale",
     "icon.svg",
     "cordis.patch.yml",

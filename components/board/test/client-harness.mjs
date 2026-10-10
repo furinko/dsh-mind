@@ -44,7 +44,7 @@ import vm from 'node:vm';
 /** 被测文件（经典脚本）的绝对路径。 */
 export const CLIENT_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'client.js');
 /** 包名：loader 的 id 与插件体的 name 都必须是它。 */
-export const PACKAGE_NAME = 'dsh-mind-board';
+export const PACKAGE_NAME = 'dsh-mind';
 /** 主面板的 key，也是侧边栏入口的 id。 */
 export const PANEL_KEY = 'dsh-mind';
 /** 宿主命令：与 lib/client.js 里的常量一致。 */

@@ -8,34 +8,38 @@
 
 ## 一张卡，三个组件
 
-「组件」= 插件管理页里那张卡下面的**行**：每行一个独立包、一个独立开关、一个独立状态点。
-所以本仓库是一个 **bundle 包 + 三个组件包**，profile 的 `dsh.profile.bundles` 里**只写 bundle**——
-三个都写进去就变成三张卡，那就不再是「组件」而是三个插件了。
+「组件」= 插件管理页里那张卡下面的**行**：每行一个独立开关、一个独立状态点。
+本仓库是**单包自洽的 bundle 包**：三个组件行指向本包的**子路径导出**
+（`dsh-mind/kernel` 等），用户只装 `dsh-mind` 一个包，三行全部可达。
+
+> 历史教训（为什么不再是三个独立包）：旧形态靠 profile 手写四行 `link:` 依赖——
+> `link:` 是纯符号链接协议，pnpm **不解析**目标包的 `dependencies`，官方
+> `dsh plugin add` 只写一行主包依赖，组件就「静默不装」（隔离 profile 实测在案）。
+> 子路径导出走标准模块解析（含 Node 自引用），一个包即闭合。
 
 ```
 dsh-mind/                        ← 插件列表里的那张卡（不插自己的行）
-  cordis.patch.yml                 insert 三行：内核 / 安全类 / 看板
-  package.json                     dependencies: 三个组件包（link:，包内有效）
+  cordis.patch.yml                 insert 三行：内核 / 安全类 / 看板（name = 本包子路径）
+  package.json                     exports: ./kernel ./guard ./board ./client；dsh.client 在根
   src/                             八件基础设施实现（组件用相对路径引它）
   mind/                            出厂区：宪章 / 法律 / 编制 / 岗位卡 / 出厂能力库 / 默认值
   lib/actions.js                   动作表（内核组件用）
-  scripts/verify-profile-install.mjs  安装自检（防「组件静默不装」）
-  scripts/install-into-profile.mjs    一键装进 profile（幂等 + 装完自动验收）
+  scripts/verify-profile-install.mjs  安装自检（防「装到不完整的包」）
   components/
-    kernel/   dsh-mind-kernel      内核组件
-    guard/    dsh-mind-guard       安全类组件
-    board/    dsh-mind-board       看板组件（浏览器半区挂在这个包上）
+    kernel/                        内核组件（宿主入口 = exports ./kernel）
+    guard/                         安全类组件（宿主入口 = exports ./guard）
+    board/                         看板组件（宿主入口 = exports ./board；浏览器半区 = ./client）
 ```
 
-| 组件 | 包 | 装什么 | 关掉它的后果 |
+| 组件 | 行 id | 装什么 | 关掉它的后果 |
 |---|---|---|---|
 | **内核** | `dsh-mind-kernel` | 八件基础设施的对外两个面：`mind` 工具 · `/mind` 命令 · 工具范围闸 · 审计钩子 · 系统提示段 | 这张卡只剩空壳，所以别关 |
 | **安全类** | `dsh-mind-guard` | 四道封闭探针 · 探针见红**定位**回滚目标（只定位入账＋告警升级主权者；运行态不自动改文件，装回由主权者经版本管理执行） · 条款级升级裁决（`mind_guard` 工具 · `/mind-guard` 命令） | 判定与记账照常，没有机制自检与升级运维 |
 | **看板** | `dsh-mind-board` | 主内容区独立面板 + 左侧边栏下方入口 | 组织照常跑，只是没有可视化 |
 
-**浏览器半区为什么挂在看板包上**：一个包的 `dsh.client` 是包级的，只有被某一行引用的包才会进 roster。
-把面板与入口放进看板包，**关掉看板那一行，整个包不进 roster，界面一起消失**——
-这是「组件可单独启停」在实现上唯一干净的落点。
+**浏览器半区为什么挂在根包上**：`dsh.client` 与 `exports ./client` 在根包声明，
+宿主按 `<包名>/client` 解析。关掉看板那一行，宿主入口与浏览器半区一起消失——
+「组件可单独启停」的落点不变，只是声明从看板子包上移到了根包（子包不再是包）。
 
 三条纪律写在代码里，也写在断言里：
 
@@ -46,9 +50,9 @@ dsh-mind/                        ← 插件列表里的那张卡（不插自己�
 3. **主面不吞异常**。工具注册不上就等于组件没生效，必须让装载如实失败；
    只有次要面（命令、提示段）才降级为告警。吞掉主面只会得到一个「看起来装好了」的假象。
 
-安装 = **四个包都写进 profile 的 `dependencies`**（`dsh-mind` + 三个组件包），
-`dsh.profile.bundles` 里**只加 `dsh-mind`**。为什么是四行而不是一行，见 [安装](#安装)——
-`link:` 不解析目标包的 `dependencies`，只写一行会得到「组件静默不装」。
+安装 = **一行**：`dsh plugin --profile <名> add dsh-mind`（npm 发布版）或 `add <本仓库路径>`
+（开发版）。装完 `dsh.profile.bundles` 里只有 `dsh-mind` 一张卡，三行组件由本包
+`cordis.patch.yml` 就位——不再需要手写任何 `link:` 依赖。
 
 ---
 
@@ -159,117 +163,64 @@ upgrade_compare · upgrade_resolve · upgrade_withdraw
 
 ## 安装
 
-**装法（本机实测可行）**：把**四个包**都写进 profile 的 `dependencies`，`dsh.profile.bundles` 里
-**只加 `dsh-mind`**，然后在 profile 目录里 `pnpm install`，再重启客户端。
-（想省事就跳到下面的「一键装」——那段手工编辑已经固化成脚本，并自带验收闸。）
-
-`<profileDir>/package.json`（本机是 `C:\Users\kuro\.dsh\profiles\desktop\package.json`，
-只列与本插件相关的行，其余依赖照旧保留）：
-
-```json
-{
-  "dependencies": {
-    "dsh-mind": "link:E:/dsh-mind",
-    "dsh-mind-kernel": "link:E:/dsh-mind/components/kernel",
-    "dsh-mind-guard": "link:E:/dsh-mind/components/guard",
-    "dsh-mind-board": "link:E:/dsh-mind/components/board"
-  },
-  "dsh": {
-    "profile": {
-      "bundles": [
-        "……其它 bundle 照旧……",
-        "dsh-mind"
-      ]
-    }
-  }
-}
-```
-
-### 为什么必须写四行，而不是一行
-
-- **`link:` 是纯符号链接协议，pnpm 不解析目标包的 `dependencies`。** 本包 `package.json` 里的
-  `"dsh-mind-kernel": "link:./components/kernel"` 这种**相对 link** 因此**在 profile 层完全不生效**。
-- **实测**：profile 里只写 `"dsh-mind": "link:E:/dsh-mind"` + bundles 加 `dsh-mind`，
-  `pnpm install` 之后**三个组件包一个都没进 profile 的 `node_modules`**。
-- 而 `cordis.patch.yml` 的 `insert` 三行是按 **profile 的 `node_modules`** 解析 `name` 的
-  （profile 目录是 baseUrl 锚点）。解析不到就是**静默不装**：不报错、卡还在、组件没了——
-  只有用到的时候才发现。所以组件依赖必须在 profile 层**再显式写一遍**。
-- 试过 `"dsh-mind": "portal:E:/dsh-mind"`（想让 pnpm 顺带解析依赖）：该 pnpm 构建直接报
-  `ERR_PNPM_SPEC_NOT_SUPPORTED_BY_ANY_RESOLVER`，**不可用**。
-
-### 为什么三个组件不能进 `dsh.profile.bundles`
-
-`bundles` 是**插件卡的名单**：每条 = 一张卡 + 一层 patch。三个都写进去就变成**三张卡**，
-而「组件」的定义恰恰是**那张卡下面的行**（一行一个包、一个独立开关）。
-三个组件行的来源是 `dsh-mind` 自己的 `cordis.patch.yml`，不是 bundles——
-bundles 里写 `dsh-mind` 一项就够。
-
-### 一键装（推荐）：`scripts/install-into-profile.mjs`
+**装法（2026-10-11 起单包自洽，一行装齐）**：
 
 ```powershell
-node E:\dsh-mind\scripts\install-into-profile.mjs %USERPROFILE%\.dsh\profiles\desktop
-node E:\dsh-mind\scripts\install-into-profile.mjs %USERPROFILE%\.dsh\profiles\desktop --dry-run   # 只看要改什么
+# 用户（npm 发布版）：
+dsh plugin --profile <名> add dsh-mind
+# 开发者（本仓库路径，装的是当前工作区）：
+dsh plugin --profile <名> add E:\dsh-mind
+# 官方桌面客户端：在会话里直接让 DSH 装（「帮我装 dsh-mind」）
 ```
 
-它做的事（**幂等**，可反复跑）：
+`dsh plugin add` 是官方安装器（`pnpm add` 薄转发 + 按「已装且声明 `dsh.bundle` 的依赖」
+自动重建 `bundles`）。装完 `dependencies` 里只有 `dsh-mind` 一行，
+`dsh.profile.bundles` 里多一张 `dsh-mind` 卡；三行组件由本包 `cordis.patch.yml`
+就位，`name` 是本包子路径（`dsh-mind/kernel` 等），经 package.json 的 `exports` 解析——
+**不需要手写任何 `link:` 依赖，不存在「组件静默不装」**。
 
-1. 读 `<profileDir>/package.json`；
-2. `dependencies` 补上四行（`link:` 指向本仓库与三个组件；写法已正确就不动，写法不对就改正并打印 `旧 → 新`）；
-3. `dsh.profile.bundles` 确保有 `dsh-mind`，并确保三个组件**不在**其中（在就移除并明确告知——那是「三张卡」的错误形态）；
-4. 有改动时**先备份**成同目录的 `package.json.bak-install-<时间戳>`，再写；
-5. 在 `<profileDir>` 里跑 `pnpm install`。pnpm 探测顺序：`--pnpm` 参数 → 环境变量 `DSH_MIND_PNPM` / `DSH_PNPM`
-   → PATH 上的 `pnpm` → 官方桌面客户端自带的 `resources/runtime/pnpm/bin/pnpm.mjs`（用当前 node 跑）。
-   每个候选都**先试跑 `--version`**（探测到 ≠ 能用），第一个成功的胜出；
-   全都探测不到就**明确报错**并给出可粘贴的手工命令，**不假装成功**；
-6. 最后跑 `verify-profile-install.mjs <profileDir>` 当**验收闸**：自检非 0 ⇒ 本脚本也非 0。
+### 历史教训：为什么曾经要手写四行（现已废除）
 
-硬边界：**不会**替你猜或创建 profile（无参数 / 不是 profile 目录 = exit 2）；
-**不重启、不杀死、不启动任何客户端进程**——改完**需要你自己重启客户端**才生效。
+旧四包形态靠 profile 写四行 `link:` 依赖才能装齐，因为：
 
-### 装完必须自检（防「静默不装」）
+- **`link:` 是纯符号链接协议，pnpm 不解析目标包的 `dependencies`**——包内相对 link
+  在 profile 层完全不生效，官方安装器只写一行主包依赖，组件就静默不装（隔离 profile
+  实测在案：`node_modules` 里只有 `dsh-mind`，三个组件一个都没有，exit=0 假绿）；
+- `portal:` 让 pnpm 顺带解析依赖的路也试过：`ERR_PNPM_SPEC_NOT_SUPPORTED_BY_ANY_RESOLVER`，不可用。
+
+单包化（组件行改子路径导出）从根上消掉了这个问题：标准模块解析 + Node 自引用，
+一个包即闭合，官方安装器的一行写法直接正确。
+
+### 为什么组件不进 `dsh.profile.bundles`
+
+`bundles` 是**插件卡的名单**：每条 = 一张卡 + 一层 patch。组件写进去就变成多张卡，
+而「组件」的定义恰恰是**那张卡下面的行**（一行一个独立开关）。三个组件行的来源是
+`dsh-mind` 自己的 `cordis.patch.yml`，bundles 里写 `dsh-mind` 一项就够。
+
+### 装完自检（防「装到不完整的包」）
 
 ```powershell
-node E:\dsh-mind\scripts\verify-profile-install.mjs %USERPROFILE%\.dsh\profiles\desktop
+node scripts/verify-profile-install.mjs %USERPROFILE%\.dsh\profiles\desktop
+node scripts/verify-profile-install.mjs --selftest   # 反例自测
 ```
 
-逐条检查：profile 的四个依赖在不在 · `bundles` 是不是只写了 `dsh-mind` · 四个包在
-`node_modules` 里解析得到吗 · `cordis.patch.yml` 的**三条 insert 行齐不齐**（少一行也红，缺哪一行点名）
-且每条 `name` 解析得到吗 · 出厂区 `mind/` 必备目录件齐不齐。全过 exit 0，任一条红 exit 1 并逐条说明。
-脚本自己也带反例测试：`node scripts/verify-profile-install.mjs --selftest`。
+逐条检查：dependencies 与 bundles 有 `dsh-mind` · `node_modules/dsh-mind` 非 private、
+无 dependencies · exports 的 `./kernel ./guard ./board ./client` 全部落盘 · 出厂区
+`mind/` 与 `src/` 在包里 · patch 三行都是 `dsh-mind/<sub>` 且四个子路径从 profile
+上下文 `require.resolve` 得到。全过 exit 0，任一条红 exit 1 并逐条说明。
 
-### `dsh plugin --profile desktop add …`：**实测它不会替本包装组件**
+装完是**一张卡**，三个组件是那张卡下面的三行，各有独立开关（关一行 = 那个组件不进
+roster，它的工具 / 命令 / 界面一起消失）；每行的 `config` 是各组件自己的（如安全类
+那一行的 `开机自检`），**不是**卡上的 `config.components`。运行时不 import 任何
+`@deepseek-ai/*`，因此不会被出厂包的解析规则挡住（`peerDependencies` 里的
+`@deepseek-ai/dsh` 是 optional，只作版本声明）。
+
+### 发布
 
 ```powershell
-dsh plugin --profile desktop add E:\dsh-mind     # 通用形式：add <本仓库路径>
+npm pack            # 产物完整性先过一遍（files 白名单：lib/src/mind/components/*/lib/locale/patch/README）
+npm publish         # 需要 npm 账号登录；发布名 dsh-mind（2026-10-11 查册未占用）
 ```
-
-它是 `pnpm add` 的**薄转发**（读官方 `@deepseek-ai/dsh` 的 `lib/plugin-*.js`：在 profile 目录里跑 pnpm，
-再按「已装且声明 `dsh.bundle` 的依赖」重建 `bundles`）。**实测（隔离的临时 profile，desktop 全程未被碰）**：
-
-```
-$ DSH_HOME=C:\Users\kuro\.dsh node E:\DSHOME\node_modules\@deepseek-ai\dsh\lib\bin.js `
-      plugin --profile zz-probe add E:\dsh-mind
-dsh: initialized profile zz-probe at C:\Users\kuro\.dsh\profiles\zz-probe
-dependencies:
-+ dsh-mind link:E:/dsh-mind
-Already up to date
-Done in 425ms using pnpm v10.34.5          ← exit=0
-```
-
-它写出的 profile 只有**一行依赖**（`"dsh-mind": "link:E:/dsh-mind"`），装出来的 `node_modules` 里
-`dsh-mind*` 相关的**只有 `dsh-mind` 一个，三个组件一个都没有** ⇒ 照它装就是**组件静默不装**。
-另外两个实测事实：它会 `initialized profile`（**会替你创建 profile 目录**），
-并给 `bundles` 加上 `@deepseek-ai/dsh-base`。
-
-所以两条出路：
-
-1. **用它装完，再手工补三行**（三个组件的 `link:` 依赖）——就是上面那份 `package.json` 片段；
-2. **直接用一键脚本**（上一节），它把四行一次写好，并且装完自动验收。
-
-装完是**一张卡**，三个组件是那张卡下面的三行，各有独立开关（关一行 = 那个包不进 roster，
-它的工具 / 命令 / 界面一起消失）；每行的 `config` 是各组件自己的（如安全类那一行的 `开机自检`），
-**不是**卡上的 `config.components`。运行时不 import 任何 `@deepseek-ai/*`，
-因此不会被出厂包的解析规则挡住（`peerDependencies` 里的 `@deepseek-ai/dsh` 是 optional，只作版本声明）。
 
 ## 验证
 

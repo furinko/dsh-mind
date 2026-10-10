@@ -262,9 +262,9 @@ test('lib/client.js 顶层没有 import / export（经典脚本，否则整站 w
 
   assert.ok(!/^\s*(?:export\s+default|export\s*\{)/m.test(source), '不得出现 export default / export {');
   assert.match(source, /window\.__ModuleLoader__\.load\(/, '必须走 window.__ModuleLoader__.load');
-  assert.match(source, /id:\s*'dsh-mind-board'/, "loader 的 id 必须是包名 'dsh-mind-board'");
+  assert.match(source, /id:\s*'dsh-mind'/, "loader 的 id 必须是被安装包名 'dsh-mind'（单包化后浏览器半区归属根包）");
   assert.match(source, /factory:\s*function\s*\(\s*require\s*\)/, 'factory 必须接收 require');
-  assert.match(source, /return\s*\{\s*name:\s*'dsh-mind-board'/, 'factory 必须 return 插件体');
+  assert.match(source, /return\s*\{\s*name:\s*'dsh-mind'/, 'factory 必须 return 插件体（name=根包名 dsh-mind）');
 });
 
 test('lib/client.js 不依赖宿主内部包，只用带兜底值的 --dsw-* 令牌', () => {
@@ -324,25 +324,24 @@ test('八件与环路已从源码里删除（不是注释掉）：渲染、常�
 });
 
 test('包清单点到的每条路径都在 exports 里，且都落在磁盘上', () => {
-  // 组件包自己没有补丁：它那一行写在 bundle 的补丁里。
-  // 所以这里只看本包清单承诺的东西——`main` 与 `dsh.client` 的浏览器半区。
+  // 单包化（2026-10-11）：浏览器半区（dsh.client + ./client）挂在**根包** dsh-mind 上；
+  // 看板组件自己的清单只承诺宿主入口 main。两份清单各查各的。
+  const REPO_ROOT = join(PACKAGE_ROOT, '..', '..');
+  const rootPkg = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
+  assert.equal(rootPkg.dsh?.client?.platform, 'web', '根包必须声明浏览器半区 platform:web');
+  assert.equal(typeof rootPkg.dsh?.client?.immediately, 'boolean');
+  assert.equal(rootPkg.exports['./client'], './components/board/lib/client.js',
+    '根包 exports ./client 必须指向看板浏览器包（宿主按 <包名>/client 解析）');
+  assert.ok(existsSync(join(REPO_ROOT, 'components/board/lib/client.js')), './client 指向的文件不存在');
+
+  // 组件清单：main 在 exports 里，全部导出都落盘。
   const referenced = new Set();
   if (typeof pkg.main === 'string') referenced.add('./' + pkg.main.replace(/^\.\//, ''));
-  const client = (pkg.dsh && pkg.dsh.client) || {};
-  assert.equal(client.platform, 'web', '看板组件必须声明 platform: web');
-  assert.equal(typeof client.immediately, 'boolean');
-  for (const value of Object.values(client)) {
-    if (typeof value === 'string' && value.startsWith('./')) referenced.add(value);
-  }
-  // 浏览器半边由 dsh.client 段发现，宿主按 `<包名>/client` 解析，所以这条必须在。
-  referenced.add('./lib/client.js');
-
   const exported = new Set(Object.values(pkg.exports || {}));
   for (const path of referenced) {
     assert.ok(exported.has(path), 'exports 缺 ' + path + ' ⇒ 宿主 ESM 加载器会拒收，后端启动即崩');
   }
   assert.equal(pkg.exports['.'], './lib/index.js');
-  assert.equal(pkg.exports['./client'], './lib/client.js');
 
   for (const [key, value] of Object.entries(pkg.exports)) {
     assert.ok(value.startsWith('./'), key + ' 的导出路径必须是相对路径');

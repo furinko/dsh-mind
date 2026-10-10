@@ -68,12 +68,13 @@ for (const file of ROLE_CARD_FILES) {
   }
 }
 
-// 交付形状是「一张卡 + 三行」。这里守四条只靠运行时会很晚才暴露的边界：
+// 交付形状是「一张卡 + 三行，单包自洽」。这里守四条只靠运行时会很晚才暴露的边界：
 //  ① 清单里每个被引用的路径都必须在 exports 里，且真的在磁盘上
 //     （漏一个 ⇒ 宿主按子路径加载被 ESM 拒收 ⇒ 后端启动即崩）；
-//  ② 补丁插的行必须指向 components/ 下真实存在的包，且行名 == 包名；
+//  ② 补丁插的行必须是本包子路径（<包名>/<sub>）且经 exports 解析到 components/ 下的真实文件
+//     —— 单包自洽的关键：用户只装一个包，三行全部可达（四包 link: 形态已废）；
 //  ③ bundle 包自己不插行（插了列表里就会多出一张卡，组件又退回成插件）；
-//  ④ 浏览器半区必须挂在看板包上（挂错包，那一行的开关就管不到它）。
+//  ④ 浏览器半区挂在根包上（dsh.client + exports ./client），组件包一个都不许有。
 const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 const exported = new Set(Object.values(manifest.exports ?? {}));
 for (const rel of [manifest.main, manifest.icon, manifest.dsh?.bundle?.patch].filter(Boolean)) {
@@ -81,9 +82,12 @@ for (const rel of [manifest.main, manifest.icon, manifest.dsh?.bundle?.patch].fi
   if (!exported.has(normalized)) failures.push(`${normalized} 被 package.json 引用但不在 exports 里 —— 宿主按子路径加载会直接拒收。`);
   if ((await readTextOrNull(join(root, rel))) === null) failures.push(`${normalized} 不存在。`);
 }
-if (manifest.dsh?.client) failures.push('bundle 包不该有 dsh.client：浏览器半区属于看板组件。');
-// exports 每一项都必须落在磁盘上：浏览器半区独立成组件后，根包曾留着指向
-// 不存在文件的 `./client` 导出——引用面（上面的循环）查不到它，因为没人引用它。
+if (manifest.private === true) failures.push('package.json 仍是 private —— npm 发不出去，市场装不到。');
+if (Object.keys(manifest.dependencies ?? {}).length > 0) failures.push('bundle 包不该有 dependencies —— 组件已在包内，残留依赖会让安装器去解析不存在的包。');
+// 浏览器半区挂在根包上：宿主按 `<包名>/client` 取浏览器包。
+if (manifest.dsh?.client?.platform !== 'web') failures.push('根包缺 dsh.client(platform:web) —— 浏览器半区不会被发现。');
+if (manifest.exports?.['./client'] === undefined) failures.push('根包 exports 缺 ./client —— 宿主按 <包名>/client 解析浏览器半区会拒收。');
+// exports 每一项都必须落在磁盘上。
 for (const [key, value] of Object.entries(manifest.exports ?? {})) {
   if (typeof value !== 'string' || !value.startsWith('./')) continue;
   if ((await readTextOrNull(join(root, value))) === null) failures.push(`exports["${key}"] 指向不存在的文件：${value}`);
@@ -95,13 +99,23 @@ const 补丁行 = [...String(await readTextOrNull(join(root, 'cordis.patch.yml')
 if (补丁行.length === 0) failures.push('cordis.patch.yml 没有插入任何组件行。');
 if (补丁行.some((row) => row.id === manifest.name)) failures.push('bundle 包给自己插了行 —— 列表里会多出一张卡，组件就退回成插件了。');
 for (const row of 补丁行) {
-  if (!(manifest.dependencies ?? {})[row.name]) {
-    failures.push(`行 ${row.id} 的包 ${row.name} 不在 bundle 的 dependencies 里 —— profile 解析不到它。`);
+  if (!row.name.startsWith(`${manifest.name}/`)) {
+    failures.push(`行 ${row.id} 的 name '${row.name}' 不是本包子路径（应为 ${manifest.name}/<sub>）。`);
+    continue;
   }
+  const sub = row.name.slice(manifest.name.length + 1);
+  const target = manifest.exports?.[`./${sub}`];
+  if (typeof target !== 'string') {
+    failures.push(`行 ${row.id} 的 name '${row.name}' 不在根包 exports 里 —— 装载时 import 会拒收。`);
+    continue;
+  }
+  if ((await readTextOrNull(join(root, target))) === null) failures.push(`行 ${row.id} 解析到不存在的文件：${target}。`);
+  if (!target.startsWith('./components/')) failures.push(`行 ${row.id} 解析到 ${target} —— 组件行必须落进 components/。`);
 }
 notes.push(`补丁插 ${补丁行.length} 行：${补丁行.map((r) => r.id).join(' / ')}。`);
 
-// 每个组件包：名字与行一致、清单承诺的路径存在且被 exports 覆盖、浏览器半区是经典脚本。
+// 每个组件目录：根包 exports 的 ./<dir> 指向它的 lib/index.js、被补丁行引用，
+// 清单承诺的路径存在且被 exports 覆盖、浏览器半区是经典脚本。
 const 组件目录 = ['kernel', 'guard', 'board'];
 for (const dir of 组件目录) {
   const 包目录 = join(root, 'components', dir);
@@ -112,14 +126,19 @@ for (const dir of 组件目录) {
     failures.push(`components/${dir}/package.json 无法解析：${error.message}`);
     continue;
   }
-  if (!补丁行.some((row) => row.name === 包清单.name)) {
-    failures.push(`components/${dir} 的包名 ${包清单.name} 没有被任何补丁行引用 —— 它不会被装载。`);
+  const 期望入口 = `./components/${dir}/lib/index.js`;
+  if (manifest.exports?.[`./${dir}`] !== 期望入口) {
+    failures.push(`根包 exports["./${dir}"] 应为 ${期望入口}，实际 ${manifest.exports?.[`./${dir}`]}。`);
+  }
+  if (!补丁行.some((row) => row.name === `${manifest.name}/${dir}`)) {
+    failures.push(`components/${dir} 没有被任何补丁行引用 —— 它不会被装载。`);
   }
   const 导出 = new Set(Object.values(包清单.exports ?? {}));
-  for (const rel of [包清单.main, ...(包清单.dsh?.client ? ['./lib/client.js'] : [])].filter(Boolean)) {
+  for (const rel of [包清单.main].filter(Boolean)) {
     const normalized = rel.startsWith('./') ? rel : `./${rel}`;
     if (!导出.has(normalized)) failures.push(`${包清单.name}：${normalized} 被引用但不在 exports 里。`);
   }
+  if (包清单.dsh?.client) failures.push(`${包清单.name} 不该有 dsh.client —— 浏览器半区挂在根包上。`);
   for (const rel of await listFiles(join(包目录, 'lib'), { recursive: true, filter: (n) => n.endsWith('.js') })) {
     const text = await readTextOrNull(join(包目录, 'lib', rel));
     if (text && /from\s+['"]@deepseek-ai\//.test(text)) {
@@ -129,15 +148,15 @@ for (const dir of 组件目录) {
       const 源码 = text ?? '';
       if (/^\s*(import|export)\s/m.test(源码)) failures.push(`${包清单.name}：lib/client.js 含顶层 import/export，会让整站 web 启动失败。`);
       else if (!源码.includes('window.__ModuleLoader__.load')) failures.push(`${包清单.name}：lib/client.js 没有走 window.__ModuleLoader__.load。`);
-      // 宿主是按**包名**去模块表里取这个 factory 的。id 写错不是「本插件不显示」，
-      // 而是整站 web 启动失败 —— 这条曾经真的把宿主带崩过，所以在这里钉死。
+      // 宿主是按**被安装包的包名**去模块表里取这个 factory 的（单包化后 = 根包名）。
+      // id 写错不是「本插件不显示」，而是整站 web 启动失败 —— 这条曾经真的把宿主带崩过。
       const loaderId = /__ModuleLoader__\.load\(\s*\{[^}]*?id:\s*'([^']+)'/s.exec(源码)?.[1];
-      if (loaderId !== 包清单.name) {
-        failures.push(`${包清单.name}：lib/client.js 的 loader id 是 '${loaderId ?? '(缺失)'}'，必须等于包名 '${包清单.name}'。`);
+      if (loaderId !== manifest.name) {
+        failures.push(`${包清单.name}：lib/client.js 的 loader id 是 '${loaderId ?? '(缺失)'}'，必须等于根包名 '${manifest.name}'。`);
       }
       const 插件体名 = /return\s*\{\s*name:\s*'([^']+)'/.exec(源码)?.[1];
-      if (插件体名 !== 包清单.name) {
-        failures.push(`${包清单.name}：lib/client.js 的插件体 name 是 '${插件体名 ?? '(缺失)'}'，必须等于包名。`);
+      if (插件体名 !== manifest.name) {
+        failures.push(`${包清单.name}：lib/client.js 的插件体 name 是 '${插件体名 ?? '(缺失)'}'，必须等于根包名。`);
       }
       continue;
     }
@@ -148,12 +167,7 @@ for (const dir of 组件目录) {
     }
   }
 }
-// 浏览器半区只允许出现在看板包里。
-for (const dir of 组件目录) {
-  const 包清单 = JSON.parse(await readFile(join(root, 'components', dir, 'package.json'), 'utf8'));
-  if (dir !== 'board' && 包清单.dsh?.client) failures.push(`${包清单.name} 不该有 dsh.client：浏览器半区属于看板组件。`);
-}
-notes.push(`组件包 ${组件目录.length} 个，各自的清单与 exports 一致。`);
+notes.push(`组件 ${组件目录.length} 个（单包自洽），入口与清单一致。`);
 
 // 全部内核模块必须可加载（语法错误在这里就要暴露，而不是等宿主重启）。
 const modules = await listFiles(join(root, 'src'), { recursive: true, filter: (n) => n.endsWith('.js') });
