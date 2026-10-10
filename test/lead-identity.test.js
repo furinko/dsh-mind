@@ -19,12 +19,25 @@
  *     根会话 ⇒ **是 Lead**（正对照）；`exec.agent.session` 取不到 ⇒ **不是 Lead**（fail-closed）。
  *  3. 端到端（经 `mind` 工具的模型可达面）：子会话主体调 `debate_round` / `debate_converge`
  *     ⇒ 拒；根会话 ⇒ 放行（正对照，且真推进轮次 / 真收敛）。
- *     ⚠️ **这条的「拒」落在主体链的档案校验那一道**（会话派生的成员主体 = 未登记 ⇒ 最严拒），
+ *     ⚠️ **这条的「拒」落在主体链的档案校验那一道**（会话派生的实例键**不在身份档案里** ⇒ 最严拒），
  *     **早于** debate 服务的「仅 Lead」；「仅 Lead」那一层由 ⑤（服务面 · 已登记成员直调）与
  *     ⑱ 的既有回归背书。别把 ③ 读成「debate 层在模型可达面被验过」。
+ *     （⚠️ A 落地后**仍是拒**，但机制换了：以前是「roleId 哨兵值与档案岗位对不上」，
+ *      现在是「这个实例键压根没登记进档案」。同一读数、不同理由 —— 这条用例断言的是前者那句
+ *      `/未登记/`，A 落地时按机制改成 `/没有登记/`，判据本体「子会话不是 Lead」一字未动。）
  *     ⚠️ 造「两份答案」的前置只能走**服务面**（工具面主体由会话事实唯一决定 ⇒ `args.实例`
  *     不再记名，连交两次会折叠成 1 份）——读数与理由写在 ③ 前置那段注释里。
  *  4. 每条被拒的判据**同时**断言「副作用没发生」：轮次未推进 / 无轮边界消息落线 / 讨论未收敛。
+ *  5. **A 落地（2026-10-10 · 主人拍板的路径，本文件末尾的 `A 落地` 段）**：
+ *     ① Lead 用 `registry_assign` **显式登记**该子会话（实例 = 它的会话 id）；
+ *     ② 内核一格：`src/org.js` 的 `subjectFor` 最后一档（会话派生）**不填 `roleId`**
+ *     ⇒ `lib/actions.js:148` 的岗位对账 `member.岗位 !== 主体.roleId` 第三段短路
+ *     ⇒ 语义变成「**在册且在岗即可，岗位以档案为准**」。
+ *     A-1 登记后放行（主体形状 `{id, kind:'成员'}`，无 `roleId`）/ A-2 未登记仍拒（fail-closed）/
+ *     A-3 自报岗位仍要档案一致（门① 的成果，一格不放）/ A-4 根会话不受影响（仍是 Lead）。
+ *     ⚠️ 本段**改的是判据本体的语义**（第三段判据所指的对象从「哨兵值 `未登记`」变成「主体自陈的
+ *     岗位」），不是为了让测试变绿而放宽断言：旧用例里那条「登记成真岗位也仍拒」钉的正是
+ *     「会话派生的 roleId 恒为哨兵值」这个缺陷，而那个缺陷**就是本批要治的东西**。
  *
  * ⚠️ **诚实边界**（别把本文件的绿读成比它更大的结论）：
  *  · 门② 的判据只到**代码路径级**：真实宿主会话里 `header.origin` / `parentSession` 的
@@ -45,6 +58,7 @@ import { TaskGraph } from '../src/tasks.js';
 import { MessageBus } from '../src/bus.js';
 import { ReviewProtocol } from '../src/review.js';
 import { RoleRegistry } from '../src/registry.js';
+import { subjectFor } from '../src/org.js';
 import { runAction } from '../lib/actions.js';
 import * as kernel from '../components/kernel/lib/index.js';
 import { fakeHost } from './host-harness.mjs';
@@ -127,9 +141,12 @@ async function 起宿主(g) {
 /**
  * 经**模型可达面**读 `agentSubject` 算出来的主体。
  *
- * 两种读数都要读得到，因为**「主体算错」本身就会以两种形态出现**：
+ * 三种读数都要读得到，因为**「主体算错」与「主体对但身份没登记」都会以「放行/拒绝」的形态出现**：
  *  · 算成 Lead ⇒ `runAction` 放行 ⇒ 结果里有 `主体`；
- *  · 算成未登记的成员 ⇒ 主体链的档案校验先拒 ⇒ 结果里是拒绝文案（**没有** `主体` 字段）。
+ *  · 算成成员、但它的实例键**不在身份档案里**（或不在岗）⇒ 主体链的档案校验先拒
+ *    ⇒ 结果里是拒绝文案（**没有** `主体` 字段）；
+ *  · 算成成员、且**在册在岗**（A 落地后的正常一格）⇒ 放行 ⇒ 结果里有 `主体`
+ *    （形状 `{id, kind:'成员', roleId:null}`，岗位在档案里不在主体上）。
  * 所以取「成功与否 + 主体（若有）+ 规则（若有）」三条，判据自己按需断言。
  */
 async function 主体读数(工具, exec) {
@@ -207,17 +224,19 @@ describe('门① 主体构造：Lead 身份不由参数声明（2026-10-10）', 
     }
   });
 
-  it('①-正对照：显式声明**在册在岗成员**（role=插件工程 / 实例=member-a）⇒ 仍放行', async () => {
+  it('①-正对照：显式声明**在册在岗成员**（主体由宿主给：member-a / 插件工程）⇒ 仍放行', async () => {
     const g = await makeFixture();
     try {
       const parts = 装配(g);
       const 节点 = await 交齐会审(parts.tasks);
       await parts.debate.open({ subject: LEAD, 项目: P, 节点 });
+      // P2（2026-10-10）后成员身份**只能由宿主显式给**（`主体`）。args 里的 `role`/`实例`
+      // 仍然照旧填着 —— 现在它们一个字都不参与构造（留着的意义就是钉住这一点）。
       const 发言 = await runAction({
-        org: 动作面org(parts), 项目: P, subject: LEAD,
+        org: 动作面org(parts), 项目: P, subject: LEAD, 主体: MEMBER_A,
         args: { action: 'debate_say', id: 节点, role: '插件工程', 实例: 'member-a', 类型: '表态', 内容: '成员照常发言' },
       });
-      assert.equal(发言.主体.kind, '成员', '成员岗位仍按身份档案构造（门① 不误伤成员这条路）');
+      assert.equal(发言.主体.kind, '成员', '成员身份仍按身份档案构造（门① 不误伤成员这条路）');
       assert.equal(发言.主体.roleId, '插件工程');
       assert.equal(发言.发言.本轮消息数, 1, '成员发言真落线并计入本轮（不是「全拒」换来的安全）');
     } finally {
@@ -269,12 +288,16 @@ describe('门② agentSubject：Lead 身份由会话事实决定（2026-10-10）
         assert.equal(根.id, String(根会话exec.agent.session.id), `实例键 = 会话 id 原样（唯一标识会话）；实际 ${JSON.stringify(根)}`);
 
         // 子会话：origin=subagent（本仓四处同款判据用的就是它）⇒ 不是 Lead。
-        // 这一条**不可能**放行：算成成员后主体链会以「未登记」拒它 —— 于是「不是 Lead」的
-        // 可观察形态就是「被拒」，且拒绝理由是身份那一条（而不是别的闸）。
+        // 这一条**不可能**放行：算成成员后，只要它的实例键不在身份档案里，主体链就拒它 ——
+        // 于是「不是 Lead」的可观察形态就是「被拒」，且拒绝理由是身份那一条（而不是别的闸）。
+        // ⚠️ A 落地后拒绝的**机制**换了（以前是哨兵值 `未登记` 与档案岗位对不上，现在是
+        // 「档案里没有这个实例键」）；「不是 Lead」这个判据本体没变，改的只是断言查的那句话
+        // —— 旧的 `/未登记/` 现在只由 `lib/actions.js:151` 的**文案回落**满足，查它等于查一句
+        // 显示文本，查不住机制。所以这里改查 `/没有登记/`（更严，不是放宽）。
         const 子读数 = await 主体读数(工具, 成员会话exec);
         assert.equal(子读数.成功, false, `子会话不得被当成 Lead 放行，实际 ${JSON.stringify(子读数)}`);
         assert.equal(子读数.主体, undefined, '子会话的读数里没有 Lead 主体（修前这里恒是 Lead）');
-        assert.match(String(子读数.理由), /未登记/, `子会话算出来的是「未登记成员」⇒ 档案校验拒；实际 ${子读数.理由}`);
+        assert.match(String(子读数.理由), /没有登记/, `子会话的实例键不在身份档案里 ⇒ 档案校验拒；实际 ${子读数.理由}`);
         // 子会话的实例键同样 = **它自己的**会话 id（B 修：修前取父会话 ⇒ 两个同父的子会话
         // 共用一个主体 id）。这里断言的是子会话自己的 id，不是父会话的。
         assert.match(String(子读数.理由), new RegExp(String(成员会话exec.agent.session.id)), '实例键 = 子会话自己的会话 id ⇒ 拒绝文案里带它');
@@ -394,10 +417,10 @@ describe('③ 端到端：子会话主体换轮 / 收敛都拒，根会话放行
         const 子换 = await 跑({ action: 'debate_round', id: 节点 }, 成员会话exec);
         assert.equal(子换.成功, false, '子会话换轮必须被拒（修前 agentSubject 恒 Lead ⇒ 放行、轮次 1→2）');
         assert.equal(子换.主体, undefined, '被拒的调用里没有 Lead 主体（修前这里是 Lead）');
-        // 诚实读数：这一拒发生在**主体链的档案校验**那一道（子会话的主体键是会话派生 id，不在身份
-        // 档案里 ⇒ 未登记 ⇒ 最严拒），**早于** debate 服务的「仅 Lead」。两层指向同一个结论；
+        // 诚实读数：这一拒发生在**主体链的档案校验**那一道（子会话的主体键是会话派生的会话 id，
+        // 身份档案里没有这个实例 ⇒ 最严拒），**早于** debate 服务的「仅 Lead」。两层指向同一个结论；
         // 「仅 Lead」那一层本身由 ⑤ 直接钉住。
-        assert.match(String(子换.规则), /身份停用 = 最严/, `子会话在主体链就被拦下（未登记）；实际 ${子换.规则}`);
+        assert.match(String(子换.规则), /身份停用 = 最严/, `子会话在主体链就被拦下（档案里没有这个实例键）；实际 ${子换.规则}`);
         assert.equal((await 节点读数()).轮次, 1, '被拒的换轮没有推进轮次');
         assert.equal(await 边界条数(), 0, '被拒的换轮没有落轮边界消息');
         assert.equal((await 线程()).length, 前条数, '被拒的换轮一条消息都没落线');
@@ -508,7 +531,10 @@ describe('B 实例键：唯一标识「哪一个会话」（2026-10-10 P1 补 ·
         // ── 子会话面：两个**同父**的子会话 ⇒ 两个不同键（修前它们取父会话 ⇒ 同一个键）。
         const 子A读数 = await 主体读数(工具, 真子A);
         const 子B读数 = await 主体读数(工具, 真子B);
-        // 子会话一律被主体链拒（未登记），所以键要从拒绝文案里读（文案形如 `…：<id>（未登记）在档案里…`）。
+        // 子会话一律被主体链拒（它的实例键不在身份档案里），所以键要从拒绝文案里读。
+        // ⚠️ 文案形状 `…：<id>（<角色位>）在档案里…` —— 那个括号段是 `lib/actions.js:151` 的
+        // **文案回落** `主体.roleId ?? '未登记'`（A 落地后会话派生主体恒走回落）。本断言只借它
+        // 定位 id 那一段；改文案会让它红，那是**有意的**（别让它悄悄漂走）。
         const 键从理由 = (理由) => {
           const m = /：(\S+?)（/.exec(String(理由));
           return m ? m[1] : null;
@@ -537,75 +563,175 @@ describe('B 实例键：唯一标识「哪一个会话」（2026-10-10 P1 补 ·
   });
 });
 
-describe('A 正对照：岗位确实未登记的会话仍 fail-closed 拒（2026-10-10 P1 补）', () => {
-  it('A-正对照：子会话带着「像岗位名」的 descriptor label 也换不来身份；档案登记成真岗位也仍拒', async () => {
+describe('A 落地（2026-10-10 · 主人拍板：Lead 显式登记 + 会话派生主体不填 roleId）', () => {
+  /**
+   * 岗位卡：`registry.assign` 在三条守卫之外还有一条前置 —— 目标岗位**必须有卡**
+   * （`src/registry.js:178-184`，§7「实例权限只来自岗位」）。夹具只带一张 `_模板`，
+   * 所以这里自己造一张，写在**私有自治区**（与 `test/identity-chain.test.js:29-36` 同款）。
+   */
+  const 岗位卡 = (id) => [
+    '---', `id: ${id}`, 'kind: 身份', 'authority: 自治', 'zone: 私有', 'domain: 个体', 'version: 1', '---',
+    `# ${id}`, '', '## 个体L0 · 身份', `${id} 岗。`, '',
+    '## 个体L1 · 规则', '先搜后写。', '',
+    '## 个体L2 · 能力', '- 无', '',
+    '## 个体L3 · 经验', '- 无',
+  ].join('\n');
+
+  /** 一个**会话派生**的子会话：实例键 = 它自己的会话 id（B 修后的形状）。 */
+  const 子id = 'session-child-a0001';
+  const 子会话 = 桩exec(
+    { cwd: 'C:/ws', createdAt: 2, isSeeded: false, version: 3, origin: 'subagent', parentSession: 'session-root-0001', delegationDepth: 1 },
+    子id,
+  );
+
+  it('A-1 登记后可用：Lead 用 registry_assign 登记该子会话 ⇒ 子会话调 mind 以成员身份执行（主体无 roleId）', async () => {
     const g = await makeFixture();
     try {
       const { 工具, org, host } = await 起宿主(g);
       try {
-        const 子id = 'session-child-a0001';
-        // ── 把该子会话的实例**按真岗位**登记进身份档案（在册在岗），再看它能不能执行。
-        //    这一格钉的是「`lib/actions.js` 的档案对账判据不许放宽」（P1 的成果）：
-        //    登记对了岗位、实例 id 也对得上，仍然拒 —— 因为会话派生的 `roleId` 恒为 `未登记`。
-        await g.writePrivate('身份档案/identity.json', JSON.stringify({
-          members: {
-            [子id]: { id: 子id, 岗位: '插件工程', 代: 1, status: '在岗' },
-            lead: { id: 'lead', 岗位: 'Lead', 代: 1, status: '在岗' },
-          },
-          sovereign: { lastInteraction: new Date().toISOString() },
-          denylist: [],
-        }, null, 2));
-        await org.registry.sync();
-        await org.policy.reload();
+        await g.writePrivate('集体L3-成员角色卡/复核员.md', 岗位卡('复核员'));
 
-        // 会话日志里**带一条 `subagent/descriptor`**，其 `label` 就是角色卡插件那种
-        // `<岗位名>:<成员名>` 形状（本批**不实现**从它取岗位 —— 理由见回报的调研结论）。
-        // 把这条事件摆在 exec 上，是为了让「将来若有人改成读 label 取岗位」当场变红。
-        const 带descriptor = {
-          name: 'mind',
-          agent: {
-            session: {
-              id: 子id,
-              header: { id: 子id, cwd: 'C:/ws', createdAt: 2, isSeeded: false, version: 3, origin: 'subagent', parentSession: 'session-root-0001', delegationDepth: 1 },
-              ownEvents: () => [{ type: 'subagent/descriptor', seq: 1, time: 2, data: { version: 3, mode: 'continuable', provider: 'in-process', label: '插件工程:member-a' } }],
-            },
-          },
-        };
-        const 读数 = await 主体读数(工具, 带descriptor);
-        assert.equal(读数.成功, false, `带 descriptor 的成员子会话仍必须被拒（本批不实现从 label 取岗位）；实际 ${JSON.stringify(读数)}`);
-        assert.equal(读数.主体, undefined, '被拒的读数里没有主体');
-        assert.match(String(读数.理由), /未登记/, `会话派生的 roleId 仍是「未登记」⇒ 与档案里的真岗位对不上 ⇒ 拒；实际 ${读数.理由}`);
-        assert.match(String(读数.理由), new RegExp(子id), '拒绝文案里带的是**这个子会话**的实例键');
+        // ── 登记**前**先读一次（同一个子会话、同一条 exec）：这一刻仍被拒 —— A-1/A-2 这一对
+        //    正对照的全部差别就是「有没有那次登记」。
+        const 登记前 = await 主体读数(工具, 子会话);
+        assert.equal(登记前.成功, false, `登记前必须仍拒（fail-closed）；实际 ${JSON.stringify(登记前)}`);
 
-        // ── 正对照（同一份档案、同一条 exec，只换「会话事实」）：根会话照常放行。
-        //    证明上面的「拒」来自成员身份那一档，不是整条链坏了。
-        const 根 = 放行主体(await 主体读数(工具, 桩exec({ cwd: 'C:/ws', createdAt: 1, isSeeded: false, version: 1 })));
-        assert.equal(根.kind, 'Lead', `正对照：根会话不受影响；实际 ${JSON.stringify(根)}`);
+        // ── ① Lead **显式登记**（工具面，根会话执行）：实例 = **该子会话的会话 id**。
+        const 登记 = JSON.parse(await 工具.execute({ action: 'registry_assign', 岗位: '复核员', 实例: 子id, 代: 1 }, 根会话exec));
+        assert.equal(登记.成功, true, `Lead 登记该实例要成功（岗位有卡 + 根会话过得了 create）；实际 ${JSON.stringify(登记)}`);
+        assert.equal(登记.实例.岗位, '复核员');
+        assert.equal(登记.实例.状态, '在岗');
+        // 读**真源**（不是返回值）：档案里的键就是子会话的会话 id。
+        assert.equal((await org.registry.identity()).members[子id].岗位, '复核员', '档案里的键 = 子会话的会话 id（B 修后的实例键）');
 
-        // ── 反例面（**本轮实测出的一个反直觉读数，如实钉住**）：把档案里那个实例的岗位写成
-        //    `未登记`，对账判据 `member.岗位 !== 主体.roleId` 就**匹配**了 ⇒ 这条会话被**放行**。
-        //    也就是说「成员子会话恒被拒」这句有一半靠的是「档案里恰好没有一个叫『未登记』的岗位」。
-        //    ⚠️ 但这一格**在 sanctioned 面上不可达**：`registry_assign` 要求目标岗位**有岗位卡**
-        //    （`src/registry.js:177-184`：`岗位「未登记」不存在`），只能靠手写 identity.json 造出来
-        //    （本用例就是这么造的）。下一段直接把 sanctioned 那条路钉住。
+        // ── ② 子会话调 mind：放行，且主体形状按本批的设计 —— **没有 roleId**。
+        const 后 = await 主体读数(工具, 子会话);
+        assert.equal(后.成功, true, `登记后该子会话必须能执行（这正是本批要治的那一格）；实际 ${JSON.stringify(后)}`);
+        assert.equal(Object.hasOwn(subjectFor({ 实例: 子id }), 'roleId'), false, '会话派生的主体**不带 roleId**（字段缺席，不是一个哨兵值）');
+        assert.equal(后.主体.id, 子id, '主体 id = 这个子会话自己的会话 id');
+        assert.equal(后.主体.kind, '成员', '会话派生的主体种类是成员（岗位在档案里，不在主体上）');
+        assert.equal(后.主体.roleId, null, '序列化读数里 roleId 是 null —— 与「字段缺席」同义（`lib/actions.js:162` 的 `?? null`）');
+
+        // ── ③ 真动作执行（不只是「过闸」）：工作台按**读者**切片那条路照常走通，
+        //    且切的是「成员只读自己那片」—— 说明主体真流进了服务层。
+        const 台 = JSON.parse(await 工具.execute({ action: 'workbench' }, 子会话));
+        assert.equal(台.成功, true, JSON.stringify(台));
+        assert.equal(台.数据.视图, '只读自己任务那片', `成员切片真生效；实际 ${台.数据.视图}`);
+        // eslint-disable-next-line no-console
+        console.log(`[A-读数] 登记后 子会话 ${子id} ⇒ 主体 ${JSON.stringify(后.主体)}；subjectFor 原样 ${JSON.stringify(subjectFor({ 实例: 子id }))}`);
+      } finally {
+        host.清理();
+        forgetSharedOrg();
+      }
+    } finally {
+      await g.cleanup();
+    }
+  });
+
+  it('A-2 正对照 · 未登记仍拒：同一个子会话不登记 ⇒ 拒；登记后**封存** ⇒ 也拒（要「在册且在岗」两件）', async () => {
+    const g = await makeFixture();
+    try {
+      const { 工具, org, host } = await 起宿主(g);
+      try {
+        await g.writePrivate('集体L3-成员角色卡/复核员.md', 岗位卡('复核员'));
+
+        // ── ① 档案里没有这个实例键 ⇒ 拒（宪章 身份停用 = 最严）。
+        const 未登记 = await 主体读数(工具, 子会话);
+        assert.equal(未登记.成功, false, `没登记 ⇒ 必须拒（A 落地治的是「登记了也拒」，不是「一律放行」）；实际 ${JSON.stringify(未登记)}`);
+        assert.equal(未登记.主体, undefined, '被拒的读数里没有主体');
+        assert.match(String(未登记.规则), /身份停用 = 最严/, `拒绝理由落在身份那一条；实际 ${未登记.规则}`);
+        assert.match(String(未登记.理由), new RegExp(子id), '拒绝文案里带的是**这个子会话**的实例键（不是父会话的）');
+        assert.match(String(未登记.理由), /没有登记/, `机制是「档案里没有这个实例键」；实际 ${未登记.理由}`);
+
+        // ── ② 登记**后**再封存 ⇒ 也拒：判据是「在册**且在岗**」，不是在册就算数。
+        await org.registry.assign({ subject: LEAD, 岗位: '复核员', 实例: 子id, 代: 1 });
+        assert.equal((await 主体读数(工具, 子会话)).成功, true, '前提：登记后在岗的这一刻是放行的（与 A-1 同款读数）');
+        await org.registry.seal({ subject: LEAD, 实例: 子id, 理由: 'A-2 正对照：在册不在岗' });
+        const 封存后 = await 主体读数(工具, 子会话);
+        assert.equal(封存后.成功, false, `在册但封存 ⇒ 仍拒（「在岗」这一件不是摆设）；实际 ${JSON.stringify(封存后)}`);
+        assert.match(String(封存后.理由), /封存/, `拒绝文案说出档案里的真实状态；实际 ${封存后.理由}`);
+
+        // ── ③ ㉓ 那个怪面（手写档案把岗位写成 `未登记`）的落地后读数：**放行，但已不是「撞上哨兵值」**
+        //    —— 主体压根没有 `roleId` 可与岗位比，放行只由「在册且在岗」决定，与岗位叫什么**无关**。
+        //    这里如实复跑（手写夹具照旧能造出各种岗位名；sanctioned 面仍要求有卡，见下）。
         await g.writePrivate('身份档案/identity.json', JSON.stringify({
           members: { [子id]: { id: 子id, 岗位: '未登记', 代: 1, status: '在岗' } },
           sovereign: { lastInteraction: new Date().toISOString() },
           denylist: [],
         }, null, 2));
         await org.registry.sync();
-        const 手写档 = await 主体读数(工具, 带descriptor);
-        assert.equal(手写档.成功, true, `手写档案里的岗位「未登记」与主体 roleId 相同 ⇒ 对账通过（这是手写夹具才能造出的形态，见下）；实际 ${JSON.stringify(手写档)}`);
-        assert.equal(手写档.主体.id, 子id, '放行时主体 id 就是这个子会话的实例键（B 修后不再是父会话）');
-        assert.equal(手写档.主体.roleId, '未登记', '放行时 roleId 仍是「未登记」——身份没被"修好"，只是撞上了对账');
-
-        // ── sanctioned 面：`registry_assign` 到岗位「未登记」⇒ 拒（岗位卡不存在）。
-        //    这是 ⑳ 已实测过的那条读数，本批**复跑**以证明「手写档那一格不可达」。
+        await org.policy.reload();
+        const 手写 = await 主体读数(工具, 子会话);
+        assert.equal(手写.成功, true, `手写档案（在册在岗）⇒ 放行，且与岗位叫什么无关；实际 ${JSON.stringify(手写)}`);
+        assert.equal(手写.主体.roleId, null, '放行时主体依然**没有 roleId** ⇒ ㉓ 那个「靠哨兵值撞上对账」的形态已不存在');
+        // sanctioned 面复跑：`registry_assign` 到岗位「未登记」⇒ 拒（岗位卡不存在）。
         await assert.rejects(
           () => org.registry.assign({ subject: LEAD, 岗位: '未登记', 实例: 子id, 代: 1 }),
           (e) => e.name === 'Denied' && /不存在/.test(e.message) && /岗位卡/.test(e.howToChange ?? ''),
-          'sanctioned 面：岗位「未登记」没有岗位卡 ⇒ assign 被拒 ⇒ 上面那一格造不出来',
+          'sanctioned 面：岗位「未登记」没有岗位卡 ⇒ assign 被拒（哨兵值走不了正路）',
         );
+      } finally {
+        host.清理();
+        forgetSharedOrg();
+      }
+    } finally {
+      await g.cleanup();
+    }
+  });
+
+  it('A-3 正对照 · 主体自陈的岗位仍要档案一致：插件工程 而档案岗位=复核员 ⇒ 拒；复核员 ⇒ 放行', async () => {
+    const g = await makeFixture();
+    try {
+      const { 工具, org, host } = await 起宿主(g);
+      try {
+        await g.writePrivate('集体L3-成员角色卡/复核员.md', 岗位卡('复核员'));
+        await org.registry.assign({ subject: LEAD, 岗位: '复核员', 实例: 子id, 代: 1 });
+
+        // ── ① **主体自陈的岗位**（`主体.roleId` 是字符串）与档案不符 ⇒ 拒。
+        //    这一格是门① 的成果，一个字都不许放宽。
+        //    P2（2026-10-10）后角色卡这条路只能由**宿主给的主体**表达（`args.role`/`args.实例`
+        //    不再参与构造 ⇒ args 仍照旧填着，用来钉住"自报救不回来"）。
+        await assert.rejects(
+          () => runAction({ org, 项目: org.project, subject: LEAD, 主体: subjectFor({ 岗位: '插件工程', 实例: 子id }), args: { action: 'status', role: '插件工程', 实例: 子id } }),
+          (e) => e.name === 'Denied'
+            && /身份停用 = 最严/.test(e.rule)
+            && /插件工程/.test(e.message) && /复核员/.test(e.message),
+          '主体自陈的岗位与档案不符 ⇒ 拒（会话派生那条「不填 roleId」不许把这一格也短路掉）',
+        );
+
+        // ── ② 正对照：主体自陈的岗位**与档案一致**（复核员）⇒ 放行，主体是复核者。
+        //    证明 ① 的拒不是「凡带岗位就拒」，而是「带的岗位必须与档案一致」。
+        const 过 = await runAction({ org, 项目: org.project, subject: LEAD, 主体: subjectFor({ 岗位: '复核员', 实例: 子id }), args: { action: 'status', role: '复核员', 实例: 子id } });
+        assert.equal(过.主体.kind, '复核者', `与档案一致时按岗位构造主体；实际 ${JSON.stringify(过.主体)}`);
+        assert.equal(过.主体.roleId, '复核员');
+
+        // ── ③ 两条路不是同一个判据：**同一条 exec、同一份档案**，会话派生那条路照常放行
+        //    （它不填 roleId ⇒ 不参与岗位对账），自报那条路照旧要对账。两格同时成立才是本批的设计。
+        const 派生 = await 主体读数(工具, 子会话);
+        assert.equal(派生.成功, true, `同一份档案下会话派生照常放行；实际 ${JSON.stringify(派生)}`);
+        assert.equal(派生.主体.roleId, null, '会话派生的读数里没有 roleId（与 ① 的自报那一路形成对照）');
+      } finally {
+        host.清理();
+        forgetSharedOrg();
+      }
+    } finally {
+      await g.cleanup();
+    }
+  });
+
+  it('A-4 根会话不受影响：根会话调 mind ⇒ 仍是 Lead、仍放行', async () => {
+    const g = await makeFixture();
+    try {
+      const { 工具, host } = await 起宿主(g);
+      try {
+        const 根 = 放行主体(await 主体读数(工具, 根会话exec));
+        assert.equal(根.kind, 'Lead', `根会话仍是 Lead（「根会话」那一档一个字节都没动）；实际 ${JSON.stringify(根)}`);
+        assert.equal(根.roleId, 'Lead', 'Lead 那一档仍带 roleId（本批只动最后一档）');
+        assert.equal(根.id, String(根会话exec.agent.session.id), '实例键 = 会话 id 原样（B 修）');
+        // 真动作：根会话看**全量**（与 A-1 的成员切片互为对照）。
+        const 台 = JSON.parse(await 工具.execute({ action: 'workbench' }, 根会话exec));
+        assert.equal(台.成功, true, JSON.stringify(台));
+        assert.equal(台.数据.视图, '全量', `根会话看全量；实际 ${台.数据.视图}`);
       } finally {
         host.清理();
         forgetSharedOrg();

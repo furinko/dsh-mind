@@ -556,11 +556,14 @@ function 组织说明(org) {
  * 三档（顺序即优先级：先判最贵的「子会话事实」）：
  *  1. **有子会话事实**（`header.origin === 'subagent'`，或 `delegationDepth >= 1`）⇒
  *     **不是 Lead**；实例键取**自己的**会话 id（B 修 · 2026-10-10，见 `会话实例键`）。
+ *     身份 = **成员**、**不带 `roleId`**（A 修 · 2026-10-10）：会话事实里没有「岗位」这一位，
+ *     所以主体不自陈岗位 —— 岗位由 Lead 的显式登记（`registry_assign`，实例 = 该会话 id）
+ *     落在身份档案里，主体链对账时按「在册且在岗」放行（见 `docs/设计债-2026-10-09.md` ㉑）。
  *  2. 其余（不是子会话 / 会话事实缺席 / `header` 缺席但 `agent` 在）⇒ **Lead**，
  *     实例取会话 id（W3 批3 既有语义：账上不丢掉「哪一个会话」）。
  *  3. `exec` 整个取不到（不是对象）⇒ **不认 Lead**，落到 `subjectFor({})` 的
- *     `{kind:'成员', roleId:'未登记'}` —— 与 `subjectFor` 自陈的「未知一律不给万能身份，
- *     身份不明时最严」同口径（fail-closed）。
+ *     `{kind:'成员'}`（无 `roleId`）—— 与 `subjectFor` 自陈的「未知一律不给万能身份，
+ *     身份不明时最严」同口径（fail-closed）：实例键是 `unknown`，档案里查不到 ⇒ 拒。
  *
  * 为什么第 2 档**不收窄**「会话事实缺席」那一格（这一档修前就是恒 Lead，修后仍是 Lead）：
  *  · `Session` 恒定带 `header`（`SessionHeader.id` 是 required，types.d.ts:65），

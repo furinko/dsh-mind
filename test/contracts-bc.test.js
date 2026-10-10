@@ -109,13 +109,15 @@ describe('契约B · 只读面收窄（2026-10-09 主权者裁决）', () => {
     }
   });
 
-  it('工具面三个只读动作的主体走批次3身份链：自报未登记实例在进服务前就被拒', async () => {
+  it('工具面三个只读动作的主体走批次3身份链：未登记实例在进服务前就被拒（args 自报不再参与构造）', async () => {
     const org = { registry: { identity: async () => ({ members: {} }) } };
     for (const action of ['memory_query', 'bus_read', 'capability_resolve']) {
       await assert.rejects(
-        () => runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, args: { action, role: '插件工程', 实例: 'ghost', 线程: 't', 名: 'x' } }),
+        // P2（2026-10-10）后主体**只能由宿主显式给**：这里宿主给的就是那个未登记实例，
+        // `args.role` / `args.实例` 一个字都不再参与构造（留在 args 里是为了钉住"自报救不回来"）。
+        () => runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, 主体: { id: 'ghost', kind: '成员', roleId: '插件工程' }, args: { action, role: '插件工程', 实例: 'ghost', 线程: 't', 名: 'x' } }),
         (e) => /身份档案/.test(e.message),
-        `${action} 的主体必须过身份链，不许 role 自报即真`,
+        `${action} 的主体必须过身份链，不许 args.role / args.实例 自报即真`,
       );
     }
   });
@@ -128,15 +130,15 @@ describe('契约B · 只读面收窄（2026-10-09 主权者裁决）', () => {
       bus: { read: async (q) => { last = { 服务: 'bus.read', subject: q.subject }; return []; } },
       capability: { resolve: async (q) => { last = { 服务: 'capability.resolve', subject: q.subject }; return {}; } },
     };
-    await runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, args: { action: 'memory_query' } });
+    await runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, 主体: LEAD, args: { action: 'memory_query' } });
     assert.equal(last.服务, 'memory.query');
     assert.equal(last.subject.kind, 'Lead', '服务层收到的是 runAction 主体链的 Lead');
 
-    await runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, args: { action: 'bus_read', 线程: 't' } });
+    await runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, 主体: LEAD, args: { action: 'bus_read', 线程: 't' } });
     assert.equal(last.服务, 'bus.read');
     assert.equal(last.subject.id, 'lead');
 
-    await runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, args: { action: 'capability_resolve', 名: 'x' } });
+    await runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, 主体: LEAD, args: { action: 'capability_resolve', 名: 'x' } });
     assert.equal(last.服务, 'capability.resolve');
     assert.equal(last.subject.kind, 'Lead');
   });
@@ -284,9 +286,9 @@ describe('契约C · 知识晋升披露机械检查（2026-10-09 主权者裁决
       registry: { identity: async () => ({ members: {} }) },
       memory: { promoteCrossProject: async (id, spec) => { 收到 = spec; return { id, 岗位: spec.岗位 }; } },
     };
-    await runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, args: { action: 'memory_lifecycle', op: 'promote', id: 'k-1', 岗位: '插件工程', 原因: 'r', 披露豁免: true } });
+    await runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, 主体: LEAD, args: { action: 'memory_lifecycle', op: 'promote', id: 'k-1', 岗位: '插件工程', 原因: 'r', 披露豁免: true } });
     assert.equal(收到.披露豁免, true, '显式带参要传 true');
-    await runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, args: { action: 'memory_lifecycle', op: 'promote', id: 'k-2', 岗位: '插件工程', 原因: 'r' } });
+    await runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, 主体: LEAD, args: { action: 'memory_lifecycle', op: 'promote', id: 'k-2', 岗位: '插件工程', 原因: 'r' } });
     assert.equal(收到.披露豁免, false, '不带参数必须折成 false，不许 undefined 混过条件判断');
   });
 });

@@ -125,9 +125,9 @@ describe('主干环路', () => {
     const node = await tasks.create({ subject: LEAD, 项目: P, 描述: '会审接线演示', 负责人: ['member-a', 'member-b'], 判据: ['x'], 模式: '独立会审' });
     await tasks.dispatch(node.id, { subject: LEAD, 项目: P });
     await tasks.start(node.id, { subject: MEMBER, 项目: P });
-    // runAction 只需要这两只手（主体是 Lead，不做成员身份档案核验）。
+    // runAction 只需要这两只手（主体是 Lead，不做成员身份档案核验；P2 后主体由宿主显式给）。
     const org = { tasks, bus, registry: { identity: async () => ({ members: {} }) } };
-    const 敲解锁 = () => runAction({ org, 项目: P, subject: LEAD, args: { action: 'bus_unlock', id: node.id, 线程: 't-unlock' } });
+    const 敲解锁 = () => runAction({ org, 项目: P, subject: LEAD, 主体: LEAD, args: { action: 'bus_unlock', id: node.id, 线程: 't-unlock' } });
 
     // 谁都没交：拒，且理由要点名「全员」。
     await assert.rejects(敲解锁, (e) => e.name === 'Denied' && /全员/.test(e.message), '未交齐必须被拒');

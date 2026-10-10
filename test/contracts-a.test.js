@@ -197,11 +197,11 @@ describe('契约A · 完整血缘（2026-10-09 方案②）', () => {
     // 工具面：memory_lineage 把 runAction 主体链主体传进服务。
     let 收到 = null;
     const org = { registry: { identity: async () => ({ members: {} }) }, memory: { lineage: async (s) => { 收到 = s; return { id: s.id }; } } };
-    await runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, args: { action: 'memory_lineage', id: base.id } });
+    await runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, 主体: LEAD, args: { action: 'memory_lineage', id: base.id } });
     assert.equal(收到.subject.kind, 'Lead');
     assert.equal(收到.id, base.id);
     await assert.rejects(
-      () => runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, args: { action: 'memory_lineage' } }),
+      () => runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, 主体: LEAD, args: { action: 'memory_lineage' } }),
       (e) => e.name === 'InvalidBody' && /id/.test(e.message),
       '缺 id 结构性拒',
     );

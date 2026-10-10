@@ -402,14 +402,16 @@ describe('W2 · 会审讨论段（2026-10-09）', () => {
       },
     };
     for (const action of ['debate_open', 'debate_say', 'debate_round', 'debate_converge']) {
-      await runAction({ org, 项目: P, subject: { id: 'lead', kind: 'Lead' }, args: { action, id: 't-x', 类型: '表态', 内容: 'x' } });
+      await runAction({ org, 项目: P, subject: { id: 'lead', kind: 'Lead' }, 主体: LEAD, args: { action, id: 't-x', 类型: '表态', 内容: 'x' } });
       assert.equal(收到[0], action.slice('debate_'.length), `${action} 进了对应服务方法`);
       assert.equal(收到[1].subject.kind, 'Lead', `${action} 主体来自 runAction 主体链`);
     }
     await assert.rejects(
-      () => runAction({ org, 项目: P, subject: { id: 'lead', kind: 'Lead' }, args: { action: 'debate_open', id: 't-x', role: '插件工程', 实例: 'ghost' } }),
+      // P2（2026-10-10）后主体只能由宿主显式给：这里给的是**未登记实例**那个主体
+      // （`args.role` / `args.实例` 不再参与构造，只留在 args 里钉住"自报救不回来"）。
+      () => runAction({ org, 项目: P, subject: { id: 'lead', kind: 'Lead' }, 主体: { id: 'ghost', kind: '成员', roleId: '插件工程' }, args: { action: 'debate_open', id: 't-x', role: '插件工程', 实例: 'ghost' } }),
       (e) => /身份档案/.test(e.message),
-      '自报未登记实例在进服务前就被拒（批次3链）',
+      '未登记实例在进服务前就被拒（批次3链）',
     );
   });
 
@@ -446,7 +448,7 @@ describe('W2 · 会审讨论段（2026-10-09）', () => {
     // 判据本体一个字没动，只是把落线的线程挪到不受甲影响的面 —— 不是为了让测试变绿而放宽判据。
     const 线程 = 't-攻击B-普通线程';
     const org = { registry: { identity: async () => ({ members: { 'member-a': { id: 'member-a', 岗位: '插件工程', status: '在岗' } } }) }, tasks, bus };
-    await runAction({ org, 项目: P, subject: { id: 'lead', kind: 'Lead' }, args: { action: 'bus_send', role: '插件工程', 实例: 'member-a', 线程, 发件: 'system', 类型: '表态', 内容: '冒充系统发件' } });
+    await runAction({ org, 项目: P, subject: { id: 'lead', kind: 'Lead' }, 主体: MEMBER, args: { action: 'bus_send', role: '插件工程', 实例: 'member-a', 线程, 发件: 'system', 类型: '表态', 内容: '冒充系统发件' } });
     const 消息 = await bus.readRaw({ 项目: P, 线程 });
     const 冒充 = 消息.find((m) => m.内容 === '冒充系统发件');
     assert.ok(冒充, '消息要能落线（表态类型本身合法）');

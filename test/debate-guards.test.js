@@ -110,7 +110,7 @@ describe('①甲 动作面收窄：讨论线程的发言只走 debate_say（2026
       await parts.debate.open({ subject: LEAD, 项目: P, 节点 });
       await assert.rejects(
         () => runAction({
-          org: 动作面org(parts), 项目: P, subject: LEAD,
+          org: 动作面org(parts), 项目: P, subject: LEAD, 主体: MEMBER_A,
           args: { action: 'bus_send', role: '插件工程', 实例: 'member-a', 线程: 节点, 类型: '分歧', 内容: '绕过 debate_say 直灌' },
         }),
         (e) => e.name === 'Denied'
@@ -134,7 +134,7 @@ describe('①甲 动作面收窄：讨论线程的发言只走 debate_say（2026
       const 节点 = await 交齐会审(parts.tasks);
       await parts.debate.open({ subject: LEAD, 项目: P, 节点 });
       const 普通 = await runAction({
-        org: 动作面org(parts), 项目: P, subject: LEAD,
+        org: 动作面org(parts), 项目: P, subject: LEAD, 主体: MEMBER_A,
         args: { action: 'bus_send', role: '插件工程', 实例: 'member-a', 线程: 't-甲-正对照', 类型: '分歧', 内容: '普通线程的消息' },
       });
       assert.equal(普通.消息.线程, 't-甲-正对照', '普通线程不受甲的判据影响（同一个部署里同时有讨论线程）');
@@ -158,7 +158,7 @@ describe('①甲 动作面收窄：讨论线程的发言只走 debate_say（2026
       const n = await parts.tasks.get(并行.id, { 项目: P });
       assert.equal(n.讨论, undefined, '前提：这个节点没有讨论段（并行分担全程不长 讨论 字段）');
       const r = await runAction({
-        org: 动作面org(parts), 项目: P, subject: LEAD,
+        org: 动作面org(parts), 项目: P, subject: LEAD, 主体: MEMBER_A,
         args: { action: 'bus_send', role: '插件工程', 实例: 'member-a', 线程: 并行.id, 类型: '表态', 内容: '无讨论段节点的消息' },
       });
       assert.equal(r.消息.线程, 并行.id, '没有讨论段的节点 ⇒ 甲的判据不命中 ⇒ 放行');
@@ -177,7 +177,7 @@ describe('①甲 动作面收窄：讨论线程的发言只走 debate_say（2026
       assert.equal((await parts.tasks.get(节点, { 项目: P })).讨论.状态, '已收敛', '前提：讨论已收敛，讨论段仍在（子状态不删）');
       await assert.rejects(
         () => runAction({
-          org: 动作面org(parts), 项目: P, subject: LEAD,
+          org: 动作面org(parts), 项目: P, subject: LEAD, 主体: MEMBER_A,
           args: { action: 'bus_send', role: '插件工程', 实例: 'member-a', 线程: 节点, 类型: '表态', 内容: '收敛后再灌' },
         }),
         (e) => e.name === 'Denied' && /讨论线程的发言只走 debate_say/.test(e.rule) && /已收敛/.test(e.message),
@@ -428,7 +428,7 @@ describe('批c 补漏 · P2：bus_unlock 也是「往线程落消息」的一只
       assert.deepEqual(await parts.bus.threads({ 项目: P }), [], '前提：讨论线程文件此刻还不存在');
 
       const 攻击 = (id, 内容) => () => runAction({
-        org: 动作面org(parts), 项目: P, subject: LEAD,
+        org: 动作面org(parts), 项目: P, subject: LEAD, 主体: LEAD,
         args: { action: 'bus_unlock', id, 线程: 讨论, 内容 },
       });
       // 形态1：id 就是讨论节点自己（修前：全员已交 ⇒ 放行）
@@ -461,7 +461,7 @@ describe('批c 补漏 · P2：bus_unlock 也是「往线程落消息」的一只
       const 讨论 = await 交齐会审(parts.tasks, undefined, 'P2 正对照·讨论节点');
       await parts.debate.open({ subject: LEAD, 项目: P, 节点: 讨论 });
       const r = await runAction({
-        org: 动作面org(parts), 项目: P, subject: LEAD,
+        org: 动作面org(parts), 项目: P, subject: LEAD, 主体: LEAD,
         args: { action: 'bus_unlock', id: 讨论, 线程: 't-P2-普通线程', 内容: 'P2 正对照广播' },
       });
       assert.equal(r.结果.解锁, true, '普通线程不受讨论线程判据影响（同一个部署里同时有讨论线程）');
@@ -481,7 +481,7 @@ describe('批c 补漏 · P2：bus_unlock 也是「往线程落消息」的一只
       const 节点 = await 交齐会审(parts.tasks, undefined, 'P2 正对照·无讨论段节点');
       assert.equal((await parts.tasks.get(节点, { 项目: P })).讨论, undefined, '前提：这个节点没有讨论段');
       const r = await runAction({
-        org: 动作面org(parts), 项目: P, subject: LEAD,
+        org: 动作面org(parts), 项目: P, subject: LEAD, 主体: LEAD,
         args: { action: 'bus_unlock', id: 节点, 线程: 节点, 内容: 'P2 正对照广播（节点线程）' },
       });
       assert.equal(r.结果.解锁, true, '未开讨论的节点线程 ⇒ 判据不命中 ⇒ 放行（正常路径不许被误伤）');
@@ -516,7 +516,7 @@ describe('批c 补漏 · P3：线程键的大小写别名绕过甲（2026-10-10�
 
       await assert.rejects(
         () => runAction({
-          org: 动作面org(parts), 项目: P, subject: LEAD,
+          org: 动作面org(parts), 项目: P, subject: LEAD, 主体: MEMBER_A,
           // 类型='交卷' 是讨论类型**之外**的（修前它与消息一起绕过去了：类型闸也废）
           args: { action: 'bus_send', role: '插件工程', 实例: 'member-a', 线程: 别名, 类型: '交卷', 内容: 'P3 别名直灌' },
         }),
@@ -544,7 +544,7 @@ describe('批c 补漏 · P3：线程键的大小写别名绕过甲（2026-10-10�
       const 别名 = 讨论.toUpperCase();
       await assert.rejects(
         () => runAction({
-          org: 动作面org(parts), 项目: P, subject: LEAD,
+          org: 动作面org(parts), 项目: P, subject: LEAD, 主体: LEAD,
           args: { action: 'bus_unlock', id: 讨论, 线程: 别名, 内容: 'P3 交叉·别名解锁广播' },
         }),
         (e) => e.name === 'Denied' && /讨论线程的发言只走 debate_say/.test(e.rule)
@@ -564,7 +564,7 @@ describe('批c 补漏 · P3：线程键的大小写别名绕过甲（2026-10-10�
       const 讨论 = await 交齐会审(parts.tasks, undefined, 'P3 正对照·讨论节点');
       await parts.debate.open({ subject: LEAD, 项目: P, 节点: 讨论 });
       const 发 = (线程, 内容) => runAction({
-        org: 动作面org(parts), 项目: P, subject: LEAD,
+        org: 动作面org(parts), 项目: P, subject: LEAD, 主体: MEMBER_A,
         args: { action: 'bus_send', role: '插件工程', 实例: 'member-a', 线程, 类型: '表态', 内容 },
       });
       const 上 = await 发('T-P3-Normal', 'P3 正对照·大写写法');

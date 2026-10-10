@@ -126,11 +126,13 @@ describe('审查修复 · 批次3+5（身份链 / 一致性）', () => {
       registry: { identity: async () => ({ members: { 'member-a': { id: 'member-a', 岗位: '插件工程', status: '在岗' } }, sovereign: {}, denylist: [] }) },
       status: async () => ({ 项目: 'default' }),
     };
-    const ok = await runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, args: { action: 'status', role: '插件工程', 实例: 'member-a' } });
+    // P2（2026-10-10）后主体**只能由宿主显式给**（`args.role` / `args.实例` 不再参与构造）：
+    // 这三格改由宿主给出的主体形状表达同一件事 —— 对账判据（`lib/actions.js:177`）一字未动。
+    const ok = await runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, 主体: subjectFor({ 岗位: '插件工程', 实例: 'member-a' }), args: { action: 'status', role: '插件工程', 实例: 'member-a' } });
     assert.equal(ok.主体.kind, '成员');
 
     await assert.rejects(
-      () => runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, args: { action: 'status', role: '插件工程', 实例: 'ghost' } }),
+      () => runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, 主体: subjectFor({ 岗位: '插件工程', 实例: 'ghost' }), args: { action: 'status', role: '插件工程', 实例: 'ghost' } }),
       (error) => {
         assert.match(error.message, /身份档案/);
         assert.match(error.message, /ghost/);
@@ -138,12 +140,72 @@ describe('审查修复 · 批次3+5（身份链 / 一致性）', () => {
       },
     );
     await assert.rejects(
-      () => runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, args: { action: 'status', role: '别的岗位', 实例: 'member-a' } }),
+      () => runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, 主体: subjectFor({ 岗位: '别的岗位', 实例: 'member-a' }), args: { action: 'status', role: '别的岗位', 实例: 'member-a' } }),
       (error) => {
-        assert.match(error.message, /岗位/, '登记岗位与自报岗位不一致也要拒');
+        assert.match(error.message, /岗位/, '主体自陈的岗位与登记岗位不一致也要拒');
         return true;
       },
     );
+  });
+
+  // ── B4（P2 · 2026-10-10 独立复核）：主体链的兜底路 fail-closed ──────────────────
+  //
+  // 修前 `runAction` 有 `spec.主体 ?? subjectFor({ 岗位: args.role, 实例: args.实例, … })`
+  // 这条兜底：**不传主体**时，`args.实例` 填一个在册在岗的实例 id（不带 `args.role`
+  // ⇒ 构造出的主体没有 `roleId`）就能通过 `lib/actions.js:177` 的岗位对账（第三段短路）
+  // ⇒ 「知道实例 id 即成那个人」。生产可达面不可达（3 个生产调用点全传主体），但任何
+  // **漏传主体**的新调用点会当场被冒充 ⇒ 本批把它改成 fail-closed（缺席即拒，不猜）。
+  describe('B4 runAction · `spec.主体` 缺席 ⇒ 拒（P2 fail-closed，2026-10-10）', () => {
+    const 在册org = () => ({
+      registry: { identity: async () => ({ members: { 'member-a': { id: 'member-a', 岗位: '插件工程', status: '在岗' } }, sovereign: {}, denylist: [] }) },
+      status: async () => ({ 项目: 'default' }),
+    });
+
+    it('B4-判据本体：`{ args:{ action, 实例 } }`（不传主体）⇒ Denied，文案指向「主体必须由宿主显式给」', async () => {
+      const org = 在册org();
+      await assert.rejects(
+        // 复核实测的最小复现原样：修前这一条放行为 `{id:'member-a', kind:'成员', roleId:null}`。
+        () => runAction({ org, 项目: 'default', args: { action: 'status', 实例: 'member-a' } }),
+        (e) => e.name === 'Denied'
+          && /主体必须由宿主显式给/.test(e.message)
+          && /§12\.2/.test(e.rule)
+          && /主体/.test(String(e.howToChange))
+          && e.detail?.缺什么 === 'spec.主体',
+        '不传主体不许被推断成任何身份（fail-closed）：知道实例 id 不等于成为它',
+      );
+    });
+
+    it('B4-反例面：`args.role` 自报也救不回来（两条自报字段都不再参与构造）', async () => {
+      const org = 在册org();
+      for (const args of [
+        { action: 'status', role: '插件工程', 实例: 'member-a' }, // 自报岗位 + 在册实例：修前放行
+        { action: 'status', role: 'Lead' }, // 门① 那条路：先于本判据拒（顺序不许被顶掉）
+        { action: 'status' },
+      ]) {
+        await assert.rejects(
+          () => runAction({ org, 项目: 'default', args }),
+          (e) => e.name === 'Denied',
+          `不传主体必须拒：${JSON.stringify(args)}`,
+        );
+      }
+      // 门① 的文案要**逐字**还是它自己那一句（证明本判据没有盖住门①）。
+      await assert.rejects(
+        () => runAction({ org, 项目: 'default', args: { action: 'status', role: 'Lead' } }),
+        (e) => /Lead 身份由会话事实决定，不由参数声明/.test(e.rule),
+        '门① 早退仍在（先于「主体缺席 ⇒ 拒」）',
+      );
+    });
+
+    it('B4-正对照：宿主显式给主体 ⇒ 档案对账那条路照旧（在册在岗放行、不在册拒）', async () => {
+      const org = 在册org();
+      const 过 = await runAction({ org, 项目: 'default', 主体: subjectFor({ 岗位: '插件工程', 实例: 'member-a' }), args: { action: 'status' } });
+      assert.deepEqual(过.主体, { id: 'member-a', kind: '成员', roleId: '插件工程' });
+      await assert.rejects(
+        () => runAction({ org, 项目: 'default', 主体: subjectFor({ 实例: 'member-b' }), args: { action: 'status' } }),
+        (e) => e.name === 'Denied' && /身份档案/.test(e.message),
+        '给了主体但不在册 ⇒ 照旧拒（对账没被本批动过）',
+      );
+    });
   });
 
   // ── E1：fold 同 id 合并 ─────────────────────────────────────────────────────

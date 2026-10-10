@@ -146,7 +146,7 @@ describe('W3 批3 · 入口与边界', () => {
       await tasks.submit(另一.id, { subject: MEMBER, 项目: P, 结论: 'ok' });
       await tasks.review(另一.id, { subject: REVIEWER, 项目: P, 三态: '过' });
       const org = { tasks, memory, policy, audit, registry: { identity: async () => ({ members: {} }) } };
-      const 结果 = await runAction({ org, 项目: P, subject: LEAD, args: { action: 'task_settle', id: 另一.id } });
+      const 结果 = await runAction({ org, 项目: P, subject: LEAD, 主体: LEAD, args: { action: 'task_settle', id: 另一.id } });
       assert.equal(结果.节点.状态, '已结账');
       assert.match(结果.说明, /已结账/);
 

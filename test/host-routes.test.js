@@ -19,7 +19,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeUnder } from './helpers.mjs';
 import { readTextOrNull } from '../src/kernel/fsx.js';
-import { fakeHost } from './host-harness.mjs';
+import { fakeHost, fakeExec } from './host-harness.mjs';
 import { shareOrg, forgetSharedOrg } from '../src/runtime.js';
 import * as kernel from '../components/kernel/lib/index.js';
 
@@ -383,6 +383,34 @@ describe('Batch 7：自注册同源路由（换掉永不返回的命令通道）
     } finally {
       forgetSharedOrg();
       await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
+    }
+  });
+
+  // ⑧ P2 正对照（2026-10-10）：三个生产调用点的主体读数。
+  // 本批改的是 `runAction` 的**兜底路**（`spec.主体` 缺席 ⇒ 拒）。三个生产调用点
+  // （工具面 `components/kernel/lib/index.js:234` / 命令面 `:272` / 路由面 `components/kernel/lib/routes.js:69`）
+  // **全部显式传 `主体`** ⇒ 走的是 `spec.主体` 那一支，读数必须与修前**逐字相同**。
+  // 这条用例把三处读数原样印出来（修前/修后各跑一次逐字比，读数留在交付回报里）。
+  it('⑧ P2 正对照：工具面 / 命令面 / 路由面的主体读数（三处都显式传主体，与修前逐字相同）', async () => {
+    const t = await 起宿主();
+    try {
+      // 工具面：真宿主链（`agentSubject(exec)` ⇒ 根会话 = Lead，实例键 = 会话 id 原样）。
+      const 工具 = t.host.工具.get('mind');
+      const 工具读数 = JSON.parse(await 工具.execute({ action: 'status' }, fakeExec({ name: 'mind', sessionId: 'session-p2-0001' })));
+      // 命令面：`/mind status`（裸 agent ⇒ Lead，既有语义原样）。
+      const 命令读数 = JSON.parse((await t.命令.handler({ agent: {}, rawInput: 'status' })).text);
+      // 路由面：同源设置页写（主体恒为「设置页」，不冒充任何人）。
+      const 路由读数 = (await t.ws.请求('POST', 端点.presence, { 体: JSON.stringify({ 小时: 96 }) })).json;
+      console.log(
+        `[P2-正对照·读数] 工具面 成功=${工具读数.成功} 主体=${JSON.stringify(工具读数.主体)}`
+          + ` | 命令面 成功=${命令读数.成功} 主体=${JSON.stringify(命令读数.主体)}`
+          + ` | 路由面 成功=${路由读数.成功} 主体=${JSON.stringify(路由读数.主体)}`,
+      );
+      assert.deepEqual(工具读数.主体, { id: 'session-p2-0001', kind: 'Lead', roleId: 'Lead' }, '工具面：根会话 ⇒ Lead、实例键 = 会话 id 原样');
+      assert.deepEqual(命令读数.主体, { id: 'lead', kind: 'Lead', roleId: 'Lead' }, '命令面：裸 agent ⇒ Lead（既有语义原样）');
+      assert.deepEqual(路由读数.主体, { id: '设置页', kind: 'Lead', roleId: 'Lead' }, '路由面：主体 = 设置页，不许冒充主权者');
+    } finally {
+      await t.清理();
     }
   });
 });
