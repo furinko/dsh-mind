@@ -96,6 +96,59 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
     assert.equal(rows[0].处置, '强制替换');
   });
 
+  it('⑭ 死字段已删：条款级合并 / 安全类两条摘要审计交出去的条目不带「告警」键', async () => {
+    // 断言面选「交给 audit.append 的条目」而不是落盘行，理由必须写死在这里（否则下一个人会来"修"成落盘断言）：
+    //   `src/audit.js` 的 append 无条件写 `告警: entry.告警 === true` ⇒ **落盘行永远有 `告警` 这个键**
+    //   （upgrade 不给就补 false）。所以「落盘行不含告警键」是做不到的，
+    //   而「落盘行 告警 === false」是**恒真式**（由 audit.js 补出来，与本处那一行删没删无关）⇒ 验不出东西。
+    //   能证伪「那一行删没删」的面只有调用点本身。
+    /** @type {object[]} */
+    const 入账 = [];
+    const 原append = f.audit.append;
+    f.audit.append = async (entry) => {
+      入账.push({ ...entry }); // 快照：记的是调用点当时的形状，之后 audit 怎么加工都不影响
+      return 原append.call(f.audit, entry);
+    };
+    try {
+      // ① 非安全类：一条「保留用户的」（用户改了甲）+ 一条「直接替换」（用户没碰乙）
+      //    ⇒ 摘要审计（依据「§5 升级：条款级合并」）落账——若全都保留用户的，这条审计根本不落。
+      await writeUnder(f.factoryRoot, 能力相对('字段演示'), `${条款('甲', '出厂甲一版')}\n${条款('乙', '出厂乙一版')}\n`);
+      await writeUnder(f.privateRoot, 能力相对('字段演示'), `${条款('甲', '用户甲一版')}\n`);
+      await upgrade.stamp({ 版本: '1.1.0', 对象: ['字段演示'] });
+      const 合并 = await upgrade.compare({ 对象: '字段演示' });
+      assert.deepEqual(
+        合并.map((r) => r.处置).sort(),
+        ['保留用户的', '直接替换'],
+        `前置：本用例要同时踩到两种处置，否则摘要审计不落账 ⇒ 下面的断言会空过。实际：${JSON.stringify(合并.map((r) => [r.条款, r.处置]))}`,
+      );
+
+      // ② 安全类：强制替换 ⇒ 另一条摘要审计（依据「§5 安全类：强制替换，不可协商」）。
+      //    这里同时踩到冲突（出厂改了 + 用户改了同一条），于是正对照那条冲突告警也在场。
+      await writeUnder(f.factoryRoot, 能力相对('字段安全演示'), `${条款('红线', '旧机制')}\n`);
+      await writeUnder(f.privateRoot, 能力相对('字段安全演示'), `${条款('红线', '用户改过的机制')}\n`);
+      await upgrade.stamp({ 版本: '1.1.1', 对象: ['字段安全演示'] });
+      await writeUnder(f.factoryRoot, 能力相对('字段安全演示'), `${条款('红线', '修补后的机制')}\n`);
+      await upgrade.compare({ 对象: '字段安全演示', 安全类: true });
+    } finally {
+      f.audit.append = 原append;
+    }
+
+    const 摘要 = 入账.filter((e) => ['§5 升级：条款级合并', '§5 安全类：强制替换，不可协商'].includes(String(e.依据)));
+    assert.deepEqual(
+      摘要.map((e) => e.依据).sort(),
+      ['§5 升级：条款级合并', '§5 安全类：强制替换，不可协商'],
+      '两条摘要审计都必须真的落账，且各自恰好一条（分母非零，下面的断言才不是空过）',
+    );
+    for (const entry of 摘要) {
+      assert.equal(Object.hasOwn(entry, '告警'), false, `摘要审计不许再带恒假的「告警」键（处置里已无「挂起」）：${entry.依据}`);
+    }
+    // 正对照：同一轮里冲突告警那条**必须**仍带 `告警: true`——
+    // 它证明上面查的不是「这一轮根本没有告警字段」这种空集结论（⑭ 只删摘要审计那一个死字段）。
+    const 冲突 = 入账.filter((e) => /升级冲突私有优先/.test(String(e.依据)));
+    assert.ok(冲突.length >= 1, '前置：冲突告警条目在场（本用例的 ② 必然冲突）');
+    assert.ok(冲突.every((e) => e.告警 === true), '冲突告警原样保留：告警字段本身仍然有人真的在用');
+  });
+
   it('探针封闭清单：缺声明、多声明都报错，不做「等其他类似情况」兜底', async () => {
     const 声明 = await probes.declare();
     assert.deepEqual(声明.已实现, CLOSED_LIST);

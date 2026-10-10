@@ -131,7 +131,6 @@ export class UpgradeManager {
         对象: { id: spec.对象, kind: '规则' },
         依据: spec.安全类 === true ? '§5 安全类：强制替换，不可协商' : '§5 升级：条款级合并',
         结果: 结果.map((r) => `${r.条款}=${r.处置}`).join(' · '),
-        告警: 结果.some((r) => r.处置 === '挂起'),
       });
     }
     return 结果;
