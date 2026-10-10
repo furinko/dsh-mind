@@ -299,6 +299,32 @@ describe('失联限制：出厂件是真源，开关可关', () => {
     }
   });
 
+  // ⑦b（2026-10-11 跑通测试 P3×3 回归）：schema 参数描述必须与 handler 真实口径一致。
+  // 病灶：capability_read 只读 id、bus_send 正文参数真名是 内容、类型枚举未标注——
+  // 按 schema 字面传参会必然失败且报错误导（「能力库里没有 undefined」「空消息不入总线」）。
+  it('⑦b S4 工具面：争议参数描述与 handler 口径一致（id/名/内容/正文/类型）', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'mind-presence-desc-'));
+    const host = fakeHost();
+    await kernel.apply(host.ctx, { home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') });
+    try {
+      const props = host.工具.get('mind').parameters.properties;
+      assert.match(props.id.description, /capability_read 按 id 读/, 'id 描述要点名 capability_read 按 id 读');
+      assert.match(props.名.description, /capability_read 不读名/, '名 描述要警示 read 不读它');
+      assert.match(props.内容.description, /bus_send/, '内容 描述要归属 bus_send');
+      assert.match(props.正文.description, /capability_publish/, '正文 描述要归属 capability_publish');
+      // 类型 枚举必须由 MESSAGE_TYPES 单源拼出：逐项一致 + 保留字警示在。
+      const { MESSAGE_TYPES } = await import('../src/bus.js');
+      assert.ok(
+        props.类型.description.startsWith(`消息类型（bus_send）：${MESSAGE_TYPES.join('/')}`),
+        `类型 描述的枚举要与 src/bus.js 的 MESSAGE_TYPES 逐项一致（手抄清单必漂）`,
+      );
+      assert.match(props.类型.description, /机制保留字/, '「系统」保留字警示要在');
+    } finally {
+      host.清理();
+      await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
+    }
+  });
+
   // ⑧ D2 坏值不许静默：保护仍在（72），但读数必须说清「你写的值不合法、已退回」。
   it('⑧ D2 响应期限小时 是坏值（0 / -5 / "abc" / null）⇒ 仍按 72 判，读数标 值不合法 + 原值 + 来源', async () => {
     for (const 坏值 of [0, -5, 'abc', null]) {

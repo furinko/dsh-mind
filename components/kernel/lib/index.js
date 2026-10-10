@@ -20,6 +20,9 @@ import { kernelFactoryRoot } from '../../../src/paths.js';
 import { agentSubject } from '../../../src/subject.js';
 import { describeFailure } from '../../../src/kernel/errors.js';
 import { ACTIONS, runAction } from '../../../lib/actions.js';
+// 单源（2026-10-11 schema 口径修缮）：类型 参数描述里的消息类型枚举从 bus.js 的
+// 唯一清单拼出来——手抄一份必漂（src/bus.js 的 MESSAGE_TYPES 是闸的同一真源）。
+import { MESSAGE_TYPES } from '../../../src/bus.js';
 import { 挂同源路由, 看板包 } from './routes.js';
 
 export const name = 'dsh-mind-kernel';
@@ -159,8 +162,8 @@ function mindTool({ org, 项目, 项目键 }) {
         project: { type: 'string', description: '项目键；省略则用当前项目' },
         role: { type: 'string', description: '以哪个岗位身份执行（Lead / 复核员 / 成员岗位名）' },
         实例: { type: 'string', description: '岗位实例 id；省略则按岗位推断' },
-        id: { type: 'string', description: '对象 id（任务节点 / 记忆条目 / 挂起项）' },
-        描述: { type: 'string' },
+        id: { type: 'string', description: '对象 id（任务节点 / 记忆条目 / 挂起项 / 能力名——capability_read 按 id 读，不读 名）' },
+        描述: { type: 'string', description: '任务/挂起项的描述（task_create / task_pending）' },
         负责人: { type: 'string', description: '负责人 id 或多个用逗号分隔' },
         判据: { type: 'string', description: '验收标准；多个用逗号分隔。任务必填，派发后冻结' },
         依赖: { type: 'string' },
@@ -175,7 +178,7 @@ function mindTool({ org, 项目, 项目键 }) {
         结论集: { type: 'string', description: 'JSON 数组：[{成员,结论,反例面}]，用于零分歧检查' },
         产出物引用: { type: 'string' },
         类: { type: 'string', enum: ['知识', '经历', '偏好', '作答'] },
-        内容: { type: 'string' },
+        内容: { type: 'string', description: '正文内容（bus_send 的消息正文 / memory_write 的条目内容）' },
         来源: { type: 'string', description: '怎么知道的；记忆写入必填（谁记的默认取主体）' },
         来源引用: { type: 'string', description: '证据/来源对象 id，多个用逗号分隔（契约A 血缘）；know-/exp-/pref-/answ- 查账本、task- 查任务图、artifact- 本批不校验，悬空拒写' },
         岗位: { type: 'string' },
@@ -189,14 +192,14 @@ function mindTool({ org, 项目, 项目键 }) {
         披露豁免: { type: 'boolean', description: 'op=promote 时 Lead 显式豁免披露机械检查（仅 Lead 可用）；豁免与命中的敏感模式名会一起进审计' },
         新条目: { type: 'string' },
         原因: { type: 'string' },
-        名: { type: 'string' },
-        正文: { type: 'string' },
+        名: { type: 'string', description: '能力名（capability_resolve 检索 / capability_publish 发布；capability_read 不读名、只读 id）' },
+        正文: { type: 'string', description: '能力卡正文（capability_publish）' },
         适用岗位: { type: 'string' },
         依据: { type: 'string' },
-        线程: { type: 'string' },
+        线程: { type: 'string', description: '线程名（bus_send / bus_read）' },
         发件: { type: 'string', description: '已忽略（W2 安全修复）：发件人恒为真实主体 id，自报无效——冒充发件人是伪造轮边界的第一步' },
         收件: { type: 'string', description: '收件人，多个用逗号分隔' },
-        类型: { type: 'string', description: '消息类型（bus_send）；debate_say 只认 分歧/表态/答复' },
+        类型: { type: 'string', description: `消息类型（bus_send）：${MESSAGE_TYPES.join('/')}——「系统」为机制保留字，仅系统主体可发；debate_say 只认 分歧/表态/答复` },
         暂不投递: { type: 'boolean' },
         延后: { type: 'boolean' },
         引用: { type: 'string' },
