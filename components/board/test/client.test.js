@@ -334,16 +334,16 @@ test('包清单点到的每条路径都在 exports 里，且都落在磁盘上',
     '根包 exports ./client 必须指向看板浏览器包（宿主按 <包名>/client 解析）');
   assert.ok(existsSync(join(REPO_ROOT, 'components/board/lib/client.js')), './client 指向的文件不存在');
 
-  // 组件清单：main 在 exports 里，全部导出都落盘。
+  // 组件清单：看板无宿主入口（单包化后只有浏览器半区，载体行加载根入口），导出都落盘。
   const referenced = new Set();
   if (typeof pkg.main === 'string') referenced.add('./' + pkg.main.replace(/^\.\//, ''));
   const exported = new Set(Object.values(pkg.exports || {}));
   for (const path of referenced) {
     assert.ok(exported.has(path), 'exports 缺 ' + path + ' ⇒ 宿主 ESM 加载器会拒收，后端启动即崩');
   }
-  assert.equal(pkg.exports['.'], './lib/index.js');
+  assert.equal(pkg.main, undefined, '看板组件不得再有宿主入口 main（死件防复活）');
 
-  for (const [key, value] of Object.entries(pkg.exports)) {
+  for (const [key, value] of Object.entries(pkg.exports ?? {})) {
     assert.ok(value.startsWith('./'), key + ' 的导出路径必须是相对路径');
     assert.ok(existsSync(join(PACKAGE_ROOT, value.slice(2))), key + ' 指向的文件不存在：' + value);
   }

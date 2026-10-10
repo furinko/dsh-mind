@@ -19,7 +19,6 @@
     ".": "./lib/index.js",
     "./kernel": "./components/kernel/lib/index.js",
     "./guard": "./components/guard/lib/index.js",
-    "./board": "./components/board/lib/index.js",
     "./client": "./components/board/lib/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json",

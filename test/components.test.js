@@ -43,21 +43,26 @@ function parsePatch(text) {
 }
 
 describe('组件：一张卡 + 三行（单包自洽）', () => {
-  it('bundle 补丁插三行，每行指向一个不同的子路径导出', async () => {
+  it('bundle 补丁插三行：内核/安全类是子路径，看板是裸包名载体行', async () => {
     const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
     const 补丁 = await readFile(join(root, 'cordis.patch.yml'), 'utf8');
     const rows = parsePatch(补丁);
     assert.equal(rows.length, 3, `应插三行，实际 ${rows.length}：${rows.map((r) => r.id).join(',')}`);
     assert.deepEqual(rows.map((r) => r.id), ['dsh-mind-kernel', 'dsh-mind-guard', 'dsh-mind-board']);
-    for (const row of rows) {
+    // 看板行必须是裸包名：浏览器半区发现器（dsh-client-modules）只认裸包名/路径型
+    // 行名定位 owning 包——子路径行被 exactPackageSpecifier 排除，dsh.client 发现不了
+    // （2026-10-11 面板消失事故的根因，这条断言防回退）。
+    const boardRow = rows.find((r) => r.id === 'dsh-mind-board');
+    assert.equal(boardRow.name, manifest.name, `看板行 name 必须是裸包名 ${manifest.name}（载体行）`);
+    assert.equal(typeof manifest.exports['.'], 'string', '载体行指向根入口，exports["."] 必须在');
+    for (const row of rows.filter((r) => r !== boardRow)) {
       assert.ok(row.name, `行 ${row.id} 缺 name`);
       assert.match(row.name, new RegExp(`^${manifest.name}/`), `行 ${row.id} 的 name '${row.name}' 应是本包子路径`);
-      assert.notEqual(row.name, manifest.name, `行 ${row.id} 不该指向 bundle 入口自己 —— 那样就没有「组件」了`);
       const sub = row.name.slice(manifest.name.length + 1);
       assert.equal(typeof manifest.exports[`./${sub}`], 'string', `行 ${row.id} 的子路径不在 exports 里 —— 装载时 import 会拒收`);
       assert.ok(manifest.exports[`./${sub}`].startsWith('./components/'), `行 ${row.id} 应解析进 components/`);
     }
-    assert.equal(new Set(rows.map((r) => r.name)).size, 3, '三行必须指向三个不同的子路径');
+    assert.equal(new Set(rows.map((r) => r.name)).size, 3, '三行必须指向三个不同的入口');
   });
 
   it('bundle 包自己不插行，否则列表里会多出一张卡', async () => {
@@ -72,11 +77,15 @@ describe('组件：一张卡 + 三行（单包自洽）', () => {
     assert.deepEqual(Object.keys(manifest.dependencies ?? {}), [], '组件已在包内，dependencies 残留会让安装器去解析不存在的包');
   });
 
-  it('三个组件入口都在根包 exports 且落盘', async () => {
+  it('宿主组件入口都在根包 exports 且落盘；看板无宿主入口（只有浏览器半区）', async () => {
     const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
-    for (const dir of ['kernel', 'guard', 'board']) {
+    for (const dir of ['kernel', 'guard']) {
       assert.equal(manifest.exports[`./${dir}`], `./components/${dir}/lib/index.js`, `exports ./${dir} 应指向 ${dir} 的宿主入口`);
     }
+    assert.equal(manifest.exports['./board'], undefined, '看板宿主入口已废（载体行加载根入口）—— ./board 导出不得复活');
+    assert.equal(manifest.exports['./client'], './components/board/lib/client.js', '浏览器半区子路径指向看板 client.js');
+    const board = JSON.parse(await readFile(join(root, 'components', 'board', 'package.json'), 'utf8'));
+    assert.equal(board.main, undefined, '看板组件清单不得再有宿主入口 main');
   });
 
   it('浏览器半区挂在根包上：dsh.client + exports ./client，组件包一个都不许有', async () => {
@@ -86,8 +95,10 @@ describe('组件：一张卡 + 三行（单包自洽）', () => {
     for (const dir of ['kernel', 'guard', 'board']) {
       const pkg = JSON.parse(await readFile(join(root, 'components', dir, 'package.json'), 'utf8'));
       assert.equal(pkg.dsh?.client, undefined, `components/${dir} 不该再有 dsh.client —— 浏览器半区已上移根包`);
-      assert.equal(typeof pkg.main, 'string', `components/${dir} 缺 main`);
-      assert.ok(pkg.exports['.'], `components/${dir} 缺 exports["."]`);
+      if (dir !== 'board') {
+        assert.equal(typeof pkg.main, 'string', `components/${dir} 缺 main`);
+        assert.ok(pkg.exports['.'], `components/${dir} 缺 exports["."]`);
+      }
     }
   });
 

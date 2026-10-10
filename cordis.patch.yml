@@ -3,13 +3,16 @@
 # **一张插件卡，三个组件。** 插件列表里出现的是本包（一张卡）；
 # 卡片下面「包含的组件」是这三行，每行一个独立开关。
 #
-# 单包自洽（2026-10-11 可发布化批）：三行的 `name` 是**本包的子路径导出**
-# （`dsh-mind/kernel` 等），由本包 package.json 的 `exports` 解析——
-# 用户只需装 `dsh-mind` 一个包，三行全部可达。
-# 为什么不再是三个独立包：旧四包形态靠 profile 里手写四行 `link:` 依赖才能装齐
-# （`link:` 是纯符号链接协议，pnpm **不解析**目标包自己的 dependencies——
-# 官方 `dsh plugin add` 只写一行主包依赖，组件就「静默不装」，实测在案）；
-# 子路径导出则走标准模块解析（含 Node 自引用），装一个包即闭合。
+# 单包自洽（2026-10-11 可发布化批）：内核/安全类的 `name` 是**本包子路径导出**
+# （`dsh-mind/kernel` 等），由本包 package.json 的 `exports` 解析——用户只需装
+# 一个包。为什么不再是三个独立包：旧四包形态靠 profile 手写四行 `link:` 依赖
+# （`link:` 不解析目标包 dependencies，官方 `dsh plugin add` 只写一行主包依赖
+# ⇒ 组件静默不装，实测在案）。
+#
+# ⚠️ 看板行必须是**裸包名 `dsh-mind`**，不能写子路径：浏览器半区的发现器
+# （dsh-client-modules）按行名定位 owning 包，只认「裸包名 / 路径型」——子路径行
+# 在 exactPackageSpecifier 处被排除，dsh.client 永远发现不了（2026-10-11 面板
+# 消失事故的根因）。看板行是浏览器半区的**载体行**（宿主 apply 刻意为空）。
 #
 # 关掉一行 = 那个组件不进 roster = 它的工具 / 命令 / 浏览器半区一起消失：
 #   关 dsh-mind-guard → 没有探针与升级运维，判定与记账照常
@@ -26,4 +29,4 @@
         开机自检: true
 
     - id: dsh-mind-board
-      name: dsh-mind/board
+      name: dsh-mind

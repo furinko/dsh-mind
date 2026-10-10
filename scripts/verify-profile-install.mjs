@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 const 脚本目录 = dirname(fileURLToPath(import.meta.url));
 const 本仓库 = join(脚本目录, '..');
 const BUNDLE = 'dsh-mind';
-const 组件 = ['kernel', 'guard', 'board'];
+const 宿主组件 = ['kernel', 'guard']; // 看板只有浏览器半区（./client），载体行是裸包名行
 
 /** 逐条判据：返回 [失败原因们, 通过语们]。 */
 function 检查(profileDir) {
@@ -53,7 +53,7 @@ function 检查(profileDir) {
   if (Object.keys(pkg.dependencies ?? {}).length > 0) 失败.push(`装到的包带着 dependencies（${Object.keys(pkg.dependencies).join(',')}）—— 单包形态不该有`);
   else 通过.push('包内自洽（无 dependencies）');
 
-  for (const sub of [...组件, 'client']) {
+  for (const sub of [...宿主组件, 'client']) {
     const target = pkg.exports?.[`./${sub}`];
     if (typeof target !== 'string') {
       失败.push(`exports 缺 ./${sub} —— 装载器 import ${BUNDLE}/${sub} 会拒收`);
@@ -61,7 +61,7 @@ function 检查(profileDir) {
     }
     if (!existsSync(join(包目录, target))) 失败.push(`exports ./${sub} → ${target} 不在包里`);
   }
-  if (失败.length === 0) 通过.push('组件入口 ./kernel ./guard ./board ./client 全部落盘');
+  if (失败.length === 0) 通过.push('组件入口 ./kernel ./guard ./client 全部落盘');
 
   if (pkg.dsh?.client?.platform !== 'web') 失败.push('包缺 dsh.client(platform:web) —— 浏览器半区不会被发现');
   const 出厂必备 = ['mind/集体L0-宪章/宪章.md', 'mind/集体L3-成员角色卡/_模板.md', 'mind/集体L2-共享基础设施/defaults/介入度.json', 'src/paths.js'];
@@ -74,22 +74,23 @@ function 检查(profileDir) {
   const patch = readFileSync(join(包目录, 'cordis.patch.yml'), 'utf8');
   const rows = [...patch.matchAll(/^\s*-\s+id:\s*(\S+)\s*$[\s\S]*?^\s+name:\s*(\S+)\s*$/gm)]
     .map((m) => ({ id: m[1], name: m[2].replace(/^['"]|['"]$/g, '') }));
-  if (rows.length !== 组件.length) 失败.push(`cordis.patch 应插 ${组件.length} 行，实际 ${rows.length}`);
+  if (rows.length !== 宿主组件.length + 1) 失败.push(`cordis.patch 应插 ${宿主组件.length + 1} 行，实际 ${rows.length}`);
   for (const row of rows) {
-    if (!row.name.startsWith(`${BUNDLE}/`)) 失败.push(`行 ${row.id} 的 name '${row.name}' 不是 ${BUNDLE}/<sub> 子路径`);
+    if (row.name === BUNDLE) continue; // 载体行（看板）：裸包名 → 根入口，浏览器半区由它发现
+    if (!row.name.startsWith(`${BUNDLE}/`)) 失败.push(`行 ${row.id} 的 name '${row.name}' 不是 ${BUNDLE}/<sub> 子路径或裸包名载体行`);
     else if (typeof pkg.exports?.[`./${row.name.slice(BUNDLE.length + 1)}`] !== 'string') 失败.push(`行 ${row.id} 的子路径不在 exports 里`);
   }
 
   // 子路径从 profile 上下文真的解析得到（这是装载器视角）。
   const req = createRequire(profileManifestPath);
-  for (const sub of [...组件, 'client']) {
+  for (const sub of [...宿主组件, 'client']) {
     try {
       req.resolve(`${BUNDLE}/${sub}`);
     } catch (error) {
       失败.push(`require.resolve('${BUNDLE}/${sub}') 失败：${error.message}`);
     }
   }
-  if (失败.filter((f) => f.includes('require.resolve')).length === 0) 通过.push('四个子路径从 profile 上下文全部可解析');
+  if (失败.filter((f) => f.includes('require.resolve')).length === 0) 通过.push('三个子路径从 profile 上下文全部可解析');
   return [失败, 通过];
 }
 
@@ -106,7 +107,7 @@ function selftest() {
     cpSync(join(本仓库, 'mind'), join(包目录, 'mind'), { recursive: true });
     cpSync(join(本仓库, 'src'), join(包目录, 'src'), { recursive: true });
     cpSync(join(本仓库, 'cordis.patch.yml'), join(包目录, 'cordis.patch.yml'));
-    for (const c of 组件) {
+    for (const c of [...宿主组件, 'board']) {
       mkdirSync(join(包目录, 'components', c, 'lib'), { recursive: true });
       cpSync(join(本仓库, 'components', c, 'lib'), join(包目录, 'components', c, 'lib'), { recursive: true });
     }

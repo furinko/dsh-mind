@@ -99,8 +99,14 @@ const 补丁行 = [...String(await readTextOrNull(join(root, 'cordis.patch.yml')
 if (补丁行.length === 0) failures.push('cordis.patch.yml 没有插入任何组件行。');
 if (补丁行.some((row) => row.id === manifest.name)) failures.push('bundle 包给自己插了行 —— 列表里会多出一张卡，组件就退回成插件了。');
 for (const row of 补丁行) {
+  if (row.name === manifest.name) {
+    // 载体行（看板）：裸包名，指向根入口。浏览器半区发现器只认裸包名/路径型行名，
+    // 子路径行在 exactPackageSpecifier 处被排除 ⇒ dsh.client 发现不了（面板消失事故）。
+    if (manifest.exports?.['.'] === undefined) failures.push(`载体行 ${row.id} 指向根包，但 exports["."] 缺失。`);
+    continue;
+  }
   if (!row.name.startsWith(`${manifest.name}/`)) {
-    failures.push(`行 ${row.id} 的 name '${row.name}' 不是本包子路径（应为 ${manifest.name}/<sub>）。`);
+    failures.push(`行 ${row.id} 的 name '${row.name}' 不是本包子路径（应为 ${manifest.name}/<sub>）或裸包名载体行。`);
     continue;
   }
   const sub = row.name.slice(manifest.name.length + 1);
@@ -114,10 +120,12 @@ for (const row of 补丁行) {
 }
 notes.push(`补丁插 ${补丁行.length} 行：${补丁行.map((r) => r.id).join(' / ')}。`);
 
-// 每个组件目录：根包 exports 的 ./<dir> 指向它的 lib/index.js、被补丁行引用，
-// 清单承诺的路径存在且被 exports 覆盖、浏览器半区是经典脚本。
-const 组件目录 = ['kernel', 'guard', 'board'];
-for (const dir of 组件目录) {
+// 宿主半区组件（kernel/guard）：根包 exports 的 ./<dir> 指向各自 lib/index.js、被补丁行引用，
+// 清单承诺的路径存在且被 exports 覆盖。
+// 看板组件不再有宿主入口（旧空 apply 占位已删）：它只有浏览器半区，
+// 载体 = 补丁里的裸包名行 dsh-mind → 根包 dsh.client → exports ./client。
+const 宿主组件 = ['kernel', 'guard'];
+for (const dir of 宿主组件) {
   const 包目录 = join(root, 'components', dir);
   let 包清单;
   try {
@@ -144,22 +152,6 @@ for (const dir of 组件目录) {
     if (text && /from\s+['"]@deepseek-ai\//.test(text)) {
       failures.push(`${包清单.name}：lib/${rel} 引用了出厂包 —— profile 安装的插件不保证能解析它。`);
     }
-    if (rel === 'client.js') {
-      const 源码 = text ?? '';
-      if (/^\s*(import|export)\s/m.test(源码)) failures.push(`${包清单.name}：lib/client.js 含顶层 import/export，会让整站 web 启动失败。`);
-      else if (!源码.includes('window.__ModuleLoader__.load')) failures.push(`${包清单.name}：lib/client.js 没有走 window.__ModuleLoader__.load。`);
-      // 宿主是按**被安装包的包名**去模块表里取这个 factory 的（单包化后 = 根包名）。
-      // id 写错不是「本插件不显示」，而是整站 web 启动失败 —— 这条曾经真的把宿主带崩过。
-      const loaderId = /__ModuleLoader__\.load\(\s*\{[^}]*?id:\s*'([^']+)'/s.exec(源码)?.[1];
-      if (loaderId !== manifest.name) {
-        failures.push(`${包清单.name}：lib/client.js 的 loader id 是 '${loaderId ?? '(缺失)'}'，必须等于根包名 '${manifest.name}'。`);
-      }
-      const 插件体名 = /return\s*\{\s*name:\s*'([^']+)'/.exec(源码)?.[1];
-      if (插件体名 !== manifest.name) {
-        failures.push(`${包清单.name}：lib/client.js 的插件体 name 是 '${插件体名 ?? '(缺失)'}'，必须等于根包名。`);
-      }
-      continue;
-    }
     try {
       await import(new URL(`../components/${dir}/lib/${rel}`, import.meta.url).href);
     } catch (error) {
@@ -167,7 +159,29 @@ for (const dir of 组件目录) {
     }
   }
 }
-notes.push(`组件 ${组件目录.length} 个（单包自洽），入口与清单一致。`);
+// 看板：载体行必须是裸包名（浏览器半区发现器只认裸包名/路径型行名），
+// 宿主入口不得复活（载体行加载的是根入口，board 的 index.js 是死件）。
+{
+  const 载体行 = 补丁行.find((row) => row.id === 'dsh-mind-board');
+  if (!载体行) failures.push('缺看板载体行 dsh-mind-board。');
+  else if (载体行.name !== manifest.name) failures.push(`看板载体行 name 应为裸包名 ${manifest.name}，实际 ${载体行.name}。`);
+  if ((await readTextOrNull(join(root, 'components', 'board', 'lib', 'index.js'))) !== null) {
+    failures.push('components/board/lib/index.js 是死件（载体行加载根入口）—— 删掉它，别让「看板宿主入口」复活。');
+  }
+  const 源码 = await readTextOrNull(join(root, 'components', 'board', 'lib', 'client.js'));
+  if (源码 === null) failures.push('components/board/lib/client.js 不存在 —— 浏览器半区没了。');
+  else {
+    if (/from\s+['"]@deepseek-ai\//.test(源码)) failures.push('看板 lib/client.js 引用了出厂包。');
+    if (/^\s*(import|export)\s/m.test(源码)) failures.push('看板 lib/client.js 含顶层 import/export，会让整站 web 启动失败。');
+    else if (!源码.includes('window.__ModuleLoader__.load')) failures.push('看板 lib/client.js 没有走 window.__ModuleLoader__.load。');
+    // 宿主是按**被安装包的包名**去模块表里取这个 factory 的（单包化后 = 根包名）。
+    const loaderId = /__ModuleLoader__\.load\(\s*\{[^}]*?id:\s*'([^']+)'/s.exec(源码)?.[1];
+    if (loaderId !== manifest.name) failures.push(`看板 client.js 的 loader id 是 '${loaderId ?? '(缺失)'}'，必须等于根包名 '${manifest.name}'。`);
+    const 插件体名 = /return\s*\{\s*name:\s*'([^']+)'/.exec(源码)?.[1];
+    if (插件体名 !== manifest.name) failures.push(`看板 client.js 的插件体 name 是 '${插件体名 ?? '(缺失)'}'，必须等于根包名。`);
+  }
+}
+notes.push(`组件 3 个（宿主 ${宿主组件.length} + 看板浏览器半区），单包自洽。`);
 
 // 全部内核模块必须可加载（语法错误在这里就要暴露，而不是等宿主重启）。
 const modules = await listFiles(join(root, 'src'), { recursive: true, filter: (n) => n.endsWith('.js') });
