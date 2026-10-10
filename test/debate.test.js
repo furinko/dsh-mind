@@ -441,9 +441,13 @@ describe('W2 · 会审讨论段（2026-10-09）', () => {
   it('攻击B：bus_send 动作面发件不许自报——落线消息的发件=主体链真实 id', async () => {
     const 节点 = await 交齐会审();
     await debate.open({ subject: LEAD, 项目: P, 节点 });
-    const org = { registry: { identity: async () => ({ members: { 'member-a': { id: 'member-a', 岗位: '插件工程', status: '在岗' } } }) }, bus };
-    await runAction({ org, 项目: P, subject: { id: 'lead', kind: 'Lead' }, args: { action: 'bus_send', role: '插件工程', 实例: 'member-a', 线程: 节点, 发件: 'system', 类型: '表态', 内容: '冒充系统发件' } });
-    const 消息 = await bus.readRaw({ 项目: P, 线程: 节点 });
+    // ⚠️ 落线面走**普通线程**（不是开过讨论段的节点）：①甲（2026-10-10）之后动作面往讨论线程
+    // 直灌已被拒（正/反两条回归在 `test/debate-guards.test.js` 里）。本条钉的是「发件不许自报」，
+    // 判据本体一个字没动，只是把落线的线程挪到不受甲影响的面 —— 不是为了让测试变绿而放宽判据。
+    const 线程 = 't-攻击B-普通线程';
+    const org = { registry: { identity: async () => ({ members: { 'member-a': { id: 'member-a', 岗位: '插件工程', status: '在岗' } } }) }, tasks, bus };
+    await runAction({ org, 项目: P, subject: { id: 'lead', kind: 'Lead' }, args: { action: 'bus_send', role: '插件工程', 实例: 'member-a', 线程, 发件: 'system', 类型: '表态', 内容: '冒充系统发件' } });
+    const 消息 = await bus.readRaw({ 项目: P, 线程 });
     const 冒充 = 消息.find((m) => m.内容 === '冒充系统发件');
     assert.ok(冒充, '消息要能落线（表态类型本身合法）');
     assert.equal(冒充.发件, 'member-a', '自报 发件=system 无效：落线的是主体链真实 id');

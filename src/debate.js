@@ -151,8 +151,9 @@ export class DebateService {
    * 经 `bus.send`（线程=节点id）落消息。
    * 预算闸**现算**（读线程）：本轮消息数 < 每轮消息上限、该成员本轮累计字符 + 新内容
    * ≤ 每人每轮字符上限——用的是**开启时冻结的快照**，不是当前部署值。
-   * 反对者与参与者**同吃这两道预算闸**：`本轮发言()` 按类型与发件过滤，反对者的发言同形，
-   * 字符额度按 `发件 === subject.id` 现算，对他同样成立（见下方「预算闸」两段）。
+   * 反对者与参与者**同吃这两道预算闸**：`本轮发言()` 只认「`发件 ∈ 预算名单()`」
+   * （名单 = 参与者 ∪ 反对者），反对者的发言同形；字符额度按 `发件 === subject.id` 现算，
+   * 对他同样成立（见下方「预算闸」两段）。名单**外**的消息一律不占预算（①乙·2026-10-10）。
    * 审计走 bus.send 既有路径（W2 规格），本方法不另记。
    *
    * @param {{ subject: object, 项目: string, 节点: string, 类型: string, 内容: string }} spec
@@ -180,9 +181,11 @@ export class DebateService {
     const 内容 = String(spec.内容 ?? '').trim();
     if (!内容) throw new InvalidBody('讨论发言内容为空。');
 
-    // 预算闸（现算）：本轮 = 最后一条轮边界消息之后的参与者发言。
+    // 预算闸（现算）：本轮 = 最后一条轮边界消息之后、**名单内**发件的发言。
+    // ①乙（2026-10-10）：名单 = 参与者 ∪ 反对者 —— 名单外的消息（外人经服务面
+    // `bus.send` 直灌、机制消息、旁听者的任何落线）**不占预算**，占不死参与者的闸。
     const 消息 = await this.bus.readRaw({ 项目: spec.项目, 线程: spec.节点 });
-    const 本轮 = 本轮发言(消息);
+    const 本轮 = 本轮发言(消息, 预算名单(讨论));
     const 上限 = 讨论.预算快照?.每轮消息上限 ?? DEFAULT_DEBATE_BUDGET.每轮消息上限;
     if (本轮.length >= 上限) {
       throw new Denied(
@@ -220,7 +223,8 @@ export class DebateService {
   }
 
   /**
-   * 换轮：轮次 < 轮次上限才放行（上限判定在任务图状态机面）；返回**即将结束的这轮**的
+   * 换轮：**仅 Lead**（④·2026-10-10，判据与 converge() 同款）+ 轮次 < 轮次上限才放行
+   * （上限判定在任务图状态机面）；返回**即将结束的这轮**的
    * 可收敛提示 =（本轮零新「分歧」消息 且 每个参与者都发过「表态」）。
    * 换轮动作本身落一条「系统」边界消息——预算切轮靠消息流内部边界，不靠时钟对齐。
    *
@@ -229,12 +233,27 @@ export class DebateService {
   async round(spec) {
     const node = await this.#node(spec.项目, spec.节点);
     const 讨论 = this.#requireOpen(node);
+    // ④（2026-10-10 独立复核实证）：换轮**仅 Lead** —— 判据与 converge() 同款。
+    // 修前这里**没有任何主体判定**：任何成员都能换轮、把两道预算整个重置、把轮次推上去，
+    // 而 `say()` 的拒绝文案却写着「换轮（debate_round，Lead）」—— 文案与判据自相矛盾。
+    // 换轮是「这一轮到此为止」的流程决定（和收敛同一族），不是发言权的一部分。
+    if (spec.subject?.kind !== 'Lead') {
+      throw new Denied(
+        '会审讨论段 · 换轮仅 Lead（W2 规格 2026-10-09）',
+        `${spec.subject?.kind ?? '未知'} 不得执行换轮：换轮会重置每轮消息数与每人每轮字符两道预算并推进轮次，是流程决定。`,
+        {
+          requireAuthority: 'Lead',
+          howToChange: '由 Lead 执行 debate_round（换轮）或 debate_converge（收敛）；成员用 debate_say（类型=分歧/表态/答复）在本轮内发言，等 Lead 换轮。',
+        },
+      );
+    }
     const 消息 = await this.bus.readRaw({ 项目: spec.项目, 线程: spec.节点 });
-    const 本轮 = 本轮发言(消息);
+    const 本轮 = 本轮发言(消息, 预算名单(讨论));
     const 提示 = 可收敛判定(本轮, 讨论.参与者);
     const 节点投影 = await this.tasks.debateRounded(spec.节点, { subject: spec.subject, 项目: spec.项目, 轮次: 讨论.轮次 + 1 });
     // 边界消息：之后的所有参与者发言都属于新轮。经 bus.send 落线（走它的闸与审计），
-    // 发件是系统——预算过滤只认参与者发言（类型 ∈ 三种），系统边界不会被算进任何人头上。
+    // 发件是系统——预算过滤只认名单内发件（名单 = 参与者 ∪ 反对者），
+    // 系统既不是参与者、默认也不是反对者 ⇒ 边界不会被算进任何人头上（①乙）。
     await this.bus.send({
       subject: { id: 'system', kind: '系统' },
       项目: spec.项目,
@@ -322,17 +341,37 @@ export function 会审预算(policy) {
 }
 
 /**
- * 本轮发言：**最后一条**轮边界消息（`[debate-round]` 系统消息）之后的参与者发言
- * （类型 ∈ 分歧/表态/答复，发件非 system）。第 1 轮没有边界消息 ⇒ 全部消息算本轮。
+ * 本轮发言：**最后一条**轮边界消息（`[debate-round]` 系统消息）之后的**名单内**发言
+ * （类型 ∈ 分歧/表态/答复，且 `发件 ∈ 名单`）。第 1 轮没有边界消息 ⇒ 全部消息算本轮。
  *
  * 用消息流内部的边界切轮而不是时钟：边界消息与发言同账同序，没有「同一秒里
  * round 与 say 谁先谁后」的对齐问题。
  *
+ * ①乙（2026-10-10 独立复核实证）：判据由「`发件 !== 'system'`」改为「`发件 ∈ 名单`」。
+ * 旧判据有两处洞：**外人**（非参与者、非反对者）经服务面 `bus.send` 直灌的消息照样占预算
+ * （实测：上限「每轮 2 条 / 每人 10 字」下直灌 11 条全落线，参与者随后 `debate_say` 被拒
+ * —— 预算被外人占死）；而 `system` 若**当上强制反对者**（在册实例恰好叫 system），
+ * 他作为反对者的发言按 `发件 !== 'system'` 被排除 ⇒ **不计入预算**（可无限发言）。
+ * 名单口径（`预算名单()` = 参与者 ∪ 反对者）一次闭合两处：名单外一律不计入，名单内一律计入。
+ *
+ * **语义变更（写进文档，见 docs/设计债-2026-10-09.md ⑰/⑱/⑲）**：非名单发件的消息
+ * **不再占预算**。这不是放宽闸门，而是把「谁占预算」的判据从「不是 system」收紧成
+ * 「在这份讨论的名单里」——名单外的人本来就不该有讨论预算可占。
+ *
  * @param {object[]} messages 折叠后的线程消息（`bus.readRaw` 的输出）
+ * @param {string[]} 名单 预算名单（`预算名单()` 的输出：参与者 ∪ 反对者）
  * @returns {object[]}
  */
-export function 本轮发言(messages) {
+export function 本轮发言(messages, 名单) {
+  // **名单必填**：漏传时若按「空名单」处理，过滤结果恒为空 ⇒ 预算两道闸静默失效（fail-open）。
+  // 那是把安全闸拆掉的写法，所以这里响亮失败，不猜、不兜底。
+  if (!Array.isArray(名单)) {
+    throw new InvalidBody('本轮发言 需要 名单（参与者 ∪ 反对者）：漏传会让预算闸静默失效（fail-open），按 fail-closed 拒。', {
+      missing: ['名单'],
+    });
+  }
   const 集合 = messages ?? [];
+  const 在名单 = new Set(名单.filter((id) => typeof id === 'string' && id !== ''));
   let 边界 = -1;
   for (let i = 集合.length - 1; i >= 0; i -= 1) {
     const m = 集合[i];
@@ -341,7 +380,22 @@ export function 本轮发言(messages) {
       break;
     }
   }
-  return 集合.slice(边界 + 1).filter((m) => DEBATE_SAY_TYPES.includes(m?.类型) && m?.发件 !== 'system');
+  return 集合.slice(边界 + 1).filter((m) => DEBATE_SAY_TYPES.includes(m?.类型) && 在名单.has(m?.发件));
+}
+
+/**
+ * 预算名单（①乙·2026-10-10）：**参与者 ∪ 强制反对者**。
+ *
+ * 为什么单独一个导出函数：能往讨论线程发言的只有这两类（`say()` 的发言权判据），
+ * 所以「谁的消息占预算」与「谁能发言」必须是**同一份名单**。三处调用点
+ * （`say` / `round` / `src/workbench.js` 的讨论小节）各写一遍迟早漂开 ——
+ * 那时面板的「本轮消息数 x/y」与实际闸的读数就不是一回事了。
+ *
+ * @param {{ 参与者?: string[], 反对者?: string }|null|undefined} 讨论 node.讨论（fold 出的子状态）
+ * @returns {string[]}
+ */
+export function 预算名单(讨论) {
+  return [...(讨论?.参与者 ?? []), 讨论?.反对者].filter(Boolean);
 }
 
 /**

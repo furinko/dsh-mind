@@ -226,7 +226,12 @@ function mindTool({ org, 项目, 项目键 }) {
         // 项目键省略时取**当前工作区目录名**（§14.4-5：目录名即项目键）——
         // 否则面板永远只显示默认项目，而任务建在别的项目里，看起来就是"一块空白"。
         const 本次项目 = args.project ?? 项目键(exec);
-        return JSON.stringify({ 成功: true, ...(await runAction({ org, 项目: 本次项目, subject: 主体, args: normalizeArgs(args) })) }, null, 1);
+        // `主体` 必须显式传下去（W3 批3 的 `spec.主体` 优先那条路）—— 这是门② 的**落地点**：
+        // 只改 `agentSubject` 而不把它传进 `runAction`，会话事实判据就是一条**死代码**
+        // （`runAction` 会回落到 `subjectFor({根会话: subject?.kind === 'Lead'})`，
+        // 而那个回落本身又受「自报的 args.role」影响）。本轮实测过这个半成品形态：
+        // 子会话 `agentSubject` 算出成员、`runAction` 收到的却是 Lead（两处读数都在回报里）。
+        return JSON.stringify({ 成功: true, ...(await runAction({ org, 项目: 本次项目, subject: 主体, 主体, args: normalizeArgs(args) })) }, null, 1);
       } catch (error) {
         return JSON.stringify({ 成功: false, ...describeFailure(error) }, null, 1);
       }
@@ -529,15 +534,67 @@ function 组织说明(org) {
 }
 
 /**
- * 从执行上下文里取主体；取不到会话就按 Lead 处理（根会话的执行者就是 Lead）。
+ * 从执行上下文里取主体：**根会话 = Lead，子会话（成员）= 不是 Lead**。
  *
- * W3 批3：去掉一处恒等三元（「值 === 'lead' ? 同一个值 : 那个值」的写法——两边同一个字符串，
- * 是重构残留）。语义不变，只是别再让读的人以为这里有个分支。
+ * 门②（2026-10-10 独立复核实证 · Lead 身份落在可自报字段上）：
+ * 修前这里传的是**常量** `根会话: true` ⇒ 任何会话（含成员子会话）的 subject 都是
+ * `{kind:'Lead'}` ⇒ `debate_round` / `debate_converge` 的「仅 Lead」判据在模型可达面不承重
+ * （成员会话调 `debate_round` 直接放行）。常量的危险在于它**不依赖任何事实**：
+ * 换掉它就得给出事实判据。
+ *
+ * 事实判据**不是**「`parentSession` 存在即成员」——`session/fork` 造的**顶层**会话带
+ * `parentSession` 却不带委托语义（`@deepseek-ai/dsh-session` lib/types/types.d.ts:70-76 自陈
+ * "fork seed lineage"，与本仓 `E:\DSHOME\packages\dshome\lib\host\mind-inject.js:223-224`
+ * 点名的误杀坑一字一致）。本仓既有同款判据**四处**（mind-inject.js:197-208 点名的
+ * notify.js:311/368、session-budget.js:293/337、mind-mood.js:418）用的都是
+ * `header.origin === 'subagent'`（types.d.ts:81，全文只有这一个取值；写入端唯一一处是
+ * dsh-subagent 的 childSessionMeta，三条创建路径共用 ⇒ **所有 in-process 子会话都带它，
+ * 而顶层会话这个字段缺席**）。成员子会话正是子代理：`startContinuable` 起的成员走的就是
+ * 这条路。于是这里用**同一份事实**，与那四处同口径；`delegationDepth` 只作佐证
+ * （types.d.ts:82-87：顶层缺席、子会话 = 父+1）。
+ *
+ * 三档（顺序即优先级：先判最贵的「子会话事实」）：
+ *  1. **有子会话事实**（`header.origin === 'subagent'`，或 `delegationDepth >= 1`）⇒
+ *     **不是 Lead**；实例键取父会话——「哪个 Lead 起的」比会话 id 更稳定；
+ *     没有父会话（裸 subagent 子会话）就退回自己的会话 id。
+ *  2. 其余（不是子会话 / 会话事实缺席 / `header` 缺席但 `agent` 在）⇒ **Lead**，
+ *     实例取会话 id（W3 批3 既有语义：账上不丢掉「哪一个会话」）。
+ *  3. `exec` 整个取不到（不是对象）⇒ **不认 Lead**，落到 `subjectFor({})` 的
+ *     `{kind:'成员', roleId:'未登记'}` —— 与 `subjectFor` 自陈的「未知一律不给万能身份，
+ *     身份不明时最严」同口径（fail-closed）。
+ *
+ * 为什么第 2 档**不收窄**「会话事实缺席」那一格（这一档修前就是恒 Lead，修后仍是 Lead）：
+ *  · `Session` 恒定带 `header`（`SessionHeader.id` 是 required，types.d.ts:65），
+ *    所以「有会话而无 header / 无会话」只出现在**夹具**里，而夹具正是本函数的调用面：
+ *    `fakeExec`（test/host-harness.mjs:127）给 `{id, header:{cwd}}`；命令面给
+ *    `{agent:{session:{id,header}}}`（test/presence-command.test.js:193）或**裸 `{}`**
+ *    （15 处：host.test.js:120/124/128、integration.test.js:36/65/70/90、
+ *    presence*.test.js、host-routes.test.js:148/210/257）。裸 `{}` 的语义是
+ *    「命令行那条路没带 agent」，**不是**「这是个成员会话」——本轮实测：把它判成成员
+ *    会让 26 条既有用例变红（整条 `/mind` 命令面打成拒绝），那是误伤，不是收紧。
+ *  · 本轮**要堵的洞**是「**子会话**也恒被当成 Lead」，第 1 档正对着它；第 2 档保持原状
+ *    是**刻意不动既有行为**（不动 ≠ 放宽：它修前修后同一读数）。
+ *  · 真正 Unknown 的那一格（第 3 档）倒向安全侧 —— 与任务书建议的「拿不到父会话事实
+ *    ⇒ 不认 Lead」同向，只是把「拿不到」的判据定在 **`exec` 缺失**，而不是「`header`
+ *    缺席」（后者是夹具常态，不是真实形态）。
+ *
+ * ⚠️ 诚实边界：只到**代码路径级**。真实宿主会话里 `header.origin` / `parentSession` 的
+ *    实际形态**未在真实运行态验证过**（本轮没有起真会话）。未取证的那一格（第 2 档末）
+ *    沿用修前读数 Lead —— fail-open 的残留面如实记在 `docs/设计债-2026-10-09.md` ⑳。
  * @param {any} exec
  */
 function agentSubject(exec) {
-  const 会话id = exec?.agent?.session?.id;
-  return subjectFor({ 根会话: true, 实例: 会话id ? `session-${String(会话id).slice(0, 8)}` : 'lead' });
+  if (!exec || typeof exec !== 'object') return subjectFor({});
+  const session = exec?.agent?.session;
+  const 会话id = session?.id;
+  const header = session?.header;
+  // 第 1 档：子会话事实（同一份事实源，见上）。
+  if (header?.origin === 'subagent' || (Number.isInteger(header?.delegationDepth) && header.delegationDepth >= 1)) {
+    const 键 = header.parentSession ?? 会话id;
+    return subjectFor({ 根会话: false, 实例: 键 ? `session-${String(键).slice(0, 8)}` : 'member-unknown' });
+  }
+  // 第 2 档：不是子会话 ⇒ 根会话 = Lead（既有语义原样）。
+  return subjectFor({ 根会话: true, 实例: typeof 会话id === 'string' && 会话id ? `session-${会话id.slice(0, 8)}` : 'lead' });
 }
 
 /** 把工具入参里的逗号串与 JSON 串规整成动作表要的形状。 */

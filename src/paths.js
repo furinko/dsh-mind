@@ -35,6 +35,33 @@ export function assertPathSegment(value, 名) {
 }
 
 /**
+ * 线程键的等价类：**哪些写法算「同一个线程」**（唯一源，紧挨 `assertPathSegment` ——
+ * 两者管的是同一件事：入口可控的字符串进路径之前该怎么看它）。
+ *
+ * 为什么必须有它（批c 补漏 · P3，2026-10-10 复核实证）：**落线侧的键是文件系统给的** ——
+ * `busThread()` 把线程名直接 join 进路径，而本部署落在 NTFS（大小写不敏感）⇒
+ * `TASK-X.jsonl` 与 `task-x.jsonl` 是**同一个文件**（实测：动作面用大写别名发一条，
+ * `readRaw(真 id)` 就读得到同一份内容）。所以判定侧不许自己发明一套口径：
+ * 「判定用精确键 + 落线用不敏感键」＝ 大小写别名就是一条旁路。
+ *
+ * 口径**不多不少**，就照落线侧的等价类来：
+ *  - **只折大小写**（`toUpperCase`，与 NTFS 的比较表同向；线程名/节点 id 是 ASCII slug + 哈希，等价类一致）；
+ *  - **不做 Unicode 规范化**：NTFS 不折 NFKC，折了会让判定比落线**更宽**（`①.jsonl` 与 `1.jsonl` 是两个文件）
+ *    —— 那是**误伤**（把两个普通线程判成同一个线程），同样是与落线侧不一致；
+ *  - **不折分隔符 / 冒号**：`assertPathSegment` 已在落线侧把它们一律拒掉 ⇒ 那一面本来就没有别名可绕。
+ *
+ * 已知边界（如实记）：本函数与 NTFS 的比较表在**非 ASCII 大小写**上未必逐字符同向
+ * （`ß` / `ı` 这类）；本部署的线程名与节点 id 由 `slugOf` 生成（字母 + 数字 + 哈希），不落在这条边界上。
+ * 真出现非 ASCII 别名时，要按**当时载体的比较表**复核这一处，别假设它天然对。
+ *
+ * @param {unknown} thread
+ * @returns {string}
+ */
+export function 线程等价键(thread) {
+  return String(thread ?? '').toUpperCase();
+}
+
+/**
  * 出厂区的绝对路径——**全插件唯一的答案**。
  *
  * 为什么不让每个组件自己算：相对路径的层数取决于组件在目录树里的深度，
@@ -186,7 +213,12 @@ export class Layout {
     return this.private(DIR.基础设施, DIR.消息总线, assertPathSegment(project, '项目'));
   }
 
-  /** 消息总线线程文件：`消息总线/<项目>/<线程>.jsonl`。 */
+  /**
+   * 消息总线线程文件：`消息总线/<项目>/<线程>.jsonl`。
+   *
+   * ⚠️ 这里拼出的路径就是**线程的落点**，而它认的等价类是**文件系统的**（NTFS 大小写不敏感）——
+   * 判定侧（如 `lib/actions.js` 的讨论线程判据）不许自己再发明一套，一律走 `线程等价键()`（同文件顶部）。
+   */
   busThread(project, thread) {
     return join(this.busDir(project), `${assertPathSegment(thread, '线程')}.jsonl`);
   }
