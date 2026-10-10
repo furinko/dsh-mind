@@ -152,6 +152,73 @@ test('优化批 ②⑤⑥：任务徽章按状态着色、判据限行带 title 
   }
 });
 
+test('优化批 ①④③：空态给可敲命令、读数分身份/健康两组、会审独立答案可折叠（行为判据）', async () => {
+  // 体例同 ②⑤⑥：renderView 真渲染一遍，断言页面文本/元素属性；
+  // 点开折叠的**交互**路径由 harness 钉（那边走真实 onClick 再断言）。
+  const 全空 = sampleView();
+  全空.待你决定 = [];
+  全空.会审 = [];
+  全空.任务.节点 = [];
+  全空.任务.总数 = 0;
+  const e = await renderView(全空);
+  assert.ok(e.text.includes('没有需要你决定的事') && e.text.includes('没有进行中的会审')
+    && e.text.includes('任务图为空'), '① 空态仍是明说的一句话（原有措辞保留）');
+  assert.ok(e.text.includes("action:'task_create'") && e.text.includes("action:'task_pending'")
+    && e.text.includes("action:'task_submit'"), '① 三块空态各给一条可敲的 mind 命令');
+  const 引导命令 = e.elements.filter((el) => el.type === 'code'
+    && String(el.props.className || '').indexOf('dshmind-cmd') >= 0);
+  assert.equal(引导命令.length, 3, '① 引导命令恰好三条 code 块（可选中复制，不给控件）');
+  assert.ok(findAllByClass(e.tree, 'dshmind-node').length === 0
+    && findAllByClass(e.tree, 'dshmind-review').length === 0, '① 空态不画卡片壳');
+
+  const 活 = await renderView(sampleView());
+  const 组标签 = 活.elements
+    .filter((el) => String(el.props.className || '').split(/\s+/).indexOf('dshmind-readoutGroupLabel') >= 0)
+    .map(textOf);
+  assert.deepEqual(组标签, ['身份', '健康'], '④ 页头读数分「身份｜健康」两组');
+  const 组 = findAllByClass(活.tree, 'dshmind-readoutGroup');
+  assert.ok(textOf(组[0]).includes('项目键') && textOf(组[0]).includes('生成时刻')
+    && !textOf(组[0]).includes('策略引擎闸'), '④ 身份组只装项目键/生成时刻');
+  const 失联格 = findAllByClass(活.tree, 'dshmind-readout').find((el) => textOf(el).includes('失联状态'));
+  assert.ok(!!失联格 && findAllByClass(失联格, 'dshmind-readoutNote').length >= 1,
+    '④ 失联详情贴格不外溢（Batch 8 定案不翻烧饼）');
+
+  const 卡 = findAllByClass(活.tree, 'dshmind-review');
+  assert.ok(findAllByClass(卡[0], 'dshmind-answers').length === 1, '③ 首场会审默认展开');
+  assert.ok(findAllByClass(卡[1], 'dshmind-answers').length === 0
+    && textOf(卡[1]).includes('独立答案 3 份'), '③ 其余默认折叠成一行摘要');
+  assert.ok(textOf(卡[1]).includes('成员 A') && !textOf(卡[1]).includes('member-a'),
+    '③ 摘要只给盲标不出成员 id');
+  assert.ok(!活.text.includes('三档划分正确') && !活.text.includes('冻结点正确'),
+    '③ 折叠场的结论文本不在页面上（撑爆问题已治）');
+
+  // 按名点名 harness 本批新增断言（条数式总数看不出某一条没跑）。
+  const report = await runHarness();
+  const 要的 = [
+    '③ 首场会审默认展开独立答案（dshmind-answers 在）',
+    '③ 展开的那场给每份结论文本',
+    '③ 第二场默认折叠：一行摘要，不铺独立答案',
+    '③ 折叠摘要只给盲标不出成员 id（揭名口径不因折叠放宽）',
+    '③ 折叠场有切换钮（button，不是别的可点元素）',
+    '揭名 true 时盲标与成员 id 都给（点开折叠后）',
+    '③ 再点一下收回去（覆盖表取反，摘要回来）',
+    '③ 切换按会话节点 id 记：首场仍是展开',
+    '① 空态仍是明说的一句话（原有措辞保留）',
+    '① 三块空态各给一条真命令（task_pending / task_submit / task_create）',
+    '① 引导命令用等宽可选中的 code 块（恰好三条，不给按钮）',
+    '① 空态不画切换钮（引导只给文本）',
+    '① 空态不画卡片壳（Batch 9「没数据的格不出现」不倒车）',
+    '① 空清单里不得残留上一场的裁决命令',
+    '④ 读数行分「身份｜健康」两组（顺序也钉住）',
+    '④ 身份组＝项目键+生成时刻（健康类不混进来）',
+    '④ 健康组＝闸/介入度/失联（/探针）',
+    '④ 失联详情仍贴在失联那一格里（readoutNote 不外溢到整行）',
+  ];
+  for (const name of 要的) {
+    assert.ok(report.passed.includes(name), '优化批 ①④③ 渲染断言缺失或未通过：' + name);
+  }
+});
+
 test('lib/client.js 顶层没有 import / export（经典脚本，否则整站 web 启动失败）', () => {
   const lines = source.split(/\r?\n/);
   const offenders = [];

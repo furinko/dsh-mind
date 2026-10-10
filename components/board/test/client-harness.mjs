@@ -987,6 +987,23 @@ export async function runHarness() {
   passed.push(check(c1.text.includes('开关来源 出厂'), '失联详情给出「失联限制」生效值的来源'));
   passed.push(check(c1.text.includes('读数：在位'), '失联详情给出读数本身'));
 
+  // ③a′ 优化批④（2026-10-10）：读数分「身份／健康」两组；失联详情仍贴格（Batch 8 定案不翻烧饼）。
+  const 组标签 = c1.elements.filter((el) => String(el.props.className || '').split(/\s+/).indexOf('dshmind-readoutGroupLabel') >= 0)
+    .map((el) => textOf(el));
+  passed.push(check(组标签.join('|') === '身份|健康', '④ 读数行分「身份｜健康」两组（顺序也钉住）', 组标签.join('|')));
+  const 读数组 = findAllByClass(r1.tree, 'dshmind-readoutGroup');
+  const 身份组文本 = 读数组.length > 0 ? textOf(读数组[0]) : '';
+  const 健康组文本 = 读数组.length > 1 ? textOf(读数组[1]) : '';
+  passed.push(check(身份组文本.includes('项目键') && 身份组文本.includes('生成时刻') && !身份组文本.includes('策略引擎闸'),
+    '④ 身份组＝项目键+生成时刻（健康类不混进来）', 身份组文本.slice(0, 60)));
+  passed.push(check(健康组文本.includes('策略引擎闸') && 健康组文本.includes('失联状态'),
+    '④ 健康组＝闸/介入度/失联（/探针）', 健康组文本.slice(0, 60)));
+  const 失联读数格 = findAllByClass(r1.tree, 'dshmind-readout').find((el) => textOf(el).includes('失联状态'));
+  // readoutNote 在实现里是「div 包 span」两层同名类，数个数会得 2；判据要的是**包含**：
+  // 详情节点在失联那一格的子树里（在整棵树里查到不算数——那可能是拉到整行的脚注）。
+  passed.push(check(!!失联读数格 && findAllByClass(失联读数格, 'dshmind-readoutNote').length >= 1,
+    '④ 失联详情仍贴在失联那一格里（readoutNote 不外溢到整行）'));
+
   // ③b 待你决定：命令是**可拿走的文本**，不是按钮
   passed.push(check(c1.text.includes('/mind task_resolve id=t-3 决定=用出厂版'), '待你决定渲染出可敲的命令文本'));
   passed.push(check(c1.text.includes('待你决定') && c1.text.includes('用我的版') && c1.text.includes('打回升级'),
@@ -1015,11 +1032,49 @@ export async function runHarness() {
   passed.push(check(!c1.text.includes('member-x1') && !c1.text.includes('member-x2'),
     '揭名 false 的成员 id 在整页都不许出现'));
   passed.push(check(hidden.includes('2/3 未齐'), '交卷进度按 `2/3 未齐` 显示'));
-  const shown = textOf(cards[1]);
+  // ⚠️ 优化批③（2026-10-10）改过这一段的读法（理由留在断言里，不是把历史的红偷偷删掉）：
+  // 独立答案现在默认「首场展开、其余折叠」——第二场的盲标/成员 id 要**点开**才在。
+  // 揭名口径没变：折叠摘要只给盲标；点开后盲标与成员 id 都给（下面点开后再验）。
+  passed.push(check(findAllByClass(cards[0], 'dshmind-answers').length === 1,
+    '③ 首场会审默认展开独立答案（dshmind-answers 在）'));
+  passed.push(check(textOf(cards[0]).includes('字段够用') && textOf(cards[0]).includes('缺审计档位'),
+    '③ 展开的那场给每份结论文本'));
+  passed.push(check(findAllByClass(cards[1], 'dshmind-answers').length === 0
+    && textOf(cards[1]).includes('独立答案 3 份'),
+    '③ 第二场默认折叠：一行摘要，不铺独立答案'));
+  passed.push(check(textOf(cards[1]).includes('成员 A') && !textOf(cards[1]).includes('member-a'),
+    '③ 折叠摘要只给盲标不出成员 id（揭名口径不因折叠放宽）', textOf(cards[1]).slice(0, 80)));
+  const 二场切换钮 = collect(r1.tree, { skipStyle: true }).elements
+    .find((el) => el.type === 'button' && String(el.props.className || '').indexOf('dshmind-toggle') >= 0
+      && textOf(el).includes('独立答案 3 份'));
+  passed.push(check(!!二场切换钮, '③ 折叠场有切换钮（button，不是别的可点元素）'));
+  // 走真实 onClick（不是直接调内部函数）：点开 ⇒ 展开；每一步后重新取元素（旧快照握着旧闭包）。
+  const 请求前 = spy.calls.length;
+  二场切换钮.props.onClick();
+  await settle();
+  r1.flush();
+  const cards点开 = findAllByClass(r1.tree, 'dshmind-review');
+  const shown = textOf(cards点开[1]);
   passed.push(check(shown.includes('成员 A') && shown.includes('member-a') && shown.includes('member-c'),
-    '揭名 true 时盲标与成员 id 都给'));
+    '揭名 true 时盲标与成员 id 都给（点开折叠后）'));
   passed.push(check(!shown.includes(LOCK_LINE), '交齐的会审没有锁行'));
   passed.push(check(shown.includes('3/3 齐'), '交齐的会审显示 `3/3 齐`'));
+  // 再点一下收回去：覆盖表取反，摘要回来、全文消失；首场不受影响（按节点 id 记，不按位置记）。
+  const 二场切换钮2 = collect(r1.tree, { skipStyle: true }).elements
+    .find((el) => el.type === 'button' && String(el.props.className || '').indexOf('dshmind-toggle') >= 0
+      && textOf(el).includes('独立答案 3 份'));
+  二场切换钮2.props.onClick();
+  await settle();
+  r1.flush();
+  const cards收起 = findAllByClass(r1.tree, 'dshmind-review');
+  passed.push(check(findAllByClass(cards收起[1], 'dshmind-answers').length === 0
+    && textOf(cards收起[1]).includes('独立答案 3 份'),
+    '③ 再点一下收回去（覆盖表取反，摘要回来）'));
+  passed.push(check(findAllByClass(cards收起[0], 'dshmind-answers').length === 1,
+    '③ 切换按会话节点 id 记：首场仍是展开'));
+  // 零请求：折叠切换是纯显示动作——两次点击之间一个命令都不许发（「不是写动作」的真判据）。
+  passed.push(check(spy.calls.length === 请求前,
+    '③ 折叠切换不发任何请求（纯显示切换，不是写动作）', String(spy.calls.length - 请求前)));
   passed.push(check(shown.includes('分歧清单') === false && shown.includes('零分歧'), '零分歧那一场照旧报出零分歧'));
   passed.push(check(textOf(cards[0]).includes('分歧清单：审计档位是否逐条'), '分歧清单渲染出来'));
   passed.push(check(textOf(cards[0]).includes('反例面：权限矩阵未覆盖自动派发'), '会审级反例面渲染出来'));
@@ -1174,9 +1229,18 @@ export async function runHarness() {
   passed.push(check(写控件.length === 0,
     '④ 工作台面板里没有任何输入类控件（input/select/textarea）', 写控件.map((el) => el.type).join(',')));
   const 面板按钮 = 面板控件.filter((el) => el.type === 'button');
-  passed.push(check(面板按钮.length === 1 && String(面板按钮[0].props.className).indexOf('dshmind-btn') >= 0
-    && String(面板按钮[0].props.children).indexOf('刷新') >= 0,
-    '④ 工作台面板里唯一的可点动作是「刷新」（不给任何写动作）',
+  // ⚠️ 优化批③（2026-10-10）改过这条的形状（理由留在断言里，不是把历史的红偷偷删掉）：
+  // 面板上现在除了「刷新」还有会审折叠切换钮——那是**纯显示切换**（onClick 只改本地折叠态，
+  // 不发任何命令，由 ③c 的「零请求」断言钉死），不是写动作。本条守住的本意是「不给任何写动作」：
+  // 按钮只许两种——刷新（dshmind-btn）与折叠钮（dshmind-toggle），多一种都算破规。
+  const 非法按钮 = 面板按钮.filter((el) => {
+    const 类 = String(el.props.className || '');
+    if (类.indexOf('dshmind-btn') >= 0 && String(el.props.children).indexOf('刷新') >= 0) return false;
+    if (类.indexOf('dshmind-toggle') >= 0) return false;
+    return true;
+  });
+  passed.push(check(面板按钮.length >= 1 && 非法按钮.length === 0,
+    '④ 工作台面板的可点动作只有「刷新」与会审折叠钮（纯显示切换；仍无任何写动作）',
     面板按钮.map((el) => String(el.props.children)).join(',')));
   passed.push(check(!面板控件.some((el) => typeof el.props.onChange === 'function'),
     '④ 工作台面板里没有 onChange 绑定的表单控件（没有任何「写」的入口）'));
@@ -1810,6 +1874,30 @@ export async function runHarness() {
   passed.push(check(!c3.text.includes('/mind task_resolve'), '空清单里不得残留命令文本'));
   r3.unmount();
 
+  // ③f′ 优化批①：空态从「一句空话」换成「一句来路 + 一条可敲的命令」（§9：给文本不给控件）。
+  //     三块全空的视图从 noDecisionView 再清空 会审/任务——这就是「新部署账本基本为空」的实况。
+  const 全空视图 = noDecisionView();
+  全空视图.会审 = [];
+  全空视图.任务.节点 = [];
+  全空视图.任务.总数 = 0;
+  const 全空 = await renderView(全空视图);
+  passed.push(check(全空.text.includes('没有需要你决定的事') && 全空.text.includes('没有进行中的会审')
+    && 全空.text.includes('任务图为空'), '① 空态仍是明说的一句话（原有措辞保留）'));
+  passed.push(check(全空.text.includes('task_pending') && 全空.text.includes('task_submit')
+    && 全空.text.includes('task_create'), '① 三块空态各给一条真命令（task_pending / task_submit / task_create）'));
+  const 引导命令 = 全空.elements.filter((el) => el.type === 'code'
+    && String(el.props.className || '').indexOf('dshmind-cmd') >= 0);
+  passed.push(check(引导命令.length === 3, '① 引导命令用等宽可选中的 code 块（恰好三条，不给按钮）',
+    String(引导命令.length)));
+  passed.push(check(全空.elements.filter((el) => el.type === 'button'
+    && String(el.props.className || '').indexOf('dshmind-toggle') >= 0).length === 0,
+    '① 空态不画切换钮（引导只给文本）'));
+  passed.push(check(findAllByClass(全空.tree, 'dshmind-node').length === 0
+    && findAllByClass(全空.tree, 'dshmind-review').length === 0,
+    '① 空态不画卡片壳（Batch 9「没数据的格不出现」不倒车）'));
+  passed.push(check(!全空.text.includes('/mind task_resolve'),
+    '① 空清单里不得残留上一场的裁决命令'));
+
   // ④ 侧边栏入口：只画图标（整行的按钮、标签、点击都归宿主侧边栏的 PanelRow）
   const glyphWide = mountEntry(a, { size: 18, active: false });
   const glyphElements = collect(glyphWide.tree).elements;
@@ -2015,30 +2103,40 @@ export async function runHarness() {
       return r;
     };
 
-    // ① 面板里**不许有"看起来能点"的东西**（唯一例外：刷新按钮）。
+    // ① 面板里**不许有"看起来能点"的东西**。例外两种：刷新按钮 + 会审折叠切换钮
+    //    （优化批③：纯显示切换，不发命令——「不是写动作」由 ③c 的零请求断言钉死）。
     //    旧版「介入度档位」画成 4 个 chip（零参与/事后抽检/变更预审/逐条审批）——
     //    只读投影长得像按钮，会误导人以为能点。
     const 面板 = await 状态render(sampleView());
     const 面板元素 = collect(面板.tree, { skipStyle: true }).elements;
     const 可点按钮 = 面板元素.filter((el) => el.type === 'button');
-    passed.push(check(可点按钮.length === 1 && String(可点按钮[0].props.children).indexOf('刷新') >= 0,
-      '① 面板里唯一可点的是「刷新」', JSON.stringify(可点按钮.map((el) => String(el.props.children)))));
+    const 非规按钮 = 可点按钮.filter((el) => {
+      const 类 = String(el.props.className || '');
+      if (类.indexOf('dshmind-btn') >= 0 && String(el.props.children).indexOf('刷新') >= 0) return false;
+      if (类.indexOf('dshmind-toggle') >= 0) return false;
+      return true;
+    });
+    passed.push(check(可点按钮.length >= 1 && 非规按钮.length === 0,
+      '① 面板里可点的只有「刷新」与会审折叠钮（其余一律不许可点）',
+      JSON.stringify(可点按钮.map((el) => String(el.props.children)))));
     passed.push(check(面板元素.every((el) => el.props.role !== 'button'),
       '① 没有任何 role=button 的伪按钮', JSON.stringify(面板元素.filter((el) => el.props.role === 'button').map((el) => el.type))));
     passed.push(check(面板元素.every((el) => el.props.tabIndex === undefined && el.props.tabindex === undefined),
       '① 没有任何 tabindex（不可聚焦）'));
     // 伪按钮 chip：状态条里**一个 chip 都不许有**（chip 是"可选项"的长相 ⇒ 只读投影不用）。
     // `badge` 例外：它是**真告警**（恒红 / 恒绿），语义是"这一格出事了"，不是"可以点我"。
-    const 状态条节点 = findAllByClass(面板.tree, 'dshmind-readouts')[0];
-    passed.push(check(!!状态条节点, '① 找得到状态条那一块'));
-    const 状态条里的伪按钮 = findAllByClass(状态条节点, 'dshmind-chip');
+    // 优化批④后读数分身份/健康两组，每组一个 .dshmind-readouts 容器——chip/badge 的规矩两组都要守。
+    const 状态条节点s = findAllByClass(面板.tree, 'dshmind-readouts');
+    passed.push(check(状态条节点s.length >= 1, '① 找得到状态条那一块（④ 后是身份/健康两个容器）'));
+    const 状态条里的伪按钮 = 状态条节点s.flatMap((节点) => findAllByClass(节点, 'dshmind-chip'));
     passed.push(check(状态条里的伪按钮.length === 0,
       '① 状态条里没有任何 chip（"可选项"长相 ⇒ 只读投影不许有）',
       JSON.stringify(状态条里的伪按钮.map((el) => textOf(el)))));
-    passed.push(check(findAllByClass(状态条节点, 'dshmind-badge').length === 0
-      || findAllByClass(状态条节点, 'dshmind-badge').every((el) => /恒[红绿]警报/.test(textOf(el))),
+    const 状态条badges = 状态条节点s.flatMap((节点) => findAllByClass(节点, 'dshmind-badge'));
+    passed.push(check(状态条badges.length === 0
+      || 状态条badges.every((el) => /恒[红绿]警报/.test(textOf(el))),
       '① 状态条里出现的 badge 只能是真告警（恒红/恒绿），不是选项外观',
-      JSON.stringify(findAllByClass(状态条节点, 'dshmind-badge').map((el) => textOf(el)))));
+      JSON.stringify(状态条badges.map((el) => textOf(el)))));
     // 介入度那格：**只显示当前生效的那一档**（一个值），而且不带边框/背景/光标。
     const 各格 = 状态条各格(面板.tree);
     const 介入格 = 各格.find((g) => g.键 === '介入度档位');

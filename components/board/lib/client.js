@@ -746,6 +746,15 @@ window.__ModuleLoader__.load({
       'background:var(--dsw-alias-state-warn-tertiary,#fdf6e7);color:var(--dsw-alias-state-warn-primary,#c47f17);',
       'border:.5px solid var(--dsw-alias-state-warn-secondary,#e5b46a);border-radius:var(--dsw-radius-md,8px)}',
       '.dshmind-empty{color:var(--dsw-alias-label-tertiary,#81858c);font-size:12px;padding:10px 0}',
+      // 优化批④：读数分「身份／健康」两组竖排，组内仍横排——失联详情多行时只撑自己那一格，
+      // 不再把身份读数一起拉高（详情贴格的 Batch 8 定案不变）。
+      '.dshmind-readoutGroups{display:flex;flex-direction:column;gap:8px}',
+      '.dshmind-readoutGroup{display:flex;flex-direction:column;gap:4px}',
+      '.dshmind-readoutGroupLabel{font-size:10px;letter-spacing:.14em;color:var(--dsw-alias-label-caption,#adb2b8)}',
+      // 优化批③：会审独立答案折叠——切换钮走文字样式（无底无框，只有指针与箭头示意）。
+      '.dshmind-toggle{border:none;background:transparent;padding:2px 0;cursor:pointer;font-size:12px;',
+      'text-align:left;color:var(--dsw-alias-label-secondary,#61666b)}',
+      '.dshmind-answerSummary{font-size:11.5px;color:var(--dsw-alias-label-tertiary,#81858c);overflow-wrap:anywhere}',
 
       '.dshmind-foot{display:flex;gap:10px;flex-wrap:wrap;align-items:center;color:var(--dsw-alias-label-caption,#adb2b8);',
       'font-size:11px;padding:2px 2px 4px}',
@@ -1055,6 +1064,38 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dshmind-readoutVal' }, 内容),
         note ? h('div', { className: 'dshmind-readoutNote' }, note) : null,
       ].filter(Boolean));
+    }
+
+    /**
+     * 空 section 的上手引导（优化批①）：空话换成「一句现状 + 一句来路 + 一条可敲的命令」。
+     * 口径：§9 只读投影——给**可选中复制的文本**（`.dshmind-cmd` 的 code 块），不给控件；
+     * 命令里的 id 用 `task-…` 占位（是示例不是真节点），照抄进任何会话即走真链路。
+     * @param {string} 现状 一句明说的空态（原有措辞保留——harness 断言钉着它们）
+     * @param {string} 来路 这一块的数据由什么产生（一句话，不含命令）
+     * @param {string} 命令 示例命令全文
+     */
+    function emptyGuide(现状, 来路, 命令) {
+      return h('div', { key: 'none', className: 'dshmind-empty' }, [
+        h('div', { key: 't' }, 现状 + ' —— ' + 来路),
+        h('code', { key: 'cmd', className: 'dshmind-cmd dshmind-mono', title: '选中复制这条命令去执行' }, 命令),
+      ]);
+    }
+
+    /**
+     * 读数分组（优化批④）：「身份（项目键/生成时刻）」与「健康（闸/介入度/失联/探针）」两组。
+     * 为什么分：读数行 6-7 格一行，失联详情多行附注时把整行撑高，身份读数跟着变形。
+     * 定案不翻烧饼：失联详情**仍贴格**（留在失联那一格里，不拉回整行脚注——Batch 8）。
+     * Batch 9 推到组级：组内一格都没有时**整组不画**，组标签不许浮空。
+     * @param {string} label 组名
+     * @param {Array} cells `readout(…)` 的返回值们（可含 null）
+     */
+    function readoutGroup(label, cells) {
+      var 有 = (cells || []).filter(Boolean);
+      if (!有.length) return null;
+      return h('div', { className: 'dshmind-readoutGroup' }, [
+        h('span', { className: 'dshmind-readoutGroupLabel' }, label),
+        h('div', { className: 'dshmind-readouts' }, 有),
+      ]);
     }
 
     // ── 会话定位 ────────────────────────────────────────────────────────────
@@ -1394,6 +1435,12 @@ window.__ModuleLoader__.load({
      */
     var 投影store = { 快照: EMPTY, 订阅者: [] };
     var 设置store = { 快照: { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' }, 订阅者: [] };
+    /**
+     * 会审折叠态（优化批③）：看板唯一的 UI 状态——照 `投影store` 同款「模块级 store + 组件订阅」，
+     * **不挂 useEffect**（设计债⑩：这个宿主给插件的 effect 可能是空实现，取数如此，UI 状态也如此）。
+     * `折叠会审` 是覆盖表（id → 折不折）；没点过的场次走默认（首场展开、其余折叠）。
+     */
+    var 界面store = { 快照: { 折叠会审: null }, 订阅者: [] };
     /** 轮询间隔：2~5 秒量级（人看的板子，又不至于把宿主问烦）。 */
     var POLL_MS = 3000;
     /** 轮询把手：`apply` 起、disposer 清（**不许留定时器**）。 */
@@ -1444,6 +1491,33 @@ window.__ModuleLoader__.load({
     function 清空store() {
       投影store.快照 = EMPTY;
       设置store.快照 = { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' };
+      界面store.快照 = { 折叠会审: null };
+    }
+
+    /**
+     * 这一场会审现在折不折。没点过（覆盖表里没有）就走默认：首场展开、其余折叠。
+     * 原型链键照 ② 徽章色查表的口径用 hasOwnProperty 挡掉——`constructor` 之类的继承属性
+     * 不许被当成「点过」。
+     * @param {string} id 会审节点 id
+     * @param {boolean} 默认折叠 这一场没被点过时该有的态（渲染序 ≠ 0）
+     * @returns {boolean} 当前是否折叠
+     */
+    function 会审折叠(id, 默认折叠) {
+      var 表 = 界面store.快照.折叠会审;
+      return 表 && Object.prototype.hasOwnProperty.call(表, id) ? !!表[id] : 默认折叠;
+    }
+
+    /**
+     * 点了一下切换钮：把这一场的态写进覆盖表（取反当前生效值）并广播重渲染。
+     * @param {string} id 会审节点 id
+     * @param {boolean} 默认折叠 同 {@link 会审折叠}
+     */
+    function 切会审折叠(id, 默认折叠) {
+      var 下 = {};
+      var 表 = 界面store.快照.折叠会审;
+      if (表) for (var k in 表) if (Object.prototype.hasOwnProperty.call(表, k)) 下[k] = 表[k];
+      下[id] = !会审折叠(id, 默认折叠);
+      发通知(界面store, { 折叠会审: 下 });
     }
     /** 组件用它接 store：`useState` + 订阅（不依赖 `useEffect`）。 */
     function useStore(store) {
@@ -1599,6 +1673,9 @@ window.__ModuleLoader__.load({
 
     function Dashboard() {
       var snap = useStore(投影store);
+      // ③ 折叠态也走 store 订阅（返回值在渲染处直接读 界面store.快照）：
+      // 切换钮 `切会审折叠` 发通知 ⇒ 这里 setState ⇒ 重渲染，全程不碰 useEffect。
+      useStore(界面store);
       var ctx = activeCtx;
 
       // ⚠️ **取数不在这里做**（Batch 7 的方向修正，见模块顶部 `起轮询` 的长注释）：
@@ -1671,78 +1748,82 @@ window.__ModuleLoader__.load({
               }, '刷新'),
             ]),
           ]),
-          h('div', { key: 'ro', className: 'dshmind-readouts' }, [
-            // Batch 9 规矩：**没数据的格不出现**（不占位置、不留空框、不给光秃秃的 `—`）。
-            // 有数据但读不出时给一句人话（「未接入」/「宿主没给」），而不是破折号。
-            readout('项目键', view ? view.项目 : '未接入'),
-            readout('生成时刻', view ? (shortTime(view.生成于) || '宿主没给') : '未接入'),
-            readout('策略引擎闸', null, h('span', { className: 'dshmind-dot-line' }, [
-              dot(!gate ? GREY : gate.在位 === true ? GREEN : gate.在位 === false ? RED : GREY),
-              h('span', { key: 'v' }, !gate ? '未接入' : gate.在位 === true ? '闸在位' : gate.在位 === false ? '闸不在位' : '未知'),
-              gate && gate.规则数 !== null
-                ? h('span', { key: 'n', className: 'dshmind-mono', style: { color: 'var(--dsw-alias-label-tertiary,#81858c)' } }, '规则 ' + gate.规则数)
-                : null,
-              gate && gate.错误 ? h('span', { key: 'e' }, gate.错误) : null,
-            ].filter(Boolean)), gateAlarm),
-            // 介入度：**只显示当前生效的那一档**（一个值）。
-            // 旧版画成 4 个 chip（零参与 / 事后抽检 / 变更预审 / 逐条审批），选中那个上色 ——
-            // 那是**只读投影**，4 个看着能点的小方块会让人以为能点（Batch 8 主人提的第 4 条）。
-            // 现在：一个值 + 旁边一句"（四档之一）"，不带边框、不带背景、不带光标、不可聚焦。
-            readout('介入度档位', null, bar
-              ? h('span', { className: 'dshmind-valueLine' }, [
-                  h('span', { key: 'v' }, bar.介入度),
-                  h('span', { key: 'h', className: 'dshmind-valueNote' }, '四档之一（只读）'),
-                ])
-              : null),
-            // 失联那一格四态四样。**`已关闭` 绝不许给绿点**：开关被关掉不是「主权者一直在」，
-            // 但也不是失联 —— 所以它拿告警色 + 明说「不判定失联」，与「在位」「已失联」都长得不一样。
-            // `未知` 照旧是灰点 + 未接入：宿主没给 ≠ 正常。
-            // 详情（生效期限 / 来源 / 坏值）**紧贴这一格**放在同一个 cell 里 —— 别拉到整行当脚注，
-            // 那会横跨所有列、把列对齐打断（Batch 8 主人提的第 6 条）。
-            readout('失联状态', null, h('span', { className: 'dshmind-dot-line' }, [
-              dot(!bar ? GREY : 失联态 === '已失联' ? RED : 失联态 === '已关闭' ? WARN : 失联态 === '在位' ? GREEN : GREY),
-              h('span', { key: 'v' }, !bar ? '未接入'
-                : 失联态 === '已失联' ? '已失联 · 自治冻结'
-                : 失联态 === '已关闭' ? '已关闭（不判定失联）'
-                : 失联态 === '在位' ? '在位'
-                : '未知'),
-            ].filter(Boolean)), lostAlarm,
-              // 格内附注：完整读数，换行显示（不裁切、不铺满整行）。
-              失联详情.在位
-                ? h('span', { key: 'note', className: 'dshmind-readoutNote' }, [
-                    h('span', { key: 'a', className: 'dshmind-mono' }, 失联详情.读数 === '缺失' ? '读数：缺失' : '读数：' + 失联详情.读数),
-                    h('span', { key: 'b' }, '生效期限 ' + (失联详情.生效响应期限小时 === null ? '—' : 失联详情.生效响应期限小时 + 'h')
-                      + '（' + 失联详情.响应期限小时来源 + '）'),
-                    h('span', { key: 'c' }, '开关来源 ' + 失联详情.失联限制来源),
-                    失联详情.值不合法
-                      ? h('span', { key: 'd', style: { color: WARN } }, '⚠ 值不合法：原值 ' + JSON.stringify(失联详情.原值)
-                          + '（' + 失联详情.原值来源 + '）已退回兜底' + (失联详情.不合法说明 ? ' · ' + 失联详情.不合法说明 : ''))
-                      : null,
-                  ].filter(Boolean))
+          // 优化批④：读数分「身份／健康」两组——失联详情多行时只撑自己那一格，
+          // 不再把项目键/生成时刻一起拉高。组内规矩不变（Batch 9：没数据的格不出现）。
+          h('div', { key: 'ro', className: 'dshmind-readoutGroups' }, [
+            readoutGroup('身份', [
+              readout('项目键', view ? view.项目 : '未接入'),
+              readout('生成时刻', view ? (shortTime(view.生成于) || '宿主没给') : '未接入'),
+            ]),
+            readoutGroup('健康', [
+              readout('策略引擎闸', null, h('span', { className: 'dshmind-dot-line' }, [
+                dot(!gate ? GREY : gate.在位 === true ? GREEN : gate.在位 === false ? RED : GREY),
+                h('span', { key: 'v' }, !gate ? '未接入' : gate.在位 === true ? '闸在位' : gate.在位 === false ? '闸不在位' : '未知'),
+                gate && gate.规则数 !== null
+                  ? h('span', { key: 'n', className: 'dshmind-mono', style: { color: 'var(--dsw-alias-label-tertiary,#81858c)' } }, '规则 ' + gate.规则数)
+                  : null,
+                gate && gate.错误 ? h('span', { key: 'e' }, gate.错误) : null,
+              ].filter(Boolean)), gateAlarm),
+              // 介入度：**只显示当前生效的那一档**（一个值）。
+              // 旧版画成 4 个 chip（零参与 / 事后抽检 / 变更预审 / 逐条审批），选中那个上色 ——
+              // 那是**只读投影**，4 个看着能点的小方块会让人以为能点（Batch 8 主人提的第 4 条）。
+              // 现在：一个值 + 旁边一句"（四档之一）"，不带边框、不带背景、不带光标、不可聚焦。
+              readout('介入度档位', null, bar
+                ? h('span', { className: 'dshmind-valueLine' }, [
+                    h('span', { key: 'v' }, bar.介入度),
+                    h('span', { key: 'h', className: 'dshmind-valueNote' }, '四档之一（只读）'),
+                  ])
                 : null),
-            // 安全类探针：**没数据就整格不出现**（Batch 9 主人倾向的"没数据就别占位置"）。
-            // 「没数据」的判据不是 `!probe`：`normalizeView` 总会造一个探针袋（缺了就是
-            // `状态:'未知'` + 没见红），所以这里认「没有结论」= 状态未知且没有见红/恒红/恒绿。
-            探针有结论
-              ? readout('安全类探针', null, h('span', { className: 'dshmind-dot-line' }, [
-                  dot(probe.见红.length ? RED : probe.状态 === '正常' || probe.状态 === '绿' ? GREEN : GREY),
-                  h('span', { key: 'v' }, probe.状态),
-                  probe.见红.length ? h('span', { key: 'r' }, '见红：' + probe.见红.join('、')) : null,
-                  probe.恒红 ? badge('恒红警报', 'red') : null,
-                  probe.恒绿 ? badge('恒绿警报', 'warn') : null,
-                ].filter(Boolean)))
-              : null,
-            // **故障注入**（Batch 9 交付物 4）：探针那一格的"退化形态"。
-            // 那两个"没内容就不画壳"的守卫现在没有活的触发者，断言也就无从变红；
-            // 留这一笔是为了让探针/门禁能**故意**把退化形态造出来（没有反例 = 没验过）。
-            //  ① 空壳格：`允许空壳` 为真 ⇒ 没内容也画壳（用来验"不许有壳没内容"那条判据真在算）。
-            注入空壳格
-              ? readout('（故障注入：没数据的格）', null, null, false, null, true)
-              : null,
-            //  ② 破折号值：把 `—` 当值传进去，且绕过守卫 ⇒ 验"值不许是光秃秃的 `—`"那条判据。
-            注入破折号格
-              ? readout('（故障注入：破折号值）', '—', null, false, null, true)
-              : null,
+              // 失联那一格四态四样。**`已关闭` 绝不许给绿点**：开关被关掉不是「主权者一直在」，
+              // 但也不是失联 —— 所以它拿告警色 + 明说「不判定失联」，与「在位」「已失联」都长得不一样。
+              // `未知` 照旧是灰点 + 未接入：宿主没给 ≠ 正常。
+              // 详情（生效期限 / 来源 / 坏值）**紧贴这一格**放在同一个 cell 里 —— 别拉到整行当脚注，
+              // 那会横跨所有列、把列对齐打断（Batch 8 主人提的第 6 条）。
+              readout('失联状态', null, h('span', { className: 'dshmind-dot-line' }, [
+                dot(!bar ? GREY : 失联态 === '已失联' ? RED : 失联态 === '已关闭' ? WARN : 失联态 === '在位' ? GREEN : GREY),
+                h('span', { key: 'v' }, !bar ? '未接入'
+                  : 失联态 === '已失联' ? '已失联 · 自治冻结'
+                  : 失联态 === '已关闭' ? '已关闭（不判定失联）'
+                  : 失联态 === '在位' ? '在位'
+                  : '未知'),
+              ].filter(Boolean)), lostAlarm,
+                // 格内附注：完整读数，换行显示（不裁切、不铺满整行）。
+                失联详情.在位
+                  ? h('span', { key: 'note', className: 'dshmind-readoutNote' }, [
+                      h('span', { key: 'a', className: 'dshmind-mono' }, 失联详情.读数 === '缺失' ? '读数：缺失' : '读数：' + 失联详情.读数),
+                      h('span', { key: 'b' }, '生效期限 ' + (失联详情.生效响应期限小时 === null ? '—' : 失联详情.生效响应期限小时 + 'h')
+                        + '（' + 失联详情.响应期限小时来源 + '）'),
+                      h('span', { key: 'c' }, '开关来源 ' + 失联详情.失联限制来源),
+                      失联详情.值不合法
+                        ? h('span', { key: 'd', style: { color: WARN } }, '⚠ 值不合法：原值 ' + JSON.stringify(失联详情.原值)
+                            + '（' + 失联详情.原值来源 + '）已退回兜底' + (失联详情.不合法说明 ? ' · ' + 失联详情.不合法说明 : ''))
+                        : null,
+                    ].filter(Boolean))
+                  : null),
+              // 安全类探针：**没数据就整格不出现**（Batch 9 主人倾向的"没数据就别占位置"）。
+              // 「没数据」的判据不是 `!probe`：`normalizeView` 总会造一个探针袋（缺了就是
+              // `状态:'未知'` + 没见红），所以这里认「没有结论」= 状态未知且没有见红/恒红/恒绿。
+              探针有结论
+                ? readout('安全类探针', null, h('span', { className: 'dshmind-dot-line' }, [
+                    dot(probe.见红.length ? RED : probe.状态 === '正常' || probe.状态 === '绿' ? GREEN : GREY),
+                    h('span', { key: 'v' }, probe.状态),
+                    probe.见红.length ? h('span', { key: 'r' }, '见红：' + probe.见红.join('、')) : null,
+                    probe.恒红 ? badge('恒红警报', 'red') : null,
+                    probe.恒绿 ? badge('恒绿警报', 'warn') : null,
+                  ].filter(Boolean)))
+                : null,
+              // **故障注入**（Batch 9 交付物 4）：探针那一格的"退化形态"。
+              // 那两个"没内容就不画壳"的守卫现在没有活的触发者，断言也就无从变红；
+              // 留这一笔是为了让探针/门禁能**故意**把退化形态造出来（没有反例 = 没验过）。
+              //  ① 空壳格：`允许空壳` 为真 ⇒ 没内容也画壳（用来验"不许有壳没内容"那条判据真在算）。
+              注入空壳格
+                ? readout('（故障注入：没数据的格）', null, null, false, null, true)
+                : null,
+              //  ② 破折号值：把 `—` 当值传进去，且绕过守卫 ⇒ 验"值不许是光秃秃的 `—`"那条判据。
+              注入破折号格
+                ? readout('（故障注入：破折号值）', '—', null, false, null, true)
+                : null,
+            ]),
           ].filter(Boolean)),
         ]),
 
@@ -1770,7 +1851,9 @@ window.__ModuleLoader__.load({
                     : h('div', { key: 'cmd', className: 'dshmind-decideWhy' }, '（投影未给命令）'),
                 ].filter(Boolean));
               }))
-            : h('div', { key: 'none', className: 'dshmind-empty' }, '没有需要你决定的事。'),
+            // 优化批①：空态不再是一句空话——给「怎么来的 + 可敲的命令」（§9：给文本不给控件）。
+            : emptyGuide('没有需要你决定的事', '打回 ≥2 的升级、探针见红、task_pending 都会把事项送到这里',
+              "mind {action:'task_pending', id:'task-…', 待决类型:'升级差异', 描述:'两条路都可行，等主权者拍板'}"),
         ),
 
         // ② 会审（§10 反趋同）：交齐才揭名 · 全票一致是异常
@@ -1779,7 +1862,9 @@ window.__ModuleLoader__.load({
           view && 会审.length
             ? h('div', { className: 'dshmind-reviews' }, 会审.slice(0, REVIEW_LIMIT).map(function (row, index) {
                 var verdict = verdictOf(row.复核三态);
-                return h('article', { key: line(row.节点, 'review-' + index), className: 'dshmind-review' }, [
+                // ③ 折叠的键与 article 的 key 同源：id 稳定在节点 id（缺时才退回序号占位）。
+                var 会审id = line(row.节点, 'review-' + index);
+                return h('article', { key: 会审id, className: 'dshmind-review' }, [
                   h('div', { key: 'top', className: 'dshmind-reviewTop' }, [
                     h('span', { key: 't', className: 'dshmind-nodeTitle' }, line(row.描述 || row.节点, '未命名会审')),
                     h('span', {
@@ -1800,20 +1885,36 @@ window.__ModuleLoader__.load({
                   row.揭名 === false
                     ? h('div', { key: 'lock', className: 'dshmind-lock' }, '🔒 未交齐，讨论保持锁定：此处只显示盲标，交齐后揭名')
                     : null,
-                  h('div', { key: 'answers', className: 'dshmind-answers' }, row.独立答案.map(function (answer, i) {
-                    return h('div', { key: 'a' + i, className: 'dshmind-answer' }, [
-                      h('div', { key: 'h', className: 'dshmind-answerHead' }, [
-                        h('span', { key: 'b', className: 'dshmind-badge', style: {
-                          color: BRAND, borderColor: BRAND, background: 'var(--dsw-alias-bg-layer-1,#fff)',
-                        } }, answer.盲标),
-                        answer.成员 ? h('span', { key: 'm', className: 'dshmind-chip dshmind-mono' }, answer.成员) : null,
-                      ].filter(Boolean)),
-                      h('div', { key: 'c', className: 'dshmind-answerBody' }, answer.结论),
-                      answer.反例面.length
-                        ? h('div', { key: 'x', className: 'dshmind-counter' }, '反例面：' + answer.反例面.join('；'))
-                        : null,
-                    ].filter(Boolean));
-                  })),
+                  // 优化批③：独立答案可折叠——多场会审时答案区不再把面板撑爆。
+                  // 默认**首场展开、其余一行摘要**（摘要只给盲标，不出成员 id——揭名口径不因折叠放宽）；
+                  // 切换走 onClick（先例：页头「刷新」），状态住模块级 界面store，不挂 useEffect（设计债⑩）。
+                  row.独立答案.length
+                    ? h('div', { key: 'answersWrap' }, [
+                        h('button', {
+                          key: 'tog', type: 'button', className: 'dshmind-toggle',
+                          onClick: function () { 切会审折叠(会审id, index !== 0); },
+                          title: 会审折叠(会审id, index !== 0) ? '展开独立答案' : '收起独立答案',
+                        }, (会审折叠(会审id, index !== 0) ? '▸' : '▾') + ' 独立答案 ' + row.独立答案.length + ' 份'
+                          + (会审折叠(会审id, index !== 0) ? '（展开看全文与反例面）' : '')),
+                        会审折叠(会审id, index !== 0)
+                          ? h('div', { key: 'sum', className: 'dshmind-answerSummary' },
+                              '盲标：' + (row.独立答案.map(function (answer) { return line(answer.盲标); }).filter(Boolean).join('、') || '（无）'))
+                          : h('div', { key: 'ans', className: 'dshmind-answers' }, row.独立答案.map(function (answer, i) {
+                              return h('div', { key: 'a' + i, className: 'dshmind-answer' }, [
+                                h('div', { key: 'h', className: 'dshmind-answerHead' }, [
+                                  h('span', { key: 'b', className: 'dshmind-badge', style: {
+                                    color: BRAND, borderColor: BRAND, background: 'var(--dsw-alias-bg-layer-1,#fff)',
+                                  } }, answer.盲标),
+                                  answer.成员 ? h('span', { key: 'm', className: 'dshmind-chip dshmind-mono' }, answer.成员) : null,
+                                ].filter(Boolean)),
+                                h('div', { key: 'c', className: 'dshmind-answerBody' }, answer.结论),
+                                answer.反例面.length
+                                  ? h('div', { key: 'x', className: 'dshmind-counter' }, '反例面：' + answer.反例面.join('；'))
+                                  : null,
+                              ].filter(Boolean));
+                            })),
+                      ])
+                    : null,
                   row.分歧清单.length
                     ? h('div', { key: 'div', className: 'dshmind-divergence' }, '分歧清单：' + row.分歧清单.join('；'))
                     : null,
@@ -1843,7 +1944,8 @@ window.__ModuleLoader__.load({
                     : null,
                 ].filter(Boolean));
               }))
-            : h('div', { key: 'none', className: 'dshmind-empty' }, '没有进行中的会审。'),
+            : emptyGuide('没有进行中的会审', '会审在成员交卷复核时产生（建卡见 §3）',
+              "mind {action:'task_submit', id:'task-…', 结论:'交卷结论一句话', 反例面:'为推翻它试过什么'}"),
         ),
 
         // ③ 任务图
@@ -1909,7 +2011,8 @@ window.__ModuleLoader__.load({
                       : null,
                   ].filter(Boolean));
                 }))
-            : h('div', { key: 'none', className: 'dshmind-empty' }, '任务图为空 —— 没有在办的节点。'),
+            : emptyGuide('任务图为空', '从建一张卡开始：判据在派发后冻结，先想清「什么样算验收通过」',
+              "mind {action:'task_create', 描述:'示例：校准一条拒绝理由', 判据:'每条拒绝都带可执行的理由'}"),
             view && tasks.length > TASK_LIMIT
               ? h('div', { key: 'more', className: 'dshmind-empty' }, '另有 ' + (tasks.length - TASK_LIMIT) + ' 个节点未在此列出（工作台投影可展开）。')
               : null,
