@@ -15,6 +15,7 @@
  */
 import { Denied, InvalidBody } from './kernel/errors.js';
 import { DEFAULT_DEBATE_BUDGET } from './policy.js';
+import { subjectForRole } from './registry.js';
 
 /** 讨论发言的合法类型（§9 消息类型里讨论段专用的三种）。 */
 export const DEBATE_SAY_TYPES = ['分歧', '表态', '答复'];
@@ -24,8 +25,9 @@ export const ROUND_BOUNDARY_MARK = '[debate-round]';
 
 export class DebateService {
   /**
-   * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock, tasks: object, bus: object, review: object }} spec
-   *   tasks / bus / review 由依赖注入：本服务只编排，不自己实现任务图、总线与复核协议。
+   * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock, tasks: object, bus: object, review: object, registry: object }} spec
+   *   tasks / bus / review / registry 由依赖注入：本服务只编排，不自己实现任务图、总线、
+   *   复核协议与角色注册表（⑮：候选池的「身份档案成员」只有一个事实源 = registry）。
    */
   constructor(spec) {
     this.layout = spec.layout;
@@ -35,6 +37,7 @@ export class DebateService {
     this.tasks = spec.tasks;
     this.bus = spec.bus;
     this.review = spec.review;
+    this.registry = spec.registry;
   }
 
   /**
@@ -42,9 +45,13 @@ export class DebateService {
    * 节点 状态=已交卷 且 每个负责人都交过自己的独立答案。
    * 参与者 = 独立答案成员数，超过人数上限拒（提示拆会审）。
    * 开启时 `review.reveal` 揭名并**冻结预算快照**（之后改部署.json 不影响进行中的讨论）。
+   * 同时**指定强制反对者**（⑮·2026-10-10）：候选 = 身份档案成员 ∪ 本项目其它节点的
+   * 负责人，**逐位过两道前置筛**（收尾②③：在册且在岗 + 可写预检，见下方注释）；
+   * 去重、去参与者、去已用过全在 `review.pickDissenter` 内部（唯一落点，不在这里再算一遍）。
+   * **指定失败不阻断开启**：没有可用候选（`反对者 === ''`）时讨论照常开启，把它的依据原样带走。
    *
    * @param {{ subject: object, 项目: string, 节点: string }} spec
-   * @returns {Promise<{ 节点: object, 参与者: string[], 轮次: number, 轮次上限: number, 揭名: object[] }>}
+   * @returns {Promise<{ 节点: object, 参与者: string[], 轮次: number, 轮次上限: number, 揭名: object[], 强制反对者: string, 强制反对者依据: string }>}
    */
   async open(spec) {
     const node = await this.#node(spec.项目, spec.节点);
@@ -75,8 +82,49 @@ export class DebateService {
         },
       );
     }
+    // 指定强制反对者（⑮·2026-10-10）——**时机 = 讨论开启时**（主人裁决）：
+    // 讨论一开，反趋同就必须已经有一位在座；晚指定等于「等讨论冷场了再找个人唱反调」。
+    // 候选＝**并集**：身份档案成员 + 本项目其它节点负责人——两条都是现读的事实源，
+    // 不另立存储。扣参与者/扣已用过在 pickDissenter 内部（唯一的去重落点）。
+    //
+    // 交给 `pickDissenter` **之前**逐位过两道筛（收尾②③·2026-10-10）：
+    //  ① **在册且在岗**：必须在身份档案里真实登记，且 `status !== '封存'`。这条对**两个来源
+    //     一律适用**——负责人那一路也要过同一道检查。为什么负责人也得过：`task_create`
+    //     不校验负责人身份（既有面，本批不动），所以负责人里能出现 `system` 这种不在册的 id；
+    //     不筛就会选出「强制反对者 = system」——一个连身份都没有的反对者。
+    //  ② **可写预检**：`bus.canWrite` 实判一次「他能不能往这个线程落一条消息」，与 `bus.send`
+    //     **同一道闸、同一个 action/target 组合**（`create` ＋ `消息/只增`），不许自创一套。
+    //     不筛的话，复核者 / 拒绝名单成员会被选中，而他一发言就被策略闸拒
+    //     （`法律 复核者只读数…` / `撤回 = 写拒绝名单`）⇒ 发声通道（四层里最后一层）
+    //     对这类候选**静默失效**，面板却照旧显示「强制反对者：X」。
+    //     `subject` 取该候选**在身份档案里的记录**（拿不到档案 ⇒ 不合格），岗位→主体种类
+    //     走 `registry.subjectForRole`（与 `canTouch` / `org.subjectFor` 同一口径）；
+    //     预检拿不到结论（异常 / 缺档案）一律按**不合格**处理（fail-closed）。
+    // 剔完为空 ⇒ 照旧「宁缺毋滥」留空 + 依据（**不阻断开启**）。
+    const 档案 = (await this.registry.identity()).members ?? {};
+    const 快照 = await this.tasks.snapshot({ 项目: spec.项目 });
+    const 候选 = [...new Set([
+      ...Object.values(档案).map((m) => m?.id),
+      ...快照.节点.flatMap((n) => n.负责人 ?? []),
+    ])].filter((id) => typeof id === 'string' && id !== '');
+    const 可指定 = [];
+    for (const id of 候选) {
+      const 记录 = 档案[id];
+      if (!记录 || 记录.status === '封存') continue; // ① 不在册 / 已封存 ⇒ 剔
+      // ② 可写预检：**拿不到结论一律按不合格**（fail-closed）。判据本体在 `bus.canWrite` 里，
+      //    这里再兜一层，是为了「闸读不出来」时不把 `open()` 一起带走 ——
+      //    候选筛不出人只是「宁缺毋滥」（讨论照常开），而开不了会审是整条环路停摆。
+      let 可写 = false;
+      try {
+        可写 = (await this.bus.canWrite({ subject: subjectForRole(记录.岗位, id), 项目: spec.项目, 线程: spec.节点 }))?.可写 === true;
+      } catch {
+        可写 = false;
+      }
+      if (可写) 可指定.push(id);
+    }
     // 揭名：盲评到此为止，讨论阶段亮出彼此身份（§10）。
     const 揭名 = await this.review.reveal({ subject: spec.subject, 项目: spec.项目, 线程: spec.节点, 参与者 });
+    const 指定 = await this.review.pickDissenter({ subject: spec.subject, 项目: spec.项目, 节点: spec.节点, 参与者, 候选: 可指定 });
     const 预算快照 = { 每轮消息上限: 预算.每轮消息上限, 每人每轮字符上限: 预算.每人每轮字符上限 };
     const 节点投影 = await this.tasks.debateOpened(spec.节点, {
       subject: spec.subject,
@@ -84,14 +132,27 @@ export class DebateService {
       参与者,
       轮次上限: 预算.轮次上限,
       预算快照,
+      反对者: 指定.反对者,
+      反对者依据: 指定.依据,
     });
-    return { 节点: 节点投影, 参与者, 轮次: 1, 轮次上限: 预算.轮次上限, 揭名: 揭名.揭名 };
+    return {
+      节点: 节点投影,
+      参与者,
+      轮次: 1,
+      轮次上限: 预算.轮次上限,
+      揭名: 揭名.揭名,
+      强制反对者: 指定.反对者,
+      强制反对者依据: 指定.依据,
+    };
   }
 
   /**
-   * 发言：仅参与者、仅讨论中；类型 ∈ {分歧, 表态, 答复}；经 `bus.send`（线程=节点id）落消息。
+   * 发言：参与者**或强制反对者**（⑮）、仅讨论中；类型 ∈ {分歧, 表态, 答复}；
+   * 经 `bus.send`（线程=节点id）落消息。
    * 预算闸**现算**（读线程）：本轮消息数 < 每轮消息上限、该成员本轮累计字符 + 新内容
    * ≤ 每人每轮字符上限——用的是**开启时冻结的快照**，不是当前部署值。
+   * 反对者与参与者**同吃这两道预算闸**：`本轮发言()` 按类型与发件过滤，反对者的发言同形，
+   * 字符额度按 `发件 === subject.id` 现算，对他同样成立（见下方「预算闸」两段）。
    * 审计走 bus.send 既有路径（W2 规格），本方法不另记。
    *
    * @param {{ subject: object, 项目: string, 节点: string, 类型: string, 内容: string }} spec
@@ -103,11 +164,17 @@ export class DebateService {
     if (!DEBATE_SAY_TYPES.includes(spec.类型)) {
       throw new InvalidBody(`讨论发言类型只有三种：${DEBATE_SAY_TYPES.join(' / ')}；收到「${spec.类型}」。`, { missing: ['类型'] });
     }
-    if (!讨论.参与者.includes(spec.subject?.id)) {
+    // 发言权（⑮·2026-10-10）：参与者**或**强制反对者。反对者没交过独立答案、不在参与者里，
+    // 但他必须能发声——否则「强制反对者」只是个投影上的名字（四层里最后一层「发声通道」）。
+    // 只放宽这一条判据：类型闸、预算闸、写入面闸一律不动（预算闸天然覆盖反对者，见下方注释）。
+    const 可发言 = 讨论.参与者.includes(spec.subject?.id) || (讨论.反对者 && 讨论.反对者 === spec.subject?.id);
+    if (!可发言) {
       throw new Denied(
         '会审讨论段 · 仅参与者可发言',
         `${spec.subject?.id} 不是节点 ${spec.节点} 的讨论参与者（${讨论.参与者.join('、')}）。旁听者不进讨论，看板与 bus_read 可以看。`,
-        { howToChange: '讨论只在交过独立答案的参与者之间进行；要发声请先成为该会审节点的负责人并交卷。' },
+        {
+          howToChange: '讨论只在交过独立答案的参与者之间进行（强制反对者亦可发言）；要发声请先成为该会审节点的负责人并交卷。',
+        },
       );
     }
     const 内容 = String(spec.内容 ?? '').trim();

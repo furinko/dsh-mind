@@ -7,6 +7,9 @@
  *  3. **历史不入上下文** —— 本模块只负责存与取。它**不向任何模型上下文注入内容**，
  *     注入决策属于宿主（§9「上下文 = 按需拉，不许全量推」）。
  *  4. **Lead 表态可标记延后** —— 一条消息可以带 `延后: true`，表示发件人据此保留表态。
+ *  5. **可写预检与 send 同闸** —— `canWrite()` 是同一道闸、同一个 action/target 组合的
+ *     「只判定不落盘」版本，供编排层在**指定之前**剔除哑候选（⑮ 收尾②·2026-10-10）：
+ *     复核者 / 拒绝名单成员当上「强制反对者」= 面板有名字、发声通道静默失效。
  *
  * 消息 `authority = 只增`（§6）：总线里没有修改与删除。
  */
@@ -61,7 +64,7 @@ export class MessageBus {
     await this.policy.check({
       subject: message.subject,
       action: 'create',
-      target: { id, kind: '消息', authority: '只增', zone: '私有', domain: '集体', project: message.项目 },
+      target: this.#写入目标(id, message.项目),
       context: {},
     });
     const 状态 = message.暂不投递 === true ? '暂不投递' : '已投递';
@@ -91,6 +94,61 @@ export class MessageBus {
       详情: { 线程: message.线程, 收件: message.收件 },
     });
     return { id, 状态, 线程: message.线程, 追加于: this.clock.iso() };
+  }
+
+  /**
+   * 消息写入的判定 target —— `send` / `deliver` / `canWrite` **共用这一处**。
+   *
+   * 为什么必须共用：会审的候选池要在「指定强制反对者」之前问一句「这位能不能落消息」，
+   * 而那句问话**必须**与 `send` 是同一个 action + 同一个 target 组合。各写一份字面量
+   * 迟早会漂（`send` 改了 target 而预检没改 ⇒ 预检放行、真发言被拒，或反过来），
+   * 那就又回到了「面板显示他是反对者、他一开口就被闸拒」这个缺陷。
+   *
+   * @param {string} id 消息 id（预检时用同一款生成器造的占位 id）
+   * @param {string} 项目
+   */
+  #写入目标(id, 项目) {
+    return { id, kind: '消息', authority: '只增', zone: '私有', domain: '集体', project: 项目 };
+  }
+
+  /**
+   * 可写预检：这位主体**能不能往这个线程落一条消息**（⑮ 收尾②·2026-10-10）。
+   *
+   * 判据与 `send` **同款**：同一个 action（`create`）＋ `#写入目标` 那一个 target 组合，
+   * 走同一个唯一判定点（`policy.decide`）。编排层（会审候选池）不许自创一套
+   * 「能不能发言」的规则 —— 否则「面板写着他是强制反对者」与「他真的能发声」会漂开。
+   *
+   * 为什么需要它：候选池若不筛「可写」，复核者 / 拒绝名单成员会被选中，而他一发言就被
+   * 策略闸拒（`法律 复核者只读数…` / `撤回 = 写拒绝名单`）⇒ 发声通道（四层里最后一层）
+   * 对这类候选**静默失效**，面板却照旧显示「强制反对者：X」。
+   *
+   * **只判定，不落盘**：不 appendLines、不记「状态变更」；被拒的那一次由 `policy.decide`
+   * 按既有口径记一条「策略拒绝」—— 那正是「谁被剔掉了、为什么」的正当留痕。
+   * **fail-closed**：判定抛错 / 拿不到结论一律算**不可写**（§12.2 查不到 ≠ 放行）。
+   *
+   * @param {{ subject: object, 项目: string, 线程: string }} spec
+   * @returns {Promise<{ 可写: boolean, 依据: string }>}
+   */
+  async canWrite(spec) {
+    try {
+      // 占位 id 用与 send 同一款生成器（同一形状）：target.id 也参与判定
+      // （拒绝名单按 id 命中，命中即拒——主体自身被撤回同样走这一条）。
+      const id = objectId('消息', `${spec.线程}/${spec.subject?.id ?? 'anonymous'}/预检`, { at: this.clock.ms() });
+      const 决定 = await this.policy.decide({
+        subject: spec.subject,
+        action: 'create',
+        target: this.#写入目标(id, spec.项目),
+        context: {},
+      });
+      return 决定.verdict === 'allow'
+        ? { 可写: true, 依据: 决定.rule }
+        : { 可写: false, 依据: `${决定.rule}：${决定.reason}` };
+    } catch (error) {
+      return {
+        可写: false,
+        依据: `可写预检拿不到结论（fail-closed 按不可写处理）：${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
   }
 
   /**
@@ -163,7 +221,7 @@ export class MessageBus {
     await this.policy.check({
       subject: spec.subject,
       action: 'create',
-      target: { id: spec.id, kind: '消息', authority: '只增', zone: '私有', domain: '集体', project: spec.项目 },
+      target: this.#写入目标(spec.id, spec.项目),
       context: {},
     });
     // 只增：投递动作也是一条新记录（同 id 的最新状态生效），历史那条「暂不投递」不动。

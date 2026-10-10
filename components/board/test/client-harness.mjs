@@ -596,6 +596,17 @@ export function sampleView() {
         ],
         分歧清单: ['冻结时点是否该在派发前'], 反例面: ['复派场景未测'],
         零分歧: false, 零分歧依据: '结论互斥', 复核三态: '不过', 复核者: 'reviewer-2',
+        // ⑮ 强制反对者（2026-10-10）：**投影在行级给这一个键**（有讨论段才给）。
+        // 这一场是「有值」的那一面；t-4 / t-5 没有讨论段 ⇒ 投影不给键 ⇒ 归一化兜底成空串 ⇒ 一个字都不画。
+        // ⚠️ 夹具喂的是**真键** `强制反对者` —— 这才是 `src/workbench.js` 真发的形状
+        //    （收尾⑥·2026-10-10：以前这里喂的是**别名** `dissenter`，于是「真键能渲染」这件事
+        //     只由一条源码文本正则兜着；别名那一路现在**单列一条断言**钉，不许它冒充真键）。
+        讨论: {
+          状态: '讨论中', 轮次: '1/2', 本轮消息数: '1/24',
+          可收敛: false, 可收敛说明: '不可收敛：本轮还有 1 条新分歧未答复；未表态：member-e。',
+          讨论未收敛: true,
+        },
+        强制反对者: 'member-c',
       },
     ],
     审计尾: [
@@ -804,6 +815,32 @@ async function textAfterLoad(renderer) {
   return collect(renderer.tree, { skipStyle: true }).text;
 }
 
+/**
+ * 把**一份给定的投影**真的渲染一遍，返回页面文本（给行为判据用：收尾⑥·2026-10-10）。
+ *
+ * 起 DOM / 起渲染器的路子与 `runHarness` 逐字同款（不另造一套夹具）：
+ * 同一次 `boot`（`session()` 带假 document）、同一个 remote→fetch 桥（handler 回 `okReply(view)`）、
+ * 同一个 `flush → settle → flush` 收敛节奏，最后取整页文本。
+ *
+ * 为什么要导出它：判据必须落在**行为**上（喂进去 → 画出来），而不是「源码里有这行字」。
+ * `client.test.js` 用它把「真键能渲染 / 空串一个字都不画」两条钉成渲染读数。
+ *
+ * @param {object} view 一份投影（形状同 `sampleView()`）
+ * @param {{ store?: Map<string,string> }} [options] `store` 可跨次复用（同一浏览器）
+ * @returns {Promise<{ text: string, elements: object[], texts: string[], tree: object, calls: object[] }>}
+ */
+export async function renderView(view, options = {}) {
+  const spy = makeRemote(() => okReply(view));
+  const booted = boot({ store: options.store, services: Object.assign(session(), { remote: spy.remote }) });
+  const renderer = mountDashboard(booted);
+  renderer.flush();
+  await settle();
+  renderer.flush();
+  const c = collect(renderer.tree, { skipStyle: true });
+  renderer.unmount();
+  return { text: c.text, elements: c.elements, texts: c.texts, tree: renderer.tree, calls: spy.calls };
+}
+
 // ── 主流程 ────────────────────────────────────────────────────────────────────
 /**
  * 跑完整套断言。失败抛错（含具体哪一条）；成功返回报告。
@@ -986,6 +1023,34 @@ export async function runHarness() {
   passed.push(check(shown.includes('分歧清单') === false && shown.includes('零分歧'), '零分歧那一场照旧报出零分歧'));
   passed.push(check(textOf(cards[0]).includes('分歧清单：审计档位是否逐条'), '分歧清单渲染出来'));
   passed.push(check(textOf(cards[0]).includes('反例面：权限矩阵未覆盖自动派发'), '会审级反例面渲染出来'));
+
+  // ③c′ ⑮ 强制反对者（2026-10-10）：讨论那一行**有值才画**——t-6 有讨论段且指定了人，
+  //     所以画出来；t-4 / t-5 投影里没有这个键（没讨论段）⇒ 一个字都不许多画。
+  //     夹具喂的是**真键**（收尾⑥）：这一条钉的是「投影真发的形状能被渲染」。
+  passed.push(check(textOf(cards[2]).includes('强制反对者：member-c'),
+    '指定了强制反对者的会审卡上画出来（真键 强制反对者）'));
+  const 反对者句 = textOf(cards[2]).split('\n').filter((t) => t.indexOf('强制反对者') >= 0);
+  passed.push(check(反对者句.length === 1, '强制反对者恰好显示一次（不重复画）', String(反对者句.length)));
+  passed.push(check(!textOf(cards[0]).includes('强制反对者') && !textOf(cards[1]).includes('强制反对者'),
+    '没有讨论段的会审卡一个「强制反对者」都不画（不给空壳读数）'));
+
+  // ③c″ 别名那一路**单列两条**钉它（收尾⑥）：别名只是兼容旧投影的读法，
+  //      不许它冒充真键 —— 所以这两条**专门**喂一份只有别名、没有真键的投影（有值 / 空串各一条）。
+  //      真键那一路的「空串 ⇒ 一个字都不画」由 `client.test.js` 的行为判据钉（那边直接拿真键喂 ''）。
+  const 别名视图 = sampleView();
+  const 别名行 = 别名视图.会审.find((r) => r.节点 === 't-6');
+  delete 别名行.强制反对者;
+  别名行.dissenter = 'member-c';
+  const 别名页 = await renderView(别名视图);
+  passed.push(check(别名页.text.includes('强制反对者：member-c'),
+    '别名 dissenter 单独喂（没有真键）也归一化画出来 —— 别名只作兼容'));
+  const 别名空 = sampleView();
+  const 别名空行 = 别名空.会审.find((r) => r.节点 === 't-6');
+  delete 别名空行.强制反对者; // 真键在时它先被读到（firstOf 的顺序），要单独验别名就得把它摘掉
+  别名空行.dissenter = '';
+  const 别名空页 = await renderView(别名空);
+  passed.push(check(!别名空页.text.includes('强制反对者'),
+    '别名给空串同样一个字都不画（别名不是「有键就画」）'));
 
   // ③d 零分歧是异常，不是好消息；复核三态三档三样
   const anomaly = findAllByClass(r1.tree, 'dshmind-anomaly');

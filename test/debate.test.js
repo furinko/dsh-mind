@@ -15,6 +15,7 @@ import { makeFixture, SOVEREIGN, LEAD, MEMBER, REVIEWER, writeUnder } from './he
 import { TaskGraph } from '../src/tasks.js';
 import { MessageBus } from '../src/bus.js';
 import { ReviewProtocol } from '../src/review.js';
+import { RoleRegistry } from '../src/registry.js';
 import { DebateService } from '../src/debate.js';
 import { projectWorkbench } from '../src/workbench.js';
 import { runAction } from '../lib/actions.js';
@@ -33,12 +34,16 @@ let f;
 /** @type {DebateService} */ let debate;
 
 /** 组装一套带讨论段的协作件（与 org.open 同款接线，夹具内轻量版）。 */
-function 装配(g) {
+function 装配(g, random = () => 0) {
   const t = new TaskGraph({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock });
   const b = new MessageBus({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock });
-  const r = new ReviewProtocol({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock, tasks: t, bus: b });
-  const d = new DebateService({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock, tasks: t, bus: b, review: r });
-  return { tasks: t, bus: b, review: r, debate: d };
+  const reg = new RoleRegistry({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock });
+  // ⑮ 强制反对者（2026-10-10）接线后 debate 需要 registry（候选池的「身份档案成员」一侧）。
+  // 这里与 `src/org.js` 同款注入；`random` 默认 `() => 0` 让**指定谁是确定性的**——否则这个文件里
+  // 逐条钉死的预算读数会被随机反对者搅成偶发红（反对者本身不发消息，但他会占掉一个候选）。
+  const r = new ReviewProtocol({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock, tasks: t, bus: b, random });
+  const d = new DebateService({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock, tasks: t, bus: b, review: r, registry: reg });
+  return { tasks: t, bus: b, review: r, debate: d, registry: reg };
 }
 
 /** 造一个已交齐的双人会审节点，返回节点 id。 */

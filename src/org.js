@@ -65,7 +65,9 @@ export class Org {
     const upgrade = new UpgradeManager({ layout, policy, audit, clock });
     const probes = new ProbeRunner({ layout, policy, audit, clock, capability });
     const review = new ReviewProtocol({ layout, policy, audit, clock, tasks, bus, random: spec.random });
-    const debate = new DebateService({ layout, policy, audit, clock, tasks, bus, review });
+    // registry 也注入 debate（⑮ 强制反对者·2026-10-10）：开启讨论时要按「身份档案成员」
+    // 算候选池，而「在岗/封存」的唯一事实源就是角色注册表——不许在 debate 里再读一遍身份档案。
+    const debate = new DebateService({ layout, policy, audit, clock, tasks, bus, review, registry });
 
     const org = new Org({
       layout,

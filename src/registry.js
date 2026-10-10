@@ -21,6 +21,26 @@ import { ACTIONS, identityStatus } from './policy.js';
 /** 卡上的四段，顺序即个体域的层级（§14：个体域才有 L0~L3）。 */
 const SEGMENTS = ['个体L0', '个体L1', '个体L2', '个体L3'];
 
+/**
+ * 岗位 + 实例 → 策略判定用的主体（岗位决定主体种类）。
+ *
+ * 这是**身份档案 → 主体**这一层的唯一映射落点：`canTouch()` 与 `debate.open()` 的候选池
+ * 预检都读它（同一件事不许有两个口径）。与 `org.subjectFor()` 的岗位分支逐字同口径
+ * （复核员→复核者、Lead→Lead、其余→成员）；差别只在**不做**宿主侧的兜底 ——
+ * 这里没有「根会话」「实例缺省成 unknown / lead」那些约定：身份档案里查不到的实例
+ * 就是查不到，交给判定层按最严处理（§12.2），不许在这里被回填成一个更高的身份。
+ *
+ * @param {string|undefined} 岗位
+ * @param {string} 实例
+ * @returns {{id: string, kind: string, roleId: string}}
+ */
+export function subjectForRole(岗位, 实例) {
+  if (岗位 === '复核员') return { id: 实例, kind: '复核者', roleId: '复核员' };
+  if (岗位 === 'Lead') return { id: 实例, kind: 'Lead', roleId: 'Lead' };
+  if (岗位) return { id: 实例, kind: '成员', roleId: 岗位 };
+  return { id: 实例, kind: '成员', roleId: '未登记' };
+}
+
 export class RoleRegistry {
   /**
    * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock }} spec
@@ -110,7 +130,7 @@ export class RoleRegistry {
         锁定的段: ['个体L0'],
       };
     }
-    const subject = { id: spec.id, kind: 岗位 === '复核员' ? '复核者' : 岗位 === 'Lead' ? 'Lead' : '成员', roleId: 岗位 };
+    const subject = subjectForRole(岗位, spec.id);
     const 权限 = [];
     for (const action of ACTIONS) {
       const decision = await this.policy.decide({

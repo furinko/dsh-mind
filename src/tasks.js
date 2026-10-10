@@ -267,7 +267,7 @@ export class TaskGraph {
    * 讨论开启事件。前置由 DebateService 编排层算好（齐卷判据与 bus_unlock 同款重算），
    * 这里守任务图自己的一面：节点存在、模式是独立会审、没开过讨论、参与者与预算快照入事件。
    * @param {string} id
-   * @param {{ subject: object, 项目: string, 参与者: string[], 轮次上限: number, 预算快照: object }} spec
+   * @param {{ subject: object, 项目: string, 参与者: string[], 轮次上限: number, 预算快照: object, 反对者?: string, 反对者依据?: string }} spec
    */
   async debateOpened(id, spec) {
     const node = await this.#require(id, spec.项目);
@@ -288,6 +288,10 @@ export class TaskGraph {
       参与者: spec.参与者,
       轮次上限: spec.轮次上限,
       预算快照: spec.预算快照,
+      // ⑮ 强制反对者（2026-10-10）：开启时指定的那位与它的依据一起进事件流——
+      // 「谁在反对」是状态，不是界面装饰，所以要能从事件流重算出来。
+      反对者: spec.反对者 ?? '',
+      反对者依据: spec.反对者依据 ?? '',
     }, spec.subject, '讨论开启');
     return this.get(id, { 项目: spec.项目 });
   }
@@ -629,6 +633,10 @@ export function fold(rows) {
           轮次: 1,
           轮次上限: row.轮次上限,
           参与者: row.参与者 ?? [],
+          // ⑮ 强制反对者（2026-10-10）：空串 = 当时没有可用候选（宁缺毋滥），
+          // 与「根本没指定过」在旧数据上同形——旧事件没有这两个键 ⇒ 兜底成 ''。
+          反对者: row.反对者 ?? '',
+          反对者依据: row.反对者依据 ?? '',
           // 预算快照在开启时冻结（判据冻结同哲学）：之后改部署.json 不影响进行中的讨论。
           预算快照: row.预算快照 ?? {},
           开于: row.at,

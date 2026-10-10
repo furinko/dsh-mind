@@ -17,7 +17,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import { CLIENT_PATH, runHarness } from './client-harness.mjs';
+import { CLIENT_PATH, renderView, runHarness, sampleView } from './client-harness.mjs';
 
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PACKAGE_PATH = join(PACKAGE_ROOT, 'package.json');
@@ -33,6 +33,42 @@ test('client-harness：工厂加载、main + sidebar.panellist 注册、非平�
     '活数据页面的元素数应 > 100，实际 ' + report.liveElements);
   assert.ok(report.liveTexts > 80,
     '活数据页面的文本节点数应 > 80，实际 ' + report.liveTexts);
+});
+
+test('⑮ 强制反对者：真键喂进去 ⇒ 画出来；空串 ⇒ 一个字都不画（行为判据，不是源码文本）', async () => {
+  // 收尾⑥（2026-10-10）：这条以前是**源码文本正则** ——
+  //   /line\(firstOf\(r, \['强制反对者', 'dissenter'\]\), ''\)/ 与 source.indexOf("' · 强制反对者：'")
+  // 那是「源码里有这行字」，不是「页面真的画出来了」：把渲染那一行删掉、把归一化那一行删掉，
+  // 正则照旧命中，判据照旧绿。现在两条都换成**行为读数**（用 harness 同一条渲染路子）：
+  //   喂一份带**真键**的会审行 ⇒ 页面文本里有「强制反对者：<那位>」；喂**空串** ⇒ 一个字都不画。
+  const 有 = sampleView();
+  const a = await renderView(有);
+  assert.ok(a.text.includes('强制反对者：member-c'),
+    '真键 强制反对者=member-c ⇒ 页面上画出「强制反对者：member-c」');
+  assert.equal(a.text.split('强制反对者').length - 1, 1,
+    '整页恰好出现一次「强制反对者」（t-4/t-5 没有讨论段 ⇒ 不许有第二个）');
+
+  const 空 = sampleView();
+  空.会审.find((r) => r.节点 === 't-6').强制反对者 = '';
+  const b = await renderView(空);
+  assert.equal(b.text.includes('强制反对者'), false,
+    '真键给空串 ⇒ 一个字都不画（不给「强制反对者：—」这种空壳读数）');
+  // 反面校准的另一半：页面本身是**渲染出来了**的（不是整页空白造成的「一个字都不画」）。
+  assert.ok(b.text.includes('mind-private') && b.text.includes('会审'),
+    '前提：空串那一份页面照常渲染（降级成空白不算「不画」）');
+
+  // 条数式的总数看不出「某一条不画了」⇒ 按名字点名 harness 里那五条（真键 3 条 + 别名 2 条）。
+  const report = await runHarness();
+  const 要的 = [
+    '指定了强制反对者的会审卡上画出来（真键 强制反对者）',
+    '强制反对者恰好显示一次（不重复画）',
+    '没有讨论段的会审卡一个「强制反对者」都不画（不给空壳读数）',
+    '别名 dissenter 单独喂（没有真键）也归一化画出来 —— 别名只作兼容',
+    '别名给空串同样一个字都不画（别名不是「有键就画」）',
+  ];
+  for (const name of 要的) {
+    assert.ok(report.passed.includes(name), '⑮ 渲染断言缺失或未通过：' + name);
+  }
 });
 
 test('lib/client.js 顶层没有 import / export（经典脚本，否则整站 web 启动失败）', () => {
