@@ -262,7 +262,9 @@ export function makeRemote(handler) {
   //    `{sessionId, command, attachments}`，老断言一个字不用改。
   const 桥 = makeFetchFromCommands(function (命令, 记录) {
     calls.push({ sessionId: '', command: 命令, attachments: [], 请求: 记录 });
-    return handler('', 命令, []);
+    // 第三个参数是**请求记录**（url/method/body）：只按命令串给回应的老 handler 用不到它，
+    // 而「按 `?project=` 回不同投影」那种 handler 必须看得到 URL（见 `renderViewByProject`）。
+    return handler('', 命令, 记录);
   });
   return {
     calls,
@@ -617,6 +619,15 @@ export function sampleView() {
     ],
     // 验账读数：人扫一眼页脚就知道记账在正常发生（真源是 MemoryService.activity）。
     记忆: { 存量: 12, 近段: { 窗口天: 7, 新增: 3, 晋升: 1 } },
+    // 项目解析修正（2026-10-11，主权者指令「修」）：当前项目有账 ⇒ **不该**触发自动切换
+    // （自动切换只在「当前无账 + 别处有账」时发生，见 lib/client.js 的 自动选项目）。
+    项目清单: {
+      当前: 'mind-private',
+      项: [
+        { 项目: 'mind-private', 任务: 5, 线程: 2, 未投递: 1, 最近于: '2026-10-07T17:04:05+08:00' },
+        { 项目: 'default', 任务: 0, 线程: 0, 未投递: 0, 最近于: '' },
+      ],
+    },
     // ⑦（2026-10-11）：消息总线——普通线程（未投递>0）+ 会审讨论线程（投影层已收走正文）。
     消息总线: [
       {
@@ -849,6 +860,39 @@ export async function renderView(view, options = {}) {
   const renderer = mountDashboard(booted);
   renderer.flush();
   await settle();
+  renderer.flush();
+  const c = collect(renderer.tree, { skipStyle: true });
+  renderer.unmount();
+  return { text: c.text, elements: c.elements, texts: c.texts, tree: renderer.tree, calls: spy.calls };
+}
+
+/**
+ * 同 `renderView`，但**假宿主按 `?project=` 回不同投影**（2026-10-11，主权者指令「修」）。
+ *
+ * 为什么需要它：自动/手动切项目那一环的可观察面是**第二次请求带了什么** ——
+ * 这只有在"请求 URL 决定响应"的假宿主上才验得出来（`renderView` 对任何 URL 都回同一份）。
+ * `回默认` = 首个请求（不带 `project`）的响应；`按项目[key]` = 带 `?project=key` 的响应。
+ *
+ * @param {object} 回默认 默认项目那份投影
+ * @param {Record<string, object>} 按项目 项目键 → 投影
+ * @returns {Promise<{text:string, elements:object[], texts:string[], tree:object, calls:object[]}>}
+ */
+export async function renderViewByProject(回默认, 按项目) {
+  // ⚠️ `makeRemote` 的 handler 形状是 `('', 命令, 记录)`——**要 URL 就读第三个参数**，
+  //    把记录当第二个参数会拿到命令串，于是任何 `?project=` 都读不出来（本批踩过）。
+  const spy = makeRemote((_占位, _命令, 记录) => {
+    const m = /[?&]project=([^&]*)/.exec(String((记录 && 记录.url) || ''));
+    const key = m ? decodeURIComponent(m[1]) : '';
+    return okReply((key && 按项目 && 按项目[key]) || 回默认);
+  });
+  const booted = boot({ services: Object.assign(session(), { remote: spy.remote }) });
+  const renderer = mountDashboard(booted);
+  // 自动切项目那一环是**两次串联**取数（默认 → 按最近活动），比单次取数多一条 Promise 链：
+  // 收敛要比 `renderView` 更耐心（每轮 settle 让一条链跑完，最后再 flush 一次把状态落到树上）。
+  renderer.flush();
+  await settle(12);
+  renderer.flush();
+  await settle(4);
   renderer.flush();
   const c = collect(renderer.tree, { skipStyle: true });
   renderer.unmount();
@@ -1246,15 +1290,20 @@ export async function runHarness() {
   // ⚠️ 优化批③（2026-10-10）改过这条的形状（理由留在断言里，不是把历史的红偷偷删掉）：
   // 面板上现在除了「刷新」还有会审折叠切换钮——那是**纯显示切换**（onClick 只改本地折叠态，
   // 不发任何命令，由 ③c 的「零请求」断言钉死），不是写动作。本条守住的本意是「不给任何写动作」：
-  // 按钮只许两种——刷新（dshmind-btn）与折叠钮（dshmind-toggle），多一种都算破规。
+  // 按钮只许三种——刷新（dshmind-btn）与折叠钮（dshmind-toggle）、项目 chip（dshmind-projChip）。
+  //
+  // ⚠️ 项目解析修正（2026-10-11，主权者指令「修」）新增第三种：项目 chip 也是**换一个只读投影**
+  // （onClick 只带 `?project=` 重取，不写任何账，由 ⑧b 的「零写请求」断言钉死）。
+  // 本条仍不许出现第四种按钮，也不许出现任何写控件。
   const 非法按钮 = 面板按钮.filter((el) => {
     const 类 = String(el.props.className || '');
     if (类.indexOf('dshmind-btn') >= 0 && String(el.props.children).indexOf('刷新') >= 0) return false;
     if (类.indexOf('dshmind-toggle') >= 0) return false;
+    if (类.indexOf('dshmind-projChip') >= 0) return false;
     return true;
   });
   passed.push(check(面板按钮.length >= 1 && 非法按钮.length === 0,
-    '④ 工作台面板的可点动作只有「刷新」与会审折叠钮（纯显示切换；仍无任何写动作）',
+    '④ 工作台面板的可点动作只有「刷新」与会审折叠钮、项目 chip（纯显示切换；仍无任何写动作）',
     面板按钮.map((el) => String(el.props.children)).join(',')));
   passed.push(check(!面板控件.some((el) => typeof el.props.onChange === 'function'),
     '④ 工作台面板里没有 onChange 绑定的表单控件（没有任何「写」的入口）'));
@@ -2117,10 +2166,11 @@ export async function runHarness() {
       return r;
     };
 
-    // ① 面板里**不许有"看起来能点"的东西**。例外两种：刷新按钮 + 会审折叠切换钮
-    //    （优化批③：纯显示切换，不发命令——「不是写动作」由 ③c 的零请求断言钉死）。
+    // ① 面板里**不许有"看起来能点"的东西**。例外三种：刷新按钮 + 会审折叠切换钮
+    //    （优化批③：纯显示切换，不发命令——「不是写动作」由 ③c 的零请求断言钉死）
+    //    + 项目 chip（项目解析修正·2026-10-11：换投影的纯显示动作，不写账——由 ⑧b 钉死）。
     //    旧版「介入度档位」画成 4 个 chip（零参与/事后抽检/变更预审/逐条审批）——
-    //    只读投影长得像按钮，会误导人以为能点。
+    //    只读投影长得像按钮，会误导人以为能点。三者之外多一个按钮都算破规。
     const 面板 = await 状态render(sampleView());
     const 面板元素 = collect(面板.tree, { skipStyle: true }).elements;
     const 可点按钮 = 面板元素.filter((el) => el.type === 'button');
@@ -2128,10 +2178,11 @@ export async function runHarness() {
       const 类 = String(el.props.className || '');
       if (类.indexOf('dshmind-btn') >= 0 && String(el.props.children).indexOf('刷新') >= 0) return false;
       if (类.indexOf('dshmind-toggle') >= 0) return false;
+      if (类.indexOf('dshmind-projChip') >= 0) return false;
       return true;
     });
     passed.push(check(可点按钮.length >= 1 && 非规按钮.length === 0,
-      '① 面板里可点的只有「刷新」与会审折叠钮（其余一律不许可点）',
+      '① 面板里可点的只有「刷新」与会审折叠钮、项目 chip（其余一律不许可点）',
       JSON.stringify(可点按钮.map((el) => String(el.props.children)))));
     passed.push(check(面板元素.every((el) => el.props.role !== 'button'),
       '① 没有任何 role=button 的伪按钮', JSON.stringify(面板元素.filter((el) => el.props.role === 'button').map((el) => el.type))));
@@ -2684,6 +2735,69 @@ export async function runHarness() {
       const e = await renderView(空);
       passed.push(check(e.text.indexOf('消息总线上还没有消息') >= 0 && e.text.indexOf("action:'bus_send'") >= 0,
         '⑦ 空总线给明说空态 + 一条可敲的 bus_send 命令'));
+    }
+
+    // ⑧ 项目解析修正（2026-10-11，主权者指令「修」）：清单进页头 + 一键切项目 + 空账明写自动选择。
+    {
+      // ⑧a 有清单 ⇒ 页头画出「项目」那一格：当前项目不可点、别的项目是可点 chip。
+      const r = await renderView(sampleView());
+      const chips = findAllByClass(r.tree, 'dshmind-projChip');
+      const 当前档 = findAllByClass(r.tree, 'dshmind-projChipOn');
+      passed.push(check(chips.length === 1 && 当前档.length === 1
+        && textOf(chips[0]).indexOf('default（0 卡 · 0 线程）') >= 0
+        && textOf(当前档[0]).indexOf('mind-private（5 卡 · 2 线程') >= 0,
+        '⑧a 页头画出项目 chips：当前项目不可点、别的项目可点（带计数）',
+        JSON.stringify({ chips: chips.length, 当前: 当前档.length })));
+      // ⑧b 点 chip ⇒ 下一次取数带 `?project=`，且**一个写请求都没有**（纯显示动作）。
+      const 目标chip = chips[0];
+      const fetch前 = r.calls.length;
+      if (目标chip && typeof 目标chip.props.onClick === 'function') 目标chip.props.onClick();
+      目标chip && r.tree && await settle();
+      const 后 = r.calls.slice(fetch前);
+      passed.push(check(后.length >= 1 && 后.every((c) => c.请求.method === 'GET')
+        && 后.some((c) => String(c.请求.url).indexOf('?project=default') >= 0),
+        '⑧b 点项目 chip 以 ?project= 重取，且零写请求',
+        JSON.stringify(后.map((c) => c.请求.method + ' ' + c.请求.url))));
+      // ⑧c 空账 + 别处有账 ⇒ 自动选最近活动那个，且页头**明写**（不许静默换项目）。
+      const 空账 = sampleView();
+      空账.项目 = 'default';
+      空账.任务 = { 总数: 0, 计数: { 待派发: 0, 进行中: 0, 已交卷: 0, 已采纳: 0, 已打回: 0, 未验: 0, 已结账: 0, 待决: 0 }, 节点: [] };
+      空账.会审 = [];
+      空账.消息总线 = [];
+      空账.项目清单 = {
+        当前: 'default',
+        项: [
+          { 项目: 'plugins', 任务: 14, 线程: 1, 未投递: 0, 最近于: '2026-10-11T05:44:19Z' },
+          { 项目: 'default', 任务: 0, 线程: 0, 未投递: 0, 最近于: '' },
+        ],
+      };
+      const 切后 = await renderViewByProject(空账, { plugins: 有账项目视图() });
+      /** 切过去那一份：项目键 **必须**是 plugins（否则页头与"自动选出来的项目"对不上，注记就不会画）。 */
+      function 有账项目视图() {
+        const v = sampleView();
+        v.项目 = 'plugins';
+        v.项目清单 = { 当前: 'plugins', 项: 空账.项目清单.项 };
+        return v;
+      }
+      const 发过的 = 切后.calls.filter((c) => c.command === COMMAND);
+      passed.push(check(发过的.some((c) => String(c.请求.url).indexOf('?project=plugins') >= 0),
+        '⑧c 默认项目无账 ⇒ 自动按最近活动项目重取（请求带 ?project=plugins）',
+        JSON.stringify(发过的.map((c) => c.请求.url))));
+      passed.push(check(切后.text.indexOf('已按最近活动自动选择') >= 0,
+        '⑧c 自动选择**明写在页头**（不许静默换项目）', 切后.text.slice(0, 0) + ''));
+      // ⑧d 空态点名当前项目 + 指出别处有账的项目（不让人以为"组织是空的"）。
+      const 空账页 = await renderView(空账);
+      passed.push(check(空账页.text.indexOf('任务图为空') >= 0
+        && 空账页.text.indexOf('本项目（default）没有账') >= 0
+        && 空账页.text.indexOf('plugins（14 卡 · 1 线程）') >= 0,
+        '⑧d 空态点名当前项目并指出有账的项目', 空账页.text.slice(-160)));
+      // ⑧e 宿主没给清单 ⇒ 不画项目那格（不装懂；与记忆读数同一条纪律）。
+      const 无清单 = sampleView();
+      无清单.项目清单 = null;
+      const 无清单页 = await renderView(无清单);
+      passed.push(check(findAllByClass(无清单页.tree, 'dshmind-projChip').length === 0
+        && findAllByClass(无清单页.tree, 'dshmind-projChipOn').length === 0,
+        '⑧e 清单缺失 ⇒ 不画项目 chips（不装懂）'));
     }
   }
 

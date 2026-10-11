@@ -7,7 +7,7 @@
  * 首次打开时会**引导私有区**（建目录、落身份档案、上基线戳），
  * 但绝不触碰出厂区——出厂区是只读模板。
  */
-import { ensureDirPath, exists, listFiles } from './kernel/fsx.js';
+import { ensureDirPath, exists, listDirs, listFiles } from './kernel/fsx.js';
 import { dirname } from 'node:path';
 import { Clock } from './kernel/time.js';
 import { defaultLayout, DIR } from './paths.js';
@@ -174,9 +174,60 @@ export class Org {
       记忆: await this.memory.activity({ 项目 }),
       讨论消息,
       线程: 线程汇总,
+      // 项目清单（2026-10-11，主权者指令「修」）：面板的 `?project=` 只有宿主能定，
+      // 而客户端的 fetch 不带项目键 ⇒ 退回默认项目；组织全部活账在别的项目下时，
+      // 面板就永远一片空白（主人真机截图：任务图/消息总线全空）。给这份清单，
+      // 界面才可能说出「还有哪些项目有账」并一键切过去，而不是继续假装组织是空的。
+      项目清单: await this.projectList(项目),
       生成于: this.clock.iso(),
     });
     return spec.读者 ? sliceForViewer(view, spec.读者) : view;
+  }
+
+  /**
+   * 项目清单：磁盘上出现过的项目键 + 各项目规模（任务数 / 总线线程数 / 未投递数 / 最近活动于）。
+   *
+   * 口径：**目录名即项目键**（§14.4-5），所以「有哪些项目」只能靠目录枚举回答；
+   * 计数全部现算（任务图事件流 fold + 总线 summary），不落盘、不写账——§9 工作台只读。
+   * 排序：有活动的在前（按最近活动倒序），空账项目沉底；`当前` 项目即使没在磁盘上出现过也带上。
+   *
+   * @param {string} [当前] 这次投影的项目键
+   * @returns {Promise<{当前: string|null, 项: object[]}>}
+   */
+  async projectList(当前) {
+    const 键 = new Set();
+    for (const dir of [
+      this.layout.private(DIR.基础设施, DIR.任务图),
+      this.layout.private(DIR.基础设施, DIR.消息总线),
+    ]) {
+      for (const name of await listDirs(dir)) 键.add(name);
+    }
+    if (当前) 键.add(当前);
+    const 项 = [];
+    for (const 项目键 of 键) {
+      const 节点 = (await this.tasks.snapshot({ 项目: 项目键 })).节点;
+      const 线程 = await this.bus.summary({ 项目: 项目键 });
+      // 最近活动：任务事件时刻 ∪ 各线程最新一条的时刻（都取自账本里的行，不取文件 mtime）。
+      const 时刻 = [
+        ...节点.map((n) => n.最近事件于),
+        ...线程.map((t) => (t.最新 ?? []).at(-1)?.追加于),
+      ].filter((x) => typeof x === 'string' && x !== '').sort();
+      项.push({
+        项目: 项目键,
+        任务: 节点.length,
+        线程: 线程.length,
+        未投递: 线程.reduce((和, t) => 和 + (Number(t.未投递) || 0), 0),
+        最近于: 时刻.at(-1) ?? null,
+      });
+    }
+    项.sort((a, b) => {
+      const 有A = a.任务 > 0 || a.线程 > 0;
+      const 有B = b.任务 > 0 || b.线程 > 0;
+      if (有A !== 有B) return 有A ? -1 : 1;
+      const 时 = String(b.最近于 ?? '').localeCompare(String(a.最近于 ?? ''));
+      return 时 !== 0 ? 时 : a.项目.localeCompare(b.项目);
+    });
+    return { 当前: 当前 ?? null, 项 };
   }
 
   /**

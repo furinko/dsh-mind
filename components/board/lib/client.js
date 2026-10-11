@@ -341,8 +341,7 @@ window.__ModuleLoader__.load({
     var AUDIT_LIMIT = 20;
     /** ⑦（2026-10-11）：消息总线一次渲染的线程数上限——超出要明说（任务图同款「另有 N」）。 */
     var BUS_LIMIT = 8;
-    var BUS_MSGS_LIMIT = 5;
-    /** 「待你决定」是主子唯一必须看的清单，所以给得比任务卡更宽；超出的部分明说还有多少条。 */
+    var BUS_MSGS_LIMIT = 5;    /** 「待你决定」是主子唯一必须看的清单，所以给得比任务卡更宽；超出的部分明说还有多少条。 */
     var DECIDE_LIMIT = 8;
     var REVIEW_LIMIT = 4;
 
@@ -371,7 +370,7 @@ window.__ModuleLoader__.load({
     }
 
     // ── 视图模型：把宿主投影收敛成渲染用得上的形状（§2.10 + 容错别名）──────
-    var EMPTY = { phase: 'init', view: null, at: '', error: '', sessionId: '', source: '', stale: false };
+    var EMPTY = { phase: 'init', view: null, at: '', error: '', sessionId: '', source: '', stale: false, 项目选择: null, 自动选择: null };
 
     function normalizeView(raw) {
       // 宿主命令返回 `{成功, action, 项目, 数据: <投影>}`；工具路径共用同一个包装。
@@ -388,6 +387,9 @@ window.__ModuleLoader__.load({
       return {
         原始: v,
         项目: line(firstOf(v, ['项目', '项目键', 'project', 'projectKey']), '（未指定）'),
+        // 项目清单（2026-10-11，主权者指令「修」）：面板默认只看一个项目，而活账可能在别的
+        // 项目下 —— 不带这份清单，界面就无法说出「还有哪些项目有账」，只能干显示一片空白。
+        项目清单: 项目清单Of(firstOf(v, ['项目清单', 'projects'])),
         生成于: line(firstOf(v, ['生成于', 'generatedAt', '生成时刻', 'at']), ''),
         边界: obj(firstOf(v, ['边界', 'bounds'])) || {},
         // 状态条是**一行**「现在能不能干活」：闸 / 介入度 / 失联 / 探针。
@@ -435,6 +437,27 @@ window.__ModuleLoader__.load({
         任务节点: arr(taskBag.节点 || firstOf(v, ['任务节点', '节点', 'tasks'])),
         视图: line(firstOf(v, ['视图', 'view']), ''),
       };
+    }
+
+    /**
+     * 项目清单袋 → 渲染用形状（2026-10-11，主权者指令「修」）。
+     * 纪律同「记忆读数」：宿主没给就 `null`（不装懂），给了就只取用得上的标量。
+     * 计数全部来自宿主现算的账本读数，界面不自己数、不猜。
+     */
+    function 项目清单Of(bag) {
+      var b = obj(bag);
+      if (!b) return null;
+      var 项 = arr(firstOf(b, ['项', 'projects', 'list'])).map(function (p) {
+        var x = obj(p) || {};
+        return {
+          项目: line(firstOf(x, ['项目', 'project', 'key']), ''),
+          任务: numOf(firstOf(x, ['任务', 'tasks', '节点数'])),
+          线程: numOf(firstOf(x, ['线程', 'threads'])),
+          未投递: numOf(firstOf(x, ['未投递', 'undelivered'])),
+          最近于: line(firstOf(x, ['最近于', 'lastAt']), ''),
+        };
+      }).filter(function (x) { return x.项目 !== ''; });
+      return { 当前: line(firstOf(b, ['当前', 'current']), '') || null, 项: 项 };
     }
 
     /**
@@ -821,6 +844,18 @@ window.__ModuleLoader__.load({
       'font-family:inherit;line-height:1.5;text-align:left;color:var(--dsw-alias-label-secondary,#61666b)}',
       '.dshmind-answerSummary{font-size:11.5px;color:var(--dsw-alias-label-tertiary,#81858c);overflow-wrap:anywhere}',
 
+      // 页头「项目」格里的项目 chips（2026-10-11，主权者指令「修」）：换投影的开关，
+      // 当前项目画成不可点的 span（不给假控件），其余是可点按钮（零写动作，参照「刷新」）。
+      '.dshmind-projChips{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
+      '.dshmind-projChip,.dshmind-projChipOn{display:inline-flex;align-items:center;max-width:230px;height:20px;',
+      'padding:0 7px;border-radius:4px;font-size:11px;font-family:inherit;line-height:20px;',
+      'white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+      '.dshmind-projChip{background:var(--dsw-alias-bg-layer-2,#fff);cursor:pointer;',
+      'border:.5px solid var(--dsw-alias-border-l2,#d3dcea);color:var(--dsw-alias-label-secondary,#61666b)}',
+      '.dshmind-projChipOn{background:var(--dsw-alias-markdown-code-block,#f5f5f5);',
+      'border:.5px solid var(--dsw-alias-border-l1,#0000001f);color:var(--dsw-alias-label-primary,#1a2233);',
+      'font-weight:600}',
+
       '.dshmind-foot{display:flex;gap:10px;flex-wrap:wrap;align-items:center;color:var(--dsw-alias-label-caption,#adb2b8);',
       'font-size:11px;padding:2px 2px 4px}',
 
@@ -1133,6 +1168,47 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 页头「项目」格里的一个项目 chip（2026-10-11，主权者指令「修」）。
+     *
+     * 语义：**换一个项目的投影**（`?project=` 重取），不写任何账 —— 与页头「刷新」同类，
+     * 所以面板仍然是「只读投影 + 两个纯显示动作」。当前项目画成不可点的 span（不给假控件）。
+     * 计数随 chip 一起给：主人一眼看出「哪个项目里才有卡/消息」。
+     * @param {{项目:string, 任务:number, 线程:number, 未投递:number}} p
+     * @param {number} i 渲染序（做 key）
+     * @param {string} 当前 现在显示的项目键
+     */
+    function 项目导航项(p, i, 当前) {
+      var 文案 = p.项目 + '（' + p.任务 + ' 卡 · ' + p.线程 + ' 线程'
+        + (p.未投递 > 0 ? ' · 未投递 ' + p.未投递 : '') + '）';
+      if (p.项目 === 当前) {
+        return h('span', { key: 'p' + i, className: 'dshmind-projChipOn', title: 文案 + '（当前显示）' }, 文案);
+      }
+      return h('button', {
+        key: 'p' + i,
+        type: 'button',
+        className: 'dshmind-projChip',
+        title: '切到这个项目的投影（只读：不改任何账）',
+        onClick: function () { 切项目(p.项目); 立即刷新(); },
+      }, 文案);
+    }
+
+    /**
+     * 空态用的一句「还有哪些项目有账」（2026-10-11，主权者指令「修」）。
+     * 现状空话照旧（harness 钉着它），后面接一句实话：当前项目是不是空的、别处有没有账。
+     * @param {object|null} 清单 归一化后的 项目清单
+     * @param {string} 当前 当前项目键
+     * @returns {string} 追加说明（没有别的项目时不追加，返回空串）
+     */
+    function 他处有账(清单, 当前) {
+      var 项 = (清单 && 清单.项) || [];
+      var 别处 = 项.filter(function (x) { return x.项目 !== 当前 && (x.任务 > 0 || x.线程 > 0); });
+      if (!别处.length) return '';
+      return '；本项目（' + (当前 || '未知') + '）没有账，有账的是：'
+        + 别处.slice(0, 3).map(function (x) { return x.项目 + '（' + x.任务 + ' 卡 · ' + x.线程 + ' 线程）'; }).join('、')
+        + ' —— 点上方「项目」那一格的 chip 切过去';
+    }
+
+    /**
      * 空 section 的上手引导（优化批①）：空话换成「一句现状 + 一句来路 + 一条可敲的命令」。
      * 口径：§9 只读投影——给**可选中复制的文本**（`.dshmind-cmd` 的 code 块），不给控件；
      * 命令里的 id 用 `task-…` 占位（是示例不是真节点），照抄进任何会话即走真链路。
@@ -1301,8 +1377,9 @@ window.__ModuleLoader__.load({
      * 取工作台投影。**永不 reject**：所有失败都变成一个 `{ok:false, error}`。
      * 返回形状：`{ok:true, view}` 或 `{ok:false, error}`。
      */
-    function fetchView(ctx, sessionId) {
-      return runCommand(ctx, sessionId, { method: 'GET', path: ROUTE_WORKBENCH }).then(function (out) {
+    function fetchView(ctx, sessionId, 项目) {
+      var 路径 = ROUTE_WORKBENCH + (项目 ? '?project=' + encodeURIComponent(项目) : '');
+      return runCommand(ctx, sessionId, { method: 'GET', path: 路径 }).then(function (out) {
         if (!out.ok) return out;
         return { ok: true, view: normalizeView(out.value) };
       });
@@ -1506,7 +1583,7 @@ window.__ModuleLoader__.load({
      * **不挂 useEffect**（设计债⑩：这个宿主给插件的 effect 可能是空实现，取数如此，UI 状态也如此）。
      * `折叠会审` 是覆盖表（id → 折不折）；没点过的场次走默认（首场展开、其余折叠）。
      */
-    var 界面store = { 快照: { 折叠会审: null }, 订阅者: [] };
+    var 界面store = { 快照: { 折叠会审: null, 项目选择: null, 自动选择: null }, 订阅者: [] };
     /** 轮询间隔：2~5 秒量级（人看的板子，又不至于把宿主问烦）。 */
     var POLL_MS = 3000;
     /** 轮询把手：`apply` 起、disposer 清（**不许留定时器**）。 */
@@ -1557,7 +1634,7 @@ window.__ModuleLoader__.load({
     function 清空store() {
       投影store.快照 = EMPTY;
       设置store.快照 = { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' };
-      界面store.快照 = { 折叠会审: null };
+      界面store.快照 = { 折叠会审: null, 项目选择: null, 自动选择: null };
     }
 
     /**
@@ -1583,7 +1660,48 @@ window.__ModuleLoader__.load({
       var 表 = 界面store.快照.折叠会审;
       if (表) for (var k in 表) if (Object.prototype.hasOwnProperty.call(表, k)) 下[k] = 表[k];
       下[id] = !会审折叠(id, 默认折叠);
-      发通知(界面store, { 折叠会审: 下 });
+      // 整表替换会把 项目选择 一起抹掉（同一个 store），所以用 `Object.assign` 合并。
+      发通知(界面store, Object.assign({}, 界面store.快照, { 折叠会审: 下 }));
+    }
+
+    /**
+     * 用户显式选过的项目键（2026-10-11，主权者指令「修」）。
+     *
+     * `null` = 没选过 ⇒ 走宿主默认项目（或"默认项目无活动时按最近活动自动选"）。
+     * 为什么要有这一格：面板的 `?project=` 只有客户端能带，而项目键只有用户知道
+     * （面板拿不到会话工作目录）；没有它，主人就只能看着默认项目的空账本。
+     * @returns {string|null}
+     */
+    function 项目选择() {
+      return line(界面store.快照.项目选择, '') || null;
+    }
+
+    /** 点了一个项目 chip：记住它，下一次取数就带 `?project=`。**不写任何账**（纯显示动作）。 */
+    function 切项目(项目键) {
+      发通知(界面store, Object.assign({}, 界面store.快照, { 项目选择: line(项目键, '') || null, 自动选择: null }));
+    }
+
+    /**
+     * 自动项目选择：**当前项目无任务、也无总线线程**，而清单里另有有活动的项目 ⇒ 取最近活动那个。
+     *
+     * 为什么允许自动选：主人的真机症状是「面板永远一片空白」——组织所有活都在别的项目下，
+     * 而面板的默认项目是空账。默认空账 + 别处有账时，显示空账不是"忠实"，是误导。
+     * 纪律：**绝不静默** —— 自动选出来的项目必须在页头明写「已按最近活动自动选择」，
+     * 且用户点过任何 chip 之后这条路彻底关闭（`项目选择()` 非 null 时不再自动）。
+     * @param {object|null} view 归一化后的投影
+     * @returns {string|null} 要切的另一个项目键；不需要切就 null
+     */
+    function 自动选项目(view) {
+      var 清单 = view && view.项目清单;
+      if (!清单 || !清单.项 || !清单.项.length) return null;
+      var 当前行 = null;
+      for (var i = 0; i < 清单.项.length; i += 1) if (清单.项[i].项目 === view.项目) 当前行 = 清单.项[i];
+      var 当前有活动 = !!当前行 && (当前行.任务 > 0 || 当前行.线程 > 0);
+      if (当前有活动) return null;
+      for (var j = 0; j < 清单.项.length; j += 1) {
+        if (清单.项[j].任务 > 0 || 清单.项[j].线程 > 0) return 清单.项[j].项目;
+      }
+      return null;
     }
     /** 组件用它接 store：`useState` + 订阅（不依赖 `useEffect`）。 */
     function useStore(store) {
@@ -1627,13 +1745,48 @@ window.__ModuleLoader__.load({
           resolve();
           return;
         }
-        fetchView(ctx, session.id).then(function (out) {
+        var 选择 = 项目选择();
+        fetchView(ctx, session.id, 选择).then(function (out) {
           if (!投影序号.该用(号)) { resolve(); return; } // 旧响应：丢掉，不覆盖更新的快照
           if (out.ok) {
+            // 自动项目选择（2026-10-11，主权者指令「修」）：没点过任何 chip、且当前项目是空账
+            //而别处有账 ⇒ 重取一次。**不静默**：快照里带上 `自动选择`，页头据此明写。
+            var 自动 = 选择 ? null : 自动选项目(out.view);
+            if (自动 && 自动 !== out.view.项目) {
+              fetchView(ctx, session.id, 自动).then(function (二次) {
+                if (!投影序号.该用(号)) { resolve(); return; }
+                if (二次.ok) {
+                  writeCache(二次.view.原始);
+                  发通知(投影store, {
+                    phase: 'live', view: 二次.view, at: new Date().toISOString(),
+                    error: '', sessionId: session.id, source: session.source, stale: false,
+                    项目选择: 选择, 自动选择: 自动,
+                  });
+                  resolve();
+                  return;
+                }
+                // 自动那一次失败：回落到默认项目的读数（宁可显示"确认过的空账"，不显示一张坏快照）。
+                writeCache(out.view.原始);
+                发通知(投影store, {
+                  phase: 'live', view: out.view, at: new Date().toISOString(),
+                  error: '', sessionId: session.id, source: session.source, stale: false,
+                  项目选择: 选择, 自动选择: null,
+                });
+                resolve();
+              }, function () {
+                if (!投影序号.该用(号)) { resolve(); return; }
+                发通知(投影store, Object.assign({}, 投影store.快照, {
+                  phase: 'error', error: '切项目取数失败：' + 自动,
+                }));
+                resolve();
+              });
+              return;
+            }
             writeCache(out.view.原始);
             发通知(投影store, {
               phase: 'live', view: out.view, at: new Date().toISOString(),
               error: '', sessionId: session.id, source: session.source, stale: false,
+              项目选择: 选择, 自动选择: null,
             });
             resolve();
             return;
@@ -1764,6 +1917,11 @@ window.__ModuleLoader__.load({
       var 待你决定 = view ? view.待你决定 : [];
       var 会审 = view ? view.会审 : [];
       var 总线 = view ? view.消息总线 : [];
+      // 项目解析（2026-10-11，主权者指令「修」）：面板默认只看一个项目，而活账常在别的
+      // 项目下 ⇒ 这份清单是"说清现在看的是哪个项目、还有哪些项目有账"的唯一来源。
+      var 项目清单 = view ? view.项目清单 : null;
+      var 当前项目 = view ? view.项目 : '';
+      var 自动选择 = line(snap.自动选择, '') || null;
       var audit = view ? view.审计尾.slice(-AUDIT_LIMIT).reverse() : [];
       // 投影里**一共**多少条（用来在框尾说清"看不全是因为投影只有这些/还有多少没列"）。
       var 审计总条数 = view ? view.审计尾.length : 0;
@@ -1819,7 +1977,21 @@ window.__ModuleLoader__.load({
           // 不再把项目键/生成时刻一起拉高。组内规矩不变（Batch 9：没数据的格不出现）。
           h('div', { key: 'ro', className: 'dshmind-readoutGroups' }, [
             readoutGroup('身份', [
-              readout('项目键', view ? view.项目 : '未接入'),
+              // 项目键那一格带一句注记：自动选出来的项目必须**明写**（不许静默换项目）。
+              readout('项目键', null, h('span', { className: 'dshmind-valueLine' }, [
+                h('span', { key: 'v', className: 'dshmind-mono' }, view ? 当前项目 : '未接入'),
+                view && 自动选择 && 自动选择 === 当前项目
+                  ? h('span', { key: 'h', className: 'dshmind-valueNote' }, '默认项目无账，已按最近活动自动选择')
+                  : null,
+              ].filter(Boolean))),
+              // 项目切换：一个 chip 一个项目（当前那个不可点）。这是**显示动作**（换一个投影），
+              // 不写任何账——与「刷新」同类，故仍属只读面板；没有别的项目时不画这一格。
+              项目清单 && 项目清单.项.length > 1
+                ? readout('项目', null, h('span', { className: 'dshmind-projChips' },
+                   项目清单.项.map(function (p, i) {
+                      return 项目导航项(p, i, 当前项目);
+                    })))
+                : null,
               readout('生成时刻', view ? (shortTime(view.生成于) || '宿主没给') : '未接入'),
             ]),
             readoutGroup('健康', [
@@ -2080,7 +2252,7 @@ window.__ModuleLoader__.load({
                       : null,
                   ].filter(Boolean));
                 }))
-            : emptyGuide('任务图为空', '从建一张卡开始：判据在派发后冻结，先想清「什么样算验收通过」',
+            : emptyGuide('任务图为空', '从建一张卡开始：判据在派发后冻结，先想清「什么样算验收通过」' + 他处有账(项目清单, 当前项目),
               "mind {action:'task_create', 描述:'示例：校准一条拒绝理由', 判据:'每条拒绝都带可执行的理由'}"),
             view && tasks.length > TASK_LIMIT
               ? h('div', { key: 'more', className: 'dshmind-empty' }, '另有 ' + (tasks.length - TASK_LIMIT) + ' 个节点未在此列出（工作台投影可展开）。')
@@ -2156,7 +2328,7 @@ window.__ModuleLoader__.load({
                         : null),
                 ].filter(Boolean));
               }))
-            : emptyGuide('消息总线上还没有消息', '成员间结构化通信走这里（bus_send 落线即出现）',
+            : emptyGuide('消息总线上还没有消息', '成员间结构化通信走这里（bus_send 落线即出现）' + 他处有账(项目清单, 当前项目),
               "mind {action:'bus_send', 线程:'通报-示例', 类型:'广播', 内容:'一句话正文', 收件:'lead'}"),
         ),
 
