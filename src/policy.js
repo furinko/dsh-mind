@@ -312,11 +312,31 @@ export class PolicyEngine {
     // 拿字符串去比数组会永远不相等，于是多负责人任务上谁也干不了活 —— 这里统一折成名单。
     const 名单 = normalizeList(task.负责人);
     if (名单.length === 0) return { ok: true };
-    const 我 = [subject.id, subject.roleId].filter(Boolean);
-    if (!我.some((id) => 名单.includes(id))) {
-      return { ok: false, reason: `该任务节点负责人是 ${名单.join('、')}，不是 ${subject.id}` };
-    }
-    return { ok: true };
+    // ① 实例 id 直配（既有路径，行为不变：按实例派的节点仍精确到实例）。
+    if (名单.includes(subject.id)) return { ok: true };
+    // ② 缺口4（主权者批准 2026-10-12）：直配不中，经身份档案把实例解析成岗位再比。
+    //    成员主体刻意不带 roleId（src/subject.js A 修——岗位由 registry_assign 落在档案），
+    //    「按岗名派发」全靠这条路承重；解析**只信档案真源**：不在册 / 不在岗 ⇒ 不产出岗位；
+    //    自报的 roleId 不参与比对（信自报 = 冒充的第一步）。
+    const 岗位 = this.#档案岗位Of(subject.id);
+    if (岗位 && 名单.includes(岗位)) return { ok: true };
+    return { ok: false, reason: `该任务节点负责人是 ${名单.join('、')}，不是 ${subject.id}` };
+  }
+
+  /**
+   * 身份档案里的在岗岗位（scopeOf 的唯一解析面 · 缺口4 2026-10-12）。
+   *
+   * decide 入口已按 mtime 保档案新鲜（本文件 :222），这里只读内存态、不另起 IO——
+   * 于是**不引入**策略引擎 → 注册表的模块依赖：档案真源是同一份
+   * （registry 写 身份档案/identity.json，policy 读同一个文件），环依赖无从谈起。
+   *
+   * @param {string} id
+   * @returns {string|null} 在册且在岗 ⇒ 岗位名；否则 null（不产出岗位 = scopeOf 照拒）
+   */
+  #档案岗位Of(id) {
+    const member = this.state.identity?.members?.[id];
+    if (!member || member.status !== '在岗') return null;
+    return typeof member.岗位 === 'string' && member.岗位 ? member.岗位 : null;
   }
 
   /**
