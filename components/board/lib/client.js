@@ -871,7 +871,7 @@ window.__ModuleLoader__.load({
      * 表现就是文案与类名都是新的、样式一条没生效（标签与控件竖着堆、控件是浏览器默认长相）。
      * 所以设置页这套要走**文档级**：`document.head` 追加 `<style>`，全局可见。
      *
-     * 参考实现：`E:\DSHOME-Plugin\lib\client.js` 的 `installStyle`（同一个宿主、同一个槽位，
+     * 参考实现：另一插件的参考实现（同一个宿主、同一个槽位，
      * 已在官方客户端跑通）——它也是 `document.createElement('style')` + `document.head.appendChild`，
      * 并按 `style[data-plugin='<id>']` 判重，所以热重载不会叠出第二份。
      */
@@ -880,7 +880,7 @@ window.__ModuleLoader__.load({
       // 设置页住在官方设置面板里，与看板面板是两件东西，样式也该各归各的。
       //
       // 目标：与官方设置页其它分区（通用 / 模型 / 插件 …）**长得像一家人**。
-      // 参考实现是 `E:\DSHOME-Plugin\lib\client.js` 的「提醒」分区（同一个宿主、同一个槽位，
+      // 参考实现是另一插件的参考实现（同一个宿主、同一个槽位，
       // 已在官方客户端跑通）：它的做法是 —— 每行「左标题 + 说明 / 右控件」、行间用
       // 那条 `border-l2` 别名令牌画 `1px solid` 分隔、圆角与淡背景也走别名令牌、
       // 说明用 `label-tertiary`、控件给类名而不是裸默认样式。这里照同一套做法。
@@ -970,7 +970,7 @@ window.__ModuleLoader__.load({
      *
      * 为什么用 window 上的标记而不是 `document.querySelector` 判重：两者都能防重复注入，
      * 但**只有标记能回答"这份样式是不是我插的"**——不是自己插的那种，卸载时就不该去摘它
-     * （摘掉别的实例/别的插件的样式是越界）。参考实现（DSHOME 的 `installStyle`）用 querySelector
+     * （摘掉别的实例/别的插件的样式是越界）。另一插件的参考实现用 querySelector
      * 判重，那里只有一个实例、不涉及移除，所以那样够用；这里要管卸载，就多留一个归属标记。
      *
      * @returns {Function|null} 移除注入的 disposer；注入不了（无 document / 已有主 / 抛错）时返回 null
@@ -1565,7 +1565,7 @@ window.__ModuleLoader__.load({
      * 真机实测：设置页与看板面板**都停在初始态**（`正在读取设置…` / 右上「读取中」、底部 `会话 —`）；
      * 而**点「保存」按钮能让它变「保存中…」** ⇒ `useState`（含 setter 与重渲染）是**好的**，
      * 坏的只有 `useEffect` —— 这个宿主给插件的 React 里它**很可能是空实现**。
-     * 同机**真机跑通**的 `DSHOME-Plugin` 全文**一个 `useEffect` 都没有**，只用 `useState` +
+     * 同机**真机跑通**的另一插件全文**一个 `useEffect` 都没有**，只用 `useState` +
      * 裸 `setInterval` 轮询 —— 照它来。
      *
      * 于是分工钉死：

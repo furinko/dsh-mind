@@ -27,6 +27,9 @@
 //      exports 的每一条都真的落盘（口径同 test/preflight.mjs）；
 //   ③ 出厂区 mind/ 按 src/paths.js 的清单全量核对：区目录 / 规则件 / 岗位卡 /
 //      defaults 逐条 existsSync，能力卡目录 readdir 数量 > 0；
+//      外加**两件单文档**：`编制.md`（`Layout.establishmentPath('出厂')`）与
+//      `集体L2-共享基础设施/README.md`（`Layout.factory()`）—— 它们不在任何数组里，
+//      2026-10-12 补漏前是**绿的漏网**；
 //   ④ cordis.patch 逐行验组件在场：宿主行的 name 对得上 exports 的子路径 + 文件在盘上，
 //      看板是裸包名载体行；两个宿主组件各自都得有行（只数行数会让「删内核行换重复 guard 行」蒙混过关）；
 //   ⑤ 组件行子路径从 profile 上下文可解析（require.resolve 逐条验）。
@@ -69,8 +72,13 @@ function 读json(path) {
  * 出厂区必备清单：**从装上的那个包自己的 `src/paths.js` 取真源**，不在本脚本里重抄一份
  * （抄一份就会漂）。读不到 paths.js 就报缺件，**不用兜底清单顶替**——兜底清单恰恰会把
  * 「发布物漏了 paths.js」这件事变成绿灯。
+ * 2026-10-12 补漏：上面那份清单只覆盖 `RULE_FILES` / `ROLE_CARD_FILES` / `DEFAULT_FILES`
+ * ＋ 能力卡 `readdir`，**漏了两件单件文档**——`集体L2-集体结构/编制.md` 与
+ * `集体L2-共享基础设施/README.md`。它们谁都不在数组里，所以「把这两件从发布物里删掉」
+ * 曾经是绿的。补法不是在本脚本里再手抄两个文件名（手抄一份就会漂），而是**问既有取径接口**：
+ * `Layout.establishmentPath('出厂')` 与 `Layout.factory(DIR.基础设施, 'README.md')`。
  * @param {string} 包目录
- * @returns {Promise<{错: string} | {源: string, 区目录: string[], 规则件: string[][], 岗位卡目录: string, 岗位卡: string[], 默认值目录: string, 默认值: string[], 能力目录: string}>}
+ * @returns {Promise<{错: string} | {源: string, 区目录: string[], 规则件: string[][], 岗位卡目录: string, 岗位卡: string[], 默认值目录: string, 默认值: string[], 能力目录: string, 单件: string[]}>}
  */
 async function 读出出厂清单(包目录) {
   const 源 = join(包目录, 'src', 'paths.js');
@@ -83,10 +91,18 @@ async function 读出出厂清单(包目录) {
   } catch (error) {
     return { 错: `src/paths.js 加载失败（出厂区清单读不出来）：${error.message}` };
   }
-  const { DIR, RULE_FILES, ROLE_CARD_FILES, DEFAULT_FILES } = mod;
+  const { DIR, RULE_FILES, ROLE_CARD_FILES, DEFAULT_FILES, Layout } = mod;
   if (!DIR || !Array.isArray(RULE_FILES) || !Array.isArray(ROLE_CARD_FILES) || !DEFAULT_FILES) {
     return { 错: 'src/paths.js 里读不到 DIR / RULE_FILES / ROLE_CARD_FILES / DEFAULT_FILES —— 清单真源缺项，出厂区核对无据' };
   }
+  if (typeof Layout !== 'function') {
+    return { 错: 'src/paths.js 里读不到 Layout —— 单件出厂件的取径接口不在，编制/README 无从核对' };
+  }
+  // 单件出厂件：**路径由 Layout 自己算**（factoryRoot 指向包内 mind/），本脚本不手抄文件名。
+  const 出厂根 = join(包目录, 'mind');
+  const layout = new Layout({ factoryRoot: 出厂根, privateRoot: 出厂根 });
+  // `Layout.establishmentPath('出厂')` 给出**绝对**路径 ⇒ 折回相对 mind/ 的口径（与上面各项一致）。
+  const 编制相对 = layout.establishmentPath('出厂').slice(出厂根.length + 1);
   return {
     源,
     区目录: [DIR.宪章, DIR.法律, DIR.集体结构, DIR.基础设施, DIR.角色卡].filter(Boolean),
@@ -96,6 +112,12 @@ async function 读出出厂清单(包目录) {
     默认值目录: join(DIR.基础设施, DIR.默认值),
     默认值: Object.values(DEFAULT_FILES),
     能力目录: join(DIR.基础设施, DIR.能力库),
+    // `编制.md` 走既有取径接口；基础设施 README 走 `Layout.factory()` 组装
+    // （paths.js 没有专门的 README 取径函数，`factory()` 就是那件既有接口）。
+    单件: [
+      编制相对,
+      layout.factory(DIR.基础设施, 'README.md').slice(出厂根.length + 1),
+    ],
   };
 }
 
@@ -122,6 +144,9 @@ async function 核出厂区(包目录) {
   if (缺卡.length) 失败.push(`出厂区缺岗位卡：${缺卡.join('、')} —— 发布物不完整`);
   const 缺默 = 缺(清单.默认值, (f) => join(根, 清单.默认值目录, f));
   if (缺默.length) 失败.push(`出厂区缺 defaults：${缺默.join('、')} —— 发布物不完整`);
+  // 单件出厂件（不在上面任何数组里 —— 这正是它们曾经漏网的原因）。
+  const 缺单件 = 缺(清单.单件, (rel) => join(根, rel));
+  if (缺单件.length) 失败.push(`出厂区缺单件文档：${缺单件.join('、')} —— 发布物不完整（files 白名单漏了？）`);
 
   // 能力卡目录：按旧版口径查 readdir 数量（> 0），这条覆盖的是「目录整个不在包里」。
   let 能力数 = 0;
@@ -138,7 +163,7 @@ async function 核出厂区(包目录) {
   if (失败.length) return { 失败, 通过: null };
   return {
     失败,
-    通过: `出厂区 mind/ 齐全（区目录 ${清单.区目录.length}、规则件 ${清单.规则件.length}、岗位卡 ${清单.岗位卡.length}、defaults ${清单.默认值.length}、能力卡 ${能力数} 张；清单源 src/paths.js）`,
+    通过: `出厂区 mind/ 齐全（区目录 ${清单.区目录.length}、规则件 ${清单.规则件.length}、岗位卡 ${清单.岗位卡.length}、defaults ${清单.默认值.length}、单件 ${清单.单件.length}、能力卡 ${能力数} 张；清单源 src/paths.js）`,
   };
 }
 
@@ -358,6 +383,19 @@ async function selftest() {
       const [失败] = await 检查(dir);
       return 失败.length >= 1 && 失败[0].includes('不是合法 JSON') && 失败[0].includes('package.json');
     });
+
+    // 坏例 8：删掉**单件**出厂文档（编制.md / 基础设施 README.md）—— 这两件不在任何数组里，
+    //        2026-10-12 补漏前删了照样绿。这条就是那次补漏的「能造坏」证明。
+    for (const rel of [join(真源.DIR.集体结构, '编制.md'), join(真源.DIR.基础设施, 'README.md')]) {
+      await 判(`删单件出厂文档 ${rel} 必红`, async () => {
+        const dir = 造profile(`missing-single-${Buffer.from(rel).toString('hex').slice(0, 12)}`);
+        const 全 = join(dir, 'node_modules', BUNDLE, 'mind', rel);
+        if (!existsSync(全)) throw new Error(`夹具失效：${rel} 不在包里`);
+        rmSync(全, { force: true });
+        const [失败] = await 检查(dir);
+        return 失败.some((line) => line.includes('出厂区缺单件文档') && line.includes(rel));
+      });
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

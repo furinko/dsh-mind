@@ -22,8 +22,6 @@
     "./client": "./components/board/lib/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json",
-    "./locale/zh.json": "./locale/zh.json",
-    "./locale/en.json": "./locale/en.json",
     "./icon.svg": "./icon.svg"
   },
   "meta": {
@@ -48,7 +46,6 @@
     "components/kernel/lib",
     "components/guard/lib",
     "components/board/lib",
-    "locale",
     "icon.svg",
     "cordis.patch.yml",
     "README.md"

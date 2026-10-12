@@ -25,8 +25,8 @@ import { subjectFor } from './org.js';
  *
  * 事实判据**不是**「`parentSession` 存在即成员」——`session/fork` 造的**顶层**会话带
  * `parentSession` 却不带委托语义（`@deepseek-ai/dsh-session` lib/types/types.d.ts:70-76 自陈
- * "fork seed lineage"，与本仓 `E:\DSHOME\packages\dshome\lib\host\mind-inject.js:223-224`
- * 点名的误杀坑一字一致）。本仓既有同款判据**四处**（mind-inject.js:197-208 点名的
+ * "fork seed lineage"，与宿主侧同名槽位的注入实现（其 `mind-inject` 一段，第 223-224 行）
+ * 点名的误杀坑一字一致）。本仓既有同款判据**四处**（宿主侧那份注入实现 197-208 行点名的
  * notify.js:311/368、session-budget.js:293/337、mind-mood.js:418）用的都是
  * `header.origin === 'subagent'`（types.d.ts:81，全文只有这一个取值；写入端唯一一处是
  * dsh-subagent 的 childSessionMeta，三条创建路径共用 ⇒ **所有 in-process 子会话都带它，
@@ -84,7 +84,7 @@ export function agentSubject(exec) {
  *
  * 修前是 `'session-' + String(键).slice(0, 8)`（`键` = 父会话 ?? 自己的会话 id）。
  * 它坏在一个**没被核实的前提**上：假设会话 id 是短的无前缀串。真实形状不是——
- * 实测（本机 `E:\DSHOME\sessions\` 下 460 个会话目录里 **208 个**形如 `session-<uuid>`，
+ * 实测（宿主会话存储目录下 460 个会话目录里 **208 个**形如 `session-<uuid>`，
  * 例如本任务 Lead 的会话 id `session-7fb7087b-c62a-4c64-a6ce-40aab0a78cd9`）
  * ⇒ `slice(0, 8)` **恰好等于** `'session-'` ⇒ 实例键**恒为 `session-session-`**：
  * 审计 / 注册表 / 独立答案里「**哪一个会话**」这一位信息全丢。实测读数见

@@ -170,7 +170,7 @@ upgrade_compare · upgrade_resolve · upgrade_withdraw
 # 用户（npm 发布版）：
 dsh plugin --profile <名> add dsh-mind
 # 开发者（本仓库路径，装的是当前工作区）：
-dsh plugin --profile <名> add E:\dsh-mind
+dsh plugin --profile <名> add <本仓路径>
 # 官方桌面客户端：在会话里直接让 DSH 装（「帮我装 dsh-mind」）
 ```
 
@@ -222,14 +222,14 @@ roster，它的工具 / 命令 / 界面一起消失）；每行的 `config` 是�
 ### 发布
 
 ```powershell
-npm pack            # 产物完整性先过一遍（files 白名单：lib/src/mind/components/*/lib/locale/patch/README）
+npm pack            # 产物完整性先过一遍（files 白名单：lib/src/mind/components/*/lib/patch/README/icon）
 npm publish         # 需要 npm 账号登录；发布名 dsh-mind（2026-10-11 查册未占用）
 ```
 
 ## 验证
 
 ```powershell
-cd E:\dsh-mind
+cd <本仓路径>
 npm test                                             # preflight 门禁 + 内核/宿主/集成用例 + 看板两半区，一条命令跑全
 node components/board/test/client-harness.mjs        # 看板：367 条行为断言
 node --test components/board/test/client.test.js     # 看板：11 条结构断言
