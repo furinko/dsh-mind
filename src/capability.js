@@ -8,11 +8,12 @@
  *  2. **角色卡只存引用** —— `referencesFor()` 回答「这个岗位引用了哪几项能力」，
  *     而不是把正文抄进卡里。
  */
-import { listFiles, readTextOrNull, atomicWrite, ensureDir } from './kernel/fsx.js';
+import { listFiles, readTextOrNull } from './kernel/fsx.js';
 import { InvalidBody } from './kernel/errors.js';
-import { assertStructure, formatFrontMatter, parseDocument } from './tags.js';
+import { parseDocument } from './tags.js';
 import { assertPathSegment } from './paths.js';
 import { slug } from './kernel/ids.js';
+import { ObjectStore } from './store.js';
 
 /** 两个来源的固定标签。 */
 export const SOURCE_FACTORY = '出厂';
@@ -20,13 +21,16 @@ export const SOURCE_AUTONOMOUS = '自治';
 
 export class CapabilityLibrary {
   /**
-   * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock }} spec
+   * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock, store?: import('./store.js').ObjectStore }} spec
    */
   constructor(spec) {
     this.layout = spec.layout;
     this.policy = spec.policy;
     this.audit = spec.audit;
     this.clock = spec.clock;
+    // 发布走对象存储（2026-10-13 批次7c·主权者裁决乙）：锁 + 版本史 + 回滚面都由
+    // ObjectStore 一处提供。调用方没传就自建——底座类是单源，实例不必单源。
+    this.store = spec.store ?? new ObjectStore({ layout: spec.layout, policy: spec.policy, audit: spec.audit, clock: spec.clock });
   }
 
   /**
@@ -132,8 +136,14 @@ export class CapabilityLibrary {
    * id 默认取名字的 kebab 折形而不是随机哈希：§14.4-1 要求「稳定、短、kebab」，
    * 而角色卡的 `个体L2` 段要**按 id 引用**它——随机 id 会让引用无从写起。
    *
+   * 写入委托 ObjectStore（2026-10-13 批次7c·主权者裁决乙）：修前这里裸 atomicWrite——
+   * 无锁、无版本史、version 恒 1，同 id 重发布静默覆盖前一版。现在 store.write 一处给齐
+   * 对象锁、version 递增、前一版留档（history）、版本指针入账；policy 闸也在 store 里
+   * 过（create/write 按是否存在自动分档），此处不再重复过闸。
+   * 存量卡零迁移：既有卡 front matter 带 version ⇒ 重发布自动 v1→v2 并留 v1 历史。
+   *
    * @param {{ subject: object, 名: string, id?: string, 正文: string, 适用岗位: string[], 依据: string }} input
-   * @returns {Promise<{ id: string, 来源: string, path: string }>}
+   * @returns {Promise<{ id: string, version: number, 来源: string, path: string }>}
    */
   async publish(input) {
     const 适用岗位 = (input.适用岗位 ?? []).map((s) => String(s).trim()).filter(Boolean);
@@ -143,35 +153,14 @@ export class CapabilityLibrary {
     const id = assertPathSegment(input.id ?? slug(input.名, { maxLength: 40 }), '能力id');
     const meta = {
       id,
-      kind: '能力',
       名: input.名,
       authority: '自治',
-      zone: '私有',
       domain: '集体',
-      version: 1,
+      // version 不许在这里写死：版本归 ObjectStore 管（存在 ⇒ 递增并留档）。
     };
     const body = `\n# ${input.名}\n\n## 适用岗位\n${适用岗位.map((r) => `- ${r}`).join('\n')}\n\n## 怎么做\n${input.正文}\n`;
-    const text = `${formatFrontMatter(meta)}${body}`;
-    assertStructure('能力', parseDocument(text, { defaultAuthority: '自治' }));
-
-    await this.policy.check({
-      subject: input.subject,
-      action: 'create',
-      target: { id, kind: '能力', authority: '自治', zone: '私有', domain: '集体', project: null },
-      context: { 依据: input.依据 },
-    });
-    const dir = this.#dir(SOURCE_AUTONOMOUS);
-    await ensureDir(`${dir}/${id}.md`);
-    await atomicWrite(`${dir}/${id}.md`, text);
-    await this.audit.append({
-      动作: '状态变更',
-      主体: input.subject,
-      对象: { id, kind: '能力' },
-      依据: input.依据,
-      结果: '发布到自治能力库（永不外流）',
-      详情: { 适用岗位 },
-    });
-    return { id, 来源: SOURCE_AUTONOMOUS, path: `${dir}/${id}.md` };
+    const written = await this.store.write('能力', { meta, body }, { subject: input.subject, reason: input.依据 });
+    return { id, version: written.version, 来源: SOURCE_AUTONOMOUS, path: written.path };
   }
 
   /**

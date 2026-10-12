@@ -49,7 +49,11 @@ describe('dsh-mind 宿主半区', () => {
     assert.ok(host.命令.has('mind'), '应注册 /mind 命令');
     assert.equal(host.段落.length, 1);
     assert.match(host.段落[0].text, /按需拉取|Lead/);
-    assert.equal(host.日志.filter((l) => l.startsWith('warn')).length, 0, `不应有告警：${host.日志.join(' | ')}`);
+    // 改形留理由（P2-4 裁决乙·2026-10-13）：出厂件两清单皆空 = 「等于没设」⇒ 装配时告警一次
+    // 是**有意行为**（fail-open 语义不动，但盲区可见）。除此之外不许有别的告警。
+    const 告警 = host.日志.filter((l) => l.startsWith('warn'));
+    assert.deepEqual(告警.filter((l) => !l.includes('工具总范围未生效')), [], `除「工具总范围未生效」这一条有意告警外不应有别的：${告警.join(' | ')}`);
+    assert.equal(告警.filter((l) => l.includes('工具总范围未生效')).length, 1, '出厂件空清单 ⇒ 恰好告警一次（裁决乙的可见性承诺）');
   });
 
   it('工具 schema 是宿主认识的 JSON Schema，且动作清单非空', () => {

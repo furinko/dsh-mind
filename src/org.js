@@ -60,7 +60,7 @@ export class Org {
     const memory = new MemoryService({ layout, policy, audit, clock });
     const tasks = new TaskGraph({ layout, policy, audit, clock, memory });
     const bus = new MessageBus({ layout, policy, audit, clock });
-    const capability = new CapabilityLibrary({ layout, policy, audit, clock });
+    const capability = new CapabilityLibrary({ layout, policy, audit, clock, store });
     const registry = new RoleRegistry({ layout, policy, audit, clock });
     const upgrade = new UpgradeManager({ layout, policy, audit, clock });
     const probes = new ProbeRunner({ layout, policy, audit, clock, capability });

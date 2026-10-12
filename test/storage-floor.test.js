@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import { makeFixture, LEAD } from './helpers.mjs';
 import { MemoryService, fold } from '../src/memory.js';
 import { CapabilityLibrary } from '../src/capability.js';
-import { readJsonl, withLock, appendLines } from '../src/kernel/fsx.js';
+import { readJsonl, withLock, appendLines, atomicWrite } from '../src/kernel/fsx.js';
 import { DIR } from '../src/paths.js';
 
 const P = 'default';
@@ -185,6 +185,64 @@ describe('批次3 · P1-10：withLock 的强夺/删除挂起路径走「超时 +
       // 内容令牌是旧的 ⇒ stat 的 mtime 也是旧的（写于 120s 前不成立，用 staleMs=1 让「新文件也算过期」）。
       const 抢到 = await withLock(lockPath, async () => '进临界区', { staleMs: 1, timeoutMs: 5000 });
       assert.equal(抢到, '进临界区', 'stale 强夺正常路径不动');
+    } finally {
+      await g.cleanup();
+    }
+  });
+});
+
+describe('批次7c · capability 迁入对象存储（2026-10-13 主权者裁决乙：锁 + 版本史 + 回滚面）', () => {
+  const 发布 = (capability, 名, 正文) =>
+    capability.publish({ subject: LEAD, 名, 适用岗位: ['插件工程'], 正文, 依据: '批次7c 测试' });
+
+  it('同 id 重发布 ⇒ version 递增且前一版留档（修前静默覆盖、version 恒 1）', async () => {
+    const g = await makeFixture();
+    try {
+      const capability = new CapabilityLibrary({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock });
+      const v1 = await 发布(capability, '版本化演示', '第一版的做法');
+      assert.equal(v1.version, 1, '首发 v1');
+      const v2 = await 发布(capability, '版本化演示', '第二版的做法（改进了）');
+      assert.equal(v2.version, 2, '重发布 ⇒ v2（修前恒 1）');
+      const 史 = await capability.store.history(v1.id);
+      assert.deepEqual(史.map((h) => h.version), [1], 'v1 进了版本史（回滚面成立）');
+      const v1文 = await capability.store.readVersion(v1.id, 1);
+      assert.ok(v1文.includes('第一版的做法'), '历史版正文可回读');
+      const 现 = await capability.read({ id: v1.id, 来源: '自治' });
+      assert.ok(现.正文.includes('第二版的做法'), '当前版是新版（不串味）');
+    } finally {
+      await g.cleanup();
+    }
+  });
+
+  it('并发同 id 发布 ⇒ 两个版本都在、无一被覆盖（修前共享 tmp 名 ⇒ rename 竞争丢版）', async () => {
+    const g = await makeFixture();
+    try {
+      const capability = new CapabilityLibrary({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock });
+      const [a, b] = await Promise.all([
+        发布(capability, '并发演示', '甲的写法'),
+        发布(capability, '并发演示', '乙的写法'),
+      ]);
+      assert.deepEqual([a.version, b.version].sort(), [1, 2], '并发 ⇒ 版本 1、2 各一（对象锁串行化，不许撞版）');
+      const 史 = await capability.store.history(a.id);
+      assert.equal(史.length, 1, '前一版留档恰好一份');
+    } finally {
+      await g.cleanup();
+    }
+  });
+
+  it('存量卡零迁移：绕过 store 直接落盘的旧卡，重发布自动 v1→v2 并留 v1', async () => {
+    const g = await makeFixture();
+    try {
+      // 造一张「批次7c 之前」的旧卡：直写目录、version: 1、无版本史。
+      const dir = g.layout.capabilityDir('自治');
+      const 旧卡 = ['---', 'id: 旧卡', 'kind: 能力', 'authority: 自治', 'zone: 私有', 'domain: 集体', 'version: 1', '---',
+        '# 旧卡', '', '## 适用岗位', '- 插件工程', '', '## 怎么做', '旧做法。', ''].join('\n');
+      await atomicWrite(`${dir}/旧卡.md`, 旧卡);
+      const capability = new CapabilityLibrary({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock });
+      const v2 = await capability.publish({ subject: LEAD, 名: '旧卡', id: '旧卡', 适用岗位: ['插件工程'], 正文: '新做法。', 依据: '迁移验证' });
+      assert.equal(v2.version, 2, '旧卡重发布 ⇒ v2（从 front matter 读回 v1 再递增）');
+      const v1文 = await capability.store.readVersion('旧卡', 1);
+      assert.ok(v1文 !== null && v1文.includes('旧做法'), '旧版被留档（迁移不丢历史）');
     } finally {
       await g.cleanup();
     }
