@@ -73,18 +73,26 @@ function createElement(type, props, ...children) {
   return { $$element: true, type, key, props: next };
 }
 
+/** setState 调用计数（2026-10-12 评审批次5）：钉「降级路径不许每次渲染重复订阅」用。 */
+let setState调用数 = 0;
+
 function useHookState(init) {
   const state = renderCtx;
   const index = state.cursor;
   state.cursor += 1;
   if (!state.hooks[index]) {
-    state.hooks[index] = { kind: 'state', value: typeof init === 'function' ? init() : init };
+    const slot = { kind: 'state', value: typeof init === 'function' ? init() : init };
+    // 真实 React 的 setState **身份稳定**（同一组件实例恒为同一函数）——client.js 降级
+    // 路径的订阅判重就靠这条；harness 此前每次渲染换新闭包，与真机语义不符。
+    slot.set = function set(next) {
+      setState调用数 += 1;
+      slot.value = typeof next === 'function' ? next(slot.value) : next;
+      state.dirty = true;
+    };
+    state.hooks[index] = slot;
   }
   const slot = state.hooks[index];
-  return [slot.value, function set(next) {
-    slot.value = typeof next === 'function' ? next(slot.value) : next;
-    state.dirty = true;
-  }];
+  return [slot.value, slot.set];
 }
 
 function useHookEffect(fn, deps) {
@@ -2098,6 +2106,69 @@ export async function runHarness() {
     慢设置.disposer();
   }
 
+  // ⑥d 保存抬水位（2026-10-12 评审批次5）：保存链不走 刷新设置 ⇒ 修前在途的轮询响应
+  //   回来后把「刚保存的回读」盖回旧值（「已保存」闪现后消失）。现在保存成功先占号抬水位。
+  {
+    const 保存后袋 = 真读数('在位');
+    保存后袋.生效响应期限小时 = 168; // 可观察标记：保存后页面应稳定显示「生效期限 168 小时」
+    const 旧袋 = 真读数('在位');
+    旧袋.生效响应期限小时 = 72;
+    let 读第几次 = 0;
+    const 放行慢读 = [];
+    const 桥 = makeRemote(function (_sessionId, 命令) {
+      if (命令 === PRESENCE_COMMAND) {
+        读第几次 += 1;
+        if (读第几次 === 1) {
+          return new Promise(function (resolve) { 放行慢读.push(function () { resolve(okReply({ 读数: 旧袋, 设置文件: SETTINGS_FILE, 说明: '读：慢' })); }); });
+        }
+        return okReply({ 读数: 保存后袋, 设置文件: SETTINGS_FILE, 说明: '读：回读' });
+      }
+      if (命令.indexOf(PRESENCE_COMMAND + ' ') === 0) {
+        return okReply({ 设置文件: SETTINGS_FILE, 变更: ['响应期限小时'], 无变更: [], 读数: 保存后袋, 说明: '已改' });
+      }
+      return okReply(sampleView());
+    });
+    const 双轨 = boot({ store, services: Object.assign(session(), { remote: 桥.remote }) });
+    await settle(); // 起轮询的第一次设置读（72，慢）正挂着
+    const sr双 = mountSettings(双轨);
+    await settle();
+    // 点保存（表单初值此时未定也无所谓：显式改成 168 再存）
+    collect(sr双.tree, { skipStyle: true }).elements.find((el) => el.type === 'input')
+      .props.onChange({ target: { value: '168' } });
+    sr双.flush();
+    collect(sr双.tree, { skipStyle: true }).elements
+      .find((el) => el.type === 'button' && String(el.props.children).indexOf('保存') >= 0).props.onClick();
+    await settle();
+    sr双.flush();
+    const 存后文本 = collect(sr双.tree, { skipStyle: true }).text;
+    passed.push(check(存后文本.indexOf('生效期限 168 小时') >= 0, '⑥d 前提：保存后显示回读值 168', 存后文本.slice(-160)));
+    放行慢读.forEach(function (放) { 放(); }); // 挂着的那次慢读（72）这时才到
+    await settle();
+    sr双.flush();
+    const 慢到后文本 = collect(sr双.tree, { skipStyle: true }).text;
+    passed.push(check(慢到后文本.indexOf('生效期限 168 小时') >= 0 && 慢到后文本.indexOf('生效期限 72 小时') < 0,
+      '⑥d 保存后的慢轮询响应不许盖掉回读（保存抬水位）', 慢到后文本.slice(-160)));
+    sr双.unmount();
+    双轨.disposer();
+  }
+
+  // ⑥e 起轮询幂等（2026-10-12 评审批次5）：重复 apply（等价于重复起轮询）不许挂双 interval。
+  {
+    const 两次 = boot({ services: Object.assign(session(), {
+      fetch: makeFetch((url) => (String(url).indexOf('workbench') >= 0
+        ? jsonResponse(sampleView())
+        : jsonResponse({ 读数: 读数袋(), 设置文件: SETTINGS_FILE, 说明: '读…' }))).fetch,
+    }) });
+    const 第一次数量 = 两次.timers.intervals.length;
+    两次.plugin.apply(两次.ctx); // 生产里 Cordis 只调一次；这里人为重复调，钉住幂等
+    // 判据是「旧的先停」（cleared 在第二次 apply 内 +1）：注册数本来就会 +1（停旧的挂新的），
+    // 拿它当判据会误伤「先停再挂」的正确实现——钉的是**没有两根同时在跑**。
+    passed.push(check(两次.timers.cleared.length >= 1 && 两次.timers.intervals.length === 第一次数量 + 1,
+      '⑥e 重复 apply ⇒ 旧轮询先停再挂新的（修前旧的不停 ⇒ 两根同时在跑、刷新翻倍）',
+      'intervals=' + 两次.timers.intervals.length + ' cleared=' + 两次.timers.cleared.length));
+    两次.disposer();
+  }
+
   // ⑦ 六条降级路径（都带缓存，所以既能报「未连接」也能显示旧快照）
   // ⚠️ 传输层换了（`remote.commands.execute` → 同源 `fetch`），这一表也跟着换了"失败长相"：
   //    原来的「宿主命令服务不可用 / 读取 remote 服务失败」不再存在，取而代之的是
@@ -2513,6 +2584,16 @@ export async function runHarness() {
       '① 宿主没有 useEffect ⇒ 设置页**仍出数据**（轮询喂 store，不靠 effect）', 设置文本.slice(0, 160)));
     passed.push(check(设置文本.indexOf('正在读取设置') < 0,
       '① 没有 effect 也不会停在「正在读取设置…」', 设置文本.slice(0, 120)));
+
+    // ①b（2026-10-12 评审 P1-11）：降级路径的同步补订阅必须**判重**——
+    //    修前每次渲染都往模块级 store 里再 push 一个订阅（订阅数组随渲染数线性涨）。
+    //    判据用 setState 调用数当探针：每次新订阅都会立刻回放一次（回放 = 一次 setState），
+    //    重复渲染两次若判重在位 ⇒ 一次回放都不该再有。
+    setState调用数 = 0;
+    设置渲染.render();
+    设置渲染.render();
+    passed.push(check(setState调用数 === 0,
+      '①b 降级路径重复渲染 ⇒ 订阅判重（零新增回放；修前每次渲染都再订一次）', 'setState 被调 ' + setState调用数 + ' 次'));
     设置渲染.unmount();
 
     // ② 看板面板：同样没有 effect ⇒ 仍出数据
