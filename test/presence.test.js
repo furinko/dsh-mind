@@ -64,6 +64,10 @@ const 冻结动作表 = [
   'bus_read',
   'audit_tail',
   'audit_verify',
+  // audit_correct（缺口2a · 主权者裁决 2026-10-12）：追加审计链「更正声明」。
+  // 过这一关时回答「是不是改设置的动作」：不是——它不改任何设置/规则件，
+  // 只往审计链追加一条声明；入口默认拒绝（仅 Lead/主权者 + 授权引用必填）。
+  'audit_correct',
   'registry_list',
   'registry_can',
   'registry_assign',

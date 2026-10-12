@@ -231,15 +231,16 @@ export class ProbeRunner {
     }
   }
 
-  /** 审计被篡改 ⇒ 见红。 */
+  /** 审计被篡改 ⇒ 见红。已确认瑕疵（更正声明闭环）不计断裂，但要在读数里报数。 */
   async #auditChain() {
     const verified = await this.audit.verify();
+    const 瑕疵 = verified.已确认瑕疵?.length ? `；已确认瑕疵 ${verified.已确认瑕疵.length} 处（${verified.已确认瑕疵.map((x) => `${x.month}#${x.seq}`).join('、')}，更正声明已入链）` : '';
     return {
       探针: '审计链',
       状态: verified.ok ? '绿' : '红',
       详情: verified.ok
-        ? `链完整：${verified.months} 个月分片 / ${verified.entries} 条记录`
-        : `链断了 ${verified.broken.length} 处：${JSON.stringify(verified.broken.slice(0, 3))}`,
+        ? `链完整：${verified.months} 个月分片 / ${verified.entries} 条记录${瑕疵}`
+        : `链断了 ${verified.broken.length} 处：${JSON.stringify(verified.broken.slice(0, 3))}${瑕疵}`,
     };
   }
 

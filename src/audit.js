@@ -12,6 +12,7 @@
 import { appendLines, atomicWrite, ensureDirPath, listFiles, readJsonl, readJsonOrNull, withLock, serializeByKey } from './kernel/fsx.js';
 import { chainHash } from './kernel/text.js';
 import { monthKey } from './kernel/time.js';
+import { Denied, InvalidBody } from './kernel/errors.js';
 
 /** §7 审计记录分级：全记 / 记汇总 / 不逐次记。 */
 export const GRADE = { 全记: '全记', 记汇总: '记汇总', 不逐次记: '不逐次记' };
@@ -60,6 +61,12 @@ const ACTION_GRADE = {
   // 该项目的作答（归档后成员不可读、默认检索面不再返回）。它同时改状态与改可见面，
   // 且是「这件事收尾了」的显式拍板 ⇒ 全记（与状态变更/不可逆操作同级，不是汇总档）。
   结账: GRADE.全记,
+  // 缺口2a（主权者裁决 2026-10-12）·更正声明：把「单点 hash 不符、骨架完好」的已确认瑕疵
+  // 从恒红转为「已确认瑕疵」。它能改变安全类探针的读数 ⇒ 与不可逆操作同级：全记 + 告警。
+  更正声明: GRADE.全记,
+  // 缺口1A（主权者批准 2026-10-12）·身份未登记拦截：未登记主体敲门也留痕
+  // （只记主体 id + 动作名，不记入参）。「有人试图以未登记身份行动」是安全信号，全记。
+  身份未登记拦截: GRADE.全记,
 };
 
 export class AuditLog {
@@ -158,6 +165,74 @@ export class AuditLog {
   }
 
   /**
+   * 更正声明（缺口2a · 主权者裁决 2026-10-12 采用「追加更正」方案）。
+   *
+   * 宪章「只增不可改」禁止改原行，于是「单点 hash 不符、骨架完好」的已确认瑕疵
+   * （如 2026-10#37：写入路径把 `对象.id:null` 的键丢掉后才落盘，hash 却是带 id 算的）
+   * 只能靠**追加一条声明**闭环——声明自身是普通链节：进链、受骨架约束，
+   * 伪造/篡改它照样在 verify() 见红，篡改面不扩大。
+   *
+   * 闸控（默认拒绝三道闸，全部在写入面——「审计写入无条件问策略引擎」是铁律，
+   * 所以「谁能写更正声明」只能由这个唯一入口自己守）：
+   *  ① `授权引用` 必填：主权者授权依据（决议 / 任务节点 id），空 ⇒ Denied；
+   *  ② `理由` 必填：这处瑕疵为什么确认无误，空 ⇒ Denied；
+   *  ③ 目标必须是**真实存在的瑕疵**：行在、prev 骨架完好、复算 hash ≠ 实存 hash——
+   *     对健康的行写声明 = 伪造瑕疵，对骨架断裂的行写声明 = 声明救不了它，都响亮拒。
+   * 载荷里的 实存hash / 复算hash 由本方法从账本**现算**（调用方不传——传了就有人能写垃圾载荷）。
+   *
+   * @param {{ 主体: string|object, 目标: string, 理由: string, 授权引用: string }} spec
+   *   `目标` 形如 `month#seq`（如 `2026-10#37`）。
+   * @returns {Promise<{ seq: number, hash: string, 时间: string, 月: string }>}
+   */
+  async appendCorrection(spec) {
+    const 授权引用 = typeof spec.授权引用 === 'string' ? spec.授权引用.trim() : '';
+    if (!授权引用) {
+      throw new Denied('审计链 · 更正声明须主权者授权', '更正声明必须带「授权引用」（主权者授权依据，如决议 / 任务节点 id）：空授权 = 默认拒绝。', {
+        requireAuthority: '主权者',
+        howToChange: '由主权者授权后，把授权依据的 id 作为「授权引用」传入（它会原样进链接受复核）。',
+      });
+    }
+    const 理由 = typeof spec.理由 === 'string' ? spec.理由.trim() : '';
+    if (!理由) {
+      throw new Denied('审计链 · 更正声明须带理由', '更正声明必须带「理由」：这处瑕疵为什么确认无误——理由要进链接受复核，空理由 = 默认拒绝。', {
+        requireAuthority: '主权者',
+        howToChange: '把瑕疵成因的核查结论作为「理由」传入（如「写入路径丢键缺陷，内容经核对无误」）。',
+      });
+    }
+    const m = /^(\d{4}-\d{2})#(\d+)$/.exec(String(spec.目标 ?? '').trim());
+    if (!m) throw new InvalidBody('更正声明的「目标」须形如 month#seq（如 2026-10#37）。', { missing: ['目标'] });
+    const [, month, seqText] = m;
+    const seq = Number(seqText);
+    const rows = await readJsonl(this.layout.auditLog(month));
+    const idx = rows.findIndex((r) => r.seq === seq);
+    if (idx < 0) throw new InvalidBody(`更正声明的目标行不存在：${month}#${seq}（本月账本 ${rows.length} 行）。`, { detail: { 目标: spec.目标, 行数: rows.length } });
+    const row = rows[idx];
+    const prevHash = idx === 0 ? null : (rows[idx - 1].hash ?? null);
+    const 复算hash = chainHash(prevHash, { ...row, hash: undefined });
+    if (row.prev !== prevHash) {
+      throw new Denied('审计链 · 更正声明救不了骨架断裂', `目标 ${month}#${seq} 的 prev 指针与上一节对不上（骨架断裂）：更正声明只覆盖「单点 hash 不符、骨架完好」的瑕疵，骨架断裂按篡改处置。`, {
+        requireAuthority: '主权者',
+        howToChange: '骨架断裂没有闭环入口——升级主权者核查篡改面。',
+      });
+    }
+    if (row.hash === 复算hash) {
+      throw new Denied('审计链 · 更正声明只认真实瑕疵', `目标 ${month}#${seq} 自检通过（复算 hash 与实存一致）：对健康的行写更正声明 = 伪造瑕疵，拒。`, {
+        requireAuthority: '主权者',
+        howToChange: '先用 audit_verify 拿到真实的断裂点（month#seq），再对它写声明。',
+      });
+    }
+    return this.append({
+      动作: '更正声明',
+      主体: spec.主体,
+      对象: { id: `${month}#${seq}`, kind: '审计' },
+      依据: 授权引用,
+      结果: `已确认瑕疵 ${month}#${seq}（实存 hash 与复算不符，骨架完好，内容经核对）`,
+      告警: true,
+      详情: { 目标: `${month}#${seq}`, 实存hash: row.hash ?? null, 复算hash, 理由, 授权引用 },
+    });
+  }
+
+  /**
    * 链自检：逐月验证 prev 指针与本节哈希，并把**月尾**与 anchor 对照。
    * 这是「审计被篡改」这一安全类的检测手段。
    *
@@ -169,22 +244,60 @@ export class AuditLog {
    * 边界（如实说明，不吞）：写入进程若恰好死在 `appendLines` 与 `#writeAnchor` 之间，
    * 这一档也会亮——它报的是同一件事「尾部那几行没有链外留痕覆盖」，方向是响亮而非静默。
    *
-   * @returns {Promise<{ ok: boolean, months: number, entries: number, broken: object[] }>}
+   * 更正声明（缺口2a · 2026-10-12）：`动作:'更正声明'` 的链节能把**一处**「单点 hash 不符、
+   * prev 骨架完好」的断裂转为「已确认瑕疵」（不计 broken，单独列入 `已确认瑕疵`），条件全部
+   * 满足才算数——目标行在、prev 对得上、声明的 `实存hash` 与账本实存一致、`复算hash` 与
+   * 现场复算一致。任何未被真实瑕疵消费的声明（伪造 / 错配 / 目标本无瑕疵）都按
+   * 「更正声明无效」计入 broken ⇒ **声明与账本对不上 ⇒ 仍红**。声明自身是普通链节：
+   * 篡改它的内容会让它自己的 hash 对不上 ⇒ 照样见红，篡改面零扩大。
+   *
+   * @returns {Promise<{ ok: boolean, months: number, entries: number, broken: object[], 已确认瑕疵: object[] }>}
    */
   async verify() {
     const months = await this.months();
     const broken = [];
+    const 已确认瑕疵 = [];
     let entries = 0;
     for (const month of months) {
       const rows = await readJsonl(this.layout.auditLog(month));
+      // 先全片收集更正声明再逐行验：声明必定**晚于**目标行入账（追加闭环），
+      // 边走边收会让「目标行在前、声明在后」的常态永远收不到。
+      const 声明表 = new Map(); // seq -> row[]
+      for (const row of rows) {
+        if (row.动作 !== '更正声明') continue;
+        const m = /^(\d{4}-\d{2})#(\d+)$/.exec(String(row.详情?.目标 ?? ''));
+        if (!m || m[1] !== month) continue;
+        const seq = Number(m[2]);
+        if (!声明表.has(seq)) 声明表.set(seq, []);
+        声明表.get(seq).push(row);
+      }
+      const 已消费 = new Set();
       let prev = null;
       for (const row of rows) {
         entries++;
         const expected = chainHash(prev, { ...row, hash: undefined });
         if (row.prev !== prev || row.hash !== expected) {
-          broken.push({ month, seq: row.seq ?? null, 类型: '链断裂', expected, actual: row.hash ?? null });
+          // 只有「prev 骨架完好」的单点 hash 瑕疵才可被声明覆盖；骨架断裂不许被声明洗白。
+          const 声明 =
+            row.prev === prev
+              ? (声明表.get(row.seq) ?? []).find((s) => s.详情?.实存hash === (row.hash ?? null) && s.详情?.复算hash === expected)
+              : null;
+          if (声明) {
+            已消费.add(声明);
+            已确认瑕疵.push({ month, seq: row.seq ?? null, 类型: '已确认瑕疵', 实存hash: row.hash ?? null, 复算hash: expected, 声明seq: 声明.seq ?? null });
+          } else {
+            broken.push({ month, seq: row.seq ?? null, 类型: '链断裂', expected, actual: row.hash ?? null });
+          }
         }
         prev = row.hash ?? null;
+      }
+      // 未被任何真实瑕疵消费的声明 = 声明与账本对不上（伪造 / 错配 / 目标本无瑕疵）⇒ 仍红。
+      for (const [seq, list] of 声明表) {
+        for (const s of list) {
+          if (!已消费.has(s)) {
+            broken.push({ month, seq: s.seq ?? null, 类型: '更正声明无效', 目标: `${month}#${seq}`, expected: s.详情?.实存hash ?? null, actual: s.hash ?? null });
+          }
+        }
       }
       // 尾部截断：anchor 是「这一片最后写到哪」的链外留痕。
       const anchor = await readJsonOrNull(this.layout.auditAnchor(month));
@@ -205,7 +318,7 @@ export class AuditLog {
         broken.push({ month, seq: rows[rows.length - 1]?.seq ?? null, 类型: '锚缺失', expected: null, actual: rows[rows.length - 1]?.hash ?? null });
       }
     }
-    return { ok: broken.length === 0, months: months.length, entries, broken };
+    return { ok: broken.length === 0, months: months.length, entries, broken, 已确认瑕疵 };
   }
 
   /**
