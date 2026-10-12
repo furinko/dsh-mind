@@ -278,4 +278,28 @@ describe('批次6 · P3 后端', () => {
       `第一次失败后必须重试到挂上（修前：挂 0 条 + 一条 warn 了事）。注册日志：${JSON.stringify(注册日志)}`);
     assert.ok(注册日志.length >= 4, '第一次失败 + 第二次三条全挂 ⇒ 至少 4 次 register 调用');
   });
+
+  it('⑮ 工具总范围「等于没设」⇒ 告警一次（fail-open 语义不动，但盲区必须可见）', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'mind-p3-warn-'));
+    const host = fakeHost();
+    try {
+      await kernel.apply(host.ctx, { home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') });
+      const 告警们 = host.日志.filter((l) => l.includes('工具总范围未生效'));
+      assert.equal(告警们.length, 1, `放行全部必须告警恰好一次（修前完全静默）：${JSON.stringify(host.日志)}`);
+      // 行为不变：fail-open 语义不替主权者改。
+      assert.equal(host.闸[0]({ name: 'bash' }), undefined, '未配置 ⇒ 放行（语义裁决：不动行为，只让盲区可见）');
+      // 重复 apply 不重复喊（持续未配置不刷屏）。
+      const host2 = fakeHost();
+      try {
+        await kernel.apply(host2.ctx, { home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') });
+        assert.equal(host2.日志.filter((l) => l.includes('工具总范围未生效')).length, 0, '持续「等于没设」不许刷屏（第二次 apply 不再喊）');
+      } finally {
+        host2.清理();
+      }
+    } finally {
+      host.清理();
+      forgetSharedOrg();
+      await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
+    }
+  });
 });

@@ -30,6 +30,12 @@ export const inject = ['tools'];
 
 /** 闸的三态。`未配置` 是出厂件缺失时的诚实答案，不是「随便放行」。 */
 const ENVELOPE_STATE = { 状态: '未配置', 允许: [], 拒绝: [] };
+/**
+ * 告警去重键（P2-4 裁决乙·2026-10-13）：fail-open / 故障都**只喊一次**（内容变化才再喊），
+ * 不许被 5s 热更定时器刷成日志洪水。放行语义本身不动（主权者没设 = 无限制，机制不替他改），
+ * 但「现在等于没设」这件事必须可见一次。
+ */
+let 上次告警键 = null;
 
 /**
  * @param {any} ctx cordis 上下文
@@ -395,6 +401,8 @@ function 闸判定(exec, 项目) {
 /** 读一次工具总范围；读不出来就诚实地标成「未配置」或「故障」。 */
 function 刷新工具总范围(org, logger) {
   const candidates = [org.layout.deploymentPrefs(), org.layout.factoryDefault('工具总范围')];
+  // 每次刷新先归零：上一份状态不能带进本轮（热更场景下文件可能已被主权者删掉）。
+  ENVELOPE_STATE.状态 = '未配置';
   for (const file of candidates) {
     let text;
     try {
@@ -407,15 +415,32 @@ function 刷新工具总范围(org, logger) {
       ENVELOPE_STATE.状态 = '已配置';
       ENVELOPE_STATE.允许 = Array.isArray(parsed.允许) ? parsed.允许 : [];
       ENVELOPE_STATE.拒绝 = Array.isArray(parsed.拒绝) ? parsed.拒绝 : [];
-      return;
+      break;
     } catch (error) {
       ENVELOPE_STATE.状态 = '故障';
       ENVELOPE_STATE.错误 = `${file}：${error instanceof Error ? error.message : String(error)}`;
-      logger.warn?.(`[dsh-mind] 工具总范围无法解析，已按 fail-closed 处理：${ENVELOPE_STATE.错误}`);
-      return;
+      break;
     }
   }
-  ENVELOPE_STATE.状态 = '未配置';
+  // P2-4 裁决乙：告警按内容去重，一次说清——fail-open 可见但不刷屏，故障同理。
+  let 告警键 = null;
+  let 告警文 = null;
+  if (ENVELOPE_STATE.状态 === '故障') {
+    告警键 = `故障|${ENVELOPE_STATE.错误}`;
+    告警文 = `[dsh-mind] 工具总范围无法解析，已按 fail-closed 处理：${ENVELOPE_STATE.错误}`;
+  } else if (ENVELOPE_STATE.状态 === '未配置'
+    || (ENVELOPE_STATE.允许.length === 0 && ENVELOPE_STATE.拒绝.length === 0)) {
+    // 「已配置但两清单皆空」与「未配置」效果相同（全部放行）——出厂件恰好就是这样，
+    // 只报「未配置」会漏掉这个真实形态。
+    告警键 = '放行全部';
+    告警文 = '[dsh-mind] 工具总范围未生效（未配置，或允许/拒绝两清单皆空）：按出厂语义全部宿主工具放行（fail-open）。'
+      + '要收紧，请由主权者在 工具总范围.json 写 允许/拒绝 清单（§4：工具总范围 = 主权者）。';
+  }
+  if (告警文 && 告警键 !== 上次告警键) {
+    上次告警键 = 告警键;
+    logger.warn?.(告警文);
+  }
+  if (!告警文) 上次告警键 = null;
 }
 
 // ── 审计 ──────────────────────────────────────────────────────────────────────
