@@ -16,9 +16,9 @@ import assert from 'node:assert/strict';
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeFixture, LEAD } from './helpers.mjs';
-import { MemoryService } from '../src/memory.js';
+import { MemoryService, fold } from '../src/memory.js';
 import { CapabilityLibrary } from '../src/capability.js';
-import { readJsonl, withLock } from '../src/kernel/fsx.js';
+import { readJsonl, withLock, appendLines } from '../src/kernel/fsx.js';
 import { DIR } from '../src/paths.js';
 
 const P = 'default';
@@ -61,6 +61,39 @@ describe('批次3 · P1-6：archiveAnswers 只归档「未归档」的当前条�
       assert.equal(三.归档条数, 1, '只有新那条被归档（审计读数 = 真增量）');
       const 归档行 = (await readJsonl(g.layout.memoryLog(P, '作答'))).filter((r) => r.追加 === '归档');
       assert.equal(归档行.length, 3, '账上恰好 3 行归档记录（2+0+1，不长胖）');
+    } finally {
+      await g.cleanup();
+    }
+  });
+
+  // 设计债⑦ 裁决乙（2026-10-13）：读与追加已在同一把锁内——这条把「锁被占时不许先读」钉成门禁。
+  // 打法：测试先占住账本锁，再发起归档；占锁期间绕过锁直接 append 一条「晚到的作答」
+  // （模拟并发交卷抢窗口）。读写同锁 ⇒ 归档等我放锁后才读 ⇒ 晚到的也被归档；
+  // 修前（锁外读）⇒ 归档在我占锁时已读完 ⇒ 晚到的永远漏掉这一轮。
+  it('债⑦门禁：锁被占住时归档不许先读（读写同锁 ⇒ 晚到作答不漏归档）', async () => {
+    const g = await makeFixture();
+    try {
+      const memory = new MemoryService({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock });
+      await 记一条作答(memory, '先到的作答');
+      const file = g.layout.memoryLog(P, '作答');
+      let 归档结果 = null;
+      let 归档中 = null;
+      await withLock(`${file}.lock`, async () => {
+        归档中 = memory.archiveAnswers({ 项目: P, 任务: 'task-并发', subject: LEAD }).then((r) => { 归档结果 = r; });
+        // 给它充足时间走到「读」那一步：修前锁外读此刻已发生（只看到「先到」）。
+        await new Promise((r) => setTimeout(r, 80));
+        // 锁仍在我手里：绕锁落一条晚到的（这正是债⑦描述的竞争窗口）。
+        await appendLines(file, [{
+          id: 'ans-晚到', 类: '作答', 内容: '晚到的作答', 项目: P,
+          来源: { 谁: 'member-a', 怎么知道: '并发测试' }, 写于: g.clock.iso(),
+        }]);
+      });
+      await 归档中;
+      const 晚到 = fold(await readJsonl(file)).find((e) => e.id === 'ans-晚到');
+      assert.ok(晚到, '前提：晚到的作答在账上');
+      assert.equal(晚到.归档, true,
+        `读写同锁 ⇒ 晚到的作答也归了档（修前锁外读 ⇒ 漏掉这一轮，归档条数=${归档结果?.归档条数}）`);
+      assert.equal(归档结果.归档条数, 2, '两条都归（先到 + 晚到）');
     } finally {
       await g.cleanup();
     }
