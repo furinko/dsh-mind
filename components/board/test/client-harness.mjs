@@ -559,7 +559,10 @@ export function sampleView() {
           交卷: { 已交: 0, 应交: 1, 齐: false }, 升级: '打回 ≥2 次',
         },
         {
-          id: 't-3', 描述: '审计档位分级落地', 状态: '待决', 负责人: ['role-γ'], 模式: null,
+          // t-3 刻意用**长描述**（2026-10-12）：真实账本里有一条 2035 字、39 个换行的描述，
+          // 而旧样本清一色 9 字短句 ⇒ 断言永远绿也测不出「卡片位不限行会被撑成一面墙」。
+          // 保留「审计档位分级落地」子串，既有断言（如 1030 行族）不受影响。
+          id: 't-3', 描述: '审计档位分级落地' + '\n\n背景：本条模拟真实账本里的长描述（对齐实账 2035 字 / 39 换行那一条）。'.repeat(45), 状态: '待决', 负责人: ['role-γ'], 模式: null,
           判据: ['三档分级与 §7 表格一致'], 判据冻结: false, 依赖: ['t-1'], 打回次数: 0, 产物: [],
           交卷: { 已交: 0, 应交: 1, 齐: false }, 待决原因: '出厂与私有两条都改了同一条',
         },
@@ -633,8 +636,13 @@ export function sampleView() {
       {
         线程: '跑通测试-20261011', 条数: 3, 未投递: 1,
         最新: [
-          { id: 'msg-1', 发件: 'lead', 类型: '广播', 内容: '全员注意：批次开始前先对判据。', 状态: '已投递', 追加于: '2026-10-07T17:01:02+08:00' },
-          { id: 'msg-2', 发件: 'member-a', 类型: '表态', 内容: '判据已核对，可以开工。', 状态: '已投递', 追加于: '2026-10-07T17:02:03+08:00' },
+          // msg-1 刻意用**超 120 字**的长正文（2026-10-12）：真实总线里有 1853 字 / 46 换行的消息，
+          // 旧样本全是短句 ⇒ 测不出「长正文折叠 + 展开全文」。保留原子串，既有断言不受影响。
+          { id: 'msg-1', 发件: 'lead', 类型: '广播', 内容: '全员注意：批次开始前先对判据。' + '\n补充说明：本条模拟真实账本里的长正文。'.repeat(20), 正文原长: 400, 状态: '已投递', 追加于: '2026-10-07T17:01:02+08:00' },
+          // msg-2 刻意含 `\n`（2026-10-12）：真实总线的正文是**多行简报**（标题/列表/表格），
+          // 旧样本全是单行 ⇒ 367 条断言全绿却漏掉了「`\n` 被 white-space:normal 折叠成一段」这个 bug。
+          // 保留「判据已核对」子串，既有断言不受影响。
+          { id: 'msg-2', 发件: 'member-a', 类型: '表态', 内容: '【通报】\n判据已核对，可以开工。\n| 段 | 授权 |\n|---|---|', 状态: '已投递', 追加于: '2026-10-07T17:02:03+08:00' },
           { id: 'msg-3', 发件: 'member-b', 类型: '提问', 内容: '产物引用给仓内 commit 还是文件路径？', 状态: '暂不投递', 追加于: '2026-10-07T17:03:04+08:00' },
         ],
       },
@@ -1294,16 +1302,22 @@ export async function runHarness() {
   //
   // ⚠️ 项目解析修正（2026-10-11，主权者指令「修」）新增第三种：项目 chip 也是**换一个只读投影**
   // （onClick 只带 `?project=` 重取，不写任何账，由 ⑧b 的「零写请求」断言钉死）。
-  // 本条仍不许出现第四种按钮，也不许出现任何写控件。
+  //
+  // ⚠️ 描述折叠（2026-10-12，主权者指令「要全文 + 默认折叠」）新增第四种：`dshmind-descToggle`
+  // 是长描述的展开/收起钮——同样是**纯显示切换**（onClick 只改本地折叠态，不发任何命令，
+  // 由 ⑩d 的「零请求」断言钉死）。加它的理由：描述是 2037 字级全文，硬截断会丢全文，
+  // 主权者明确要「可看全文」——折叠是唯一既不丢字、又不把面板撑爆、也不引入写入口的做法。
+  // 本条仍不许出现第五种按钮，也不许出现任何写控件。
   const 非法按钮 = 面板按钮.filter((el) => {
     const 类 = String(el.props.className || '');
     if (类.indexOf('dshmind-btn') >= 0 && String(el.props.children).indexOf('刷新') >= 0) return false;
     if (类.indexOf('dshmind-toggle') >= 0) return false;
     if (类.indexOf('dshmind-projChip') >= 0) return false;
+    if (类.indexOf('dshmind-descToggle') >= 0) return false;
     return true;
   });
   passed.push(check(面板按钮.length >= 1 && 非法按钮.length === 0,
-    '④ 工作台面板的可点动作只有「刷新」与会审折叠钮、项目 chip（纯显示切换；仍无任何写动作）',
+    '④ 工作台面板的可点动作只有「刷新」与会审折叠钮、描述折叠钮、项目 chip（纯显示切换；仍无任何写动作）',
     面板按钮.map((el) => String(el.props.children)).join(',')));
   passed.push(check(!面板控件.some((el) => typeof el.props.onChange === 'function'),
     '④ 工作台面板里没有 onChange 绑定的表单控件（没有任何「写」的入口）'));
@@ -2166,11 +2180,103 @@ export async function runHarness() {
       return r;
     };
 
-    // ① 面板里**不许有"看起来能点"的东西**。例外三种：刷新按钮 + 会审折叠切换钮
+    // ⑩d 描述展开钮：**行为**断言（走真实 onClick）。放在这里是因为要用 `状态render`
+    //     （共享 store、不 unmount、带 flush）；`renderView` 挂载后立刻 unmount，
+    //     返回静态快照，点了看不到变化。
+    //     体例照 ③「独立答案折叠」：点开验展开、再点验收回、每步重新取元素。
+    {
+      const r10 = await 状态render(sampleView());
+      const 钮10 = findAllByClass(r10.tree, 'dshmind-descToggle')[0];
+      passed.push(check(!!钮10, '⑩d 长描述展开钮在（button）', 钮10 ? 'ok' : 'null'));
+      const 取长卡 = () => findAllByClass(r10.tree, 'dshmind-node')
+        .filter((el) => textOf(el).includes('审计档位分级落地'));
+      // 默认折叠：全文块此刻不画。
+      passed.push(check(取长卡().length === 1 && findAllByClass(取长卡()[0], 'dshmind-nodeTitleOpen').length === 0,
+        '⑩d 默认折叠 ⇒ 全文块不画'));
+      钮10.props.onClick();
+      await settle();
+      r10.flush();
+      const 卡10 = 取长卡();
+      const 全文10 = 卡10.length === 1 ? findAllByClass(卡10[0], 'dshmind-nodeTitleOpen')[0] : null;
+      passed.push(check(!!全文10, '⑩d 点开 ⇒ 全文块出现（dshmind-nodeTitleOpen）',
+        '命中 ' + (卡10.length === 1 ? findAllByClass(卡10[0], 'dshmind-nodeTitleOpen').length : -1)));
+      // 全文必须**完整**：展开块文本长度要与样本描述同量级（不许只剩个尾巴）。
+      // ⚠️ 不能用 `textOf(全文10)`：它递归收集**整块子树**的文本，卡片里的判据/meta 等
+      // 会把长度垫到 1000+ ⇒ 展开块即便只画了 40 字，断言照样绿（2026-10-12 塞 bug 校准
+      // 当场抓出的假断言）。必须直读展开块**自己的** `props.children`。
+      const 展开文本 = 全文10 ? String(全文10.props && 全文10.props.children || '') : '';
+      passed.push(check(展开文本.length > 1000,
+        '⑩d 展开块给的是**完整描述**（不是截断残留），实测展开块自身长度 > 1000',
+        '长度 ' + 展开文本.length));
+      // 再点一下收回：全文块消失（覆盖表取反）。
+      const 钮10b = findAllByClass(r10.tree, 'dshmind-descToggle')[0];
+      钮10b.props.onClick();
+      await settle();
+      r10.flush();
+      const 卡10b = 取长卡();
+      passed.push(check(卡10b.length === 1 && findAllByClass(卡10b[0], 'dshmind-nodeTitleOpen').length === 0,
+        '⑩d 再点 ⇒ 收回（全文块消失）'));
+    }
+
+    // ⑦e 总线折叠是**行为**断言（2026-10-12，主权者「（总线）也默认收起呗」）：
+    // 本区从**静默截断**改为**折叠** —— 线程超 BUS_PREVIEW、消息超 BUS_MSGS_PREVIEW、
+    // 正文超 BUS_TEXT_PREVIEW 都默认只给预览，**明说还有多少**，点钮铺开全部。
+    // 用 `状态render`（共享 store、不 unmount、带 flush）才能验点击后的变化。
+    // 塞 bug 校准：把任一处的 `slice(0, N)` 改回旧的静默截断（不画「另有 N」钮）⇒ 本组必红。
+    {
+      // 造一个「超限」投影：5 个线程，首个线程 6 条消息、首条为长正文。
+      const 超 = sampleView();
+      const 长文 = '超长正文测试。' + '补充。'.repeat(60);
+      超.消息总线 = [0, 1, 2, 3, 4].map((i) => ({
+        线程: 'th-' + i, 条数: i === 0 ? 6 : 1, 未投递: 0,
+        最新: i === 0
+          ? [0, 1, 2, 3, 4, 5].map((j) => ({
+              id: 'x' + j, 发件: 'member-a', 类型: '广播',
+              // 长正文放在**最新**那条（j=5）：默认只画最新 BUS_MSGS_PREVIEW 条，
+              // 放最旧的位置会被消息层折叠挡住，测不到正文折叠。
+              内容: j === 5 ? 长文 : '消息' + j, 正文原长: j === 5 ? 长文.length : 3,
+              状态: '已投递', 追加于: '2026-10-07T17:0' + j + ':00+08:00',
+            }))
+          : [{ id: 'y' + i, 发件: 'member-b', 类型: '表态', 内容: '短', 正文原长: 1, 状态: '已投递', 追加于: '2026-10-07T17:00:00+08:00' }],
+      }));
+      const rB = await 状态render(超);
+      // 线程层：默认只画 BUS_PREVIEW=3 个，明说另有 2 个。
+      passed.push(check(findAllByClass(rB.tree, 'dshmind-bus').length === 3,
+        '⑦e 线程默认只画 3 个（其余收起）',
+        '卡数 ' + findAllByClass(rB.tree, 'dshmind-bus').length));
+      passed.push(check(textOf(rB.tree).indexOf('另有 2 个线程') >= 0,
+        '⑦e 收起时**明说**还有几个线程（不静默截断）',
+        JSON.stringify(textOf(rB.tree).match(/另有 \d+ 个线程/))));
+      // 按**文案**精确定位「展开全部线程」钮：页面上还有描述钮/正文钮，取第一个会点错。
+      const 钮B = findAllByClass(rB.tree, 'dshmind-descToggle')
+        .find((el) => String(el.props.children).indexOf('个线程') >= 0);
+      passed.push(check(!!钮B, '⑦e 有「展开全部线程」钮',
+        JSON.stringify(findAllByClass(rB.tree, 'dshmind-descToggle').map((el) => String(el.props.children)))));
+      钮B.props.onClick();
+      await settle();
+      rB.flush();
+      passed.push(check(findAllByClass(rB.tree, 'dshmind-bus').length === 5,
+        '⑦e 点开 ⇒ 全部 5 个线程都画出来（数据本来就在，没被丢）',
+        '卡数 ' + findAllByClass(rB.tree, 'dshmind-bus').length));
+      // 消息层：首个线程默认只画 3 条，明说另有 3 条。
+      const 首卡 = findAllByClass(rB.tree, 'dshmind-bus').filter((el) => textOf(el).indexOf('th-0') >= 0)[0];
+      passed.push(check(!!首卡 && findAllByClass(首卡, 'dshmind-busRow').length === 3,
+        '⑦e 每线程默认只画 3 条消息',
+        '行数 ' + (首卡 ? findAllByClass(首卡, 'dshmind-busRow').length : -1)));
+      passed.push(check(!!首卡 && textOf(首卡).indexOf('另有 3 条') >= 0,
+        '⑦e 消息收起时**明说**还有几条（不静默截断）'));
+      // 正文层：长正文默认折到 3 行、给展开钮。
+      const 长正文格B = 首卡 ? findAllByClass(首卡, 'dshmind-busText').find((el) => textOf(el).indexOf('超长正文测试') >= 0) : null;
+      passed.push(check(!!长正文格B && String(长正文格B.props.className).indexOf('busTextClamped') >= 0,
+        '⑦e 长正文默认折叠（busTextClamped）'));
+    }
+
+    // ① 面板里**不许有"看起来能点"的东西**。例外四种：刷新按钮 + 会审折叠切换钮
     //    （优化批③：纯显示切换，不发命令——「不是写动作」由 ③c 的零请求断言钉死）
-    //    + 项目 chip（项目解析修正·2026-10-11：换投影的纯显示动作，不写账——由 ⑧b 钉死）。
+    //    + 项目 chip（项目解析修正·2026-10-11：换投影的纯显示动作，不写账——由 ⑧b 钉死）
+    //    + 描述折叠钮（2026-10-12 主权者要「全文+默认折叠」：纯显示切换，零请求——由 ⑩d 钉死）。
     //    旧版「介入度档位」画成 4 个 chip（零参与/事后抽检/变更预审/逐条审批）——
-    //    只读投影长得像按钮，会误导人以为能点。三者之外多一个按钮都算破规。
+    //    只读投影长得像按钮，会误导人以为能点。四者之外多一个按钮都算破规。
     const 面板 = await 状态render(sampleView());
     const 面板元素 = collect(面板.tree, { skipStyle: true }).elements;
     const 可点按钮 = 面板元素.filter((el) => el.type === 'button');
@@ -2179,10 +2285,11 @@ export async function runHarness() {
       if (类.indexOf('dshmind-btn') >= 0 && String(el.props.children).indexOf('刷新') >= 0) return false;
       if (类.indexOf('dshmind-toggle') >= 0) return false;
       if (类.indexOf('dshmind-projChip') >= 0) return false;
+      if (类.indexOf('dshmind-descToggle') >= 0) return false;
       return true;
     });
     passed.push(check(可点按钮.length >= 1 && 非规按钮.length === 0,
-      '① 面板里可点的只有「刷新」与会审折叠钮、项目 chip（其余一律不许可点）',
+      '① 面板里可点的只有「刷新」与会审折叠钮、描述折叠钮、项目 chip（其余一律不许可点）',
       JSON.stringify(可点按钮.map((el) => String(el.props.children)))));
     passed.push(check(面板元素.every((el) => el.props.role !== 'button'),
       '① 没有任何 role=button 的伪按钮', JSON.stringify(面板元素.filter((el) => el.props.role === 'button').map((el) => el.type))));
@@ -2595,6 +2702,77 @@ export async function runHarness() {
       const 徽3 = 状态徽章(卡(r, '审计档位分级落地'));
       passed.push(check(!!徽3 && 徽3.props.style.color === 色板.WARN && 徽3.props.style.borderColor === 色板.WARN,
         '② 待决任务徽章给告警 WARN', JSON.stringify(徽3 && 徽3.props.style)));
+      // ⑩ 长描述不打爆卡片 + 全文可看（2026-10-12）：
+      //    主人先报「只用了左侧一半的面板」→ 定案：多列网格 + 长描述。
+      //    随后主人改口径为「**要全文 + 默认折叠**」（否掉硬截断——那会丢全文）。
+      //    所以现在钉的是：①单列；②折叠态有钳位且数值合理；③展开态类名在；
+      //    ④长描述有展开钮；⑤展开钮纯显示、零请求。
+      // 塞 bug 校准：把 `.dshmind-nodeTitleClamped` 的 line-clamp 改成 999、或把 `.dshmind-nodes`
+      //    改回多列、或删掉展开钮 ⇒ 本组必红。
+      {
+        const r9 = await renderView(sampleView());
+        const 样式9 = collect(r9.tree, {}).elements
+          .filter((el) => el.type === 'style')
+          .map((el) => String(el.props && el.props.children || '')).join('\n');
+        // ①单列：多列对长正文是错的布局（列窄⇒高度爆炸，横向还空着）。
+        const 网格规则 = (样式9.match(/\.dshmind-nodes\{[^}]*\}/) || [''])[0];
+        passed.push(check(/grid-template-columns:\s*1fr/.test(网格规则)
+          && !/auto-fit/.test(网格规则),
+          '⑩ 任务图是**单列**（不许再出现 auto-fit 多列 —— 列窄会让长描述高度爆炸）',
+          JSON.stringify(网格规则)));
+        // ②折叠态钳位：只查「有没有 line-clamp」不够，`999` 也是合法声明却等于没限行。
+        const 折叠规则 = (样式9.match(/\.dshmind-nodeTitleClamped\{[^}]*\}/) || [''])[0];
+        const 钳位 = Number((折叠规则.match(/-webkit-line-clamp:\s*(\d+)/) || [0, 0])[1]);
+        passed.push(check(钳位 >= 1 && 钳位 <= 6,
+          '⑩ 折叠态行数上限落在 1~6 行 —— 长描述默认不许把卡片撑成一面墙',
+          JSON.stringify(折叠规则) + ' 钳位=' + 钳位));
+        passed.push(check(/overflow:\s*hidden/.test(折叠规则),
+          '⑩ 折叠态必须配 overflow:hidden（否则只是排版提示、照样溢出）', JSON.stringify(折叠规则)));
+        // ③展开态类名在：展开时不许再钳位（否则「要全文」落空）。
+        const 展开规则 = (样式9.match(/\.dshmind-nodeTitleOpen\{[^}]*\}/) || [''])[0];
+        passed.push(check(展开规则.length > 0 && !/-webkit-line-clamp/.test(展开规则),
+          '⑩ 展开态不钳位 —— 点开后必须看到全文，不许再截',
+          JSON.stringify(展开规则)));
+        // ④长描述必须有展开钮，且默认是折叠态（主权者口径「默认折叠」）。
+        const 长卡 = 卡(r9, '审计档位分级落地');
+        const 钮 = 长卡 ? findAllByClass(长卡, 'dshmind-descToggle')[0] : null;
+        passed.push(check(!!钮 && String(钮.props.children).indexOf('展开全文') >= 0,
+          '⑩ 长描述给「展开全文」钮（默认折叠）', JSON.stringify(钮 && String(钮.props.children))));
+        // ⑤默认折叠 ⇒ 全文块此刻不该出现（点开才画）。
+        passed.push(check(!!长卡 && findAllByClass(长卡, 'dshmind-nodeTitleOpen').length === 0,
+          '⑩ 默认折叠 ⇒ 全文块此刻不画（点开才铺开）'));
+        // ⑥折叠态标题确实带钳位类。
+        const 长标题2 = 长卡 ? findAllByClass(长卡, 'dshmind-nodeTitle')[0] : null;
+        passed.push(check(!!长标题2 && String(长标题2.props.className).indexOf('dshmind-nodeTitleClamped') >= 0,
+          '⑩ 折叠态标题挂 Clamped 类', JSON.stringify(长标题2 && String(长标题2.props.className))));
+        // ⑦标题**独占整行**（2026-10-12，主权者打回「这里就不能单起一行吗」）：
+        //   标题原为 `flex:1`，会吃掉整行剩余宽 ⇒ 后面的徽章组（交卷/模式/复核）被顶到
+        //   远端右侧、标题只剩 3 行时左侧空一大片。改成 `flex-basis:100%` 强制换行。
+        //   塞 bug 校准：把 `.dshmind-nodeTitleFull` 去掉/改回 flex:1 ⇒ 本条必红。
+        const 独占规则 = (样式9.match(/\.dshmind-nodeTitleFull\{[^}]*\}/) || [''])[0];
+        passed.push(check(/flex-basis:\s*100%/.test(独占规则),
+          '⑩ 标题独占整行（flex-basis:100%）—— 徽章组才会换行到下一行、从左边排',
+          JSON.stringify(独占规则)));
+        passed.push(check(!!长标题2 && String(长标题2.props.className).indexOf('dshmind-nodeTitleFull') >= 0,
+          '⑩ 任务图长描述标题挂 TitleFull 类', JSON.stringify(长标题2 && String(长标题2.props.className))));
+        // 反例面：**不许**改共享的 `.dshmind-nodeTitle` 去加 flex-basis —— 总线线程名
+        // （`:2404`）同用该类，全局改会把短线程名也顶成独占一行（超范围、连带改外观）。
+        const 标题规则9 = (样式9.match(/\.dshmind-nodeTitle\{[^}]*\}/) || [''])[0];
+        passed.push(check(标题规则9.length > 0 && !/flex-basis/.test(标题规则9),
+          '⑩ 共享的 .dshmind-nodeTitle 不许加 flex-basis（总线线程名同用它，全局改会连带超范围）',
+          JSON.stringify(标题规则9)));
+        // 会审卡那处也必须挂（两处同源，只改一处就是漏）。
+        const 会审卡9 = findAllByClass(r9.tree, 'dshmind-review')[0];
+        const 会审标题9 = 会审卡9 ? findAllByClass(会审卡9, 'dshmind-nodeTitle')[0] : null;
+        passed.push(check(!!会审标题9 && String(会审标题9.props.className).indexOf('dshmind-nodeTitleFull') >= 0,
+          '⑩ 会审卡标题同样挂 TitleFull（两处同源，不许只改一处）',
+          JSON.stringify(会审标题9 && String(会审标题9.props.className))));
+        // 反例面：总线线程名的 nodeTitle **不许**带 TitleFull（超范围改外观）。
+        const 总线标题9 = findAllByClass(r9.tree, 'dshmind-bus')
+          .map((el) => findAllByClass(el, 'dshmind-nodeTitle')[0]).filter(Boolean);
+        passed.push(check(总线标题9.every((el) => String(el.props.className).indexOf('dshmind-nodeTitleFull') < 0),
+          '⑩ 总线线程名不带 TitleFull（线程名短、本就正常，不改）'));
+      }
       // ⑥ 顺手在同一份活页上钉审计时间口径：夹具 seq1 的 ISO（Clock.iso 同款秒级 ISO）
       //   `2026-10-07T17:01:02+08:00` 必须画成带 MM-DD 前缀的 `10-07 17:01:02`——
       //   诊断档「只到时分秒」不成立，这条钉住短日期前缀不许再被「优化」掉。
@@ -2722,9 +2900,122 @@ export async function runHarness() {
         '⑦ 未投递 >0 高亮（warn 徽章）'));
       passed.push(check(卡.length === 1 && textOf(卡[0]).indexOf('⏸') >= 0 && textOf(卡[0]).indexOf('判据已核对') >= 0,
         '⑦ 最新消息扫描行在（暂不投递带 ⏸ 前缀）'));
-      const 行 = 卡.length === 1 ? findAllByClass(卡[0], 'dshmind-busRow').find((el) => textOf(el).indexOf('产物引用给仓内') >= 0) : null;
-      passed.push(check(!!行 && String(行.props.title).indexOf('⏸ ') === 0,
-        '⑦ 消息行挂 title=摘要全文（截断不丢信息）', JSON.stringify(行 && 行.props.title)));
+      // ⚠️ 口径改形（2026-10-12，主权者「（总线）也默认收起呗」）：
+      // 旧版 title 挂在**行**上、给的是投影层截断后的 120 字（「全文」其实只有 120 字）。
+      // 现在投影层给全量正文，收窄挪到渲染层折叠 —— **长正文**（> BUS_TEXT_PREVIEW）在
+      // 折叠态把 title 挂到**正文格**上给全文；**短正文不折、不挂**（没什么可展开的）。
+      // 本条守的本意不变：截断处必须有不丢信息的出口。用长正文样本 msg-1 测。
+      const 长行 = 卡.length === 1 ? findAllByClass(卡[0], 'dshmind-busRow').find((el) => textOf(el).indexOf('全员注意') >= 0) : null;
+      const 长正文格 = 长行 ? findAllByClass(长行, 'dshmind-busText')[0] : null;
+      passed.push(check(!!长正文格 && String(长正文格.props.title).indexOf('全员注意') === 0,
+        '⑦ 长正文折叠态：正文格挂 title=全文（截断不丢信息）',
+        JSON.stringify(长正文格 && 长正文格.props.title).slice(0, 80)));
+      // 短正文不许被折叠（没东西可展）：msg-3 的短句不该带 Clamped 类。
+      const 短行 = 卡.length === 1 ? findAllByClass(卡[0], 'dshmind-busRow').find((el) => textOf(el).indexOf('产物引用给仓内') >= 0) : null;
+      const 短正文格 = 短行 ? findAllByClass(短行, 'dshmind-busText')[0] : null;
+      passed.push(check(!!短正文格 && String(短正文格.props.className).indexOf('Clamped') < 0,
+        '⑦ 短正文不折叠（没东西可展，不给多一个钮）', JSON.stringify(短正文格 && String(短正文格.props.className))));
+      // 长正文必须给「展开全文」钮，且折叠态挂 Clamped。
+      passed.push(check(!!长行 && findAllByClass(长行, 'dshmind-descToggle').length === 1,
+        '⑦ 长正文给「展开全文」钮（默认折叠）',
+        '钮数 ' + (长行 ? findAllByClass(长行, 'dshmind-descToggle').length : -1)));
+      passed.push(check(!!长正文格 && String(长正文格.props.className).indexOf('busTextClamped') >= 0,
+        '⑦ 长正文折叠态挂 busTextClamped', JSON.stringify(长正文格 && String(长正文格.props.className))));
+      const 行 = 长行;
+      // ⑦c 总线正文保留换行（2026-10-12，主人视觉打回「密排」）：
+      // 旧版正文套 `.dshmind-auditAction`（审计动作列口径），它只有 overflow-wrap、无 white-space
+      // ⇒ 默认 normal 把消息里的 `\n` 折叠成空格：多行简报（标题/列表/表格）挤成一整段。
+      // 塞 bug 校准：删掉 `.dshmind-busText{…white-space:pre-wrap…}` 里那段（或把 :2325 换回
+      // auditAction）⇒ 本组必红。
+      const 正文 = findAllByClass(r.tree, 'dshmind-busText');
+      passed.push(check(正文.length > 0,
+        '⑦c 总线正文用独立类名 dshmind-busText（不借审计动作列口径）', '命中 ' + 正文.length + ' 个'));
+      // 样式写在模块级样式表字符串里（不是内联 props.style）——它在 type:'style' 节点的
+      // `props.children` 上（一个长字符串）。**不能用 `textOf()`**：它内部强制 skipStyle，
+      // 对 style 节点返回空串（2026-10-12 实测踩过，断言会永远绿/假红）。
+      const 样式文本 = collect(r.tree, {}).elements
+        .filter((el) => el.type === 'style')
+        .map((el) => String(el.props && el.props.children || '')).join('\n');
+      const 规则 = (样式文本.match(/\.dshmind-busText\{[^}]*\}/) || [''])[0];
+      passed.push(check(/white-space:\s*pre-wrap/.test(规则),
+        '⑦c 总线正文声明 white-space:pre-wrap —— 保留消息内换行（否则 24 行折叠成一段）',
+        JSON.stringify(规则)));
+      // 反例面：`nowrap` 会截断、裸 `pre` 不折行会横向溢出（末列是 minmax(0,1fr)，本就该吃满折行）。
+      // 注意 `(?!-wrap)`：不加它，`pre-wrap` 会被 `pre\b` 误伤（`\b` 在 `-` 前成立）。
+      passed.push(check(规则.length > 0 && !/white-space:\s*(nowrap|pre(?!-wrap))\b/.test(规则),
+        '⑦c 不许用 nowrap（截断）或裸 pre（不折行会横向溢出）', JSON.stringify(规则)));
+      // 反向：总线行内不得再出现 .dshmind-auditAction —— 两套口径合流正是这个 bug 的成因。
+      passed.push(check(卡.length === 1 && findAllByClass(卡[0], 'dshmind-auditAction').length === 0,
+        '⑦c 总线行内不再出现 .dshmind-auditAction（分区类名不串味）'));
+      // 换行必须真的到达正文格：多行消息的正文文本里要保住 `\n`（渲染不得先折叠）。
+      const 多行行 = 卡.length === 1 ? findAllByClass(卡[0], 'dshmind-busRow').find((el) => textOf(el).indexOf('【通报】') >= 0) : null;
+      const 多行正文 = 多行行 ? findAllByClass(多行行, 'dshmind-busText')[0] : null;
+      passed.push(check(!!多行正文 && textOf(多行正文).indexOf('\n') >= 0,
+        '⑦c 多行消息的 `\\n` 到达渲染（没被折成一整段）',
+        JSON.stringify(多行正文 && textOf(多行正文))));
+      // ⑦f 扫描行是**两行**（2026-10-12，主权者：「这里单起一行啊」）：
+      // 旧版四列网格（时间/类型/发件/正文）里前三列吃掉左侧宽度，正文被挤到右边只剩一条。
+      // 现在：元信息（时间/类型/发件）独立一行，正文独占下一行、吃满宽度。
+      // 塞 bug 校准：把 `.dshmind-busRow` 改回 `display:grid` 四列（或把元信息与正文合成一行）⇒ 必红。
+      {
+        const 行f = findAllByClass(r.tree, 'dshmind-busRow')[0];
+        passed.push(check(!!行f, '⑦f 消息扫描行在'));
+        // 结构：每行只有两个块 —— busMeta（元信息）+ busTextWrap（正文）。
+        const 子块f = 行f ? (行f.props.children || []).filter(Boolean) : [];
+        const 类名f = 子块f.map((c) => String(c.props && c.props.className || ''));
+        passed.push(check(类名f.length === 2
+          && 类名f[0].indexOf('dshmind-busMeta') >= 0
+          && 类名f[1].indexOf('dshmind-busTextWrap') >= 0,
+          '⑦f 扫描行只有两个块：元信息 + 正文（正文不再和元信息抢同一行）',
+          JSON.stringify(类名f)));
+        // 元信息块里必须是 时间/类型/发件 三样（不许把正文也塞进去）。
+        const metaF = 行f ? findAllByClass(行f, 'dshmind-busMeta')[0] : null;
+        const meta文本f = metaF ? textOf(metaF) : '';
+        passed.push(check(!!metaF && meta文本f.indexOf('广播') >= 0 && meta文本f.indexOf('lead') >= 0
+          && meta文本f.indexOf('全员注意') < 0,
+          '⑦f 元信息行只有时间/类型/发件（正文不在这行）', JSON.stringify(meta文本f)));
+        // 布局：busRow 必须是纵排（flex-direction:column），不是旧的四列 grid。
+        const 样式f = collect(r.tree, {}).elements
+          .filter((el) => el.type === 'style')
+          .map((el) => String(el.props && el.props.children || '')).join('\n');
+        const 行规则f = (样式f.match(/\.dshmind-busRow\{[^}]*\}/) || [''])[0];
+        passed.push(check(/flex-direction:\s*column/.test(行规则f) && !/grid-template-columns/.test(行规则f),
+          '⑦f 扫描行改纵排（不再用四列 grid 挤正文）', JSON.stringify(行规则f)));
+      }
+      // ⑦g 滚动作用域 vs 显示宽度，**拆成两层**（2026-10-12）：
+      // 主权者先报「面板整体的纵向滚动作用域太小」，我改 min-height 未解决；随后他框出
+      // **面板左右两侧的空白**并说明「不能只放宽滚动作用域吗」——根因是两者原先**共用一个元素**：
+      // `.dshmind-root` 既是面板 DOM 边界（`max-width:1040px`，两侧空白不属于它）、又是滚动容器
+      // （`overflow:auto`）⇒ 滚轮落在两侧空白上命中的是宿主容器、而宿主不是滚动容器 ⇒ 滚不动。
+      // 现在：root 铺满（无 max-width）+ 滚动容器；page 保持 1040px 居中的**显示宽度不变**。
+      // 塞 bug 校准：把 max-width 加回 root、或把 overflow 挪到 page ⇒ 必红。
+      {
+        const 样式g = collect(r.tree, {}).elements
+          .filter((el) => el.type === 'style')
+          .map((el) => String(el.props && el.props.children || '')).join('\n');
+        const 根规则g = (样式g.match(/\.dshmind-root\{[^}]*\}/) || [''])[0];
+        const 页规则g = (样式g.match(/\.dshmind-page\{[^}]*\}/) || [''])[0];
+        // root：铺满 + 滚动容器 + 不锁死高度。
+        passed.push(check(!/max-width/.test(根规则g),
+          '⑦g 根容器**不许**再限宽（限宽会让两侧空白不属于面板 ⇒ 那里滚不动）',
+          JSON.stringify(根规则g)));
+        passed.push(check(/overflow:\s*auto/.test(根规则g),
+          '⑦g 根容器是滚动容器（overflow:auto）—— 铺满整屏 ⇒ 整屏任何位置都能滚',
+          JSON.stringify(根规则g)));
+        passed.push(check(/min-height:\s*100%/.test(根规则g) && !/(?:^|;)\s*height:\s*100%/.test(根规则g),
+          '⑦g 根容器 min-height:100% 而非 height:100%（不锁死高度）', JSON.stringify(根规则g)));
+        // page：显示宽度口径保留（1040 居中），且**不许**自己再成为滚动容器（否则又截住滚轮）。
+        passed.push(check(/max-width:\s*1040px/.test(页规则g) && /margin:\s*0\s+auto/.test(页规则g),
+          '⑦g 内容层仍是 1040px 居中（显示宽度不变——主权者只要求放宽滚动作用域）',
+          JSON.stringify(页规则g)));
+        passed.push(check(页规则g.length > 0 && !/overflow/.test(页规则g),
+          '⑦g 内容层不许有 overflow（否则内层又会截住滚轮）', JSON.stringify(页规则g)));
+        // 结构上确实存在两层。
+        passed.push(check(findAllByClass(r.tree, 'dshmind-root').length === 1
+          && findAllByClass(r.tree, 'dshmind-page').length === 1,
+          '⑦g DOM 确实是两层：root（铺满+滚动）+ page（内容居中）',
+          'root=' + findAllByClass(r.tree, 'dshmind-root').length + ' page=' + findAllByClass(r.tree, 'dshmind-page').length));
+      }
       const 讨论卡 = findAllByClass(r.tree, 'dshmind-bus').filter((el) => textOf(el).indexOf('会审讨论段 · 盲评保护') >= 0);
       passed.push(check(讨论卡.length === 1
         && textOf(讨论卡[0]).indexOf('member-') < 0
@@ -2736,6 +3027,7 @@ export async function runHarness() {
       passed.push(check(e.text.indexOf('消息总线上还没有消息') >= 0 && e.text.indexOf("action:'bus_send'") >= 0,
         '⑦ 空总线给明说空态 + 一条可敲的 bus_send 命令'));
     }
+
 
     // ⑧ 项目解析修正（2026-10-11，主权者指令「修」）：清单进页头 + 一键切项目 + 空账明写自动选择。
     {

@@ -20,6 +20,16 @@ import { objectId } from './kernel/ids.js';
 /** 消息类型（§9 接口契约里 `类型` 的取值面）。 */
 export const MESSAGE_TYPES = ['派活', '交卷', '复核结论', '分歧', '广播', '表态', '提问', '答复', '系统'];
 
+/**
+ * `summary()` 每个线程默认给多少条最新消息（2026-10-12 主权者口径「默认收起、展开看全部」）。
+ *
+ * 为什么不再是 5：面板要能**折叠**而不是**丢弃**。旧版投影只给 5 条、渲染层还照着
+ * 5 条再 `slice(-5)` 一次（纯空操作），于是第 6 条起从源头就没了、连「另有 N 条」都算不出。
+ * 现在给得足够宽，由渲染层默认折叠、按需展开；「条数」字段仍是全量真值，
+ * 所以即使某线程超过这个数，渲染层也能用 `条数 - 最新.length` 明说还有多少。
+ */
+export const DEFAULT_LATEST = 50;
+
 export class MessageBus {
   /**
    * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock }} spec
@@ -291,9 +301,16 @@ export class MessageBus {
    * ⑦（2026-10-11）设计债③收口：投影取数改走 `readRaw`（内部读，不过闸、不入审计）——
    * 与 `讨论消息` 同口径：看板按秒级轮询，走公开 `read()` 会让「只读服务调用」
    * 按线程×轮询刷屏，淹没真正的留痕；留痕属于编排动作，不属于投影取数。
-   * 正文只给前 120 字：面板是扫一眼的面，全文在 bus_read。
    *
-   * @param {{ 项目: string, 最新条数?: number }} spec
+   * **正文与条数口径（2026-10-12 主权者改口径：默认收起、展开看全部）**：
+   * 旧版在这里就把正文截到 120 字、且只给最新 5 条 —— 截断发生在**投影层**，
+   * 于是渲染层手里根本没有全文，「展开」无从谈起，且超出的条数**算不出「另有 N」**。
+   * 现在改成：正文给**全量**（`内容`），另附 `正文原长` 供渲染层判断要不要给展开钮；
+   * `最新条数` 默认也放宽到 `DEFAULT_LATEST`，让面板能折叠而不是丢弃。
+   * 面板仍是「扫一眼的面」——收窄动作挪到**渲染层**（默认折叠 3 行 + 展开钮），
+   * 而不是在数据源头把信息删掉。全文检索/审计仍走 `bus_read`。
+   *
+   * @param {{ 项目: string, 最新条数?: number }} spec `最新条数` 省略时取 `DEFAULT_LATEST`
    * @returns {Promise<Array<{ 线程: string, 条数: number, 未投递: number, 最新: object[] }>>}
    */
   async summary(spec) {
@@ -304,14 +321,19 @@ export class MessageBus {
         线程,
         条数: rows.length,
         未投递: rows.filter((r) => r.状态 === '暂不投递').length,
-        最新: rows.slice(-(spec.最新条数 ?? 5)).map((row) => ({
-          id: row.id,
-          发件: row.发件,
-          类型: row.类型,
-          内容: String(row.内容 ?? '').slice(0, 120),
-          状态: row.状态,
-          追加于: row.追加于,
-        })),
+        最新: rows.slice(-(spec.最新条数 ?? DEFAULT_LATEST)).map((row) => {
+          const 正文 = String(row.内容 ?? '');
+          return {
+            id: row.id,
+            发件: row.发件,
+            类型: row.类型,
+            内容: 正文,
+            // 原长：渲染层据此决定「折叠预览」还是直接铺开（截断判断挪到渲染层）。
+            正文原长: 正文.length,
+            状态: row.状态,
+            追加于: row.追加于,
+          };
+        }),
       });
     }
     return out;

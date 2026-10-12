@@ -339,9 +339,17 @@ window.__ModuleLoader__.load({
     var MAX_RESPONSE_DEADLINE_HOURS = 876000;
     var TASK_LIMIT = 12;
     var AUDIT_LIMIT = 20;
-    /** ⑦（2026-10-11）：消息总线一次渲染的线程数上限——超出要明说（任务图同款「另有 N」）。 */
-    var BUS_LIMIT = 8;
-    var BUS_MSGS_LIMIT = 5;    /** 「待你决定」是主子唯一必须看的清单，所以给得比任务卡更宽；超出的部分明说还有多少条。 */
+    /**
+     * ⑦（2026-10-12，主权者指令「也默认收起呗」）：总线改为**折叠**而不是**截断**。
+     *
+     * 旧版这里是 `BUS_LIMIT = 8` + `BUS_MSGS_LIMIT = 5` 两处 `slice` —— 超出的**静默消失**，
+     * 与本仓「别静默截断（Batch 9）」的纪律相悖（审计区/任务图都给了「另有 N」，唯独总线没有）。
+     * 现在：全部数据都在（投影层已给全量），默认只画预览，点「展开」看全部；超出部分**明说还有多少**。
+     * 仍是纯显示动作、零请求（同「独立答案」「描述」折叠）。
+     */
+    var BUS_PREVIEW = 3;        /** 默认先画几个线程，其余收起（点「展开全部线程」铺开）。 */
+    var BUS_MSGS_PREVIEW = 3;   /** 每个线程默认先画几条消息，其余收起（点「展开全部消息」铺开）。 */
+    var BUS_TEXT_PREVIEW = 120; /** 消息正文超过多少字才折叠（沿用旧的 120 字「扫一眼」尺度，只是不丢字）。 */
     var DECIDE_LIMIT = 8;
     var REVIEW_LIMIT = 4;
 
@@ -478,6 +486,9 @@ window.__ModuleLoader__.load({
             发件: line(x.发件, ''),
             类型: line(x.类型, ''),
             内容: line(x.内容, ''),
+            // 正文原长（2026-10-12）：投影层给全量后，渲染层据此决定要不要给「展开全文」钮。
+            // 缺省时退回内容自身长度（向后兼容旧投影，不装懂也不崩）。
+            正文原长: numOf(firstOf(x, ['正文原长', 'contentLength'])),
             状态: line(x.状态, ''),
             追加于: line(x.追加于, ''),
           };
@@ -628,10 +639,25 @@ window.__ModuleLoader__.load({
 
     // ── 样式：只用 --dsw-alias-* 令牌，附兜底色（令牌改名只掉外观，不掉功能）──
     var CSS = [
-      '.dshmind-root{box-sizing:border-box;display:flex;flex-direction:column;gap:14px;width:100%;max-width:1040px;',
-      'margin:0 auto;padding:24px clamp(24px,4vw,48px) 40px;height:100%;overflow:auto;',
+      // 滚动作用域 vs 显示宽度，**拆成两层**（2026-10-12，主权者：「不能只放宽滚动作用域吗」）：
+      //
+      // 问题的根源是两者原先**共用一个元素**：`.dshmind-root` 既是面板的 DOM 边界（只有
+      // `max-width:1040px` 宽），又是滚动容器（`overflow:auto`）。于是滚轮落在它**两侧的空白**上时
+      // 命中的是宿主容器、而宿主不是滚动容器 ⇒ **那两块区域滚不动**（主权者截图红框即此处）。
+      //
+      // 拆法：
+      //   · `.dshmind-root`  —— **铺满**（无 max-width），承担 `overflow:auto`、`min-height:100%`。
+      //                        鼠标落在整屏任何位置（含左右空白）都在它的范围内 ⇒ 都能滚。
+      //   · `.dshmind-page`  —— **内容仍 1040px 居中**，管排版与内边距。显示宽度**不变**
+      //                        （主权者只要求放宽滚动作用域，不要求把正文拉成超宽行）。
+      // 两层之间不要再放 `overflow`，否则又会出现「内层截住滚轮」的同款毛病。
+      '.dshmind-root{box-sizing:border-box;display:flex;flex-direction:column;width:100%;',
+      'min-height:100%;overflow:auto;',
       'color:var(--dsw-alias-label-primary,#16181d);font-size:13px;line-height:20px;',
       "font-family:var(--ds-font-family-sans,-apple-system,'Segoe UI',system-ui,sans-serif)}",
+      // 内容层：宽度口径原样保留（1040px + 居中 + 同款内边距），只是不再兼任滚动容器。
+      '.dshmind-page{box-sizing:border-box;display:flex;flex-direction:column;gap:14px;width:100%;max-width:1040px;',
+      'margin:0 auto;padding:24px clamp(24px,4vw,48px) 40px}',
       '.dshmind-root *{box-sizing:border-box}',
       // ⚠️ 子项**不许被压缩**（2026-10-11 截断事故）：根是 flex 纵向容器 + height:100%，
       // 子项默认 flex-shrink:1 ⇒ 内容变高时先**压扁**子项而不是出滚动条，而各分区
@@ -773,14 +799,42 @@ window.__ModuleLoader__.load({
       '.dshmind-verdictNone{color:var(--dsw-alias-label-caption,#adb2b8);border-color:var(--dsw-alias-border-l2,#0000001f)}',
 
       // 任务节点
-      '.dshmind-nodes{display:grid;grid-template-columns:repeat(auto-fit,minmax(288px,1fr));gap:10px;margin-top:12px}',
+      // **单列**（2026-10-12，主权者指令「这个多列还是干掉」）：
+      // 原先 `repeat(auto-fit,minmax(288px,1fr))` 在 1040px 容器里会排 3 列，每卡仅约
+      // 340px 宽；而卡里要放 2037 字级的「描述」⇒ 每行才 24 字、要 85 行、高约 1700px，
+      // 视觉上就是「只用了左侧一半的面板」的那坨密排。多列对**长正文**是错的布局：
+      // 高度随列宽收窄而爆炸，横向却还空着。改单列吃满宽度，长文本才读得下去。
+      // 注：`grid-template-columns:1fr` 而非 `display:block`——保留 grid 的 gap 语义，
+      // 且与下方 `.dshmind-node` 的既有样式零冲突（改动面最小）。
+      '.dshmind-nodes{display:grid;grid-template-columns:1fr;gap:10px;margin-top:12px}',
       '.dshmind-node{border:.5px solid var(--dsw-alias-border-l1,#0000001f);border-radius:var(--dsw-radius-md,8px);',
       'background:var(--dsw-alias-bg-layer-2,#fff);padding:10px 12px;min-width:0;display:flex;flex-direction:column;gap:6px}',
       '.dshmind-nodePending{border-color:var(--dsw-alias-state-warn-primary,#c47f17);',
       'background:var(--dsw-alias-state-warn-tertiary,#fdf6e7)}',
       '.dshmind-nodeEscalated{border-color:var(--dsw-alias-state-error-primary,#d54941)}',
       '.dshmind-nodeTop{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
-      '.dshmind-nodeTitle{font-weight:600;font-size:13px;min-width:0;flex:1;overflow-wrap:anywhere}',
+      // 标题位实际承载的是**描述**（任务图 `描述||标题||id` / 会审 `描述||节点`，同源），
+      // 实测 2037 字 / 40 换行 ⇒ 必须管住高度。
+      // 2026-10-12 主权者改口径：**要全文 + 默认折叠**（先前 line-clamp 硬截断被否——
+      // 那会丢全文、只能 hover 看）。所以现在是「折叠预告 3 行 / 展开全文」两态，
+      // 全文走改动`:描述`的展开钮在原地铺开，而不是塞进 title。
+      // 折叠态用 line-clamp 只是**视觉预告**（配合下面的展开钮），并非最终截断手段。
+      '.dshmind-nodeTitle{font-weight:600;font-size:13px;min-width:0;flex:1;overflow-wrap:anywhere;white-space:pre-wrap}',
+      // 标题**独占整行**（2026-10-12，主权者打回「这里就不能单起一行吗」）：
+      // 标题位（承载描述）住在 `reviewTop`/`nodeTop` 这个 flex 行里，而 `nodeTitle` 原本
+      // 是 `flex:1` —— 它会**吃掉整行剩余宽度**，于是后面的徽章组（交卷/模式/复核）被顶到
+      // 远端右侧，标题只剩 3 行时左边空出一大片，看着就是「徽章飘在右半空里」。
+      // 改 `flex-basis:100%`：标题强制占满整行 ⇒ 徽章组自然**换行到下一行、从左边开始排**。
+      // **只加在两处长描述标题上**，不动共享的 `.dshmind-nodeTitle`：总线线程名
+      // （`:2404`）同样是 `reviewTop`+`nodeTitle` 结构，但线程名短、那里本就正常，
+      // 全局改会连带把它也顶成独占一行（超范围）。
+      '.dshmind-nodeTitleFull{flex:1 1 100%;flex-basis:100%}',
+      // 折叠态：最多 3 行预告 + 省略号。展开态见 `.dshmind-nodeTitleOpen`（去掉钳位、全文铺开）。
+      '.dshmind-nodeTitleClamped{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}',
+      '.dshmind-nodeTitleOpen{display:block;white-space:pre-wrap}',
+      // 展开/收起钮：纯显示动作、零请求（照 `.dshmind-toggle` 独立答案折叠的同款先例）。
+      '.dshmind-descToggle{border:none;background:transparent;padding:2px 0;cursor:pointer;font-size:11.5px;',
+      'color:var(--dsw-alias-state-business-primary,#0f1115);text-align:left;width:fit-content}',
       '.dshmind-meta{display:flex;gap:10px;flex-wrap:wrap;color:var(--dsw-alias-label-tertiary,#81858c);font-size:11px}',
       '.dshmind-criteria{color:var(--dsw-alias-label-secondary,#61666b);font-size:11.5px;line-height:17px;',
       'border-left:2px solid var(--dsw-alias-border-l3,#00000024);padding-left:8px;overflow-wrap:anywhere}',
@@ -803,11 +857,26 @@ window.__ModuleLoader__.load({
       '.dshmind-audit{display:flex;flex-direction:column;gap:1px;padding-bottom:2px}',
       // ⑦ 总线消息扫描行：**独立类名**（审计区按 .dshmind-auditRow 数行恰好 20 条，
       // 两个分区共用类名会污染那条「不静默裁掉」的断言）；列形也不同——末列是正文不是主体。
-      // 复用 auditScroll 的滚动壳与 auditAction 的换行口径。
+      // 复用 auditScroll 的滚动壳（换行口径**不复用**，见下）。
       '.dshmind-busMsgs{display:flex;flex-direction:column;gap:1px;padding-bottom:2px}',
-      '.dshmind-busRow{display:grid;grid-template-columns:max-content max-content max-content minmax(0,1fr);',
-      'gap:10px;align-items:baseline;',
+      // 扫描行布局（2026-10-12，主权者：「这里单起一行啊」）：
+      // 旧版是四列网格 `max-content ×3 + minmax(0,1fr)` —— 时间/类型/发件三格**吃掉左侧宽度**，
+      // 正文被挤到右边只剩一条（截图里正文只显示一行半就被 line-clamp 截了），而正文才是要读的。
+      // 改成**两行**：上行 = 时间/类型/发件（小字元信息），下行 = 正文（吃满整行宽度）。
+      '.dshmind-busRow{display:flex;flex-direction:column;gap:2px;',
       'padding:6px 10px;background:var(--dsw-alias-bg-layer-2,#fff);font-size:12px}',
+      '.dshmind-busMeta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+      // 正文格（2026-10-12 主人视觉打回「密排/显示太丑」）：
+      // 旧版正文套的是 `.dshmind-auditAction`（审计**动作列**的类名），而它只有
+      // `overflow-wrap:anywhere`、**没有 `white-space`** ⇒ 默认 normal 把消息里的 `\n`
+      // 折叠成空格：一条 24 行的正文会挤成一整段（bus.js 只截到 120 字，换行还在，
+      // 是被**渲染**吞掉的，不是数据侧丢的）。`overflow-wrap` 只管断超长词，不解析 `\n`。
+      // 用 pre-wrap 而非 pre：pre 不折行会横向溢出，而本行末列是 `minmax(0,1fr)`，就该吃满折行。
+      '.dshmind-busText{white-space:pre-wrap;overflow-wrap:anywhere;font-weight:400}',
+      // 正文折叠（2026-10-12，主权者「（总线）也默认收起呗」）：投影层不再截字，
+      // 超长正文由这里默认折到若干行 + 「展开全文」钮，点开看全部（不丢字）。
+      '.dshmind-busTextClamped{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}',
+      '.dshmind-busTextWrap{display:flex;flex-direction:column;gap:2px;min-width:0}',
       // UI 卫生批（主人视觉打回「截断」）：时间列固定 88px，而 shortTime 恒为
       // `MM-DD HH:mm:ss`（14 字符，11px 等宽 ≈ 92px）——固定列窄过内容就是叠字/截断。
       // 时间与档位两列改按内容（max-content），动作列吃剩余宽，主体列保持省略（有 title）。
@@ -1583,7 +1652,7 @@ window.__ModuleLoader__.load({
      * **不挂 useEffect**（设计债⑩：这个宿主给插件的 effect 可能是空实现，取数如此，UI 状态也如此）。
      * `折叠会审` 是覆盖表（id → 折不折）；没点过的场次走默认（首场展开、其余折叠）。
      */
-    var 界面store = { 快照: { 折叠会审: null, 项目选择: null, 自动选择: null }, 订阅者: [] };
+    var 界面store = { 快照: { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null }, 订阅者: [] };
     /** 轮询间隔：2~5 秒量级（人看的板子，又不至于把宿主问烦）。 */
     var POLL_MS = 3000;
     /** 轮询把手：`apply` 起、disposer 清（**不许留定时器**）。 */
@@ -1634,7 +1703,7 @@ window.__ModuleLoader__.load({
     function 清空store() {
       投影store.快照 = EMPTY;
       设置store.快照 = { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' };
-      界面store.快照 = { 折叠会审: null, 项目选择: null, 自动选择: null };
+      界面store.快照 = { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null };
     }
 
     /**
@@ -1662,6 +1731,63 @@ window.__ModuleLoader__.load({
       下[id] = !会审折叠(id, 默认折叠);
       // 整表替换会把 项目选择 一起抹掉（同一个 store），所以用 `Object.assign` 合并。
       发通知(界面store, Object.assign({}, 界面store.快照, { 折叠会审: 下 }));
+    }
+
+    /**
+     * 总线某一处折叠态（2026-10-12，主权者指令「（总线）也默认收起呗」）。
+     *
+     * 一处折叠 = 一个 `key`（如 `线程:task-1终审` / `消息:task-1终审` / `正文:task-1终审#3`）。
+     * 默认**折叠**（true）：总线的线程/消息/长正文都默认只给预览，点钮才铺开——这样
+     * 「数据全都在」与「面板不被撑爆」两件事同时成立，不再靠静默截断。
+     * @param {string} key 折叠点标识
+     * @returns {boolean} 当前是否折叠（未点过 ⇒ true）
+     */
+    function 总线折叠(key) {
+      var 表 = 界面store.快照.折叠总线;
+      return 表 && Object.prototype.hasOwnProperty.call(表, key) ? !!表[key] : true;
+    }
+
+    /**
+     * 点了一下总线的某个折叠钮：取反并入表、广播重渲染（纯显示、零请求）。
+     * @param {string} key 折叠点标识，同 {@link 总线折叠}
+     */
+    function 切总线折叠(key) {
+      var 下 = {};
+      var 表 = 界面store.快照.折叠总线;
+      if (表) for (var k in 表) if (Object.prototype.hasOwnProperty.call(表, k)) 下[k] = 表[k];
+      下[key] = !总线折叠(key);
+      发通知(界面store, Object.assign({}, 界面store.快照, { 折叠总线: 下 }));
+    }
+
+    /**
+     * 这一张卡的长描述现在折不折（2026-10-12，主权者指令「要全文 + 默认折叠」）。
+     *
+     * 为什么需要它：`描述` 是**全量长文本**（实测 2037 字 / 40 换行），而它住在卡片
+     * 标题位（任务图 `描述||标题||id`、会审 `描述||节点`，同源）。硬截断（line-clamp）
+     * 会把全文丢掉、要看只能 hover；改成**默认折叠 + 可展开**：默认收起省版面，
+     * 想读全文点一下就在原地铺开，不丢一个字、也不新增写动作。
+     *
+     * 默认**折叠**（与「独立答案」首场展开不同）：描述通常几千字，全铺开正是本次
+     * 要治的「密排」；且它出现在每一张卡上，逐张展开是有意为之的动作。
+     * 原型链键照 {@link 会审折叠} 同款用 hasOwnProperty 挡（`constructor` 不算点过）。
+     * @param {string} id 卡片所属节点 id
+     * @returns {boolean} 当前是否折叠（默认 true）
+     */
+    function 描述折叠(id) {
+      var 表 = 界面store.快照.折叠描述;
+      return 表 && Object.prototype.hasOwnProperty.call(表, id) ? !!表[id] : true;
+    }
+
+    /**
+     * 点了一下「展开全文」：把这张卡的态写进覆盖表并广播重渲染（纯显示、零请求）。
+     * @param {string} id 卡片所属节点 id
+     */
+    function 切描述折叠(id) {
+      var 下 = {};
+      var 表 = 界面store.快照.折叠描述;
+      if (表) for (var k in 表) if (Object.prototype.hasOwnProperty.call(表, k)) 下[k] = 表[k];
+      下[id] = !描述折叠(id);
+      发通知(界面store, Object.assign({}, 界面store.快照, { 折叠描述: 下 }));
     }
 
     /**
@@ -2103,9 +2229,18 @@ window.__ModuleLoader__.load({
                 var verdict = verdictOf(row.复核三态);
                 // ③ 折叠的键与 article 的 key 同源：id 稳定在节点 id（缺时才退回序号占位）。
                 var 会审id = line(row.节点, 'review-' + index);
+                // 描述全文 + 默认折叠（2026-10-12 主权者口径「要全文 + 默认折叠」）：
+                // 标题位先给 3 行预告；点「展开全文」在**卡片内**另起一块铺开全文（不塞 title、
+                // 不丢字）。折叠为纯显示动作，零请求（同「独立答案」折叠的先例）。
+                var 会审描述 = line(row.描述 || row.节点, '未命名会审');
+                var 会审描述长 = 会审描述.length > 80;
+                var 会审折 = 描述折叠(会审id);
                 return h('article', { key: 会审id, className: 'dshmind-review' }, [
                   h('div', { key: 'top', className: 'dshmind-reviewTop' }, [
-                    h('span', { key: 't', className: 'dshmind-nodeTitle' }, line(row.描述 || row.节点, '未命名会审')),
+                    h('span', {
+                      key: 't',
+                      className: 'dshmind-nodeTitle dshmind-nodeTitleFull' + (会审描述长 && 会审折 ? ' dshmind-nodeTitleClamped' : ''),
+                    }, 会审描述),
                     h('span', {
                       key: 'p',
                       className: 'dshmind-badge',
@@ -2120,6 +2255,19 @@ window.__ModuleLoader__.load({
                     h('span', { key: 'v', className: 'dshmind-verdict ' + verdict.类 },
                       '复核 ' + verdict.文本 + (row.复核者 ? ' · ' + row.复核者 : '')),
                   ].filter(Boolean)),
+                  // 描述折叠（2026-10-12）：长的才给钮；短的（如一行摘要）不必多一个控件。
+                  // 展开态全文**另起一块**（不进 reviewTop 那个 flex 行，免得和徽章挤在一起）。
+                  // 纯显示动作、零请求，与「独立答案」折叠同款。
+                  会审描述长
+                    ? h('button', {
+                        key: 'desctog', type: 'button', className: 'dshmind-descToggle',
+                        onClick: function () { 切描述折叠(会审id); },
+                        title: 会审折 ? '展开描述全文' : '收起描述',
+                      }, (会审折 ? '▸ 展开全文（' + 会审描述.length + ' 字）' : '▾ 收起描述'))
+                    : null,
+                  会审描述长 && !会审折
+                    ? h('div', { key: 'descfull', className: 'dshmind-nodeTitleOpen' }, 会审描述)
+                    : null,
                   // 未交齐 = 讨论保持锁定：明说锁着，并且下面只可能出现盲标（成员 id 在归一化时就丢了）。
                   row.揭名 === false
                     ? h('div', { key: 'lock', className: 'dshmind-lock' }, '🔒 未交齐，讨论保持锁定：此处只显示盲标，交齐后揭名')
@@ -2203,9 +2351,18 @@ window.__ModuleLoader__.load({
                   // hasOwnProperty 挡原型链键（'constructor'/'toString' 等字面量查表会返回 truthy 函数，
                   // 绕过「查表 miss ⇒ 保灰」）——坏值不许因为继承属性画出彩色（失联「值不合法」同族口径）。
                   var 徽色 = Object.prototype.hasOwnProperty.call(状态徽章色, task.状态) ? 状态徽章色[task.状态] : null;
-                  return h('article', { key: line(task.id, 'task-' + index), className: cls }, [
+                  // 描述全文 + 默认折叠（2026-10-12 主权者口径，与会审卡同款）：
+                  // 标题位给 3 行预告，长的才给展开钮；展开后在卡内另起一块铺开全文。
+                  var 任务描述 = line(task.描述 || task.标题 || task.id, '未命名节点');
+                  var 任务id = line(task.id, 'task-' + index);
+                  var 任务描述长 = 任务描述.length > 80;
+                  var 任务折 = 描述折叠(任务id);
+                  return h('article', { key: 任务id, className: cls }, [
                     h('div', { key: 'top', className: 'dshmind-nodeTop' }, [
-                      h('span', { key: 't', className: 'dshmind-nodeTitle' }, line(task.描述 || task.标题 || task.id, '未命名节点')),
+                      h('span', {
+                        key: 't',
+                        className: 'dshmind-nodeTitle dshmind-nodeTitleFull' + (任务描述长 && 任务折 ? ' dshmind-nodeTitleClamped' : ''),
+                      }, 任务描述),
                       h('span', { key: 'st', className: 'dshmind-badge', style: 徽色 ? {
                         // 着色体例照抄会审交卷徽章：color + borderColor 同色值 + 底色 layer-1。
                         color: 徽色,
@@ -2217,6 +2374,17 @@ window.__ModuleLoader__.load({
                         color: 'var(--dsw-alias-label-secondary,#61666b)',
                       } }, line(task.状态, '未知')),
                     ]),
+                    // 描述折叠（2026-10-12，与会审卡同款）：长的才给钮，展开后卡内另起一块铺全文。
+                    任务描述长
+                      ? h('button', {
+                          key: 'desctog', type: 'button', className: 'dshmind-descToggle',
+                          onClick: function () { 切描述折叠(任务id); },
+                          title: 任务折 ? '展开描述全文' : '收起描述',
+                        }, (任务折 ? '▸ 展开全文（' + 任务描述.length + ' 字）' : '▾ 收起描述'))
+                      : null,
+                    任务描述长 && !任务折
+                      ? h('div', { key: 'descfull', className: 'dshmind-nodeTitleOpen' }, 任务描述)
+                      : null,
                     h('div', { key: 'meta', className: 'dshmind-meta' }, [
                       h('span', { key: 'o' }, '负责人 ' + (owners.length ? owners.join('、') : '未指派')),
                       task.模式 ? h('span', { key: 'm' }, '模式 ' + line(task.模式)) : null,
@@ -2295,11 +2463,26 @@ window.__ModuleLoader__.load({
         // ⑤ 消息总线（⑦·2026-10-11）：**全部**有消息的线程（不只未投递）——
         // 「有没有人想说话」一眼可见；未投递 >0 高亮。会审讨论线程按盲评口径收起正文
         // （投影层已收走 发件/正文，这里只画标记与规模行——与独立答案的遮罩同一条纪律）。
+        //
+        // 2026-10-12（主权者指令「（总线）也默认收起呗」）：本区从**静默截断**改为**折叠**。
+        // 旧版 `slice(0, BUS_LIMIT)` + `slice(-BUS_MSGS_LIMIT)` 会让超出的线程/消息直接消失、
+        // 还不说少了多少——与本仓「别静默截断（Batch 9）」相悖。现在：数据全在（投影已给全量），
+        // 默认只画预览，点钮铺开全部，并**明说还有多少**。纯显示、零请求（同「独立答案」「描述」折叠）。
         section(5, '消息总线', '§7 结构化通信 · 全部线程 · 未投递高亮 · 投影只读',
           总线.length ? 总线.length + ' 线程' : '',
           总线.length
-            ? h('div', { className: 'dshmind-reviews' }, 总线.slice(0, BUS_LIMIT).map(function (row, index) {
+            ? h('div', { className: 'dshmind-reviews' }, (function () {
+                // 线程层折叠：默认画 BUS_PREVIEW 个，其余收起（全都在，随时可铺开）。
+                var 线程展开 = !总线折叠('线程:全部');
+                var 画线程 = 线程展开 ? 总线 : 总线.slice(0, BUS_PREVIEW);
+                var 行 = 画线程.map(function (row, index) {
                 var 线程id = line(row.线程, 'bus-' + index);
+                // 消息层折叠：默认画最新的 BUS_MSGS_PREVIEW 条，其余收起。
+                var 消息键 = '消息:' + 线程id;
+                var 消息展开 = !总线折叠(消息键);
+                var 全部消息 = arr(row.最新);
+                var 画消息 = 消息展开 ? 全部消息 : 全部消息.slice(-BUS_MSGS_PREVIEW);
+                var 收起消息数 = 全部消息.length - 画消息.length;
                 return h('article', { key: 线程id, className: 'dshmind-bus' }, [
                   h('div', { key: 'top', className: 'dshmind-reviewTop' }, [
                     h('span', { key: 't', className: 'dshmind-nodeTitle', title: row.线程 }, row.线程 || '（未命名线程）'),
@@ -2311,23 +2494,82 @@ window.__ModuleLoader__.load({
                   row.会审讨论段
                     ? h('div', { key: 'mask', className: 'dshmind-decideWhy' },
                         '讨论发言按盲评口径收起（未交齐不揭名）；讨论读数见上方会审区。')
-                    : (row.最新.length
-                        ? h('div', { key: 'msgs', className: 'dshmind-auditScroll' },
-                            h('div', { className: 'dshmind-busMsgs' }, row.最新.slice(-BUS_MSGS_LIMIT).map(function (m, i) {
-                              // 扫描行：时间/类型/发件/正文——正文在投影层已截 120 字，
-                              // 这里整行挂 title 给这 120 字全文（截断不丢信息的 UI 卫生口径）。
-                              var 摘要 = (m.状态 === '暂不投递' ? '⏸ ' : '') + (m.内容 || '（空消息）');
-                              return h('div', { key: 'm' + i, className: 'dshmind-busRow', title: 摘要 }, [
-                                h('span', { key: 't', className: 'dshmind-mono', style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary,#81858c)' } },
-                                  shortTime(m.追加于) || '—'),
-                                h('span', { key: 'k', className: 'dshmind-chip' }, m.类型 || '?'),
-                                m.发件 ? h('span', { key: 'f', className: 'dshmind-chip dshmind-mono', title: m.发件 }, 短主体(m.发件)) : null,
-                                h('span', { key: 'c', className: 'dshmind-auditAction' }, 摘要),
+                    : (全部消息.length
+                        ? h('div', { key: 'msgs', className: 'dshmind-auditScroll' }, [
+                            // 消息层：被收起时明说还有多少条（不静默）。
+                            收起消息数 > 0
+                              ? h('button', {
+                                  key: 'msgtog', type: 'button', className: 'dshmind-descToggle',
+                                  onClick: function () { 切总线折叠(消息键); },
+                                  title: '展开该线程的全部消息',
+                                }, '▸ 另有 ' + 收起消息数 + ' 条（展开全部 ' + 全部消息.length + ' 条）')
+                              : (全部消息.length > BUS_MSGS_PREVIEW
+                                  ? h('button', {
+                                      key: 'msgtog2', type: 'button', className: 'dshmind-descToggle',
+                                      onClick: function () { 切总线折叠(消息键); },
+                                      title: '收起',
+                                    }, '▾ 收起')
+                                  : null),
+                            h('div', { className: 'dshmind-busMsgs' }, 画消息.map(function (m, i) {
+                              // 扫描行：时间/类型/发件/正文。
+                              // 2026-10-12：投影层现在给**全量正文**（收窄挪到这里），
+                              // 所以超长的正文用**折叠预览**而不是丢掉——点钮看全文。
+                              var 正文全 = String(m.内容 || '');
+                              var 正文键 = '正文:' + 线程id + '#' + m.id;
+                              var 正文折 = 总线折叠(正文键);
+                              var 正文长 = m.正文原长 > 0 ? m.正文原长 : 正文全.length;
+                              var 要折 = 正文长 > BUS_TEXT_PREVIEW;
+                              var 摘要 = (m.状态 === '暂不投递' ? '⏸ ' : '') + (正文全 || '（空消息）');
+                              var 单元格 = h('span', {
+                                key: 'c',
+                                className: 'dshmind-busText' + (要折 && 正文折 ? ' dshmind-busTextClamped' : ''),
+                                // 折叠预览时 title 给全文（截断不丢信息的 UI 卫生口径）；
+                                // 展开态不再挂 title（正文就在页面上，重复挂反而挡视线）。
+                                title: 要折 && 正文折 ? 摘要 : undefined,
+                              }, 摘要);
+                              return h('div', { key: 'm' + i, className: 'dshmind-busRow' }, [
+                                // 元信息独立一行（时间/类型/发件）——不再和正文抢同一行的宽度。
+                                h('div', { key: 'meta', className: 'dshmind-busMeta' }, [
+                                  h('span', { key: 't', className: 'dshmind-mono', style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary,#81858c)' } },
+                                    shortTime(m.追加于) || '—'),
+                                  h('span', { key: 'k', className: 'dshmind-chip' }, m.类型 || '?'),
+                                  m.发件 ? h('span', { key: 'f', className: 'dshmind-chip dshmind-mono', title: m.发件 }, 短主体(m.发件)) : null,
+                                ].filter(Boolean)),
+                                // 正文独占下一行、吃满宽度（正文才是要读的东西）。
+                                // 独立类名：不再借审计动作列的口径（两套口径合流正是上面那个 bug）。
+                                h('div', { key: 'cw', className: 'dshmind-busTextWrap' }, [
+                                  单元格,
+                                  要折
+                                    ? h('button', {
+                                        key: 'txtog', type: 'button', className: 'dshmind-descToggle',
+                                        onClick: function () { 切总线折叠(正文键); },
+                                        title: 正文折 ? '展开该条正文全文' : '收起正文',
+                                      }, 正文折 ? '▸ 展开全文（' + 正文长 + ' 字）' : '▾ 收起')
+                                    : null,
+                                ]),
                               ].filter(Boolean));
-                            })))
+                            })),
+                          ])
                         : null),
                 ].filter(Boolean));
-              }))
+                });
+                // 线程层：被收起时明说还有多少线程（总线程数由投影给，算得出）。
+                var 收起线程数 = 总线.length - 画线程.length;
+                if (收起线程数 > 0) {
+                  行.push(h('button', {
+                    key: 'bustog', type: 'button', className: 'dshmind-descToggle',
+                    onClick: function () { 切总线折叠('线程:全部'); },
+                    title: '展开全部线程',
+                  }, '▸ 另有 ' + 收起线程数 + ' 个线程（展开全部 ' + 总线.length + ' 个）'));
+                } else if (总线.length > BUS_PREVIEW) {
+                  行.push(h('button', {
+                    key: 'bustog2', type: 'button', className: 'dshmind-descToggle',
+                    onClick: function () { 切总线折叠('线程:全部'); },
+                    title: '收起',
+                  }, '▾ 收起线程'));
+                }
+                return 行;
+              })())
             : emptyGuide('消息总线上还没有消息', '成员间结构化通信走这里（bus_send 落线即出现）' + 他处有账(项目清单, 当前项目),
               "mind {action:'bus_send', 线程:'通报-示例', 类型:'广播', 内容:'一句话正文', 收件:'lead'}"),
         ),
@@ -2347,7 +2589,11 @@ window.__ModuleLoader__.load({
         ].filter(Boolean)),
       ];
 
-      return h('div', { className: 'dshmind-root', 'data-dshmind': 'root' }, children);
+      // 两层（2026-10-12）：root = 铺满 + 滚动容器；page = 内容 1040px 居中（显示宽度不变）。
+      // 鼠标落在左右空白上时命中的是 root（它铺满整屏）⇒ 也能滚。
+      return h('div', { className: 'dshmind-root', 'data-dshmind': 'root' }, [
+        h('div', { key: 'page', className: 'dshmind-page', 'data-dshmind': 'page' }, children),
+      ]);
     }
 
     // ── 侧边栏入口 ──────────────────────────────────────────────────────────
