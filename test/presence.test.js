@@ -325,6 +325,54 @@ describe('失联限制：出厂件是真源，开关可关', () => {
     }
   });
 
+  // ⑦c（2026-10-11 跑通测试 P3 · 补 ⑦b 的空档）：⑦b 断的是 schema 的**描述文本**，
+  // 于是把 `lib/actions.js` 那条 `if (!args.id) throw …` 改成不抛，全量仍绿——
+  // 行为退回「能力库里没有 undefined」，正是 d826d66 声称修掉的那句（把人引向「库里缺条目」）。
+  // 描述文本是给模型看的提示，**守卫是代码**：这里喂真参数、断真行为，两处都钉。
+  it('⑦c S4 工具面行为：capability_read 缺 id（只给 名）⇒ 报「需要 id」指路，不许退回「能力库里没有 undefined」', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'mind-presence-capread-'));
+    const host = fakeHost();
+    await kernel.apply(host.ctx, { home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') });
+    const org = await shareOrg({ home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') });
+    try {
+      const 工具 = host.工具.get('mind');
+      assert.ok(工具, 'mind 工具应已注册');
+      // 正对照：按真 id 读得到真正文 ⇒ 证明这条路是通的，下面的红不是「怎么都拒」。
+      const 真 = JSON.parse(await 工具.execute({ action: 'capability_read', id: 'memory-write' }, fakeExec({ name: 'mind' })));
+      assert.equal(真.成功, true, `正对照：按 id 读真能力卡必须成功（出厂件里有 memory-write）：${JSON.stringify(真)}`);
+      assert.equal(真.条目.id, 'memory-write');
+      assert.match(String(真.条目.正文), /记忆写入/, '正对照：正文要真读进来（不是个空壳）');
+      // 行为面：只给 `名`（schema 里另一个参数）⇒ 缺 id。模型照 schema 字面传参走的就是这条路。
+      const 缺 = JSON.parse(await 工具.execute({ action: 'capability_read', 名: 'memory-write' }, fakeExec({ name: 'mind' })));
+      assert.equal(缺.成功, false, '缺 id 必须失败：不许静默返回别的东西');
+      assert.match(String(缺.理由), /需要 id/, '错误必须点名「需要 id」——这就是那条指路（缺了它会退回「能力库里没有 undefined」）');
+      assert.match(String(缺.理由), /capability_resolve/, '要指路：`名` 只用于 capability_resolve');
+      assert.deepEqual(缺.缺什么, ['id'], '「缺什么」要如实说是 id');
+      assert.ok(!/undefined/.test(String(缺.理由)), '不许退回「能力库里没有 undefined」：那会把人引向「库里缺条目」的错方向');
+      // 同一件事在动作层也成立：工作台 / 命令面共用同一条守卫，不维护第二份。
+      await assert.rejects(
+        () =>
+          runAction({
+            org,
+            项目: 'p',
+            subject: { id: 'lead', kind: 'Lead' },
+            主体: { id: 'lead', kind: 'Lead' },
+            args: { action: 'capability_read', 名: 'memory-write' },
+          }),
+        (error) => {
+          assert.equal(error.name, 'InvalidBody', '缺 id 要响亮拒（InvalidBody），不是悄悄返回 null');
+          assert.match(String(error.message), /需要 id/);
+          assert.deepEqual(error.missing, ['id']);
+          return true;
+        },
+        'capability_read 缺 id：动作层同样必须报「需要 id」',
+      );
+    } finally {
+      host.清理();
+      await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
+    }
+  });
+
   // ⑧ D2 坏值不许静默：保护仍在（72），但读数必须说清「你写的值不合法、已退回」。
   it('⑧ D2 响应期限小时 是坏值（0 / -5 / "abc" / null）⇒ 仍按 72 判，读数标 值不合法 + 原值 + 来源', async () => {
     for (const 坏值 of [0, -5, 'abc', null]) {

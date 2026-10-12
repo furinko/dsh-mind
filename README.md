@@ -9,8 +9,9 @@
 ## 一张卡，三个组件
 
 「组件」= 插件管理页里那张卡下面的**行**：每行一个独立开关、一个独立状态点。
-本仓库是**单包自洽的 bundle 包**：三个组件行指向本包的**子路径导出**
-（`dsh-mind/kernel` 等），用户只装 `dsh-mind` 一个包，三行全部可达。
+本仓库是**单包自洽的 bundle 包**：内核与安全类两行指向本包的**子路径导出**
+（`dsh-mind/kernel` / `dsh-mind/guard`），看板行是**裸包名 `dsh-mind`**（浏览器半区的载体行，
+宿主 apply 刻意为空——见下）；用户只装 `dsh-mind` 一个包，三行全部可达。
 
 > 历史教训（为什么不再是三个独立包）：旧形态靠 profile 手写四行 `link:` 依赖——
 > `link:` 是纯符号链接协议，pnpm **不解析**目标包的 `dependencies`，官方
@@ -19,8 +20,8 @@
 
 ```
 dsh-mind/                        ← 插件列表里的那张卡（不插自己的行）
-  cordis.patch.yml                 insert 三行：内核 / 安全类 / 看板（name = 本包子路径）
-  package.json                     exports: ./kernel ./guard ./board ./client；dsh.client 在根
+  cordis.patch.yml                 insert 三行：内核 / 安全类 / 看板（内核·安全类 name = 子路径；看板 name = 裸包名）
+  package.json                     exports: ./kernel ./guard ./client；dsh.client 在根
   src/                             八件基础设施实现（组件用相对路径引它）
   mind/                            出厂区：宪章 / 法律 / 编制 / 岗位卡 / 出厂能力库 / 默认值
   lib/actions.js                   动作表（内核组件用）
@@ -28,7 +29,7 @@ dsh-mind/                        ← 插件列表里的那张卡（不插自己�
   components/
     kernel/                        内核组件（宿主入口 = exports ./kernel）
     guard/                         安全类组件（宿主入口 = exports ./guard）
-    board/                         看板组件（宿主入口 = exports ./board；浏览器半区 = ./client）
+    board/                         看板组件（宿主入口 = 裸包名载体行的根入口 `exports "."`；浏览器半区 = exports ./client）
 ```
 
 | 组件 | 行 id | 装什么 | 关掉它的后果 |
@@ -176,7 +177,8 @@ dsh plugin --profile <名> add E:\dsh-mind
 `dsh plugin add` 是官方安装器（`pnpm add` 薄转发 + 按「已装且声明 `dsh.bundle` 的依赖」
 自动重建 `bundles`）。装完 `dependencies` 里只有 `dsh-mind` 一行，
 `dsh.profile.bundles` 里多一张 `dsh-mind` 卡；三行组件由本包 `cordis.patch.yml`
-就位，`name` 是本包子路径（`dsh-mind/kernel` 等），经 package.json 的 `exports` 解析——
+就位，`name` 是内核/安全类的子路径（`dsh-mind/kernel` / `dsh-mind/guard`）与看板行的
+裸包名（`dsh-mind`，浏览器半区载体行），经 package.json 的 `exports` 解析——
 **不需要手写任何 `link:` 依赖，不存在「组件静默不装」**。
 
 ### 历史教训：为什么曾经要手写四行（现已废除）
@@ -205,9 +207,11 @@ node scripts/verify-profile-install.mjs --selftest   # 反例自测
 ```
 
 逐条检查：dependencies 与 bundles 有 `dsh-mind` · `node_modules/dsh-mind` 非 private、
-无 dependencies · exports 的 `./kernel ./guard ./board ./client` 全部落盘 · 出厂区
-`mind/` 与 `src/` 在包里 · patch 三行都是 `dsh-mind/<sub>` 且四个子路径从 profile
-上下文 `require.resolve` 得到。全过 exit 0，任一条红 exit 1 并逐条说明。
+无 dependencies · exports 的 `./kernel ./guard ./client` 每一项都落盘 · 出厂区
+`mind/` 与 `src/` 在包里 · patch 三行逐行在场（内核 / 安全类两行的 `name` 是
+`dsh-mind/<sub>` 子路径，看板那一行是**裸包名 `dsh-mind` 载体行**）且
+`./kernel ./guard ./client` 三个子路径从 profile 上下文 `require.resolve` 得到。
+全过 exit 0，任一条红 exit 1 并逐条说明。
 
 装完是**一张卡**，三个组件是那张卡下面的三行，各有独立开关（关一行 = 那个组件不进
 roster，它的工具 / 命令 / 界面一起消失）；每行的 `config` 是各组件自己的（如安全类
@@ -226,20 +230,26 @@ npm publish         # 需要 npm 账号登录；发布名 dsh-mind（2026-10-11 
 
 ```powershell
 cd E:\dsh-mind
-npm test                                             # preflight 门禁 + 内核用例 260 条
-node components/board/test/client-harness.mjs        # 看板：309 条行为断言
-node --test components/board/test/client.test.js     # 看板：6 条结构断言
+npm test                                             # preflight 门禁 + 内核/宿主/集成用例 + 看板两半区，一条命令跑全
+node components/board/test/client-harness.mjs        # 看板：367 条行为断言
+node --test components/board/test/client.test.js     # 看板：11 条结构断言
 ```
 
 数字口径（哪个脚本产出哪个数，本机实测 exit=0）：
 
 | 数 | 产出者 | 怎么看 |
 |---|---|---|
-| **260** | `node --test "test/*.test.js"`（`npm test` 的后半段） | `ℹ tests 260` / `ℹ pass 260` / `ℹ fail 0` |
-| **309** | `components/board/test/client-harness.mjs` 自己打印 | 末行 `client-harness: 309 条断言全部通过` |
-| **6** | `node --test components/board/test/client.test.js` | `ℹ tests 6` / `ℹ pass 6` / `ℹ fail 0` |
+| **327** | `node --test "test/*.test.js"`（只跑根 `test/` 的那一段；`npm test` 中段的第一个 glob） | `ℹ tests 327` / `ℹ pass 327` / `ℹ fail 0` |
+| **367** | `components/board/test/client-harness.mjs` 自己打印（`npm test` 末段） | 末行 `client-harness: 367 条断言全部通过` |
+| **11** | `node --test components/board/test/client.test.js` | `ℹ tests 11` / `ℹ pass 11` / `ℹ fail 0` |
 
 这三个数会随断言增加而变——**以脚本自己的输出为准**（表里是写这份文档时的实测值）。
+
+**看板测试此前不在门禁里**：`scripts.test` 原来只跑 `node --test "test/*.test.js"`，
+而看板的 11 条结构断言与 367 条行为断言都在 `components/board/test/` 下——
+看板行为红了而 `npm test` 全绿是可能的。现在两处都进了 `scripts.test`
+（`"components/board/test/*.test.js"` 一个 glob ＋ `client-harness.mjs` 一段）：
+`npm test` 中段两个 glob 合起来是 327 + 11 = 338 条，末段再跑那 367 条行为断言。
 
 **这两个看板脚本在 `components/board/test/` 下**（不在根 `test/`）——
 写成 `node test/client-harness.mjs` 会 MODULE_NOT_FOUND。

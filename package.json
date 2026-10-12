@@ -54,7 +54,7 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node test/preflight.mjs && node --test \"test/*.test.js\"",
+    "test": "node test/preflight.mjs && node --test \"test/*.test.js\" \"components/board/test/*.test.js\" && node components/board/test/client-harness.mjs",
     "preflight": "node test/preflight.mjs"
   },
   "engines": {

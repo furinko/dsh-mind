@@ -17,6 +17,7 @@ import { readJsonl } from '../src/kernel/fsx.js';
 import { Clock } from '../src/kernel/time.js';
 import { runAction } from '../lib/actions.js';
 import { projectWorkbench, sliceForViewer } from '../src/workbench.js';
+import { Org } from '../src/org.js';
 
 /** @type {Awaited<ReturnType<typeof makeFixture>>} */
 let f;
@@ -220,6 +221,111 @@ describe('主干环路', () => {
     // 成员切片：总线正文一律收起（「只读自己那片」——他人发言不是自己那片）。
     const 成员视图 = sliceForViewer(投影([]), { id: 'member-a', kind: '成员' });
     assert.ok(成员视图.消息总线.every((t) => !t.最新), '成员切片：总线只给规模行，不给正文');
+  });
+
+  it('⑦ 盲评掩码补漏（纯投影）：名单与会审行同口径取并集，判定键走单源 `线程等价键`', () => {
+    const 消息行 = (内容) => [{ id: 'm-1', 发件: 'member-a', 类型: '交卷', 内容, 状态: '已投递', 追加于: 't' }];
+    const 投影 = (节点, 线程) => projectWorkbench({
+      项目: P, 节点, 探针: { 结果: [] }, 策略: { healthy: true, rules: [] }, 线程,
+    });
+
+    // ① 未交齐的会审节点（负责人 2 人、1 份独立答案、**没开讨论**）⇒ 线程也遮。
+    //    修前：名单只装「开了讨论」的节点 ⇒ 这条线程原样画出「发件 + 正文」，而同一份面板的
+    //    会审行只有盲标 —— 「会审行看不见、总线行看得见」。
+    const 未齐会审 = { id: 'task-mask-a', 状态: '执行中', 负责人: ['member-a', 'member-b'], 独立答案: [{ 成员: 'member-a', 结论: 'A 案' }] };
+    const 视图 = 投影([未齐会审], [{ 线程: 'task-mask-a', 条数: 1, 未投递: 0, 最新: 消息行('密文-未齐会审') }]);
+    assert.equal(视图.消息总线[0].会审讨论段, true, '未交齐的会审节点线程必须遮：判据是「揭名之前不给内容」，与有没有开讨论无关');
+    assert.equal(视图.消息总线[0].最新, undefined, '遮罩行不给正文与发件');
+    assert.ok(!JSON.stringify(视图).includes('密文-未齐会审'), '会审行盲标时，同一份投影里不许出现那串密文');
+    assert.equal(视图.会审[0].揭名, false, '前置读数：此时会审行确实只有盲标（漏口就在这两行之间）');
+
+    // ② 判定键必须与落线侧同源：落线是 `busThread()` 直接 join 文件系统（NTFS 大小写不敏感）
+    //    ⇒ 大写别名线程是同一个文件。修前用精确键 ⇒ miss ⇒ 正文进面板。
+    const 别名视图 = 投影([未齐会审], [{ 线程: 'TASK-MASK-A', 条数: 1, 未投递: 0, 最新: 消息行('密文-别名') }]);
+    assert.equal(别名视图.消息总线[0].会审讨论段, true, '大小写别名线程同样遮（判定键走 线程等价键()）');
+    assert.ok(!JSON.stringify(别名视图).includes('密文-别名'), '大小写别名不许把正文送进面板');
+
+    // ③ 正对照（别修过头）：**非会审**节点（1 负责人、无独立答案、没开讨论）的普通线程照旧给「最新」。
+    const 单人 = { id: 'task-plain', 状态: '执行中', 负责人: ['member-a'] };
+    const 普通 = 投影([单人], [{ 线程: 'task-plain', 条数: 1, 未投递: 0, 最新: 消息行('普通正文') }]).消息总线[0];
+    assert.equal(普通.最新.length, 1, '普通线程仍给正文+发件——消息总线面板的意义就是让人看见线程');
+    assert.equal(普通.会审讨论段, undefined, '普通线程不带遮罩标记');
+
+    // ④ 并集，不取替换：`n.讨论` 那一路必须保留（开了讨论但形状不是会审的节点仍遮）；
+    //    会审形状的另一半（有独立答案、哪怕只有 1 位负责人）也遮 —— 与会审行同口径。
+    const 讨论单 = { id: 'task-open', 状态: '执行中', 负责人: ['member-a'], 讨论: { 状态: '讨论中' } };
+    const 讨论单行 = 投影([讨论单], [{ 线程: 'task-open', 条数: 1, 未投递: 0, 最新: 消息行('讨论正文') }]).消息总线[0];
+    assert.equal(讨论单行.会审讨论段, true, '开过讨论的节点仍遮（既有口径不许被替换掉）');
+    assert.equal(讨论单行.最新, undefined);
+    const 单人有答案 = { id: 'task-ans', 状态: '已交卷', 负责人: ['member-a'], 独立答案: [{ 成员: 'member-a', 结论: 'A 案' }] };
+    assert.equal(
+      投影([单人有答案], [{ 线程: 'task-ans', 条数: 1, 未投递: 0, 最新: 消息行('单人会审正文') }]).消息总线[0].会审讨论段,
+      true,
+      '有独立答案（哪怕 1 位负责人）也是会审：与会审行同口径',
+    );
+
+    // e) 成员切片行为不变：遮罩行的形状与「不给正文」照旧。
+    const 成员 = sliceForViewer(视图, { id: 'member-a', kind: '成员' });
+    assert.deepEqual(
+      成员.消息总线,
+      [{ 线程: 'task-mask-a', 条数: 1, 未投递: 0, 会审讨论段: true }],
+      '成员切片：只给规模行，遮罩标记照旧带出（行为不变）',
+    );
+  });
+
+  it('⑦ 盲评掩码端到端：动作面落进会审节点线程的结论不进面板投影（含大写别名线程）', async () => {
+    const g = await makeFixture();
+    try {
+      const org = await Org.open({ home: g.home, factoryRoot: g.factoryRoot, privateRoot: g.privateRoot, project: P });
+      const 节点 = await org.tasks.create({
+        subject: LEAD, 项目: P, 描述: '掩码补漏会审', 负责人: ['member-a', 'member-b'], 判据: ['结论一致'], 模式: '独立会审',
+      });
+      await org.tasks.dispatch(节点.id, { subject: LEAD, 项目: P });
+      await org.tasks.start(节点.id, { subject: MEMBER, 项目: P });
+      await org.tasks.submit(节点.id, { subject: MEMBER, 项目: P, 结论: 'A 案' }); // 只交 1/2：未齐
+
+      // 泄漏路径 A：负责人 `bus_send` 往**自己的任务线程**（=节点 id，这条本来就被允许）落结论。
+      const 密文 = '密文：未交齐的会审结论';
+      await runAction({
+        org, 项目: P, subject: LEAD, 主体: MEMBER,
+        args: { action: 'bus_send', 线程: 节点.id, 类型: '交卷', 内容: 密文 },
+      });
+      assert.equal(
+        (await org.bus.readRaw({ 项目: P, 线程: 节点.id })).some((m) => m.内容 === 密文),
+        true,
+        '前置：这条落线路径本身是允许的（真落线，不是纸面允许）',
+      );
+      const 视图 = await org.workbench({ 项目: P });
+      assert.equal(视图.会审[0].揭名, false, '未交齐 ⇒ 会审行只有盲标');
+      assert.ok(!JSON.stringify(视图).includes(密文), '同一份面板上，会审行盲标时总线行不许把结论画出来');
+
+      // 泄漏路径 B：讨论开启**之前**用大写别名先建线（先落的那一侧决定文件名形态，
+      // 与真 id 是同一个文件）——判定侧用精确键就会 miss。
+      const 节点B = await org.tasks.create({
+        subject: LEAD, 项目: P, 描述: '掩码补漏会审二', 负责人: ['member-a', 'member-b'], 判据: ['结论一致'], 模式: '独立会审',
+      });
+      await org.tasks.dispatch(节点B.id, { subject: LEAD, 项目: P });
+      await org.tasks.start(节点B.id, { subject: MEMBER, 项目: P });
+      await org.tasks.submit(节点B.id, { subject: MEMBER, 项目: P, 结论: 'A 案' }); // 只交 1/2：未齐
+      const 别名 = 节点B.id.toUpperCase();
+      assert.notEqual(别名, 节点B.id, '前置：别名与真 id 字面不同（否则这条测不到大小写口径）');
+      const 别名密文 = '密文：大写别名线程';
+      await runAction({
+        org, 项目: P, subject: LEAD, 主体: LEAD,
+        args: { action: 'bus_send', 线程: 别名, 类型: '交卷', 内容: 别名密文 },
+      });
+      assert.equal(
+        (await org.bus.readRaw({ 项目: P, 线程: 节点B.id })).some((m) => m.内容 === 别名密文),
+        true,
+        '别名与真 id 落到同一个文件（NTFS 大小写不敏感）——这就是大小写那条旁路的落线事实',
+      );
+      const 别名视图 = await org.workbench({ 项目: P });
+      const 别名行 = 别名视图.消息总线.find((t) => t.线程 === 别名);
+      assert.equal(别名行?.会审讨论段, true, `别名线程也必须遮，实际 ${JSON.stringify(别名行)}`);
+      assert.ok(!JSON.stringify(别名视图).includes(别名密文), '大小写别名不许把正文送进面板');
+    } finally {
+      await g.cleanup();
+    }
   });
 
   it('记忆：写入必带来源，项目标签恒打、岗位标签默认不打', async () => {
