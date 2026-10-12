@@ -23,6 +23,29 @@ const ANSWER_READERS = ['主权者', 'Lead', '复核者'];
 const isStateRow = (row) => typeof row?.指向 === 'string' && typeof row?.追加 === 'string';
 
 /**
+ * 「已被否」粘性判据（**唯一源**，2026-10-12 评审收口）：`query` 的默认召回面与
+ * `promoteCrossProject` 的晋升闸共用同一条——召回面否掉的东西，晋升面不许放行。
+ *
+ * 判据是**粘的**：只要追加过 invalid / 推翻，就永久出局，之后的「降权」不许把它复活。
+ * 只看最后一个 `状态` 会漏：`fold` 是按 `追于` 覆盖的，而 `追于` 是**秒级**——
+ * 同一秒里「先失效、后降权」会让最终状态变成 `已降权`，于是被判错过的条目又回到召回面。
+ * 方向也一致：降权的意思是「冷」，不是「错」（§7「冷 ⇒ 追加降权状态，不删」），
+ * 而「错」是事实判断，不该被后来的优先级判断撤销。
+ *
+ * 契约A（§C8）：「隔离 / 待删除」与已失效同为粘性——源对象被物理删除后，
+ * 血缘波及的下游不许再以「有效知识」的面目出现在默认召回里。
+ */
+export function 是否已被否(entry) {
+  return (
+    entry.状态 === '已失效' ||
+    entry.状态 === '被推翻' ||
+    entry.状态 === '已隔离' ||
+    entry.状态 === '待删除' ||
+    (entry.历史 ?? []).some((s) => ['invalid', '推翻', '隔离', '待删除'].includes(s.追加))
+  );
+}
+
+/**
  * 契约C（主权者裁决 2026-10-09）·披露机械检查的**出厂默认清单**。
  *
  * 晋升跨项目知识（`promoteCrossProject`）会把一条知识扩散到产生它的项目之外，
@@ -166,6 +189,16 @@ export class MemoryService {
     const entry = await this.#folded(id);
     if (!entry) throw new InvalidBody(`没有这条记忆：${id}`);
     if (entry.类 !== '知识') throw new InvalidBody('只有知识可以打岗位标签；经历/偏好/作答不跨项目。');
+    // 被否的知识不许扩散（2026-10-12 评审 P1-7）：修前这里只看「存在 + 类=知识」，
+    // 一条已失效/被推翻的知识照样晋升到跨项目面——召回面否掉的东西从侧门出去了。
+    // 判据与 query 的默认召回面同源（是否已被否 · 唯一源），口径不许分叉。
+    if (是否已被否(entry)) {
+      throw new Denied(
+        '记忆处置表 · 被否的知识不许晋升（§7：扩散错误知识比不扩散更糟）',
+        `条目 ${id} 当前状态「${entry.状态}」且有过否决性追加：已失效/被推翻/被隔离的知识不许打岗位标签扩散到跨项目面。`,
+        { howToChange: '若原条目判错了：推翻它、以正确内容另记一条，再晋升新条目；不许给被否条目翻案式晋升。' },
+      );
+    }
     await this.policy.check({
       subject: spec.subject,
       action: 'write',
@@ -232,9 +265,13 @@ export class MemoryService {
 
     // 双份留痕：本项目那份保留原样，跨项目那份追一条同 id 的条目，
     // 这样「它产生于本项目」与「它对本岗位可复用」两个事实都在。
+    // fold 派生键不许回落账本（2026-10-12 评审 P1-7）：`历史 / 状态 / 账本出现于` 是 fold 的
+    // 读时投影——写进去，跨项目账上就嵌了一份**陈旧的**状态史，mergeEntryRows 会拿它盖真实
+    // 累积历史（本项目后续追加的 状态行 不在那份快照里）。
+    const { 历史: _派生历史, 状态: _派生状态, 账本出现于: _派生出现于, ...条目原件 } = entry;
     await this.#appendLedger(this.layout.memoryLog(DIR.跨项目, '知识'), [
       {
-        ...entry,
+        ...条目原件,
         归属: DIR.跨项目,
         岗位: spec.岗位,
         追加: undefined,
@@ -320,23 +357,9 @@ export class MemoryService {
     // 「当前有效视图」：失效与被推翻的条目**不进召回**，但**仍留在 `条目` 里**供追溯——
     // 调用方要看到「这条存在过、已经被否掉」，而不是让它悄悄消失（§7 追加状态的本意）。
     // 要看它们就显式带 `含失效: true`（历史 / 调查口径）。
-    //
-    // 判据是**粘的**：只要追加过 invalid / 推翻，就不再进当前召回，之后的「降权」不许把它复活。
-    // 只看最后一个 `状态` 会漏：`fold` 是按 `追于` 覆盖的，而 `追于` 是**秒级**——
-    // 同一秒里「先失效、后降权」会让最终状态变成 `已降权`，于是被判错过的条目又回到召回面。
-    // 方向也一致：降权的意思是「冷」，不是「错」（§7「冷 ⇒ 追加降权状态，不删」），
-    // 而「错」是事实判断，不该被后来的优先级判断撤销。
-    //
-    // 契约A（§C8）：「隔离 / 待删除」与已失效同为粘性——源对象被物理删除后，
-    // 血缘波及的下游不许再以「有效知识」的面目出现在默认召回里。
-    const 已被否 = (entry) =>
-      entry.状态 === '已失效' ||
-      entry.状态 === '被推翻' ||
-      entry.状态 === '已隔离' ||
-      entry.状态 === '待删除' ||
-      (entry.历史 ?? []).some((s) => ['invalid', '推翻', '隔离', '待删除'].includes(s.追加));
-    const 撤回 = visible.filter(已被否);
-    const 可召回 = query.含失效 === true ? visible : visible.filter((entry) => !已被否(entry));
+    // 判据实现只有一处：`是否已被否`（模块级，晋升闸与它共用同一条粘性判据）。
+    const 撤回 = visible.filter(是否已被否);
+    const 可召回 = query.含失效 === true ? visible : visible.filter((entry) => !是否已被否(entry));
 
     // `排除失效` 只报**实际被排除**的条数：带 `含失效: true` 时一条都没排除，
     // 那里还写个 1 就是一句假读数（这个组织里假读数比没读数更贵）。
@@ -624,19 +647,29 @@ export class MemoryService {
       target: memoryTarget('作答', spec.项目, spec.项目),
       context: { id: spec.任务 ?? null, 状态: '归档' },
     });
-    const rows = await readJsonl(file);
-    const open = rows.filter((row) => !isStateRow(row));
-    if (open.length === 0) return { 归档条数: 0, 账本: file };
-    await this.#appendLedger(file, open.map((row) => ({ id: objectId('账目', row.id, { at: this.clock.ms() }), 指向: row.id, 追加: '归档', 追于: this.clock.iso(), 依据: spec.任务 ?? '任务结束', 主体: spec.subject })));
+    // 读与追加在**同一把锁内**（设计债⑦：修前锁外读、`#appendLedger` 锁内写——中间窗口里
+    // 并发的交卷/结账不会被归档，漏的那条永远没人补）；候选集从 `fold` 出的**当前视图**滤
+    // 「未归档」，而不是从原始行滤「不是状态行」（2026-10-12 评审 P1-6：修前 `!isStateRow`
+    // 选中的是**全部历史条目行**——已归档的条目行照旧在账上 ⇒ 每次结账都给全体老条目
+    // 再追加一轮归档行，账本无限长胖、审计读数「归档 N 条」次次虚高）。
+    const 归档行 = await withLock(`${file}.lock`, async () => {
+      const rows = await readJsonl(file);
+      const open = fold(rows).filter((entry) => entry.归档 !== true);
+      if (open.length === 0) return [];
+      const lines = open.map((row) => ({ id: objectId('账目', row.id, { at: this.clock.ms() }), 指向: row.id, 追加: '归档', 追于: this.clock.iso(), 依据: spec.任务 ?? '任务结束', 主体: spec.subject }));
+      await appendLines(file, lines);
+      return lines;
+    });
+    if (归档行.length === 0) return { 归档条数: 0, 账本: file };
     await this.audit.append({
       动作: '状态变更',
       主体: spec.subject,
       对象: { id: spec.任务 ?? spec.项目, kind: '任务' },
       依据: '作答归档后的可读性表（§7）',
-      结果: `归档 ${open.length} 条作答：成员不可读，默认检索面不再返回`,
+      结果: `归档 ${归档行.length} 条作答：成员不可读，默认检索面不再返回`,
       项目: spec.项目,
     });
-    return { 归档条数: open.length, 账本: file };
+    return { 归档条数: 归档行.length, 账本: file };
   }
 
   /**

@@ -112,6 +112,9 @@ export class CapabilityLibrary {
    * @returns {Promise<{ id: string, 来源: string, 正文: string, 适用岗位: string[], path: string }|null>}
    */
   async read(spec) {
+    // id 先过段名校验（2026-10-12 评审 P1-5）：修前 `read('../../../x')` 直接拼进路径，
+    // 读出能力库目录外的任意 .md —— 读面也要守段，「找不到返回 null」只在段合法后成立。
+    assertPathSegment(spec.id, '能力id');
     const zones = spec.来源 ? [spec.来源] : [SOURCE_AUTONOMOUS, SOURCE_FACTORY];
     for (const 来源 of zones) {
       const path = `${this.#dir(来源)}/${spec.id}.md`;

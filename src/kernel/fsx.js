@@ -163,7 +163,10 @@ export async function listDirs(dir, options = {}) {
  * @returns {Promise<T>}
  */
 export async function withLock(lockPath, fn, options = {}) {
-  const staleMs = options.staleMs ?? 15_000;
+  // staleMs 默认 60s（2026-10-12 评审 P2-9 从 15s 上调）：15s 在 Windows 慢盘 + 整文件重写
+  // （purge 这类读-改-写）面前太激进了——持有者只是慢，就被判「已死」强夺，临界区双入。
+  // 真实的死锁代价是等 60s，可接受；误判强夺的代价是数据竞争，不可接受。
+  const staleMs = options.staleMs ?? 60_000;
   const timeoutMs = options.timeoutMs ?? 10_000;
   const started = Date.now();
   await ensureDir(lockPath);
@@ -205,13 +208,17 @@ export async function withLock(lockPath, fn, options = {}) {
       if (!error || (error.code !== 'EEXIST' && error.code !== 'EPERM')) throw error;
       const info = await stat(lockPath).catch(() => null);
       const age = info ? Date.now() - info.mtimeMs : Number.POSITIVE_INFINITY;
-      if (age > staleMs) {
-        await rm(lockPath, { force: true });
-        options.onSteal?.({ lockPath, ageMs: age });
-        continue;
+      if (info && age > staleMs) {
+        // rm 在「删除挂起」上会 EPERM（句柄未关、DeleteFileW 已标挂起）——那不是强夺成功，
+        // 是「还占着」：吞掉、交给下面的超时 + 退避收束（2026-10-12 评审 P1-10 复核实测）。
+        const 抹掉 = await rm(lockPath, { force: true }).then(() => true, () => false);
+        if (抹掉) options.onSteal?.({ lockPath, ageMs: age });
       }
-      // stat 不到 = 锁刚被释放（删除挂起窗口）——重试即可，不算失败。
-      if (!info) continue;
+      // 超时与退避是**所有**等待路径的共同出口（修前只有「锁还在且未过期」走这里，
+      // 强夺与删除挂起两条都是裸 continue ⇒ 100% CPU 热循环，且永不超时）：
+      //  - 强夺后立刻重试：Windows 上被 rm 的文件在持有句柄关闭前处于删除挂起态，
+      //    open('wx') 持续 EPERM，裸 continue 会在这里空转到天荒地老；
+      //  - stat 不到（!info）：同样是删除挂起窗口——等一拍再试，不算失败。
       if (Date.now() - started > timeoutMs) {
         throw new Error(`获取锁超时：${lockPath}（持有者未在 ${timeoutMs}ms 内释放）`);
       }
