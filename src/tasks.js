@@ -27,6 +27,7 @@ const TERMINAL = new Set(['已采纳', '已结账']);
  * 没有它，「已采纳」能被 start 复活、「待派发」能直接 review 成已采纳——环路次序就没有强制力。
  *  - start：已派发开工；已打回/未验返工。
  *  - submit：执行中交卷；已交卷再交 = 会审里另一个人交他自己的那份（fold 按人留）。
+ *    讨论段存在即拒（锁内判，2026-10-12 评审 P1-4：揭名后不许洗卷）。
  *  - review：已交卷初核；未验/已打回后再核。
  *  - markPending：任何非终态、非待决；resolvePending：只在待决。
  *  - attach：任何非终态。
@@ -42,6 +43,22 @@ const TRANSITIONS = {
   // 复核没过就打回重做，没采纳的节点不许结账（那会把未验收的工作收进终态）。
   settle: ['已采纳'],
 };
+
+/**
+ * 齐卷判据的**唯一源**（§9 会审解锁 / §10 盲评遮罩 / 讨论开启，三处共用一把尺）：
+ * 状态已交卷 + 负责人非空 + **每个负责人**都在独立答案里交过自己那份。
+ * 按人核对，不是计数——计数会被「非负责人垫一份」骗开（2026-10-12 评审：
+ * Lead 往会审节点交一份垫数 ⇒ 计数齐、按人不齐 ⇒ 遮罩提前揭开而 debate_open 反而拒）。
+ * 判据漂一处，盲评与解锁就分叉；所以它只能住在这里。
+ *
+ * @param {object|null} node 任务图节点（fold 投影）
+ * @returns {boolean}
+ */
+export function 全员已交(node) {
+  const 负责人 = node?.负责人 ?? [];
+  const 已交 = (node?.独立答案 ?? []).map((a) => a.成员);
+  return Boolean(node) && node.状态 === '已交卷' && 负责人.length > 0 && 负责人.every((r) => 已交.includes(r));
+}
 
 export class TaskGraph {
   /**
@@ -146,7 +163,7 @@ export class TaskGraph {
     const node = await this.#require(id, spec.项目);
     this.#requireTransition(node, 'submit');
     await this.#checkWrite(id, node, spec);
-    await this.#append(spec.项目, {
+    const event = {
       kind: 'submitted',
       id,
       状态: '已交卷',
@@ -155,7 +172,21 @@ export class TaskGraph {
       // 反例面由交卷人自己给：§10 的零分歧判据是「结论层一致**且无人给出反例面**」，
       // 而反例面必须来自各自的独立产出，不能事后由 Lead 补。
       反例面: spec.反例面 ?? [],
-    }, spec.subject);
+    };
+    await this.#append(spec.项目, event, spec.subject, undefined, (nodeInLock) => {
+      // 讨论段存在 ⇒ 答案已揭名（或已收敛）：从「已交卷」再交卷会在 fold 里按「同人替换」
+      // 静默洗掉本人那份独立答案（2026-10-12 评审 P1-4），零分歧判定就跑在洗过的答案集上。
+      // 判定必须在锁内（builder）：debate_opened 与 submit 走同一把项目锁，锁外预读有竞态。
+      // 返工环路不受影响：打回后状态是 已打回/执行中（不是已交卷）， rework 的提交照常放行。
+      if (nodeInLock?.讨论 && nodeInLock.状态 === '已交卷') {
+        throw new Denied(
+          '任务图 · 讨论段开启后不许改卷（§10 独立会审完整性）',
+          `节点 ${id} 已开启讨论段（${nodeInLock.讨论.状态 ?? '未知'}）：答案已揭名，再交卷会静默替换你原来的独立答案——那不是交卷，是洗卷。`,
+          { howToChange: '要改答案走返工环路：请复核者 review「不过」打回 → task_start → task_submit。' },
+        );
+      }
+      return event;
+    });
     return this.get(id, { 项目: spec.项目 });
   }
 

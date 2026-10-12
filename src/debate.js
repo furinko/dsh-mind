@@ -16,6 +16,7 @@
 import { Denied, InvalidBody } from './kernel/errors.js';
 import { DEFAULT_DEBATE_BUDGET } from './policy.js';
 import { subjectForRole } from './registry.js';
+import { 全员已交 } from './tasks.js';
 
 /** 讨论发言的合法类型（§9 消息类型里讨论段专用的三种）。 */
 export const DEBATE_SAY_TYPES = ['分歧', '表态', '答复'];
@@ -57,8 +58,8 @@ export class DebateService {
     const node = await this.#node(spec.项目, spec.节点);
     const 负责人 = node.负责人 ?? [];
     const 已交 = (node.独立答案 ?? []).map((a) => a.成员);
-    // 齐卷判据与 bus_unlock 同一款重算：状态已交卷 + 负责人非空 + 每人都有自己的独立答案。
-    const 齐 = node.状态 === '已交卷' && 负责人.length > 0 && 负责人.every((r) => 已交.includes(r));
+    // 齐卷判据只有一处实现（tasks.js 的 全员已交）：与 bus_unlock / 盲评遮罩同一把尺。
+    const 齐 = 全员已交(node);
     if (!齐) {
       throw new Denied(
         '会审讨论段 · 全员已交才开启（与 bus_unlock 同判据）',

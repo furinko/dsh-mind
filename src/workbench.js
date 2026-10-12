@@ -24,6 +24,7 @@
  */
 import { judgeZeroDivergence } from './review.js';
 import { 本轮发言, 预算名单, 可收敛判定 } from './debate.js';
+import { 全员已交 } from './tasks.js';
 // 判定键**必须**与落线侧同源（`src/paths.js` 的 `线程等价键()` 注释：判定侧一律走它，
 // 不许自己再发明一套）——见下方 `会审线程集合` 的注释。
 import { 线程等价键 } from './paths.js';
@@ -361,11 +362,13 @@ function 任务行(node) {
 /**
  * 交卷进度：**应交**看负责人人数，**已交**看有几个人的独立答案。
  * 两者都来自任务图事件流，所以是纯投影（§9 会审解锁就靠这个判据）。
+ * 「齐」的判据只有一处实现（tasks.js 的 全员已交，按人核对）——与 debate_open /
+ * bus_unlock 同一把尺；计数判据会被「非负责人垫一份」骗开（2026-10-12 评审 P2-5）。
  */
 function 交卷进度(node) {
   const 应交 = (node.负责人 ?? []).length;
   const 已交 = (node.独立答案 ?? []).length;
-  return { 已交, 应交, 齐: 应交 > 0 && 已交 >= 应交 };
+  return { 已交, 应交, 齐: 全员已交(node) };
 }
 
 /**
