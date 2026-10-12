@@ -67,6 +67,10 @@ const ACTION_GRADE = {
   // 缺口1A（主权者批准 2026-10-12）·身份未登记拦截：未登记主体敲门也留痕
   // （只记主体 id + 动作名，不记入参）。「有人试图以未登记身份行动」是安全信号，全记。
   身份未登记拦截: GRADE.全记,
+  // 缺口1B（2026-10-12 评审）·动作拦截：动作层/服务层自长闸（会审闸、状态机、披露检查、
+  // 身份门①②……）的 Denied 全记——策略引擎的拒绝另有「策略拒绝」，两边不双记
+  // （引擎抛出的 Denied 带 已入账 标记，动作层跳过）。
+  动作拦截: GRADE.全记,
 };
 
 export class AuditLog {
@@ -123,7 +127,13 @@ export class AuditLog {
         详情: entry.详情 ?? {},
         prev,
       };
-      const hash = chainHash(prev, { ...record, hash: undefined });
+      // hash 的输入必须先过 JSON 往返归一（2026-10-12 评审 P2-1）：落盘走 JSON.stringify
+      // （丢 undefined 值、NaN→null……），而 verify 复算的是「从盘上解析回来」的对象。
+      // 写侧不归一，任何含 undefined 的字段都会自己打断自己的链（2026-10#37 就是这么来的）。
+      // 注意 hash 键要在归一**之后**补回 undefined：验侧是 `{...row, hash: undefined}`
+      // （canonical 把 undefined 算成 null），两边形状必须逐键一致——归一时直接丢键就会
+      // 全盘见红（校准实测）。
+      const hash = chainHash(prev, { ...JSON.parse(JSON.stringify(record)), hash: undefined });
       const stored = { ...record, hash };
       await appendLines(file, [stored]);
       this._chain.set(month, { seq: record.seq, hash });
@@ -251,6 +261,10 @@ export class AuditLog {
    * 「更正声明无效」计入 broken ⇒ **声明与账本对不上 ⇒ 仍红**。声明自身是普通链节：
    * 篡改它的内容会让它自己的 hash 对不上 ⇒ 照样见红，篡改面零扩大。
    *
+   * 声明表是**跨月全局**的（2026-10-12 评审 P1-9）：`appendCorrection` 永远写进**当前月**
+   * 分片，而目标行在旧月——按月收集会让跨月轮转后的声明永远够不着目标（静默失效，
+   * 安全类机制里最糟的形状）。声明在哪个分片不重要，键是 `目标月#seq`。
+   *
    * @returns {Promise<{ ok: boolean, months: number, entries: number, broken: object[], 已确认瑕疵: object[] }>}
    */
   async verify() {
@@ -258,20 +272,25 @@ export class AuditLog {
     const broken = [];
     const 已确认瑕疵 = [];
     let entries = 0;
+    // 第一遍：全月份收集更正声明（跨月全局表，见 JSDoc）。声明必定**晚于**目标行入账
+    // （追加闭环），边走边收会让「目标行在前、声明在后」的常态永远收不到。
+    const 声明表 = new Map(); // 'YYYY-MM#seq' -> row[]
+    const 每月rows = new Map();
     for (const month of months) {
       const rows = await readJsonl(this.layout.auditLog(month));
-      // 先全片收集更正声明再逐行验：声明必定**晚于**目标行入账（追加闭环），
-      // 边走边收会让「目标行在前、声明在后」的常态永远收不到。
-      const 声明表 = new Map(); // seq -> row[]
+      每月rows.set(month, rows);
       for (const row of rows) {
         if (row.动作 !== '更正声明') continue;
         const m = /^(\d{4}-\d{2})#(\d+)$/.exec(String(row.详情?.目标 ?? ''));
-        if (!m || m[1] !== month) continue;
-        const seq = Number(m[2]);
-        if (!声明表.has(seq)) 声明表.set(seq, []);
-        声明表.get(seq).push(row);
+        if (!m) continue;
+        const key = `${m[1]}#${Number(m[2])}`;
+        if (!声明表.has(key)) 声明表.set(key, []);
+        声明表.get(key).push(row);
       }
-      const 已消费 = new Set();
+    }
+    const 已消费 = new Set();
+    for (const month of months) {
+      const rows = 每月rows.get(month);
       let prev = null;
       for (const row of rows) {
         entries++;
@@ -280,7 +299,7 @@ export class AuditLog {
           // 只有「prev 骨架完好」的单点 hash 瑕疵才可被声明覆盖；骨架断裂不许被声明洗白。
           const 声明 =
             row.prev === prev
-              ? (声明表.get(row.seq) ?? []).find((s) => s.详情?.实存hash === (row.hash ?? null) && s.详情?.复算hash === expected)
+              ? (声明表.get(`${month}#${row.seq}`) ?? []).find((s) => s.详情?.实存hash === (row.hash ?? null) && s.详情?.复算hash === expected)
               : null;
           if (声明) {
             已消费.add(声明);
@@ -290,14 +309,6 @@ export class AuditLog {
           }
         }
         prev = row.hash ?? null;
-      }
-      // 未被任何真实瑕疵消费的声明 = 声明与账本对不上（伪造 / 错配 / 目标本无瑕疵）⇒ 仍红。
-      for (const [seq, list] of 声明表) {
-        for (const s of list) {
-          if (!已消费.has(s)) {
-            broken.push({ month, seq: s.seq ?? null, 类型: '更正声明无效', 目标: `${month}#${seq}`, expected: s.详情?.实存hash ?? null, actual: s.hash ?? null });
-          }
-        }
       }
       // 尾部截断：anchor 是「这一片最后写到哪」的链外留痕。
       const anchor = await readJsonOrNull(this.layout.auditAnchor(month));
@@ -316,6 +327,15 @@ export class AuditLog {
       } else if (rows.length > 0) {
         // 有账却无锚：锚文件被删同样让「尾部截断」无法被发现，按最严报出来（§12.2 查不到 = 最严）。
         broken.push({ month, seq: rows[rows.length - 1]?.seq ?? null, 类型: '锚缺失', expected: null, actual: rows[rows.length - 1]?.hash ?? null });
+      }
+    }
+    // 未被任何真实瑕疵消费的声明 = 声明与账本对不上（伪造 / 错配 / 目标本无瑕疵）⇒ 仍红。
+    // 归属记到**声明自己所在的月份**（它是哪个月入的账，就在哪个月见红）。
+    for (const [key, list] of 声明表) {
+      for (const s of list) {
+        if (!已消费.has(s)) {
+          broken.push({ month: monthKey(s.时间), seq: s.seq ?? null, 类型: '更正声明无效', 目标: key, expected: s.详情?.实存hash ?? null, actual: s.hash ?? null });
+        }
       }
     }
     return { ok: broken.length === 0, months: months.length, entries, broken, 已确认瑕疵 };

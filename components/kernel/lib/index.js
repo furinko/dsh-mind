@@ -18,7 +18,7 @@ import { shareOrg } from '../../../src/runtime.js';
 import { subjectFor, DEFAULT_PROJECT } from '../../../src/org.js';
 import { kernelFactoryRoot } from '../../../src/paths.js';
 import { agentSubject } from '../../../src/subject.js';
-import { describeFailure } from '../../../src/kernel/errors.js';
+import { describeFailure, InvalidBody } from '../../../src/kernel/errors.js';
 import { ACTIONS, runAction } from '../../../lib/actions.js';
 // 单源（2026-10-11 schema 口径修缮）：类型 参数描述里的消息类型枚举从 bus.js 的
 // 唯一清单拼出来——手抄一份必漂（src/bus.js 的 MESSAGE_TYPES 是闸的同一真源）。
@@ -572,7 +572,10 @@ function normalizeArgs(args) {  const out = { ...args };
     try {
       out.结论集 = JSON.parse(out.结论集);
     } catch {
-      out.结论集 = [];
+      // 坏串不许静默落成 []（2026-10-12 评审 P2-2）：零分歧检查读空气 ⇒ 「零分歧」假绿。
+      throw new InvalidBody('结论集 不是合法 JSON：解析失败不许静默当空集（空集与坏串是两回事）。', {
+        detail: { 期望形状: '[{"成员":"member-a","结论":"...","反例面":["..."]}]' },
+      });
     }
   }
   return out;

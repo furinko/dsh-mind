@@ -292,11 +292,15 @@ export class PolicyEngine {
     if (decision.alarm) {
       throw new Fault(String(decision.rule).replace(/^fault:/, ''), decision.reason, { detail: decision.detail });
     }
-    throw new Denied(decision.rule, decision.reason, {
+    const denied = new Denied(decision.rule, decision.reason, {
       requireAuthority: decision.requireAuthority,
       howToChange: decision.howToChange,
       detail: decision.detail,
     });
+    // 这条拒绝在 decide() 里已记「策略拒绝」入账——动作层的拦截入账（缺口1B，
+    // actions.js 记动作拦截）靠这个标记跳过，同一拒绝不双记。
+    denied.已入账 = true;
+    throw denied;
   }
 
   /**
