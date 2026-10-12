@@ -307,7 +307,7 @@ export class PolicyEngine {
    */
   scopeOf(subject, task) {
     if (subject?.kind !== '成员') return { ok: true };
-    if (!task) return { ok: false, reason: '成员在任务外无权限：没有关联任务节点' };
+    if (!task) return { ok: false, reason: '成员在任务外无权限：本次调用未声明任务上下文（task 为空）' };
     // 负责人可能是**一个人**，也可能是**一岗多人的一组**（§10）。
     // 拿字符串去比数组会永远不相等，于是多负责人任务上谁也干不了活 —— 这里统一折成名单。
     const 名单 = normalizeList(task.负责人);
@@ -473,7 +473,7 @@ export class PolicyEngine {
     if (!scoped.ok && action !== 'read') {
       return deny('法律 权限矩阵 · 任务内全权，任务外无（§2）', scoped.reason, {
         requireAuthority: 'Lead',
-        howToChange: '由 Lead 把该成员派到对应任务节点，或改由该节点负责人执行。',
+        howToChange: '在本次调用的入参里声明任务上下文（带上你名下任务节点的 id，如 memory_write / memory_lifecycle 传「任务」）；名下没有已派发/执行中的节点时，由 Lead 先派发。',
       });
     }
 
@@ -630,7 +630,7 @@ export class PolicyEngine {
         const scoped = this.scopeOf(subject, context.task ?? target.task ?? null);
         if (!scoped.ok && action !== 'read') return deny('法律 权限矩阵 · 自治档（任务外无）', scoped.reason, {
           requireAuthority: 'Lead',
-          howToChange: '由 Lead 派发任务节点后再执行。',
+          howToChange: '在本次调用的入参里声明任务上下文（带上你名下任务节点的 id，如 memory_write / memory_lifecycle 传「任务」）；名下没有已派发/执行中的节点时，由 Lead 先派发。',
         });
       }
       const level = this.intervention();

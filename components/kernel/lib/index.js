@@ -181,6 +181,7 @@ function mindTool({ org, 项目, 项目键 }) {
         内容: { type: 'string', description: '正文内容（bus_send 的消息正文 / memory_write 的条目内容）' },
         来源: { type: 'string', description: '怎么知道的；记忆写入必填（谁记的默认取主体）' },
         来源引用: { type: 'string', description: '证据/来源对象 id，多个用逗号分隔（契约A 血缘）；know-/exp-/pref-/answ- 查账本、task- 查任务图、artifact- 本批不校验，悬空拒写' },
+        任务: { type: 'string', description: '任务节点 id（memory_write / memory_lifecycle 的成员调用必填：声明本次写入归属的任务上下文——成员的「任务内全权」靠它判定；策略引擎仍按节点负责人名单比对，传别人的节点照拒）' },
         岗位: { type: 'string' },
         标签: { type: 'string' },
         文本: { type: 'string', description: '检索查询词' },

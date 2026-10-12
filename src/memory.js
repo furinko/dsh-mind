@@ -449,7 +449,8 @@ export class MemoryService {
   /**
    * 失效：追加 `invalid` 状态，不改原条目（§7「错误 / 过期」）。
    * @param {string} id
-   * @param {{ subject: object, 原因: string }} spec
+   * @param {{ subject: object, 原因: string, 任务?: object }} spec
+   *   `任务`：任务上下文（成员任务内处置自己条目时由动作层从任务图取真节点透传）。
    */
   async invalidate(id, spec) {
     return this.#appendState(id, 'invalid', spec);
@@ -457,7 +458,7 @@ export class MemoryService {
   /**
    * 冷：追加降权状态，不删（§7「冷」）。
    * @param {string} id
-   * @param {{ subject: object, 原因: string }} spec
+   * @param {{ subject: object, 原因: string, 任务?: object }} spec
    */
   async demote(id, spec) {
     return this.#appendState(id, '降权', spec);
@@ -470,7 +471,7 @@ export class MemoryService {
    * 调用方不传（血缘是「谁推翻谁」的事实，不是自报项）。
    *
    * @param {string} id
-   * @param {{ subject: object, 新条目: string, 理由: string }} spec
+   * @param {{ subject: object, 新条目: string, 理由: string, 任务?: object }} spec
    */
   async overturn(id, spec) {
     const entry = await this.#folded(id);
@@ -484,6 +485,9 @@ export class MemoryService {
       岗位: entry.岗位 ?? undefined,
       来源引用: entry.来源引用 ?? [],
       派生自: id,
+      // 推翻是「追加新条目 + 旧条目入账」双动作：新条目那次 remember 也过策略引擎，
+      // 任务上下文必须跟着透传，否则成员任务内推翻会死在内部那次写入上（半动作）。
+      任务: spec.任务 ?? null,
     });
     await this.#appendState(id, '推翻', spec, { 新条目: created.id });
     return { id, 状态: '被推翻', 新条目: created.id };
@@ -898,7 +902,7 @@ export class MemoryService {
   /**
    * @param {string} id
    * @param {string} 状态
-   * @param {{ subject: object, 原因: string }} spec
+   * @param {{ subject: object, 原因?: string, 任务?: object }} spec
    * @param {object} [extra]
    */
   async #appendState(id, 状态, spec, extra = {}) {
@@ -908,7 +912,7 @@ export class MemoryService {
       subject: spec.subject,
       action: 'write',
       target: memoryTarget(entry.类, entry.归属, entry.项目),
-      context: { id, 状态 },
+      context: { id, 状态, task: spec.任务 ?? null },
     });
     await this.#appendLedger(this.layout.memoryLog(entry.归属, entry.类), [
       { id: objectId('账目', `${id}:${状态}`, { at: this.clock.ms() }), 指向: id, 追加: 状态, 追于: this.clock.iso(), 依据: spec.原因, 主体: spec.subject, ...extra },
