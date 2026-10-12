@@ -22,6 +22,19 @@ import { ACTIONS, identityStatus } from './policy.js';
 const SEGMENTS = ['个体L0', '个体L1', '个体L2', '个体L3'];
 
 /**
+ * 双区的**覆盖优先级**，唯一一份。
+ *
+ * 顺序即语义：先扫到的赢 ⇒ 自治（私有）覆盖出厂。`get()` 的短路顺序、`list()` 的合并顺序、
+ * `#scanCards()` 的扫描顺序都读它——这三处以前各写各的数组字面量，
+ * 正是「同一条读取链上两种语义」的成因（`get()` 私有优先、`list()` 两区并列）。
+ * 规则只写一份，就不存在「改了一处忘了另一处」。
+ */
+const ZONES = [
+  ['自治', '私有'],
+  ['出厂', '出厂'],
+];
+
+/**
  * 岗位 + 实例 → 策略判定用的主体（岗位决定主体种类）。
  *
  * 这是**身份档案 → 主体**这一层的唯一映射落点：`canTouch()` 与 `debate.open()` 的候选池
@@ -72,10 +85,45 @@ export class RoleRegistry {
 
   /**
    * 岗位清单。索引缺失时**自动重算**，不让调用方拿到空表。
-   * @returns {Promise<Array<{ id: string, 来源: string, 摘要: string, 段: string[], 能力引用: string[] }>>}
+   *
+   * **一个 id 一行，取私有版（同名时）——与 `get()` 同一个口径。**
+   *
+   * 为什么必须与 `get()` 同口径（W3 批4·2026-10-12）：改动前 `get()` 是私有优先短路
+   * （`for (const zone of ['自治','出厂'])` 命中即 return），而 `list()` 直接把
+   * `#scanCards()` 吐出来——两区都 push、无去重、无覆盖。于是同一条读取链上并存两种语义：
+   * `registry_list` 报 2 个「插件工程」，`registry_can`（走 `get()`）却只认 1 个。
+   * 谁也没写错，错的是**同一件事有两个口径**。
+   *
+   * 但**去重不许把「存在同名」这件事吞掉**（那等于把一处需要人拍板的双区分歧，
+   * 变成一次静默的覆盖）：所以每一行都带 `同名: string[]`，如实列出这张卡所在的区，
+   * **生效来源排在首位**（同名时是 `['私有','出厂']`，不同名时是 `['私有']` 或 `['出厂']`）——
+   * 读的人一眼看得出「它生效的是哪份、另外还有哪份」，不必再对照 `来源` 才能猜。
+   * 判据是「列得出一行，且看得出它在两区都有」，不是「看起来只有一份」。
+   *
+   * @returns {Promise<Array<{ id: string, 来源: string, 同名: string[], 摘要: string, 段: string[], 能力引用: string[], digest: string }>>}
    */
   async list() {
-    return this.#scanCards();
+    /** @type {Map<string, object>} */
+    const byId = new Map();
+    // ZONES 的顺序即优先级：先到的赢（自治先扫），与 get() 同序同源。
+    for (const [zone, label] of ZONES) {
+      for (const row of await this.#scanZone(zone, label)) {
+        const 已有 = byId.get(row.id);
+        if (已有) {
+          // 冲突：把**后到的**区如实记进去（先到的那区在创建时就已入列）。
+          已有.同名.push(label);
+          continue;
+        }
+        // 先到的那个区就是生效来源，所以它自己也要进 `同名`——
+        // 只在后面 push「输的那一方」的话，行上只剩 `['出厂']`，看起来像是出厂版生效。
+        byId.set(row.id, { ...row, 来源: label, 同名: [label] });
+      }
+    }
+    // 判据②只要求「看得出这个 id 在两区都有」，不要求冲突时的来源顺序稳定；
+    // 但读数要可复现（同一盘同一答案），所以按 ZONES 的优先级序而非扫描次序收敛。
+    const 序 = new Map(ZONES.map(([, l], i) => [l, i]));
+    for (const row of byId.values()) row.同名.sort((a, b) => 序.get(a) - 序.get(b));
+    return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
   }
 
   /**
@@ -85,7 +133,9 @@ export class RoleRegistry {
    */
   async get(spec) {
     const id = assertPathSegment(spec.id, '岗位卡id');
-    for (const zone of ['自治', '出厂']) {
+    // ZONES 的顺序即覆盖优先级（自治在前 ⇒ 私有优先短路）。与 list() 同源，
+    // 所以「读」与「列」不可能再给出两份答案——包括命中的是哪一区、来源标签叫什么。
+    for (const [zone, label] of ZONES) {
       const dir = this.layout.roleCardDir(zone);
       const path = `${dir}/${id}.md`;
       const text = await readTextOrNull(path);
@@ -93,7 +143,7 @@ export class RoleRegistry {
       const parsed = parseDocument(text);
       return {
         id: parsed.meta.id ?? spec.id,
-        来源: zone === '自治' ? '私有' : '出厂',
+        来源: label,
         meta: parsed.meta,
         段: Object.fromEntries(SEGMENTS.map((s) => [s, section(parsed.body, s)])),
         能力引用: refs(section(parsed.body, '个体L2')),
@@ -331,26 +381,46 @@ export class RoleRegistry {
 
   // ── 内部 ────────────────────────────────────────────────────────────────────
 
-  /** 扫描两区岗位卡。 */
+  /**
+   * 扫一个区的岗位卡。**单区**，不排序、不去重——去重与排序是 `list()` 的事。
+   *
+   * 拆出来是为了让「两区各扫一遍」这件事只有一个落点：`list()` 与 `sync()` 共用它，
+   * 而 `list()` 的合并顺序与 `get()` 的短路顺序是同一个常量（`ZONES`）。
+   *
+   * @param {'自治'|'出厂'} zone
+   * @param {string} label
+   */
+  async #scanZone(zone, label) {
+    const out = [];
+    const dir = this.layout.roleCardDir(zone);
+    for (const rel of await listFiles(dir, { recursive: false, filter: (n) => n.endsWith('.md') })) {
+      const id = rel.replace(/\.md$/, '');
+      const text = await readTextOrNull(`${dir}/${rel}`);
+      if (text === null) continue;
+      const parsed = parseDocument(text);
+      out.push({
+        id: parsed.meta.id ?? id,
+        来源: label,
+        摘要: String(parsed.meta.摘要 ?? section(parsed.body, parsed.meta.id ?? id) ?? '').split('\n')[0]?.trim().slice(0, 80) ?? '',
+        段: SEGMENTS.filter((s) => section(parsed.body, s)),
+        能力引用: refs(section(parsed.body, '个体L2')),
+        digest: digest(text),
+      });
+    }
+    return out;
+  }
+
+  /**
+   * 扫描两区岗位卡（**并列**，含同名）。
+   *
+   * 仅供 `sync()` 写索引用：索引是一份「盘上有什么」的台账，同名两行在那里是**如实记录**，
+   * 不是错。给外面看的口径在 `list()`（一个 id 一行 + `同名` 字段）。
+   *
+   * @returns {Promise<Array<object>>}
+   */
   async #scanCards() {
     const out = [];
-    for (const [zone, label] of [['自治', '私有'], ['出厂', '出厂']]) {
-      const dir = this.layout.roleCardDir(zone);
-      for (const rel of await listFiles(dir, { recursive: false, filter: (n) => n.endsWith('.md') })) {
-        const id = rel.replace(/\.md$/, '');
-        const text = await readTextOrNull(`${dir}/${rel}`);
-        if (text === null) continue;
-        const parsed = parseDocument(text);
-        out.push({
-          id: parsed.meta.id ?? id,
-          来源: label,
-          摘要: String(parsed.meta.摘要 ?? section(parsed.body, parsed.meta.id ?? id) ?? '').split('\n')[0]?.trim().slice(0, 80) ?? '',
-          段: SEGMENTS.filter((s) => section(parsed.body, s)),
-          能力引用: refs(section(parsed.body, '个体L2')),
-          digest: digest(text),
-        });
-      }
-    }
+    for (const [zone, label] of ZONES) out.push(...(await this.#scanZone(zone, label)));
     return out.sort((a, b) => a.id.localeCompare(b.id));
   }
 
