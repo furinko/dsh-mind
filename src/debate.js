@@ -298,7 +298,7 @@ export class DebateService {
       subject: spec.subject,
       项目: spec.项目,
       线程: spec.节点,
-      发件: 'lead',
+      发件: spec.subject.id, // 末位表态记真实主体 id（硬编码 'lead' 会与真 Lead 的实例 id 对不上账）
       收件: 讨论.参与者,
       类型: '表态',
       内容: String(spec.内容 ?? '').trim() || `收敛：讨论结束（第 ${讨论.轮次} 轮）`,

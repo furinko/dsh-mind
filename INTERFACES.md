@@ -125,7 +125,16 @@ export class MessageBus {
   async deliver(id)
   /** 会审解锁：任务图报「全员已交」→ 解锁并广播（§9 边界写死）。 */
   async unlock({ 项目, 线程, 全员已交 })
-  async threads({ 项目 })
+
+// 动作面补充（2026-10-12 评审批次 1/2）：
+//  - `bus_unlock` 动作带绑定闸（线程必须等价于被验齐卷的节点 id，NTFS 大小写折叠同口径）
+//    且幂等：已广播过的节点再调返回 {解锁:true, 广播:null}，不重复广播。
+//  - 「全员已交」判据单源 = tasks.js 导出的 `全员已交(node)`（状态已交卷 + 负责人非空 +
+//    每个负责人都在独立答案里）；debate_open / bus_unlock / workbench 交卷进度三处共用。
+//  - `bus_read` 动作面有盲评遮罩：独立会审节点未交齐且无讨论段时，成员读者只看到
+//    自己的消息，他人的 发件→匿名席次、内容→占位（Lead/复核者/主权者不受影响）。
+//  - `task_submit`：讨论段开启后（节点有 讨论 且 状态=已交卷）不许改卷；返工环路
+//    （已打回/执行中）不受影响。  async threads({ 项目 })
 }
 ```
 存储：`layout.busThread(project, thread)`；消息 `authority:'只增'`；**历史不入上下文**（本模块只负责存与取，不注入）。
@@ -251,8 +260,15 @@ export class ProbeRunner {
   constructor(spec)
   /** 出厂声明：主权者声明探针，出厂作者实现。 */
   async declare()
-  /** 跑全部探针。 */
-  async run()
+  /**
+   * 跑全部探针。
+   * @param {{ subject: object, 机制版本?: string }} spec —— `subject` 必带且
+   *   `kind ∈ {Lead, 主权者, 系统}`（结构性白名单 PROBE_RUNNERS，**不走策略引擎**：
+   *   探针必须在引擎不健康时照常跑——「闸不在位」那盏灯正是为它点的，
+   *   2026-10-12 评审批次 1 修正）。`机制版本` 恒由声明文件现算，`spec.机制版本`
+   *   只余装配/测试通道（工具 schema 已删除该自报字段）。
+   */
+  async run(spec)
   /** 恒红 / 恒绿都要报警（恒亮的灯等于没灯）。 */
   async evaluateHealth()
   /** 探针红 ⇒ 定位「探针全绿的最近一版」＋无条件入账＋告警升级主权者（甲′裁决 2026-10-09）；运行态不自动改文件——执行面＝主权者经版本管理（git/包版本）装回全绿版本。 */
@@ -559,7 +575,8 @@ await runAction({ org, 项目, subject, 主体, args: { action, ...args }, 面: 
 - `debate_round`：轮次 < `轮次上限` 才放行（上限判定在任务图状态机面），否则
   `Denied`「轮次用尽，须收敛」；返回 `结束轮可收敛` 提示 =（本轮零新「分歧」消息
   **且** 每个参与者都发过「表态」）。
-- `debate_converge`：**仅 Lead**；Lead 末位 `bus.send`（类型=表态，发件=lead）记消息 id
+- `debate_converge`：**仅 Lead**；Lead 末位 `bus.send`（类型=表态，发件=真实主体 id——
+  2026-10-12 评审批次6 起不再硬编码 `lead`，否则与真 Lead 的实例 id 对不上账）记消息 id
   进事件；此后 `debate_say` 拒（讨论已收敛）。
 - **对 review 是软约束**（设计取舍已定，不许改成硬闸）：讨论中仍可 review，
   工作台会审行标注 `讨论未收敛` / `复核时讨论未收敛`。

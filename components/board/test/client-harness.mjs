@@ -2169,6 +2169,35 @@ export async function runHarness() {
     两次.disposer();
   }
 
+  // ⑥f 隐藏标签页不轮询（2026-10-12 评审批次6·P3）：看不见的面板每 3s 全量拉一遍是纯浪费；
+  //    回前台后到点自然补拉。对照臂钉「闸没把轮询掐死」。
+  {
+    const 隐藏doc = makeDocument().document;
+    隐藏doc.hidden = true;
+    const 计数 = { fetch: 0 };
+    const 隐页 = boot({ services: Object.assign(session(), {
+      document: 隐藏doc,
+      fetch: makeFetch(function (url) {
+        计数.fetch += 1;
+        return String(url).indexOf('workbench') >= 0
+          ? jsonResponse(sampleView())
+          : jsonResponse({ 读数: 读数袋(), 设置文件: SETTINGS_FILE, 说明: '读…' });
+      }).fetch,
+    }) });
+    await settle();
+    const 轮隐 = 隐页.timers.intervals.find((t) => t.ms === REFRESH_MS);
+    check(!!轮隐, '⑥f 轮询器已注册');
+    const 基数 = 计数.fetch;
+    轮隐.fn();
+    await settle();
+    passed.push(check(计数.fetch === 基数, '⑥f document.hidden ⇒ 轮询到点不拉（修前照拉：白跑）', 'fetch ' + 基数 + '→' + 计数.fetch));
+    隐藏doc.hidden = false;
+    轮隐.fn();
+    await settle();
+    passed.push(check(计数.fetch > 基数, '⑥f 回前台 ⇒ 到点照拉（对照臂）', 'fetch=' + 计数.fetch));
+    隐页.disposer();
+  }
+
   // ⑦ 六条降级路径（都带缓存，所以既能报「未连接」也能显示旧快照）
   // ⚠️ 传输层换了（`remote.commands.execute` → 同源 `fetch`），这一表也跟着换了"失败长相"：
   //    原来的「宿主命令服务不可用 / 读取 remote 服务失败」不再存在，取而代之的是
@@ -3171,6 +3200,27 @@ export async function runHarness() {
       passed.push(check(findAllByClass(无清单页.tree, 'dshmind-projChip').length === 0
         && findAllByClass(无清单页.tree, 'dshmind-projChipOn').length === 0,
         '⑧e 清单缺失 ⇒ 不画项目 chips（不装懂）'));
+      // ⑧f chip 缺计数 ⇒ 画「？」不画 null/undefined（2026-10-12 评审批次6·P3）：
+      //    缺数据不是 0；印「null 卡」是排版事故，印「0 卡」是说谎。
+      const 缺数 = sampleView();
+      缺数.项目清单 = { 当前: 'mind-private', 项: [{ 项目: 'mind-private', 任务: 5, 线程: 2 }, { 项目: '缺数项目' }] };
+      const 缺数页 = await renderView(缺数);
+      passed.push(check(缺数页.text.indexOf('缺数项目（？ 卡 · ？ 线程）') >= 0
+        && 缺数页.text.indexOf('null 卡') < 0 && 缺数页.text.indexOf('undefined 卡') < 0,
+        '⑧f 项目 chip 缺计数 ⇒ 画「？」（修前印 null 卡 · null 线程）', 缺数页.text.slice(0, 200)));
+    }
+
+    // ⑨ 投影合并抗原型污染（2026-10-12 评审批次6·P3）：数据袋里的 own __proto__ 不许借
+    //    Object.assign 的 [[Set]] 语义换掉合并目标的原型——修前攻击者可借原型注入伪造的
+    //    「项目清单」等字段，绕过归一化默认值直接上屏。
+    {
+      const 毒袋 = JSON.parse('{"__proto__":{"项目清单":{"项":[{"项目":"毒项目","任务":1,"线程":1}]}},'
+        + '"任务":{"总数":0,"计数":{"待派发":0,"进行中":0,"已交卷":0,"已采纳":0,"已打回":0,"未验":0,"已结账":0,"待决":0},"节点":[]},'
+        + '"状态条":{"闸":"正常","介入度":"自动","失联":false,"探针":"健康"},"会审":[],"待你决定":[],"消息总线":[]}');
+      const 毒页 = await renderView({ 成功: true, 项目: 'default', 数据: 毒袋 });
+      passed.push(check(毒页.text.indexOf('毒项目') < 0,
+        '⑨ own __proto__ 不许污染合并结果（修前「毒项目」借原型上屏成 chip）', 毒页.text.slice(0, 160)));
+      passed.push(check(({}).项目清单 === undefined, '⑨ 全局 Object.prototype 没被碰'));
     }
   }
 

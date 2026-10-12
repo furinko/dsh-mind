@@ -86,7 +86,9 @@ export class TaskGraph {
     if (!input.描述?.trim()) throw new InvalidBody('任务节点必须有描述。');
     const 判据 = normalizeList(input.判据);
     if (判据.length === 0) throw new InvalidBody('验收标准必填：没有判据的节点无法验收，也无法在派发后冻结。', { missing: ['判据'] });
-    const 负责人 = normalizeList(input.负责人);
+    // 去重（2026-10-12 评审 P3）：['A','A'] 会让会审进度/参与者数虚增，
+    // 「交齐」判据虽按人去重判定不受影响，但读数说谎就是缺陷。
+    const 负责人 = [...new Set(normalizeList(input.负责人))];
     if (负责人.length === 0) throw new InvalidBody('任务节点必须有负责人。', { missing: ['负责人'] });
     if (负责人.length > 1 && !MULTI_MODES.includes(input.模式)) {
       throw new InvalidBody(`一岗多人必须显式声明模式：${MULTI_MODES.join(' / ')}。`, { missing: ['模式'] });

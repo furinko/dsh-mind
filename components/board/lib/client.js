@@ -113,6 +113,26 @@ window.__ModuleLoader__.load({
     function obj(value) {
       return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
     }
+    /**
+     * 浅合并到 fresh 对象，跳过 `__proto__` / `constructor` / `prototype` 三个 own 键
+     * （2026-10-12 评审 P3）：Object.assign 的 [[Set]] 语义会让 `__proto__` 改掉目标原型；
+     * 合并来自网络的投影时这是白送的污染面。用 defineProperty 式赋值（`Object.defineProperty`
+     * 的 own-key 语义）绕开 setter。
+     */
+    function 安全合并() {
+      var out = {};
+      for (var i = 0; i < arguments.length; i += 1) {
+        var src = arguments[i];
+        if (!src) continue;
+        var keys = Object.keys(src);
+        for (var j = 0; j < keys.length; j += 1) {
+          var k = keys[j];
+          if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+          Object.defineProperty(out, k, { value: src[k], writable: true, enumerable: true, configurable: true });
+        }
+      }
+      return out;
+    }
     function arr(value) {
       if (Array.isArray(value)) return value;
       if (value === null || value === undefined || value === '') return [];
@@ -311,8 +331,6 @@ window.__ModuleLoader__.load({
     var ROUTE_WORKBENCH = '/plugins/dsh-mind/workbench';
     /** 上一次已知快照：取不到投影时仍然有东西可看。 */
     var CACHE_KEY = 'dsh-mind.dashboard.v1';
-    /** 自动刷新间隔（人看的板子，30s 够「活」，又不打扰）。 */
-    var REFRESH_MS = 30000;
     /**
      * 一次请求的**上限等待**（毫秒）。
      *
@@ -383,8 +401,11 @@ window.__ModuleLoader__.load({
     function normalizeView(raw) {
       // 宿主命令返回 `{成功, action, 项目, 数据: <投影>}`；工具路径共用同一个包装。
       // 这里把包装与投影合并成一层，两种形状都能读，视图不必知道自己被谁调过。
+      // ⚠️ 合并走 安全赋值 而不是 Object.assign（2026-10-12 评审 P3）：assign 用 [[Set]]
+      // 语义，投影里若带 own 键 `__proto__` 会顺手改掉目标的原型——投影来自网络，
+      // 把它当可信输入是白送的原型污染面。
       var box = obj(raw) || {};
-      var v = obj(box.数据) ? Object.assign({}, box, box.数据) : box;
+      var v = obj(box.数据) ? 安全合并(box, box.数据) : box;
       var taskBag = obj(firstOf(v, ['任务', 'task'])) || {};
       var statusBag = obj(firstOf(v, ['状态条', '状态'])) || {};
       var gateBag = obj(firstOf(statusBag, ['闸', 'policy'])) || {};
@@ -1247,7 +1268,10 @@ window.__ModuleLoader__.load({
      * @param {string} 当前 现在显示的项目键
      */
     function 项目导航项(p, i, 当前) {
-      var 文案 = p.项目 + '（' + p.任务 + ' 卡 · ' + p.线程 + ' 线程'
+      // 计数缺数据画「？」不画 null/undefined（2026-10-12 评审 P3）：缺数据不是 0，
+      // 印「null 卡」是排版事故，印「0 卡」是说谎。
+      var 数 = function (n) { return Number.isFinite(n) ? String(n) : '？'; };
+      var 文案 = p.项目 + '（' + 数(p.任务) + ' 卡 · ' + 数(p.线程) + ' 线程'
         + (p.未投递 > 0 ? ' · 未投递 ' + p.未投递 : '') + '）';
       if (p.项目 === 当前) {
         return h('span', { key: 'p' + i, className: 'dshmind-projChipOn', title: 文案 + '（当前显示）' }, 文案);
@@ -2011,7 +2035,15 @@ window.__ModuleLoader__.load({
       立即刷新();
       var timer = null;
       try {
-        timer = 设(function () { if (!轮询把手.停了) 立即刷新(); }, POLL_MS);
+        timer = 设(function () {
+          if (轮询把手.停了) return;
+          // 隐藏标签页不拉（2026-10-12 评审 P3）：看不见的面板每 3s 全量拉一遍是纯浪费；
+          // 回到前台后最多晚一个周期自然补上。拿不到 document 就照拉（保守：宁可多拉不可不拉）。
+          try {
+            if (typeof document !== 'undefined' && document && document.hidden === true) return;
+          } catch (error) { /* 读不到可见性就照拉 */ }
+          立即刷新();
+        }, POLL_MS);
       } catch (error) {
         轮询把手.停了 = true;
         return function 停轮询() {};
@@ -2683,6 +2715,9 @@ window.__ModuleLoader__.load({
 
       // 回读即真源：读数一变就把表单同步过来（**只在人没改过时**，且用 `useState` 驱动，
       // 不靠 effect）。`useState` 的初值 + 这里每次渲染的比对，等价于"受控同步"。
+      // 渲染体内 setState 是**有意为之**（2026-10-12 评审 P3 复核）：React 官方认可的
+      // render-phase derived-state 模式（同组件、守卫收敛 `键 !== 同步.键` ⇒ 最多多渲染
+      // 一轮，不会死循环；effect 版会晚一帧闪旧值）。别「修」成 effect。
       var 读 = snap.读数;
       var 上次同步 = useState({ 键: '', 开关: '是', 小时: '72' });
       var 同步 = 上次同步[0];

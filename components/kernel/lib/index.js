@@ -275,7 +275,7 @@ function mindCommand(spec) {
         // `面: 'command'` 是**人侧**的标记：命令面专属动作（如改设置的 `presence`）
         // 只在这一面可达，`mind` 工具的 enum 里没有它们（模型没有这只手）。
         // `主体` 一起显式传下去：账上要记**敲这条命令的那个人**，不许归并成一个泛化的 lead。
-        const result = await runAction({ org: spec.org, 项目: args.project ?? 本次项目, subject: 主体, 主体, args: { action, ...args }, 面: 'command' });
+        const result = await runAction({ org: spec.org, 项目: args.project ?? 本次项目, subject: 主体, 主体, args: { ...args, action }, 面: 'command' });
         return { kind: 'success', text: JSON.stringify({ 成功: true, ...result }, null, 1) };
       } catch (error) {
         return { kind: 'error', text: JSON.stringify({ 成功: false, ...describeFailure(error) }, null, 1) };
@@ -374,7 +374,10 @@ function 闸判定(exec, 项目) {
   if (ENVELOPE_STATE.拒绝.includes(工具)) {
     return `[dsh-mind] 工具「${工具}」在工具总范围之外：工具总范围由主权者设定（§4）。要改请让主权者修改 工具总范围.json。`;
   }
-  if (ENVELOPE_STATE.允许.length > 0 && !ENVELOPE_STATE.允许.includes(工具) && !工具.startsWith('mind')) {
+  // 自家工具用**精确名单**（2026-10-12 评审 P3）：startsWith('mind') 会把任何
+  // 「mind*」开头的第三方工具一起放行进白名单模式——前缀不是身份。
+  const 自家工具 = 工具 === 'mind' || 工具 === 'mind_guard';
+  if (ENVELOPE_STATE.允许.length > 0 && !ENVELOPE_STATE.允许.includes(工具) && !自家工具) {
     return `[dsh-mind] 工具「${工具}」未被允许：当前工具总范围是白名单模式。要改请让主权者修改 工具总范围.json。`;
   }
   // `mind*` 为什么无条件放行（W3 批3 补的注释，此前只有一行代码、没有理由）：
@@ -547,6 +550,13 @@ function 组织说明(org) {
 
 /** 把工具入参里的逗号串与 JSON 串规整成动作表要的形状。 */
 function normalizeArgs(args) {  const out = { ...args };
+  // 布尔字面量归一（2026-10-12 评审 P3）：命令行/JSON 串里敲的 'true'/'false' 是
+  // 字符串——`全量=false` 在 JS 里是 truthy（恒真），反过来按假处理的字段就恒假。
+  // 两头都是谎话，统一在入口归一。
+  for (const key of Object.keys(out)) {
+    if (out[key] === 'true') out[key] = true;
+    else if (out[key] === 'false') out[key] = false;
+  }
   for (const key of ['负责人', '判据', '依赖', '分歧清单', '反例面', '产出物引用', '适用岗位', '收件', '标签', '来源引用']) {
     const value = out[key];
     if (typeof value === 'string') {

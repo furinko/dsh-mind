@@ -273,7 +273,9 @@ export function formatFrontMatter(data) {
  * }}
  */
 export function parseDocument(text, options = {}) {
-  const source = String(text).replace(/\r\n?/g, '\n');
+  // 先剥 BOM（2026-10-12 评审 P3）：UTF-8 BOM 会让 `startsWith('---\n')` 落空，
+  // 整个 front matter 静默消失（元数据全丢、正文带着 `---` 残渣）。
+  const source = String(text).replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
   const fallback = options.defaultAuthority ?? '自治';
   const errors = [];
   let meta = {};

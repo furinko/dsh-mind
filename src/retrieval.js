@@ -111,7 +111,9 @@ export function search(index, query, options = {}) {
   const queryHasBigram = terms.some((t) => !isLatinTerm(t) && [...t].length >= 2);
   const queryHasLatin = terms.some(isLatinTerm);
 
-  const 命中 = [...scoreById.entries()]
+  // 命中数报**截断前**的总数（2026-10-12 评审 P3）：报 slice 后的条数，
+  // limit=0 会把「有 37 条命中」报成「0 命中」——使用者照着错的读数做判断。
+  const 全部命中 = [...scoreById.entries()]
     .filter(([id]) => {
       if (!queryHasBigram && !queryHasLatin) return true;
       const evidence = evidenceById.get(id) ?? { bigram: 0, latin: 0 };
@@ -122,15 +124,14 @@ export function search(index, query, options = {}) {
       return { doc, id, 分数 };
     })
     // 分数降序；同分按 id 升序 —— 相同输入必须给出相同排序（检索回归集的前提）。
-    .sort((a, b) => b.分数 - a.分数 || a.id.localeCompare(b.id))
-    .slice(0, limit)
-    .map(({ doc, id, 分数 }) => ({
-      id,
-      分数: Number(分数.toFixed(6)),
-      摘要: summarize(doc.正文, 160),
-      ...(doc.标签 ? { 标签: doc.标签 } : {}),
-      ...(doc.来源 ? { 来源: doc.来源 } : {}),
-    }));
+    .sort((a, b) => b.分数 - a.分数 || a.id.localeCompare(b.id));
+  const 命中 = 全部命中.slice(0, limit).map(({ doc, id, 分数 }) => ({
+    id,
+    分数: Number(分数.toFixed(6)),
+    摘要: summarize(doc.正文, 160),
+    ...(doc.标签 ? { 标签: doc.标签 } : {}),
+    ...(doc.来源 ? { 来源: doc.来源 } : {}),
+  }));
 
   return {
     命中,
@@ -139,7 +140,7 @@ export function search(index, query, options = {}) {
       查询词: normalizeForSearch(query).trim(),
       范围: scope,
       文档数: candidateIndexes.length,
-      命中数: 命中.length,
+      命中数: 全部命中.length,
     },
   };
 }

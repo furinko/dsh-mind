@@ -268,7 +268,13 @@ export class ObjectStore {
    * @param {string} kind @param {{id: string}} meta @param {'出厂'|'私有'} zone @param {string} [authority]
    */
   #pathFor(kind, meta, zone, authority) {
-    if (kind === '规则') return this.layout.rulePath(meta.id, zone);
+    if (kind === '规则') {
+      const p = this.layout.rulePath(meta.id, zone);
+      // rulePath 对未知 id 回 null：不修的话锁会建到 "null.lock"、正文写到 null.md，
+      // 两份互相不认识（2026-10-12 评审 P3）——未知规则件响亮拒。
+      if (!p) throw new InvalidBody(`未知规则件 id：${meta.id}（规则件的落点由 RULE_FILES 决定，名单里的才有效）。`, { detail: { kind, id: meta.id, zone } });
+      return p;
+    }
     return this.layout.documentPath(kind, { id: meta.id, authority: authority ?? '自治' }, zone);
   }
 

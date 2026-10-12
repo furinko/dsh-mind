@@ -10,6 +10,7 @@
  */
 import { open, mkdir, readFile, readdir, rename, rm, stat, writeFile, appendFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { InvalidBody } from './errors.js';
 
 /** @param {string} file */
 export async function ensureDir(file) {
@@ -271,13 +272,22 @@ export async function mutateLocked(spec) {
   });
 }
 
-/** @param {string} file */
+/**
+ * 读 JSON 文件；**文件不存在**回 null，**存在但解析失败**响亮抛
+ * （2026-10-12 评审 P3：解析失败回 null 会把「文件坏了」伪装成「没有这份文件」——
+ * 审计锚坏了会被当成「没锚」、历史索引坏了会被当成「空索引」然后被整文件重写盖掉）。
+ * 调用方若要把「坏了」折叠成自己的语义（如 audit.verify 把锚损坏归入 broken），
+ * 自己 try/catch——那是有名的决策，不是这里的静默。
+ * @param {string} file
+ */
 export async function readJsonOrNull(file) {
   const text = await readTextOrNull(file);
   if (text === null) return null;
   try {
     return JSON.parse(text);
-  } catch {
-    return null;
+  } catch (error) {
+    throw new InvalidBody(`JSON 解析失败：${file}（文件存在但内容坏了；「坏了」不许伪装成「没有」）。`, {
+      detail: { file, 解析错误: error instanceof Error ? error.message : String(error) },
+    });
   }
 }

@@ -311,7 +311,15 @@ export class AuditLog {
         prev = row.hash ?? null;
       }
       // 尾部截断：anchor 是「这一片最后写到哪」的链外留痕。
-      const anchor = await readJsonOrNull(this.layout.auditAnchor(month));
+      // 锚损坏（JSON 解析失败）不许伪装成「没锚」：单独一类 broken（2026-10-12 评审 P3，
+      // readJsonOrNull 现在对坏文件响亮抛）。
+      let anchor = null;
+      try {
+        anchor = await readJsonOrNull(this.layout.auditAnchor(month));
+      } catch {
+        broken.push({ month, seq: rows[rows.length - 1]?.seq ?? null, 类型: '锚损坏', expected: null, actual: null });
+        continue;
+      }
       if (anchor?.hash) {
         const tail = rows[rows.length - 1] ?? null;
         if (!tail || tail.hash !== anchor.hash || (tail.seq ?? null) !== (anchor.seq ?? null)) {
@@ -376,6 +384,8 @@ export class AuditLog {
       const cached = this._chain.get(month);
       if (cached) return cached.hash;
     }
+    // 锚损坏 = 链外留痕不可信 ⇒ 追加不许继续（fail-closed）：让它以 InvalidBody 抛出去，
+    // 不许 fallthrough 到「读整片取尾行」——坏锚 + 好尾行会把断链接成「看起来正常」。
     const anchor = await readJsonOrNull(this.layout.auditAnchor(month));
     if (anchor?.hash) {
       this._chain.set(month, anchor);

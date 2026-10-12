@@ -186,7 +186,7 @@ export function sliceForViewer(view, 读者) {
   if (读者?.kind !== '成员') {
     return { ...view, 视图: 读者?.kind === '复核者' ? '只读全量（复核者需要看到分歧清单）' : '全量' };
   }
-  const 我的 = view.任务.节点.filter((n) => [...(n.负责人 ?? []), n.负责人岗位].includes(读者.id) || (n.负责人 ?? []).includes(读者.roleId));
+  const 我的 = view.任务.节点.filter((n) => (n.负责人 ?? []).includes(读者.id) || (n.负责人 ?? []).includes(读者.roleId));
   const 我的id = new Set(我的.map((n) => n.id));
   return {
     ...view,

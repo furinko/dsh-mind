@@ -131,5 +131,20 @@ export function describeFailure(error) {
   if (error instanceof Fault) {
     return { 结果: '安全闸故障（fail-closed）', 故障码: error.code, 理由: error.message };
   }
-  return { 结果: '错误', 理由: error instanceof Error ? error.message : String(error) };
+  return { 结果: '错误', 理由: 脱路径(error instanceof Error ? error.message : String(error)) };
+}
+
+/**
+ * 兜底分支的文案**脱内部绝对路径**（2026-10-12 评审 P3）：`ENOENT C:\Users\xxx\...`
+ * 这种系统错误原文会把部署目录结构泄给拿到答复的人。路径折成 `<路径:文件名>`——
+ * 排障要的是「哪个文件」，不是「你家目录长什么样」。
+ * 上面四个类型分支（Denied/NeedsApproval/InvalidBody/Fault）的文案是机制自己写的、
+ * 面向操作者（InvalidBody 会**有意**带上出问题的文件路径——那是给排障的人看的）；
+ * 要脱的是**系统原始错误**（ENOENT/EACCES……）里不受控的那部分，所以只脱兜底分支。
+ * @param {string} text
+ */
+function 脱路径(text) {
+  return String(text)
+    .replace(/[A-Za-z]:\\[^\s"'，。；：]+/g, (m) => `<路径:${m.split(/[\\/]/).pop()}>`)
+    .replace(/(^|[\s"'(（])\/[^\s"'，。；：]+/g, (_m, 前缀) => `${前缀}<路径:${_m.trim().split('/').pop()}>`);
 }

@@ -323,6 +323,7 @@ export function 挂同源路由(spec) {
     let 清理器们 = [];
     let 定时器 = null;
     let 试了 = 0;
+    let 最近错误 = null;
 
     const 现在挂 = () => {
       const ws = 取webServer(ctx);
@@ -341,8 +342,11 @@ export function 挂同源路由(spec) {
             // 撤不掉也没别的办法，如实告警即可
           }
         }
-        logger.warn?.(`[dsh-mind] 注册同源路由失败：${error instanceof Error ? error.message : String(error)}`);
-        return true; // webServer 在位，只是这次注册没成 —— 不再轮询
+        // 注册失败**不当作「挂完了」**（2026-10-12 评审 P3）：修前 return true 让轮询
+        // 立刻停，端点永久缺席、只留一条 warn——面板永远空白而无人知晓。
+        // 现在返回 false：继续按预算重试（瞬时冲突会自愈），预算耗尽走下面那条响亮告警。
+        最近错误 = error instanceof Error ? error.message : String(error);
+        return false;
       }
       清理器们 = 新挂;
       return true;
@@ -374,7 +378,8 @@ export function 挂同源路由(spec) {
           // 不许静默：20 次都拿不到 webServer，等于浏览器半区整个没接线。
           // 影响面说清楚 —— 面板与设置页会一直空白，而插件侧看起来「激活正常」。
           logger.warn?.(
-            `[dsh-mind] 同源路由放弃挂载：轮询 ${次数} 次（${间隔毫秒}ms/次）都没拿到 webServer。`
+            `[dsh-mind] 同源路由放弃挂载：轮询 ${次数} 次（${间隔毫秒}ms/次）都没挂上。`
+            + (最近错误 ? ` 最后一次注册失败：${最近错误}。` : ' 原因：一直没拿到 webServer。')
             + ` 未注册的端点：${端点表.presence}（设置页读写）、${端点表.workbench}（看板投影）、${端点表.ping}（自检）。`
             + ` 影响面：工作台面板与设置页将保持空白/读取中，命令面（/mind）不受影响。`,
           );

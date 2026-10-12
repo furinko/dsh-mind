@@ -158,6 +158,7 @@ export class MemoryService {
         记于: this.clock.iso(),
         轮: input.轮 ?? null,
       }),
+      同锁追加: input.同锁追加, // 内部通道（overturn 双行同锁）；外部调用方不传
     });
     await this.audit.append({
       动作: '状态变更',
@@ -499,6 +500,16 @@ export class MemoryService {
   async overturn(id, spec) {
     const entry = await this.#folded(id);
     if (!entry) throw new InvalidBody(`没有这条记忆：${id}`);
+    // 推翻 = 「新条目 + 旧条目状态行」**双行同锁落账**（2026-10-12 评审 P3）：
+    // 修前两步分开落，第二步（状态行）失败会留下「替代品在、原条目没标推翻」的
+    // 撕裂窗口——旧知识继续被召回，替代它的人却已经入账。
+    // write 闸先行（拒了就连新条目都不许落）；remember 的 create 闸照旧在里面。
+    await this.policy.check({
+      subject: spec.subject,
+      action: 'write',
+      target: memoryTarget(entry.类, entry.归属, entry.项目),
+      context: { id, 状态: '推翻', task: spec.任务 ?? null },
+    });
     const created = await this.remember({
       subject: spec.subject,
       类: entry.类,
@@ -511,8 +522,21 @@ export class MemoryService {
       // 推翻是「追加新条目 + 旧条目入账」双动作：新条目那次 remember 也过策略引擎，
       // 任务上下文必须跟着透传，否则成员任务内推翻会死在内部那次写入上（半动作）。
       任务: spec.任务 ?? null,
+      同锁追加: (row) => [{
+        id: objectId('账目', `${id}:推翻`, { at: this.clock.ms() }),
+        指向: id, 追加: '推翻', 追于: this.clock.iso(),
+        依据: spec.理由 ?? spec.原因, 主体: spec.subject, 新条目: row.id,
+      }],
     });
-    await this.#appendState(id, '推翻', spec, { 新条目: created.id });
+    await this.audit.append({
+      动作: '状态变更',
+      主体: spec.subject,
+      对象: { id, kind: entry.类 },
+      依据: '记忆处置表：不许改写，只能追加',
+      结果: '追加状态 推翻',
+      项目: entry.项目,
+      详情: { 原因: spec.理由 ?? spec.原因, 新条目: created.id },
+    });
     return { id, 状态: '被推翻', 新条目: created.id };
   }
 
@@ -887,7 +911,10 @@ export class MemoryService {
    * 锁内读到「这个 id 已在账上」就 bump 时刻重算，直到算出一个新 id——不静默、不合并。
    *
    * @param {string} file 账本文件
-   * @param {{ kind: string, seed: string, build: (id: string) => object }} spec
+   * @param {{ kind: string, seed: string, build: (id: string) => object, 同锁追加?: (row: object) => object[] }} spec
+   *   `同锁追加`（2026-10-12 评审 P3）：与新条目**同一把锁、同一次 appendLines** 落账的
+   *   伴随行（如 overturn 的「推翻」状态行）——双行同窗口，不留「新条目在、状态行没落上」
+   *   的撕裂态。
    * @returns {Promise<object>} 实际落线的行
    */
   async #appendEntry(file, spec) {
@@ -897,7 +924,8 @@ export class MemoryService {
       let id = objectId(spec.kind, spec.seed, { at: this.#nextStamp() });
       while (已用.has(id)) id = objectId(spec.kind, spec.seed, { at: this.#nextStamp() });
       const row = spec.build(id);
-      await appendLines(file, [row]);
+      const 伴随 = typeof spec.同锁追加 === 'function' ? spec.同锁追加(row) : [];
+      await appendLines(file, [row, ...伴随]);
       return row;
     });
   }
