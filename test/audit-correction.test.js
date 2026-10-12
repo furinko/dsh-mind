@@ -200,12 +200,12 @@ describe('审计链更正声明（缺口2a）', () => {
     });
 
     it('更正前审计链红、其余三道绿；更正后四盏全绿', async () => {
-      const 前 = await probes.run({ 机制版本: 'corr-1' });
+      const 前 = await probes.run({ subject: LEAD, 机制版本: 'corr-1' });
       assert.ok(前.见红.some((r) => r.探针 === '审计链'), '更正前审计链必须红');
       assert.equal(前.见红.length, 1, `其余三道不许被波及，实际见红 ${JSON.stringify(前.见红)}`);
 
       await f.audit.appendCorrection({ 主体: LEAD, 目标: `${month}#2`, 理由: '写入路径丢键缺陷，内容经核对无误', 授权引用: 授权 });
-      const 后 = await probes.run({ 机制版本: 'corr-2' });
+      const 后 = await probes.run({ subject: LEAD, 机制版本: 'corr-2' });
       assert.equal(后.全绿, true, `更正后应四盏全绿，实际见红 ${JSON.stringify(后.见红)}`);
       const 链 = 后.结果.find((r) => r.探针 === '审计链');
       assert.match(链.详情, /已确认瑕疵 1 处/, '探针读数要报出已确认瑕疵（透明，不装没事）');

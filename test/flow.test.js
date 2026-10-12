@@ -129,7 +129,7 @@ describe('主干环路', () => {
     await tasks.start(node.id, { subject: MEMBER, 项目: P });
     // runAction 只需要这两只手（主体是 Lead，不做成员身份档案核验；P2 后主体由宿主显式给）。
     const org = { tasks, bus, registry: { identity: async () => ({ members: {} }) } };
-    const 敲解锁 = () => runAction({ org, 项目: P, subject: LEAD, 主体: LEAD, args: { action: 'bus_unlock', id: node.id, 线程: 't-unlock' } });
+    const 敲解锁 = () => runAction({ org, 项目: P, subject: LEAD, 主体: LEAD, args: { action: 'bus_unlock', id: node.id, 线程: node.id } });
 
     // 谁都没交：拒，且理由要点名「全员」。
     await assert.rejects(敲解锁, (e) => e.name === 'Denied' && /全员/.test(e.message), '未交齐必须被拒');
@@ -140,7 +140,7 @@ describe('主干环路', () => {
     await tasks.submit(node.id, { subject: MEMBER_B, 项目: P, 结论: 'B 案' });
     const 结果 = await 敲解锁();
     assert.equal(结果.结果.解锁, true, JSON.stringify(结果));
-    const rows = await bus.read({ subject: LEAD, 项目: P, 线程: 't-unlock' });
+    const rows = await bus.read({ subject: LEAD, 项目: P, 线程: node.id });
     const 广播 = rows.find((m) => m.类型 === '广播');
     assert.ok(广播, '解锁广播必须在总线上可见');
     assert.deepEqual(广播.收件.sort(), ['member-a', 'member-b'], '广播要发给全体负责人');

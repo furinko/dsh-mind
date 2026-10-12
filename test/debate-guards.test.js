@@ -454,21 +454,24 @@ describe('批c 补漏 · P2：bus_unlock 也是「往线程落消息」的一只
     }
   });
 
-  it('P2-回归·正对照1：普通线程（不是节点 id）照常解锁并广播', async () => {
+  it('P2-回归·正对照1（2026-10-12 改约）：线程 ≠ 节点 id ⇒ 绑定闸拒（普通线程不再是合法落点）', async () => {
+    // 旧语义「普通线程照常解锁广播」正是 P1-3 的攻击面：齐卷重算 id、广播落自报线程。
+    // 新契约：落点必须是被验齐卷的节点自己（线程等价键比对）。本条钉死旧语义已死。
     const g = await makeFixture();
     try {
       const parts = 装配(g);
       const 讨论 = await 交齐会审(parts.tasks, undefined, 'P2 正对照·讨论节点');
       await parts.debate.open({ subject: LEAD, 项目: P, 节点: 讨论 });
-      const r = await runAction({
-        org: 动作面org(parts), 项目: P, subject: LEAD, 主体: LEAD,
-        args: { action: 'bus_unlock', id: 讨论, 线程: 't-P2-普通线程', 内容: 'P2 正对照广播' },
-      });
-      assert.equal(r.结果.解锁, true, '普通线程不受讨论线程判据影响（同一个部署里同时有讨论线程）');
+      await assert.rejects(
+        runAction({
+          org: 动作面org(parts), 项目: P, subject: LEAD, 主体: LEAD,
+          args: { action: 'bus_unlock', id: 讨论, 线程: 't-P2-普通线程', 内容: 'P2 正对照广播' },
+        }),
+        (e) => e.name === 'Denied' && /落点/.test(e.message) && /广播/.test(e.message),
+        '线程 ≠ 节点 id 必须被绑定闸拒（修前放行且真落线）',
+      );
       const 落 = (await parts.bus.readRaw({ 项目: P, 线程: 't-P2-普通线程' })).filter((m) => m.内容 === 'P2 正对照广播');
-      assert.equal(落.length, 1, '真落线');
-      assert.equal(落[0].类型, '广播', '广播形态没被改坏（发件=system 是 unlock 的既有口径）');
-      assert.deepEqual(落[0].收件, ['member-a', 'member-b'], '收件仍取负责人（默认 收件 = 负责人）');
+      assert.equal(落.length, 0, '被拒后不许落线');
     } finally {
       await g.cleanup();
     }

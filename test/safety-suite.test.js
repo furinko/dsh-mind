@@ -164,7 +164,7 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
   });
 
   it('探针：四盏灯全绿；审计被篡改、闸不在位都见红', async () => {
-    const green = await probes.run({ 机制版本: 'mech-1' });
+    const green = await probes.run({ subject: LEAD, 机制版本: 'mech-1' });
     assert.equal(green.全绿, true, `应全绿，实际：${JSON.stringify(green.见红)}`);
     assert.deepEqual(green.结果.map((r) => r.探针), CLOSED_LIST);
 
@@ -185,7 +185,7 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
     const auditFile = f.layout.auditLog(month);
     const forged = { seq: 999, 时间: '2020-01-01T00:00:00Z', 主体: { id: 'attacker', kind: '未知' }, 动作: '状态变更', 对象: { id: 'x', kind: '账目' }, 依据: '伪造', 结果: '伪造', 档位: '全记', prev: 'deadbeef', hash: 'cafebabe' };
     await writeFile(auditFile, `${await readFile(auditFile, 'utf8')}${JSON.stringify(forged)}\n`);
-    const tampered = await probes.run({ 机制版本: 'mech-2' });
+    const tampered = await probes.run({ subject: LEAD, 机制版本: 'mech-2' });
     assert.equal(tampered.全绿, false);
     assert.ok(tampered.见红.some((r) => r.探针 === '审计链'));
     const 异常 = (await f.audit.read({})).filter((r) => r.对象?.id === '红线索兵').at(-1);
@@ -196,7 +196,7 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
     const { rm } = await import('node:fs/promises');
     await rm(f.layout.rulePath('审计要求', '出厂'), { force: true });
     await f.policy.reload();
-    const gate = await probes.run({ 机制版本: 'mech-3' });
+    const gate = await probes.run({ subject: LEAD, 机制版本: 'mech-3' });
     assert.ok(gate.见红.some((r) => r.探针 === '闸在位'));
     assert.equal(f.policy.healthy, false);
   });

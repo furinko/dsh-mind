@@ -13,12 +13,19 @@
  */
 import { listFiles, readJsonOrNull, readTextOrNull, atomicWrite, ensureDirPath } from './kernel/fsx.js';
 import { shortHash } from './kernel/ids.js';
+import { Denied } from './kernel/errors.js';
 
 /** 封闭清单。新增一项要改这里 + 出厂声明，二者不一致就是故障。 */
 export const CLOSED_LIST = ['审计链', '闸在位', '出厂件洁净', '撤回名单一致'];
 
 /** 连续多少次同色才算「恒」。太短会把偶发抖动报成故障。 */
 const STICKY_RUNS = 3;
+
+/**
+ * 探针巡检的主体白名单（2026-10-12 评审 P1-8）。**不挂策略引擎**：探针必须在引擎
+ * 不健康时照常跑（「闸不在位」正是为它点的灯）；kind 由会话事实链供给，自报不到。
+ */
+const PROBE_RUNNERS = ['Lead', '主权者', '系统'];
 
 export class ProbeRunner {
   /**
@@ -70,10 +77,29 @@ export class ProbeRunner {
    * 跑全部探针并落一份快照。
    *
    * 快照是「回滚目标」的唯一来源：只有留下证据，才可能回到「全绿的最近一版」。
-   * @param {{ 机制版本?: string }} [spec]
+   *
+   * 主体闸（2026-10-12 评审 P1-8）：落快照 + 入账是写动作，动作面修前零闸——任何成员
+   * 子会话都能经 mind_guard 灌水快照、操纵恒红/恒绿健康判定。但这里**不能过策略引擎**：
+   * 探针必须在引擎不健康时照常跑（「闸不在位」那盏灯正是为它点的；safety-suite 钉死了
+   * 删掉规则件后 run 必须照常落快照），过 policy.check 等于「闸坏了灯也灭」。
+   * 于是闸是**结构性身份白名单**：Lead / 主权者 / 系统可跑，成员 / 复核者 / 未知一律拒。
+   * 它不靠身份档案（引擎不健康时档案同样不可信），而 kind 由会话事实链供给（内核
+   * 门①/门② 已封自报），成员在工具面拿不到 Lead 这个 kind。
+   *
+   * 「机制版本」恒由声明文件现算（`#mechanismVersion`）；`spec.机制版本` 只余装配/测试通道
+   * （开机自检的 'boot'、测试造版本差），动作面已不可达——快照是回滚目标的唯一来源，
+   * 自报标签 = 回滚目标投毒。
+   *
+   * @param {{ subject: object, 机制版本?: string }} spec
    * @returns {Promise<{全绿: boolean, 结果: Array<object>, 见红: Array<object>, 机制版本: string, 于: string, 声明问题: string[]}>}
    */
   async run(spec = {}) {
+    if (!PROBE_RUNNERS.includes(spec.subject?.kind)) {
+      throw new Denied('安全类 · 探针巡检的主体闸（§4：机制内置动作，不挂策略引擎——引擎不健康时探针必须照常跑）', `主体 ${spec.subject?.id ?? '（缺席）'}（${spec.subject?.kind ?? '未知'}）无权跑探针：落快照 + 入账是写动作，只有 Lead / 主权者 / 系统能触发。`, {
+        requireAuthority: 'Lead',
+        howToChange: '由 Lead（根会话）执行 probe_run；成员要探针读数用 probe_health（只读）。',
+      });
+    }
     const declaration = await this.declare();
     const 结果 = [];
     for (const 探针 of CLOSED_LIST) {

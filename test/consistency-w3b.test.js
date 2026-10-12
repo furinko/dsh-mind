@@ -159,7 +159,7 @@ describe('W3 批2 · 口径与静默失效', () => {
       assert.equal(声明.一致, false);
       assert.ok(声明.问题.some((p) => /无法解析/.test(p)), `问题里要说清是解析失败：${声明.问题.join('；')}`);
 
-      const ran = await probes.run({ 机制版本: 'w3b-1' });
+      const ran = await probes.run({ subject: LEAD, 机制版本: 'w3b-1' });
       assert.equal(ran.全绿, false, '声明坏了不许报全绿');
       assert.ok(ran.声明问题.length > 0);
       assert.equal(ran.结果.length, 4, '四道探针照跑（修前 run 在第一步就抛，快照与审计全无）');
