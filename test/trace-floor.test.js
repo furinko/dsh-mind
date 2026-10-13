@@ -84,9 +84,24 @@ describe('批次4 · P2-2：结论集坏串响亮拒，不静默落成空集', (
       assert.equal(坏.成功, false, '坏串必须拒（修前放行且按空集判定）');
       assert.match(JSON.stringify(坏), /结论集 不是合法 JSON/, '拒绝要点名是结论集解析失败');
 
-      const 好 = JSON.parse(await 工具.execute({ action: 'review_zero', id: 'task-x', 结论集: '[]' }, exec));
-      assert.equal(好.成功, true, `合法串必须过解析这关并给出检查读数（实际：${JSON.stringify(好)}）`);
+      // 合法串 + 真实节点（2026-10-13 审查 P1-8 之后结论集不再收自报：必须给任务图里真有的
+      // 节点 id，服务层从独立答案重算）。'task-x' 不存在 ⇒ 响亮拒，而不是读空气。
+      const org = await shareOrg({ home: g.home, factoryRoot: g.factoryRoot, privateRoot: g.privateRoot });
+      // 项目键两边钉死同一个值（工具面的项目键从 exec 工作区派生，这里显式传 project 免得漂）。
+      const 项目 = 'zero-div-floor';
+      const LEAD_SUB = { id: 'lead', kind: 'Lead' };
+      const 节点 = await org.tasks.create({ subject: LEAD_SUB, 项目, 描述: '零分歾示证', 负责人: ['member-a', 'member-b'], 模式: '独立会审', 判据: ['x'] });
+      await org.tasks.dispatch(节点.id, { subject: LEAD_SUB, 项目 });
+      await org.tasks.start(节点.id, { subject: { id: 'member-a', kind: '成员' }, 项目 });
+      await org.tasks.submit(节点.id, { subject: { id: 'member-a', kind: '成员' }, 项目, 结论: '同一结论' });
+      await org.tasks.submit(节点.id, { subject: { id: 'member-b', kind: '成员' }, 项目, 结论: '同一结论' });
+      const 好 = JSON.parse(await 工具.execute({ action: 'review_zero', id: 节点.id, project: 项目, 结论集: '[]' }, exec));
+      assert.equal(好.成功, true, `合法串 + 真实节点必须给出检查读数（实际：${JSON.stringify(好)}）`);
       assert.ok(好.检查, '走到 review.checkZeroDivergence 才有「检查」读数');
+      assert.equal(好.检查.零分歧, true, '两份同文结论且无反例面 ⇒ 零分歧（从任务图独立答案重算）');
+
+      const 空气节点 = JSON.parse(await 工具.execute({ action: 'review_zero', id: 'task-x', project: 项目, 结论集: '[]' }, exec));
+      assert.equal(空气节点.成功, false, '不存在的节点必须响亮拒（不收自报结论集 ⇒ 没有权威源）');
     } finally {
       host.清理();
       forgetSharedOrg();
@@ -113,6 +128,14 @@ describe('批次4 · P1-9：更正声明跨月生效', () => {
       const a10 = new AuditLog({ layout: g.layout, clock: clockAt('2026-10-01T00:00:00.000Z') });
       let v = await a10.verify();
       assert.ok(v.broken.some((b) => b.month === '2026-09' && b.seq === 1 && b.类型 === '链断裂'), '前提：篡改见红');
+
+      // 授权引用存在性（P2-18）：先在任务图里落一个真实节点，授权指向它。
+      const { appendLines } = await import('../src/kernel/fsx.js');
+      const { mkdir } = await import('node:fs/promises');
+      const { dirname } = await import('node:path');
+      const taskLog = g.layout.taskLog('default');
+      await mkdir(dirname(taskLog), { recursive: true }).catch(() => {});
+      await appendLines(taskLog, [{ seq: 1, at: '2026-09-01T00:00:00.000Z', by: { id: 'lead', kind: 'Lead' }, kind: 'created', id: '决议-batch4', 描述: '跨月声明授权载体', 判据: ['x'] }]);
 
       await a10.appendCorrection({ 主体: '主权者', 目标: '2026-09#1', 理由: '核查无误（测试造瑕）', 授权引用: '决议-batch4' });
       v = await a10.verify();

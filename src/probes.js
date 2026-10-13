@@ -115,7 +115,9 @@ export class ProbeRunner {
       见红,
       声明问题: declaration.问题,
     };
-    await this.#snapshot(ran);
+    const 快照 = await this.#snapshot(ran);
+    // 快照哈希入账（2026-10-13 裁决第二批 · 裁决3）：快照是回滚目标的唯一来源，
+    // 无完整性保护等于回滚面可投毒——哈希进审计链，autoRollback 定位前校验。
     await this.audit.append({
       // 动作名按结果分流：全绿是「巡检」（系统的机制内置动作，见权限矩阵主体表），
       // 见红才是「异常」。全绿也记异常会让动作名与结果语义不符，审计全是噪音。
@@ -125,8 +127,22 @@ export class ProbeRunner {
       依据: '§4 五道配套：红线索兵 + 留痕 + 可申诉',
       结果: 全绿 ? '全绿' : `见红 ${见红.length} 项：${见红.map((r) => r.探针).join('、')}`,
       告警: !全绿,
-      详情: { 机制版本: ran.机制版本, 见红, 声明问题: declaration.问题 },
+      详情: { 机制版本: ran.机制版本, 见红, 声明问题: declaration.问题, 快照 },
     });
+    // 恒红/恒绿报警接线（2026-10-13 裁决第二批 · P2-10）：§4「恒亮的灯等于没灯」——
+    // evaluateHealth 此前只返回结构、无消费点，恒绿可能静默。巡检后现判，恒态 ⇒ 告警入账。
+    const 健康 = await this.evaluateHealth();
+    if (健康.恒红 || 健康.恒绿) {
+      await this.audit.append({
+        动作: '探针健康异常',
+        主体: { id: 'system', kind: '系统' },
+        对象: { id: '红线索兵', kind: '账目' },
+        依据: '§4 恒红/恒绿都要报警：连续同态 = 检测能力存疑，不是"安全"',
+        结果: 健康.状态,
+        告警: true,
+        详情: { 状态: 健康.状态, 说明: 健康.说明, 连续次数: 健康.最近.length },
+      });
+    }
     return ran;
   }
 
@@ -183,6 +199,22 @@ export class ProbeRunner {
     if (!latest || latest.全绿) {
       return { 执行: false, 目标版本: null, 原因: '最新一次探针全绿，没有回滚的必要。' };
     }
+    // 快照完整性校验（2026-10-13 裁决第二批 · 裁决3）：快照是无哈希普通 JSON，改一份
+    // 历史「全绿+版本X」即可把回滚目标定位到伪造版本（投毒面）。修法：定位出的目标快照
+    // 与账上「探针巡检/异常」行记录的内容哈希比对——不符 ⇒ 告警 + 拒绝定位（fail-closed）。
+    const 校验 = await this.#verifySnapshotIntegrity(latest);
+    if (!校验.ok) {
+      await this.audit.append({
+        动作: '自动回滚',
+        主体: { id: 'system', kind: '系统' },
+        对象: { id: '机制版本', kind: '账目' },
+        依据: '§4 快照完整性校验（裁决第二批·裁决3）：回滚目标与审计入账哈希不符 = 投毒嫌疑，拒绝定位',
+        结果: `最新快照完整性校验失败：${校验.原因}——不定位回滚目标，升级主权者核查`,
+        告警: true,
+        详情: { 校验 },
+      });
+      return { 执行: false, 目标版本: null, 原因: `快照完整性存疑（${校验.原因}），已告警并升级主权者；不定位回滚目标。` };
+    }
     // 关键：不是「上一版」，是「**全绿的最近一版**」——中间可能隔着好几版见红。
     const 目标 = [...snapshots].reverse().find((s) => s.全绿 === true);
     if (!目标) {
@@ -200,6 +232,20 @@ export class ProbeRunner {
     // 口径如实（F2 + 甲′裁决 2026-10-09）：运行态不自动改文件、不自建回滚制品——
     // 回滚制品＝git/包版本（开发仓），装回全绿版本由主权者经版本管理执行。
     // 这里只「定位目标并入账」，不许审计里出现「版本 x → 版本 y」这种像真回滚过的写法。
+    // 回滚目标快照同样过完整性校验（裁决3）：目标被改过 = 定位到伪造版本，同拒。
+    const 目标校验 = await this.#verifySnapshotIntegrity(目标);
+    if (!目标校验.ok) {
+      await this.audit.append({
+        动作: '自动回滚',
+        主体: { id: 'system', kind: '系统' },
+        对象: { id: '机制版本', kind: '账目' },
+        依据: '§4 快照完整性校验（裁决第二批·裁决3）：回滚目标与审计入账哈希不符 = 投毒嫌疑，拒绝定位',
+        结果: `回滚目标快照完整性校验失败：${目标校验.原因}——不定位，升级主权者核查`,
+        告警: true,
+        详情: { 校验: 目标校验, 候选目标: 目标.机制版本 },
+      });
+      return { 执行: false, 目标版本: null, 原因: `回滚目标快照完整性存疑（${目标校验.原因}），已告警并升级主权者。` };
+    }
     await this.audit.append({
       动作: '自动回滚',
       主体: { id: 'system', kind: '系统' },
@@ -321,12 +367,18 @@ export class ProbeRunner {
 
   // ── 快照 ────────────────────────────────────────────────────────────────────
 
-  /** @param {object} ran */
+  /**
+   * @param {object} ran
+   * @returns {Promise<{名: string, 哈希: string}>} 快照文件名与内容哈希（入账供 autoRollback 校验）
+   */
   async #snapshot(ran) {
     const dir = this.layout.probeSnapshotDir();
     await ensureDirPath(dir);
     const name = `${ran.于.replace(/[:.]/g, '-')}-${shortHash(ran.机制版本, 6)}.json`;
-    await atomicWrite(`${dir}/${name}`, `${JSON.stringify(ran, null, 2)}\n`);
+    const text = `${JSON.stringify(ran, null, 2)}\n`;
+    await atomicWrite(`${dir}/${name}`, text);
+    // 内容哈希（裁决3）：按盘上字节算——校验侧对同一文件复算，两边同源。
+    return { 名: name, 哈希: shortHash(text, 16) };
   }
 
   /** @param {number} limit */
@@ -347,12 +399,42 @@ export class ProbeRunner {
     const text = (await readTextOrNull(this.layout.probeDeclaration())) ?? '';
     return shortHash(text, 12);
   }
+
+  /**
+   * 快照完整性校验（裁决3）：给定快照对象，找到盘上对应文件，复算内容哈希并与
+   * 审计「探针巡检/异常」行入账的哈希比对。不符 / 找不到入账 ⇒ 不 ok（fail-closed）。
+   * @param {object} snap
+   * @returns {Promise<{ok: boolean, 原因?: string, 名?: string, 哈希?: string}>}
+   */
+  async #verifySnapshotIntegrity(snap) {
+    const dir = this.layout.probeSnapshotDir();
+    const files = (await listFiles(dir, { recursive: false, filter: (n) => n.endsWith('.json') })).sort();
+    const 正文 = `${JSON.stringify(snap, null, 2)}\n`;
+    let 名 = null;
+    for (const f of files) {
+      const t = await readTextOrNull(`${dir}/${f}`);
+      if (t !== null && t === 正文) { 名 = f; break; }
+    }
+    if (!名) return { ok: false, 原因: '盘上找不到与该快照逐字节一致的文件（内容已被改动或已丢失）' };
+    const 哈希 = shortHash(正文, 16);
+    const rows = await this.audit.read({});
+    const 记录 = rows.filter((r) => ['探针巡检', '探针异常'].includes(r.动作) && r.详情?.快照?.名 === 名).at(-1);
+    if (!记录) return { ok: false, 原因: `账上没有快照 ${名} 的入账哈希（入账缺失或早于裁决3的旧快照）` };
+    if (记录.详情.快照.哈希 !== 哈希) {
+      return { ok: false, 原因: `哈希不符：账上 ${记录.详情.快照.哈希}，盘上复算 ${哈希}` };
+    }
+    return { ok: true, 名, 哈希 };
+  }
 }
 
 /** 用户数据 / 凭据外泄的检测面。模式写得具体，避免把正常文本误判成泄漏。 */
 const SENSITIVE_PATTERNS = [
-  ['绝对用户路径', /[A-Za-z]:\\Users\\[^\\\s"']+/u],
+  // 正反斜杠两种写法都要拦（2026-10-13 审查 P2-21）：Node 生态里 `C:/Users/kuro/...` 极常见，
+  // 修前只匹配反斜杠写法 ⇒ 正斜杠路径完全漏过。
+  ['绝对用户路径（反斜杠）', /[A-Za-z]:\\Users\\[^\\\s"']+/u],
+  ['绝对用户路径（正斜杠）', /[A-Za-z]:\/Users\/[^\s"']+/u],
   ['POSIX 用户路径', /\/Users\/[A-Za-z0-9._-]+\//u],
+  ['Linux 家目录路径', /\/home\/[A-Za-z0-9._-]+\//u],
   ['疑似密钥', /\bsk-[A-Za-z0-9]{16,}\b/u],
   ['Bearer 令牌', /Bearer\s+[A-Za-z0-9._-]{20,}/u],
 ];

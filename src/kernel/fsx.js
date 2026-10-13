@@ -100,6 +100,33 @@ export async function readJsonl(file) {
 }
 
 /**
+ * readJsonl 的**带体检**版本（2026-10-13 审查 P1-7）：跳坏行的同时把坏行数报出来。
+ * 审计链自检此前复用了「会跳行的读取器」——撕裂半行被读取与自检**一起**静默跳过，
+ * verify 对「上一条完好记录」照常全绿，该条记录永久丢失且无 broken 项。
+ * `末行完整`：文件是否存在未以换行结尾的尾部（追加式账本的撕裂形态）。
+ * @param {string} file
+ * @returns {Promise<{ rows: any[], 坏行: number, 末行完整: boolean }>}
+ */
+export async function readJsonlHealth(file) {
+  const text = await readTextOrNull(file);
+  if (text === null) return { rows: [], 坏行: 0, 末行完整: true };
+  const rows = [];
+  let 坏行 = 0;
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (!t) continue;
+    try {
+      rows.push(JSON.parse(t));
+    } catch {
+      坏行 += 1;
+    }
+  }
+  const 末行完整 = text === '' || text.endsWith('\n');
+  return { rows, 坏行, 末行完整 };
+}
+
+/**
  * @param {string} dir
  * @param {{ filter?: (name: string) => boolean, recursive?: boolean }} [options]
  * @returns {Promise<string[]>} 相对 dir 的 POSIX 风格路径
@@ -168,7 +195,11 @@ export async function withLock(lockPath, fn, options = {}) {
   // （purge 这类读-改-写）面前太激进了——持有者只是慢，就被判「已死」强夺，临界区双入。
   // 真实的死锁代价是等 60s，可接受；误判强夺的代价是数据竞争，不可接受。
   const staleMs = options.staleMs ?? 60_000;
-  const timeoutMs = options.timeoutMs ?? 10_000;
+  // timeoutMs 必须大于 staleMs（2026-10-13 审查 P1-5）：否则等待者在等到 stale 判死之前就先
+  // 超时抛错，强夺分支永远不可达——崩溃进程留下的锁文件会让所有后续写持续失败，只能人工删锁
+  // （这正是 fsx 头注释「重启后不能有卡死的锁」要防的事故）。默认给 stale 之后留一个完整
+  // 的强夺 + 重试窗口；调用方仍可显式传更短的 timeoutMs 换快速失败。
+  const timeoutMs = options.timeoutMs ?? staleMs + 60_000;
   const started = Date.now();
   await ensureDir(lockPath);
   for (;;) {
@@ -210,9 +241,14 @@ export async function withLock(lockPath, fn, options = {}) {
       const info = await stat(lockPath).catch(() => null);
       const age = info ? Date.now() - info.mtimeMs : Number.POSITIVE_INFINITY;
       if (info && age > staleMs) {
+        // rm 前重校验（2026-10-13 审查 P1-5b）：stat 与 rm 之间旧锁可能刚被释放并被**新等待者**
+        // 抢走——不重校验就会删掉新持有者的锁，两个进程同进临界区。重 stat 到同一 mtime 才删；
+        // 已变样就当没看见，交给下面的超时 + 退避收束。
+        const re = await stat(lockPath).catch(() => null);
+        const 仍stale = re && re.mtimeMs === info.mtimeMs;
         // rm 在「删除挂起」上会 EPERM（句柄未关、DeleteFileW 已标挂起）——那不是强夺成功，
         // 是「还占着」：吞掉、交给下面的超时 + 退避收束（2026-10-12 评审 P1-10 复核实测）。
-        const 抹掉 = await rm(lockPath, { force: true }).then(() => true, () => false);
+        const 抹掉 = 仍stale ? await rm(lockPath, { force: true }).then(() => true, () => false) : false;
         if (抹掉) options.onSteal?.({ lockPath, ageMs: age });
       }
       // 超时与退避是**所有**等待路径的共同出口（修前只有「锁还在且未过期」走这里，

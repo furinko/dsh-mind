@@ -9,10 +9,11 @@
  *  3. **归档 takes precedence over 状态** —— §7 明确「不承担回滚、不做状态」，
  *     所以这里没有任何 `update`/`delete` 方法，将来也不加。
  */
-import { appendLines, atomicWrite, ensureDirPath, listFiles, readJsonl, readJsonOrNull, withLock, serializeByKey } from './kernel/fsx.js';
+import { appendLines, atomicWrite, ensureDirPath, listFiles, readJsonl, readJsonlHealth, readJsonOrNull, withLock, serializeByKey } from './kernel/fsx.js';
 import { chainHash } from './kernel/text.js';
 import { monthKey } from './kernel/time.js';
 import { Denied, InvalidBody } from './kernel/errors.js';
+import { DIR } from './paths.js';
 
 /** §7 审计记录分级：全记 / 记汇总 / 不逐次记。 */
 export const GRADE = { 全记: '全记', 记汇总: '记汇总', 不逐次记: '不逐次记' };
@@ -235,6 +236,19 @@ export class AuditLog {
         howToChange: '先用 audit_verify 拿到真实的断裂点（month#seq），再对它写声明。',
       });
     }
+    // 授权引用存在性校验（2026-10-13 裁决第二批 · P2-18）：对齐 memory 来源引用的
+    // fail-closed 口径——空字符串之外的「任意字符串」不能当授权：授权依据必须是任务图里
+    // 真实出现过的节点 id（决议/任务都落任务图），悬空授权 = 漂白哈希差异的口子，拒。
+    if (!(await this.#授权存在(授权引用))) {
+      throw new Denied(
+        '审计链 · 授权引用必须真实存在',
+        `授权引用「${授权引用}」在任务图事件流里找不到：更正声明是把哈希差异转「已确认瑕疵」的闭环入口，授权依据必须指向真实的决议/任务节点（fail-closed，与记忆来源引用同口径）。`,
+        {
+          requireAuthority: '主权者',
+          howToChange: '把主权者授权所依据的决议/任务节点 id 原样传入（它进链接受复核）。',
+        },
+      );
+    }
     return this.append({
       动作: '更正声明',
       主体: spec.主体,
@@ -244,6 +258,17 @@ export class AuditLog {
       告警: true,
       详情: { 目标: `${month}#${seq}`, 实存hash: row.hash ?? null, 复算hash, 理由, 授权引用 },
     });
+  }
+
+  /** 授权引用是否指向任务图里真实出现过的节点（跨全部项目，与 memory.#taskExists 同口径）。 */
+  async #授权存在(id) {
+    const { listFiles } = await import('./kernel/fsx.js');
+    const root = this.layout.private(DIR.基础设施, DIR.任务图);
+    for (const rel of await listFiles(root, { recursive: true, filter: (n) => n.endsWith('tasks.jsonl') })) {
+      const rows = await readJsonl(`${root}/${rel}`);
+      if (rows.some((row) => row?.id === id)) return true;
+    }
+    return false;
   }
 
   /**
@@ -281,8 +306,16 @@ export class AuditLog {
     const 声明表 = new Map(); // 'YYYY-MM#seq' -> row[]
     const 每月rows = new Map();
     for (const month of months) {
-      const rows = await readJsonl(this.layout.auditLog(month));
+      // 撕裂行可见（2026-10-13 审查 P1-7）：读取走带体检的版本——坏行数与「尾部没有换行」
+      // 都是 broken 项。修前 verify 复用会跳行的读取器，崩溃撕裂的半行被两边一起静默跳过。
+      const { rows, 坏行, 末行完整 } = await readJsonlHealth(this.layout.auditLog(month));
       每月rows.set(month, rows);
+      if (坏行 > 0) {
+        broken.push({ month, seq: null, 类型: '撕裂行', expected: null, actual: null, 坏行数: 坏行 });
+      }
+      if (!末行完整) {
+        broken.push({ month, seq: rows[rows.length - 1]?.seq ?? null, 类型: '尾部撕裂（末行无换行）', expected: null, actual: null });
+      }
       for (const row of rows) {
         if (row.动作 !== '更正声明') continue;
         const m = /^(\d{4}-\d{2})#(\d+)$/.exec(String(row.详情?.目标 ?? ''));
@@ -339,6 +372,19 @@ export class AuditLog {
       } else if (rows.length > 0) {
         // 有账却无锚：锚文件被删同样让「尾部截断」无法被发现，按最严报出来（§12.2 查不到 = 最严）。
         broken.push({ month, seq: rows[rows.length - 1]?.seq ?? null, 类型: '锚缺失', expected: null, actual: rows[rows.length - 1]?.hash ?? null });
+      }
+    }
+    // 月份缺口（2026-10-13 审查 P1-7b）：删掉整月 账本+锚 后该月从 months() 枚举中消失，
+    // verify 对剩余月份照常全绿。月份清单按日历连续性核对：中间缺一个月 ⇒ 响亮见红。
+    // 如实交代剩余面（不吞）：**最早**月份之前与**最新**月份之后的截断没有链外检查点，
+    // 本条查不出（需要跨月滚动的链外留痕，记入设计债）。
+    const 升序 = [...months].sort();
+    for (let i = 1; i < 升序.length; i++) {
+      const [y1, m1] = 升序[i - 1].split('-').map(Number);
+      const [y2, m2] = 升序[i].split('-').map(Number);
+      const 期望下月 = m1 === 12 ? `${y1 + 1}-01` : `${y1}-${String(m1 + 1).padStart(2, '0')}`;
+      if (y2 !== Number(期望下月.split('-')[0]) || m2 !== Number(期望下月.split('-')[1])) {
+        broken.push({ month: 升序[i], seq: null, 类型: '月份缺口', expected: 期望下月, actual: 升序[i], 说明: `${升序[i - 1]} 与 ${升序[i]} 之间缺月：整月账本+锚被删的形状` });
       }
     }
     // 未被任何真实瑕疵消费的声明 = 声明与账本对不上（伪造 / 错配 / 目标本无瑕疵）⇒ 仍红。
@@ -423,7 +469,10 @@ export class AuditLog {
 function normalizeActor(actor) {
   if (actor && typeof actor === 'object') {
     return {
-      id: String(actor.id),
+      // 主体 id 缺席 ⇒ 记 '未知' 而不是 String(undefined)='undefined'（2026-10-13 第三批收口）：
+      // 伪主体 'undefined' 会被检索/过滤面当成一个真实存在的 id，分不清「未知主体」与「名叫
+      // undefined 的主体」。kind 缺席同理。
+      id: actor.id === undefined || actor.id === null || actor.id === '' ? '未知' : String(actor.id),
       kind: String(actor.kind ?? '未知'),
       ...(actor.roleId ? { roleId: String(actor.roleId) } : {}),
       ...(actor.generation !== undefined ? { generation: Number(actor.generation) } : {}),

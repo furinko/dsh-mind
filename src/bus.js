@@ -16,6 +16,7 @@
 import { appendLines, readJsonl, withLock } from './kernel/fsx.js';
 import { InvalidBody, Denied } from './kernel/errors.js';
 import { objectId } from './kernel/ids.js';
+import { 全员已交 } from './tasks.js';
 
 /** 消息类型（§9 接口契约里 `类型` 的取值面）。 */
 export const MESSAGE_TYPES = ['派活', '交卷', '复核结论', '分歧', '广播', '表态', '提问', '答复', '系统'];
@@ -39,6 +40,9 @@ export class MessageBus {
     this.policy = spec.policy;
     this.audit = spec.audit;
     this.clock = spec.clock;
+    // 任务图（可选注入 · 2026-10-13 审查 P2-4）：unlock 的齐卷判定从任务图重算，
+    // 不再信调用方布尔自报。装配点（org.js）接上；独立用法（纯函数式夹具）退回自报并如实标注。
+    this.tasks = spec.tasks ?? null;
   }
 
   /**
@@ -49,7 +53,11 @@ export class MessageBus {
    */
   async send(message) {
     if (!message.线程?.trim()) throw new InvalidBody('消息必须属于一个线程。', { missing: ['线程'] });
-    if (!message.发件?.trim()) throw new InvalidBody('消息必须有发件人。', { missing: ['发件'] });
+    // 发件恒为真实主体 id（2026-10-13 审查 P2-4，服务层收口）：修前直写 `message.发件` 自报——
+    // 动作层已封，但任何新内部调用者接上即绕过（防御纵深）。系统主体（轮边界等机制消息）
+    // 用主体自己的 id（'system'）；自报发件只作兼容读，不再采信。
+    if (!message.subject?.id) throw new InvalidBody('消息必须有发件人（发件恒取真实主体 id，subject 缺席 = 无法投递）。', { missing: ['subject'] });
+    const 发件 = String(message.subject.id);
     const 类型 = message.类型 ?? '表态';
     if (!MESSAGE_TYPES.includes(类型)) throw new InvalidBody(`未知消息类型：${类型}`, { missing: ['类型'] });
     const 内容 = String(message.内容 ?? '').trim();
@@ -70,7 +78,7 @@ export class MessageBus {
       );
     }
 
-    const id = objectId('消息', `${message.线程}/${message.发件}/${内容.slice(0, 24)}`, { at: this.clock.ms() });
+    const id = objectId('消息', `${message.线程}/${发件}/${内容.slice(0, 24)}`, { at: this.clock.ms() });
     await this.policy.check({
       subject: message.subject,
       action: 'create',
@@ -83,7 +91,7 @@ export class MessageBus {
         {
           id,
           线程: message.线程,
-          发件: message.发件,
+          发件,
           收件: Array.isArray(message.收件) ? message.收件 : [message.收件],
           类型,
           内容,
@@ -261,8 +269,21 @@ export class MessageBus {
    * @returns {Promise<{ 解锁: boolean, 广播: string|null, 原因: string }>}
    */
   async unlock(spec) {
-    if (spec.全员已交 !== true) {
-      return { 解锁: false, 广播: null, 原因: '任务图未报「全员已交」，会审保持锁定（提交后解锁）。' };
+    // 齐卷判定从任务图重算（2026-10-13 审查 P2-4）：修前完全信调用方布尔 `全员已交`——
+    // 动作层已重算，但服务面任何新调用者接上即绕过。注入了 tasks 就必须给 节点 id 现算
+    // （全员已交() 是齐卷判据的唯一源，与遮罩/讨论开启同一把尺）；未注入 tasks 的独立用法
+    // 才退回自报布尔，并在原因里如实标注口径。
+    let 齐 = spec.全员已交 === true;
+    let 口径 = '调用方自报（未注入任务图，无法重算）';
+    if (this.tasks) {
+      if (!spec.节点) throw new InvalidBody('unlock 需要 节点（任务节点 id）：齐卷判定从任务图独立答案重算，不收自报布尔。', { missing: ['节点'] });
+      const node = await this.tasks.get(spec.节点, { 项目: spec.项目 });
+      if (!node) throw new InvalidBody(`没有这个任务节点：${spec.节点}（项目 ${spec.项目}）`);
+      齐 = 全员已交(node);
+      口径 = `任务图重算（状态=${node.状态}，答案 ${(node.独立答案 ?? []).length}/${(node.负责人 ?? []).length}）`;
+    }
+    if (!齐) {
+      return { 解锁: false, 广播: null, 原因: `任务图未报「全员已交」（${口径}），会审保持锁定（提交后解锁）。` };
     }
     const broadcast = await this.send({
       subject: { id: 'system', kind: '系统' },

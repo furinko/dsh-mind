@@ -33,6 +33,14 @@ const 授权 = 'task-审计链更正声明机制-缺口2-a--8dt4y';
 async function 造瑕疵夹具() {
   const f = await makeFixture();
   const audit = new AuditLog({ layout: f.layout, clock: f.clock });
+  // 授权引用存在性校验（2026-10-13 裁决第二批 P2-18）：授权必须指向任务图里真实出现过的
+  // 节点 id——夹具里先落一个该 id 的事件行，让合法路径过闸。
+  const { appendLines } = await import('../src/kernel/fsx.js');
+  const { mkdir } = await import('node:fs/promises');
+  const { dirname } = await import('node:path');
+  const taskLog = f.layout.taskLog('default');
+  await mkdir(dirname(taskLog), { recursive: true }).catch(() => {});
+  await appendLines(taskLog, [{ seq: 1, at: new Date().toISOString(), by: { id: 'lead', kind: 'Lead' }, kind: 'created', id: 授权, 描述: '更正声明授权载体', 判据: ['x'] }]);
   await audit.append({ 动作: '状态变更', 主体: LEAD, 对象: 'a', 依据: '第 1 行', 结果: 'ok' });
   await audit.append({ 动作: '状态变更', 主体: LEAD, 对象: 'b', 依据: '第 2 行（将被写坏）', 结果: 'ok' });
   await audit.append({ 动作: '状态变更', 主体: LEAD, 对象: 'c', 依据: '第 3 行', 结果: 'ok' });

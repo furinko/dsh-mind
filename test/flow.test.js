@@ -476,8 +476,12 @@ describe('主干环路', () => {
 
     const 默认面 = await memory.query({ subject: LEAD, 项目: P });
     assert.ok(!默认面.条目.some((e) => e.id === answer.id), '归档作答不进默认检索面');
-    const 显式面 = await memory.query({ subject: LEAD, 项目: P, 显式: true });
-    assert.ok(显式面.条目.some((e) => e.id === answer.id), '可显式检索');
+    // 显式检索必须自报读者（2026-10-13 审查 P1-9）：不传读者的 显式:true 不再跳过可读性检查——
+    // 否则任何成员不带读者就能读归档作答。动作面（memory_query）恒传 读者=主体，不受影响。
+    const 无读者 = await memory.query({ subject: MEMBER, 项目: P, 显式: true });
+    assert.ok(!无读者.条目.some((e) => e.id === answer.id), '显式检索不传读者 ⇒ 归档作答照旧不可见（fail-closed）');
+    const 显式面 = await memory.query({ subject: LEAD, 项目: P, 显式: true, 读者: LEAD });
+    assert.ok(显式面.条目.some((e) => e.id === answer.id), '可显式检索（读者在可读名单内）');
     assert.match(显式面.说明 ?? '', /显式/);
 
     assert.equal((await memory.readableBy(answer.id, { 读者: REVIEWER })).可读, true);
@@ -554,32 +558,39 @@ describe('主干环路', () => {
     );
     const blind = await review.openBlind({ subject: LEAD, 项目: P, 线程: 't-1', 参与者: ['member-a', 'member-b'], 已交: ['member-a', 'member-b'] });
     assert.equal(blind.解锁, true);
+    // 盲标映射已随机化（2026-10-13 裁决第二批 P2-13）：映射顺序不可预测 ⇒ 只断「集合覆盖」
+    // 与「盲标唯一」，不断言谁拿 A（那正是修前的去匿名面）。
     assert.deepEqual(blind.盲标.map((b) => b.盲标), ['成员 A', '成员 B']);
-    assert.ok(!JSON.stringify(blind.盲标.at(0)).includes('member-a') === false, '盲标阶段本就不该给名字对齐；揭名在讨论阶段');
+    assert.deepEqual([...new Set(blind.盲标.map((b) => b.id))].sort(), ['member-a', 'member-b'], '每个参与者恰好一个盲标');
     const revealed = await review.reveal({ subject: LEAD, 项目: P, 线程: 't-1', 参与者: ['member-a', 'member-b'] });
-    assert.equal(revealed.揭名.find((r) => r.盲标 === '成员 A').id, 'member-a');
+    // 揭名与 openBlind 同一确定性映射（P2-13）：同一线程+名册，两边逐人对得上。
+    for (const r of revealed.揭名) {
+      assert.equal(r.盲标, blind.盲标.find((b) => b.id === r.id).盲标, `揭名与盲评映射一致：${r.id}`);
+    }
   });
 
-  it('反趋同：零分歧按「结论层一致且无人给反例面」判定，并记一笔触发抽检', async () => {
-    const 有反例 = await review.checkZeroDivergence({
-      subject: LEAD, 项目: P, 节点: 'n-2',
-      结论集: [
-        { 成员: 'a', 结论: '可以' },
-        { 成员: 'b', 结论: '可以' },
-        { 成员: 'c', 结论: '可以', 反例面: ['边界情况没覆盖'] },
-      ],
-    });
+  it('反趋同：零分歧从任务图独立答案重算（不收自报），并记一笔触发抽检', async () => {
+    const MEMBER_B = { id: 'member-b', kind: '成员', roleId: '插件工程' };
+    const 有反例节点 = await tasks.create({ subject: LEAD, 项目: P, 描述: '有反例', 负责人: ['member-a', 'member-b'], 模式: '独立会审', 判据: ['x'] });
+    await tasks.dispatch(有反例节点.id, { subject: LEAD, 项目: P });
+    await tasks.start(有反例节点.id, { subject: MEMBER, 项目: P });
+    await tasks.submit(有反例节点.id, { subject: MEMBER, 项目: P, 结论: '可以' });
+    await tasks.submit(有反例节点.id, { subject: MEMBER_B, 项目: P, 结论: '可以', 反例面: ['边界情况没覆盖'] });
+    const 有反例 = await review.checkZeroDivergence({ subject: LEAD, 项目: P, 节点: 有反例节点.id });
     assert.equal(有反例.零分歧, false, '有人给了反例面就不算零分歧');
+    assert.match(有反例.结论集来源, /任务图独立答案重算/, '结论集必须从任务图重算，不收自报');
 
+    const 零节点 = await tasks.create({ subject: LEAD, 项目: P, 描述: '全票一致', 负责人: ['member-a', 'member-b'], 模式: '独立会审', 判据: ['x'] });
+    await tasks.dispatch(零节点.id, { subject: LEAD, 项目: P });
+    await tasks.start(零节点.id, { subject: MEMBER, 项目: P });
+    await tasks.submit(零节点.id, { subject: MEMBER, 项目: P, 结论: '通过' });
+    await tasks.submit(零节点.id, { subject: MEMBER_B, 项目: P, 结论: '通过' });
+    // 自报一份带假「反例面」的结论集（P1-8 攻击面）：服务层必须无视它，仍按任务图重算 ⇒ 照样报警。
     const 零分歧 = await review.checkZeroDivergence({
-      subject: LEAD, 项目: P, 节点: 'n-3',
-      结论集: [
-        { 成员: 'a', 结论: '通过', 结论层: '可以' },
-        { 成员: 'b', 结论: '同意', 结论层: '可以' },
-        { 成员: 'c', 结论: '无异议', 结论层: '可以' },
-      ],
+      subject: LEAD, 项目: P, 节点: 零节点.id,
+      结论集: [{ 成员: 'a', 结论: 'x', 反例面: ['假反例压报警'] }, { 成员: 'b', 结论: 'y', 反例面: ['假反例压报警'] }],
     });
-    assert.equal(零分歧.零分歧, true, '措辞不同但结论层一致 ⇒ 仍是零分歧');
+    assert.equal(零分歧.零分歧, true, '自报结论集被无视：两份同文结论且无反例面 ⇒ 零分歧（异常信号）');
     assert.equal(零分歧.触发人工抽检, true);
     const rows = await f.audit.read({});
     assert.ok(rows.some((r) => r.动作 === '零分歧异常' && String(r.结果).includes('零分歧')), '审计里必须有这笔异常');

@@ -113,7 +113,9 @@ describe('dsh-mind 宿主半区', () => {
     assert.equal(submitted.节点.独立答案[0].结论, '做完了');
     assert.deepEqual(submitted.节点.独立答案[0].反例面, ['没测边界']);
 
-    const reviewed = JSON.parse(await tool.execute({ action: 'task_review', id, project: 'boot', 三态: '未验', 反例面: '读数拿不到' }, exec));
+    // 提审分离（2026-10-13 裁决第二批 M1）：交卷人（本链路里根会话=Lead 交的卷）不得复核
+    // 自己的卷——复核者显式给 reviewer（未参与交卷）。
+    const reviewed = JSON.parse(await tool.execute({ action: 'task_review', id, project: 'boot', 三态: '未验', 反例面: '读数拿不到', 复核者: 'reviewer' }, exec));
     assert.equal(reviewed.结论.算通过, false);
     assert.equal(reviewed.结论.计打回, false);
   });

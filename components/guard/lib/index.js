@@ -37,7 +37,12 @@ export async function apply(ctx, config = {}) {
       logger,
     });
   } catch (error) {
-    logger.warn?.(`[dsh-mind] 安全类组件取不到共享组织，未装载：${error instanceof Error ? error.message : String(error)}`);
+    // 装配失败不许静默缺席（2026-10-13 审查 P2-11）：修前只 warn 一条就 return——
+    // `mind_guard` 工具整个不存在、探针不跑、审计零痕迹，「安全类探针不可达」这件事本身不可见，
+    // 与本组件「封闭清单 + 响亮告警」的定位相反。降级为自述工具：让模型与人都看得到
+    // 「安全类没起来 + 原因」，而不是以为探针在岗。
+    logger.warn?.(`[dsh-mind] 安全类组件取不到共享组织，降级为只读自述：${error instanceof Error ? error.message : String(error)}`);
+    ctx.tools.register(degradedGuardTool(error));
     return;
   }
 
@@ -68,6 +73,24 @@ export async function apply(ctx, config = {}) {
 }
 
 export default { name, inject, apply };
+
+/**
+ * 装配失败时的自述工具（与内核 degradedTool 同款纪律 · 2026-10-13 审查 P2-11）：
+ * 宁可让模型看到「安全类没起来 + 原因」，也不能让它以为探针在岗却拿不到读数。
+ * @param {unknown} error
+ */
+export function degradedGuardTool(error) {
+  const 原因 = error instanceof Error ? error.message : String(error);
+  return {
+    name: 'mind_guard',
+    description: '安全类组件未能装配（探针与升级裁决不可用）；本工具只回报原因。',
+    parameters: { type: 'object', properties: { action: { type: 'string' } }, required: [], additionalProperties: true },
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute() {
+      return JSON.stringify({ 成功: false, 结果: '安全类未装配', 理由: 原因, 影响面: '四道封闭探针不跑、开机自检缺席、升级挂起 diff 不可裁决', 怎么改: '检查 $DSH_HOME/mind-data 的读写权限与内核组件（dsh-mind-kernel）是否在位——安全类共用内核的共享组织；修复后重启会话。' }, null, 1);
+    },
+  };
+}
 
 /** `mind_guard` 工具：一个动作参数走完本组件的全部操作。 */
 function guardTool({ org }) {

@@ -11,6 +11,7 @@
  * 状态权威的实现方式是 **append-only 事件流 + 折叠**：`tasks.jsonl` 是真相，
  * 内存里的节点只是它的投影，因此重启后一切都能重算（§12.4）。
  */
+import { stat } from 'node:fs/promises';
 import { appendLines, readJsonl, withLock } from './kernel/fsx.js';
 import { Denied, Fault, InvalidBody } from './kernel/errors.js';
 
@@ -75,6 +76,47 @@ export class TaskGraph {
     this.audit = spec.audit;
     this.clock = spec.clock;
     this.memory = spec.memory ?? null;
+    /**
+     * 事件流读缓存（2026-10-13 第三批性能收口）：键 = 账本路径，值 = {签名, rows}。
+     * 为什么安全：**真源仍是文件**，签名（mtimeMs+size+本进程写计数）一变即重读。
+     * 修前每个公开操作都要重读+重解析整条事件流（get/list/#append/写后再读），
+     * 一次 submit 最多 4 遍全量；账本上万行时写路径明显劣化。
+     */
+    this.#readCache = new Map();
+    /** 本进程写计数（写后即使 mtime/size 撞车也重读——同一个写者自己知道自己写过）。 */
+    this.#writeCount = new Map();
+  }
+
+  /** @type {Map<string, {签名: string, rows: object[]}>} */
+  #readCache;
+  /** @type {Map<string, number>} */
+  #writeCount;
+
+  /**
+   * 事件行（带读缓存）：签名 = 盘上 mtime+size + 本进程对这条账本的写次数。
+   * @param {string} 项目
+   * @returns {Promise<object[]>}
+   */
+  async #rowsOf(项目) {
+    const file = this.layout.taskLog(项目);
+    let 签名;
+    try {
+      const st = await stat(file);
+      签名 = `${st.mtimeMs}:${st.size}:${this.#writeCount.get(file) ?? 0}`;
+    } catch {
+      签名 = `absent:${this.#writeCount.get(file) ?? 0}`;
+    }
+    const hit = this.#readCache.get(file);
+    if (hit?.签名 === 签名) return hit.rows;
+    const rows = await readJsonl(file);
+    this.#readCache.set(file, { 签名, rows });
+    return rows;
+  }
+
+  /** 记一次本进程写入：让缓存签名失效（下一次读必然重读）。 */
+  #bumpWrite(项目) {
+    const file = this.layout.taskLog(项目);
+    this.#writeCount.set(file, (this.#writeCount.get(file) ?? 0) + 1);
   }
 
   /**
@@ -121,11 +163,11 @@ export class TaskGraph {
     };
     // 校验挂在 eventBuilder 上，是为了**在锁内**跑（锁外预读会与并发 create 打架：
     // 刚建好的依赖读不到 ⇒ 误拒一个完全合法的节点）。builder 只校验、原样返回事件。
-    await this.#append(input.项目, 事件, input.subject, '状态变更', (_node, rows) => {
+    const { 节点 } = await this.#append(input.项目, 事件, input.subject, '状态变更', (_node, rows) => {
       this.#assertDependencies(依赖, id, fold(rows));
       return 事件;
     });
-    return this.get(id, { 项目: input.项目 });
+    return 节点;
   }
 
   /**
@@ -143,8 +185,20 @@ export class TaskGraph {
       target: { id, kind: '任务', authority: '自治', zone: '私有', project: spec.项目 },
       context: { task: node },
     });
-    await this.#append(spec.项目, { kind: 'dispatched', id, 判据冻结: true }, spec.subject);
-    return this.get(id, { 项目: spec.项目 });
+    const { 节点 } = await this.#append(
+      spec.项目,
+      { kind: 'dispatched', id, 判据冻结: true },
+      spec.subject,
+      '状态变更',
+      null,
+      (nodeInLock) => {
+        // 锁内复检（P1-6）：派发只对「待派发」——锁外读过之后节点可能已被并发派发/推进。
+        if (!nodeInLock || nodeInLock.状态 !== '待派发') {
+          throw new Denied('任务图 · 状态机', `节点 ${id} 在锁内已推进为 ${nodeInLock?.状态 ?? '不存在'}，不能重复派发。`, { howToChange: '只对「待派发」的节点派发。' });
+        }
+      },
+    );
+    return 节点;
   }
 
   /** @param {string} id @param {{ subject: object, 项目: string }} spec */
@@ -152,8 +206,8 @@ export class TaskGraph {
     const node = await this.#require(id, spec.项目);
     this.#requireTransition(node, 'start');
     await this.#checkWrite(id, node, spec);
-    await this.#append(spec.项目, { kind: 'started', id, 状态: '执行中' }, spec.subject);
-    return this.get(id, { 项目: spec.项目 });
+    const { 节点 } = await this.#append(spec.项目, { kind: 'started', id, 状态: '执行中' }, spec.subject, '状态变更', null, this.#transitionGuard(id, 'start'));
+    return 节点;
   }
 
   /**
@@ -186,7 +240,7 @@ export class TaskGraph {
     }
     await this.#checkWrite(id, node, spec);
     const 旧负责人 = node.负责人 ?? [];
-    await this.#append(
+    const { 节点: after } = await this.#append(
       spec.项目,
       { kind: 'reassigned', id, 负责人 },
       spec.subject,
@@ -201,7 +255,6 @@ export class TaskGraph {
         return { kind: 'reassigned', id, 负责人 };
       },
     );
-    const after = await this.get(id, { 项目: spec.项目 });
     return { ...after, 改派: { 从: 旧负责人, 到: 负责人 } };
   }
 
@@ -228,7 +281,7 @@ export class TaskGraph {
       // 而反例面必须来自各自的独立产出，不能事后由 Lead 补。
       反例面: spec.反例面 ?? [],
     };
-    await this.#append(spec.项目, event, spec.subject, undefined, (nodeInLock) => {
+    const { 节点 } = await this.#append(spec.项目, event, spec.subject, undefined, (nodeInLock) => {
       // 讨论段存在 ⇒ 答案已揭名（或已收敛）：从「已交卷」再交卷会在 fold 里按「同人替换」
       // 静默洗掉本人那份独立答案（2026-10-12 评审 P1-4），零分歧判定就跑在洗过的答案集上。
       // 判定必须在锁内（builder）：debate_opened 与 submit 走同一把项目锁，锁外预读有竞态。
@@ -241,8 +294,8 @@ export class TaskGraph {
         );
       }
       return event;
-    });
-    return this.get(id, { 项目: spec.项目 });
+    }, this.#transitionGuard(id, 'submit'));
+    return 节点;
   }
 
   /**
@@ -258,6 +311,16 @@ export class TaskGraph {
     }
     const node = await this.#require(id, spec.项目);
     this.#requireTransition(node, 'review');
+    // 提审分离（§3.4 · 2026-10-13 裁决第二批 M1）：交卷人不得复核自己的卷——
+    // 「组织不给自己发合格证」在任务面的可执行形态。判据看**独立答案按人留**的事实，
+    // 不看自报。单人节点的交卷人同样不许自复（复核另请人）。
+    const 复核者id = String(spec.复核者 ?? spec.subject?.id ?? '');
+    const 交了卷 = (node.独立答案 ?? []).some((a) => String(a.成员) === 复核者id);
+    if (交了卷) {
+      throw new Denied('任务图 · 交卷人不得复核自己的卷（§3.4 提审分离）', `复核者 ${复核者id} 在本节点的独立答案里：交卷人复核自己的卷 = 给自己发合格证。`, {
+        howToChange: '由未参与交卷的主体执行 task_review（复核者或 Lead/主权者）；交卷人有异议走返工环路（review 不过 → task_start 重做）。',
+      });
+    }
     await this.policy.check({
       subject: spec.subject,
       action: 'review',
@@ -265,7 +328,7 @@ export class TaskGraph {
       context: {},
     });
     const 状态 = spec.三态 === '过' ? '已采纳' : spec.三态 === '不过' ? '已打回' : '未验';
-    await this.#append(spec.项目, {
+    const { 节点: reviewed } = await this.#append(spec.项目, {
       kind: 'reviewed',
       id,
       三态: spec.三态,
@@ -275,9 +338,10 @@ export class TaskGraph {
       复核者: spec.复核者 ?? spec.subject?.id,
       算通过: spec.三态 === '过',
       计打回: spec.三态 === '不过',
-    }, spec.subject);
+    }, spec.subject, '状态变更', null, this.#transitionGuard(id, 'review'));
     if (spec.三态 === '不过') await this.reject(id, { subject: spec.subject, 项目: spec.项目, 理由: `复核不过：${(spec.分歧清单 ?? []).join('；') || '未给分歧清单'}` });
-    return this.get(id, { 项目: spec.项目 });
+    // 打回路径下 reject 又写了一条事件：返回它折出来的最新节点才是真读数。
+    return spec.三态 === '不过' ? this.get(id, { 项目: spec.项目 }) : reviewed;
   }
 
   /**
@@ -300,11 +364,25 @@ export class TaskGraph {
       id,
       打回次数: (nodeInLock?.打回次数 ?? 0) + 1,
       理由: spec.理由,
-    }));
-    if ((rejected.打回次数 ?? 0) >= 2) {
-      await this.#append(spec.项目, { kind: 'escalated', id, 升级: { 原因: '打回≥2', 至: '主权者' } }, { id: 'system', kind: '系统' });
+    }), (nodeInLock) => {
+      // 锁内复检（P1-6）：终态不许打回——锁外读的 TERMINAL 判定可能与并发 review(过) 竞态。
+      if (!nodeInLock) throw new InvalidBody(`没有这个任务节点：${id}（在锁内折叠视图中不存在）`);
+      if (TERMINAL.has(nodeInLock.状态)) {
+        throw new Denied('任务图 · 状态机', `节点 ${id} 已到终态 ${nodeInLock.状态}（锁内复检），不能再打回。`, { howToChange: '终态节点只能追加更正，不能回到环路里。' });
+      }
+    });
+    if ((rejected.事件.打回次数 ?? 0) >= 2) {
+      // 去重（2026-10-13 裁决第二批 P3）：只在「恰好第 2 次」时升级一次——修前每次再打回
+      // 都追加 escalated，审计里同一条升级反复出现（告警疲劳）。
+      // 判据走缓存读（第三批）：这里不写盘，缓存签名仍有效，读的是同一份盘上事实。
+      const rows = await this.#rowsOf(spec.项目);
+      const 已升过 = rows.some((r) => r.kind === 'escalated' && r.id === id);
+      if (!已升过) {
+        const { 节点: 升级后 } = await this.#append(spec.项目, { kind: 'escalated', id, 升级: { 原因: '打回≥2', 至: '主权者' } }, { id: 'system', kind: '系统' });
+        return 升级后;
+      }
     }
-    return this.get(id, { 项目: spec.项目 });
+    return rejected.节点;
   }
 
   /**
@@ -316,8 +394,8 @@ export class TaskGraph {
     const node = await this.#require(id, spec.项目);
     this.#requireTransition(node, 'markPending');
     await this.#checkWrite(id, node, spec);
-    await this.#append(spec.项目, { kind: 'pending', id, 状态: '待决', 待决原因: spec.原因, 待决类型: spec.待决类型 ?? '升级差异' }, spec.subject);
-    return this.get(id, { 项目: spec.项目 });
+    const { 节点 } = await this.#append(spec.项目, { kind: 'pending', id, 状态: '待决', 待决原因: spec.原因, 待决类型: spec.待决类型 ?? '升级差异' }, spec.subject, '状态变更', null, this.#transitionGuard(id, 'markPending'));
+    return 节点;
   }
 
   /**
@@ -329,8 +407,17 @@ export class TaskGraph {
     const node = await this.#require(id, spec.项目);
     this.#requireTransition(node, 'resolvePending');
     await this.#checkWrite(id, node, spec);
-    await this.#append(spec.项目, { kind: 'resolved', id, 待决: false, 状态: node.待决前的状态 ?? node.状态, 决定: spec.决定, 已决于: this.clock.iso() }, spec.subject);
-    return this.get(id, { 项目: spec.项目 });
+    // 恢复状态在**锁内**用最新折叠视图取（2026-10-13 审查 M3 顺修）：锁外算好的
+    // `待决前的状态` 与并发 markPending 竞态时会把节点恢复到陈旧状态。
+    const { 节点 } = await this.#append(
+      spec.项目,
+      { kind: 'resolved', id, 待决: false, 决定: spec.决定, 已决于: this.clock.iso() },
+      spec.subject,
+      '状态变更',
+      (nodeInLock) => ({ kind: 'resolved', id, 待决: false, 状态: nodeInLock?.待决前的状态 ?? nodeInLock?.状态 ?? null, 决定: spec.决定, 已决于: this.clock.iso() }),
+      this.#transitionGuard(id, 'resolvePending'),
+    );
+    return 节点;
   }
 
   /**
@@ -342,8 +429,8 @@ export class TaskGraph {
     const node = await this.#require(id, spec.项目);
     this.#requireTransition(node, 'attach');
     await this.#checkWrite(id, node, spec);
-    await this.#append(spec.项目, { kind: 'artifact', id, 产出物: spec.产出物 }, spec.subject);
-    return this.get(id, { 项目: spec.项目 });
+    const { 节点 } = await this.#append(spec.项目, { kind: 'artifact', id, 产出物: spec.产出物 }, spec.subject, '状态变更', null, this.#transitionGuard(id, 'attach'));
+    return 节点;
   }
 
   // ── W2 会审讨论段（2026-10-09）：事件流是状态权威，bus 只承载消息 ────────────
@@ -368,18 +455,39 @@ export class TaskGraph {
       });
     }
     await this.#checkWrite(id, node, spec);
-    await this.#append(spec.项目, {
-      kind: 'debate_opened',
-      id,
-      参与者: spec.参与者,
-      轮次上限: spec.轮次上限,
-      预算快照: spec.预算快照,
-      // ⑮ 强制反对者（2026-10-10）：开启时指定的那位与它的依据一起进事件流——
-      // 「谁在反对」是状态，不是界面装饰，所以要能从事件流重算出来。
-      反对者: spec.反对者 ?? '',
-      反对者依据: spec.反对者依据 ?? '',
-    }, spec.subject, '讨论开启');
-    return this.get(id, { 项目: spec.项目 });
+    const { 节点 } = await this.#append(
+      spec.项目,
+      {
+        kind: 'debate_opened',
+        id,
+        参与者: spec.参与者,
+        轮次上限: spec.轮次上限,
+        预算快照: spec.预算快照,
+        // ⑮ 强制反对者（2026-10-10）：开启时指定的那位与它的依据一起进事件流——
+        // 「谁在反对」是状态，不是界面装饰，所以要能从事件流重算出来。
+        反对者: spec.反对者 ?? '',
+        反对者依据: spec.反对者依据 ?? '',
+      },
+      spec.subject,
+      '讨论开启',
+      null,
+      (nodeInLock) => {
+        // 锁内复检（P1-6/P1-12）：并发双 open 会落两条 debate_opened，fold 后者覆盖讨论子状态、
+        // 轮次重置为 1——模式与「未开过讨论」这两条都要在锁内再验。
+        if (!nodeInLock) throw new InvalidBody(`没有这个任务节点：${id}（在锁内折叠视图中不存在）`);
+        if (nodeInLock.模式 !== '独立会审') {
+          throw new Denied('会审讨论段 · 只属于独立会审（§10）', `节点 ${id} 的模式是「${nodeInLock.模式 ?? '未声明'}」（锁内复检）：并行分担没有盲评与讨论环节。`, {
+            howToChange: '讨论段只对独立会审节点开放；并行分担节点直接交卷、复核。',
+          });
+        }
+        if (nodeInLock.讨论) {
+          throw new Denied('会审讨论段 · 状态机', `节点 ${id} 的讨论已${nodeInLock.讨论.状态 === '已收敛' ? '收敛' : '开启'}（锁内复检），不能重复开启。`, {
+            howToChange: nodeInLock.讨论.状态 === '已收敛' ? '讨论已收敛：走复核（review）。' : '讨论进行中：发言用 debate_say，换轮 debate_round，收敛 debate_converge。',
+          });
+        }
+      },
+    );
+    return 节点;
   }
 
   /**
@@ -406,8 +514,21 @@ export class TaskGraph {
       );
     }
     await this.#checkWrite(id, node, spec);
-    await this.#append(spec.项目, { kind: 'debate_round', id, 轮次: spec.轮次 }, spec.subject, '讨论换轮');
-    return this.get(id, { 项目: spec.项目 });
+    const { 节点 } = await this.#append(spec.项目, { kind: 'debate_round', id, 轮次: spec.轮次 }, spec.subject, '讨论换轮', null, (nodeInLock) => {
+      // 锁内复检（P1-6）：讨论段状态与轮次上限都要以锁内最新折叠视图为准。
+      if (!nodeInLock?.讨论 || nodeInLock.讨论.状态 !== '讨论中') {
+        throw new Denied('会审讨论段 · 状态机', `节点 ${id} 没有「讨论中」的讨论段（未开启或已收敛，锁内复检）。`, {
+          howToChange: '先 debate_open 开启讨论；已收敛的讨论不能再换轮。',
+        });
+      }
+      if (nodeInLock.讨论.轮次 >= nodeInLock.讨论.轮次上限) {
+        throw new Denied('会审讨论段 · 轮次用尽，须收敛', `节点 ${id} 的讨论轮次 ${nodeInLock.讨论.轮次}/${nodeInLock.讨论.轮次上限} 已到上限（锁内复检），不能再换轮。`, {
+          requireAuthority: 'Lead',
+          howToChange: '由 Lead 执行 debate_converge 收敛讨论。',
+        });
+      }
+    });
+    return 节点;
   }
 
   /**
@@ -423,8 +544,15 @@ export class TaskGraph {
       });
     }
     await this.#checkWrite(id, node, spec);
-    await this.#append(spec.项目, { kind: 'debate_converged', id, 表态消息id: spec.表态消息id }, spec.subject, '讨论收敛');
-    return this.get(id, { 项目: spec.项目 });
+    const { 节点 } = await this.#append(spec.项目, { kind: 'debate_converged', id, 表态消息id: spec.表态消息id }, spec.subject, '讨论收敛', null, (nodeInLock) => {
+      // 锁内复检（P1-6）：收敛只对「讨论中」——与并发 debate_round/重复收敛在锁内分胜负。
+      if (!nodeInLock?.讨论 || nodeInLock.讨论.状态 !== '讨论中') {
+        throw new Denied('会审讨论段 · 状态机', `节点 ${id} 没有「讨论中」的讨论段（未开启或已收敛，锁内复检）。`, {
+          howToChange: '先 debate_open 开启讨论。',
+        });
+      }
+    });
+    return 节点;
   }
 
   /**
@@ -467,7 +595,7 @@ export class TaskGraph {
    * @returns {Promise<object[]>}
    */
   async events(spec) {
-    return readJsonl(this.layout.taskLog(spec.项目));
+    return this.#rowsOf(spec.项目);
   }
 
   // ── 内部 ────────────────────────────────────────────────────────────────────
@@ -479,14 +607,24 @@ export class TaskGraph {
    *   锁外算好再进锁，两个并发 reject 会算出同一个次数，链上少一次打回。
    *   第二个参数是**锁内的原始事件行**：跨节点判定（依赖图这类）也必须在锁内做，
    *   锁外预读会与并发 create 打架（W3 批3·2026-10-09）。builder 抛错即拒写。
-   * @returns {Promise<object>} 实际落线的事件（调用方接着用同一份，不许两处各算各的）
+   * @param {(nodeInLock: object|null, rows: object[]) => void} [inLockGuard] **锁内状态机复检**
+   *   （2026-10-13 审查 P1-6）：锁外 #require/#requireTransition 读到的状态与落笔时刻可能不同——
+   *   review(过) 与 submit 并发时，submit 在锁外过闸、锁内把已采纳节点洗回「已交卷」就是这条路。
+   *   所有转移类事件在锁内用最新折叠视图再验一次；抛错即拒写。
+   * @returns {Promise<{事件: object, 节点: object|null}>} 实际落线的事件 + **锁内投影出的节点**
+   *   （2026-10-13 第三批性能收口：修前调用方落线后再 `get()` 一次全量读+折叠；
+   *   现在锁内已经把新行折进去了，直接给——顺带消掉「写后再读」可能读到别人中途写入的竞态。）
    */
-  async #append(项目, event, subject, 审计动作 = '状态变更', eventBuilder = null) {
+  async #append(项目, event, subject, 审计动作 = '状态变更', eventBuilder = null, inLockGuard = null) {
     const file = this.layout.taskLog(项目);
     let finalEvent = event;
+    let 新节点 = null;
     await withLock(this.layout.taskLock(项目), async () => {
+      // 锁内必须重读真源（fresh）：缓存可能落后于别的进程刚写下的行，
+      // 状态机复检/依赖校验都建立在锁内折叠视图上，读旧表就是判错。
       const rows = await readJsonl(file);
       const node = fold(rows).get(event.id);
+      if (inLockGuard) inLockGuard(node, rows);
       // 判据冻结：派发之后任何想动判据的事件都被拒绝。这是 §7 那一条的可执行形态。
       if (node?.判据冻结 && Object.hasOwn(event, '判据')) {
         throw new Denied('任务图 · 派发后判据冻结', `节点 ${event.id} 已派发，判据不能在事后改动。`, {
@@ -497,7 +635,11 @@ export class TaskGraph {
       if (eventBuilder) finalEvent = eventBuilder(node, rows);
       const at = this.clock.iso();
       const by = subject && typeof subject === 'object' ? { id: String(subject.id), kind: String(subject.kind ?? '未知') } : { id: String(subject), kind: '未知' };
-      await appendLines(file, [{ seq: rows.length + 1, at, by, ...finalEvent }]);
+      const 落线行 = { seq: rows.length + 1, at, by, ...finalEvent };
+      await appendLines(file, [落线行]);
+      // 本进程写过了：让读缓存签名失效（下一次读必重读），并把新行折进来的投影直接给出。
+      this.#bumpWrite(项目);
+      新节点 = fold([...rows, 落线行]).get(event.id) ?? null;
     });
     await this.audit.append({
       动作: 审计动作,
@@ -508,7 +650,7 @@ export class TaskGraph {
       项目,
       详情: { 事件: finalEvent.kind, 状态: finalEvent.状态 ?? null },
     });
-    return finalEvent;
+    return { 事件: finalEvent, 节点: 新节点 };
   }
 
   /** @param {string} id @param {string} 项目 */
@@ -593,8 +735,8 @@ export class TaskGraph {
       throw new Fault('SETTLE_NO_MEMORY', '结账要归档作答，但装配时没把记忆服务接进任务图（org.js 的接线问题，不是调用问题）。');
     }
     const 归档 = await this.memory.archiveAnswers({ 项目: spec.项目, 任务: id, subject: spec.subject });
-    await this.#append(spec.项目, { kind: 'settled', id, 状态: '已结账', 归档条数: 归档.归档条数 }, spec.subject, '结账');
-    return this.get(id, { 项目: spec.项目 });
+    const { 节点 } = await this.#append(spec.项目, { kind: 'settled', id, 状态: '已结账', 归档条数: 归档.归档条数 }, spec.subject, '结账', null, this.#transitionGuard(id, 'settle'));
+    return 节点;
   }
 
   /** @param {object} node @param {keyof TRANSITIONS} op */
@@ -605,6 +747,18 @@ export class TaskGraph {
         howToChange: '主干环路的次序是 受理→定判据→派发→执行→交卷→复核→采纳/打回；按当前状态选下一步动作。',
       });
     }
+  }
+
+  /**
+   * 锁内状态机复检的通用形态（2026-10-13 审查 P1-6）：节点必须存在，且当前（锁内最新）
+   * 状态仍在 op 的允许清单里。锁外那次照做（快速失败 + 可读理由），锁内这次才是权威。
+   * @param {object|null} node @param {string} id @param {keyof TRANSITIONS} op
+   */
+  #transitionGuard(id, op) {
+    return (nodeInLock) => {
+      if (!nodeInLock) throw new InvalidBody(`没有这个任务节点：${id}（在锁内折叠视图中不存在）`);
+      this.#requireTransition(nodeInLock, op);
+    };
   }
 
   /**

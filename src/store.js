@@ -84,7 +84,11 @@ export class ObjectStore {
     // 所以在算 version 之前就能定。
     const lockPath = `${this.#pathFor(kind, { id }, zone, meta.authority ?? '自治')}.lock`;
     return withLock(lockPath, async () => {
-      const existing = await this.read(kind, id, { subject: spec.subject });
+      // existing 读取带 zone 限定（2026-10-13 审查 P2-15）：修前按 私有→出厂 合并读——
+      // 出厂作者更新出厂件时 existing 会命中私有叠加层 ⇒ version 按私有副本续算、
+      // #keepVersion 把私有正文存进历史，而私有叠加层仍遮蔽新出厂件（更新静默不可见）。
+      // 版本谱系跟着**写入目标那一区**走：写哪一区，就从哪一区读 existing。
+      const existing = await this.read(kind, id, { subject: spec.subject, zone });
       // version 从 front matter 里读回来是**字符串**；不转数字就会得到 v1 → v11 这种版本号。
       const previous = existing ? Number(existing.meta.version ?? 1) : null;
       const authority = existing?.authority ?? meta.authority ?? '自治';

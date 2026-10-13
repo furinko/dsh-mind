@@ -233,9 +233,9 @@ export class Layout {
     return join(this.memoryDir(scope), `${assertPathSegment(kind, '记忆类')}.jsonl`);
   }
 
-  /** 审计日志：按月分片，不按项目分（§14.3）。 */
+  /** 审计日志：按月分片，不按项目分（§14.3）。month 是路径段，必须过校验（2026-10-13 审查 P2-19）。 */
   auditLog(month) {
-    return this.private(DIR.基础设施, DIR.审计日志, `audit-${month}.jsonl`);
+    return this.private(DIR.基础设施, DIR.审计日志, `audit-${assertPathSegment(String(month), '审计月份')}.jsonl`);
   }
 
   /** 审计日志目录。 */
@@ -243,9 +243,9 @@ export class Layout {
     return this.private(DIR.基础设施, DIR.审计日志);
   }
 
-  /** 审计链锚：记住每片最后一条的链哈希，重启后据此续链。 */
+  /** 审计链锚：记住每片最后一条的链哈希，重启后据此续链。month 同样过校验（P2-19）。 */
   auditAnchor(month) {
-    return this.private(DIR.基础设施, DIR.审计日志, `.anchor-${month}.json`);
+    return this.private(DIR.基础设施, DIR.审计日志, `.anchor-${assertPathSegment(String(month), '审计月份')}.json`);
   }
 
   /** 角色注册表：索引，不是真源（§14.2 明确标注）。 */

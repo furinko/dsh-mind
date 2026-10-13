@@ -73,6 +73,9 @@ const ALWAYS_INVARIANTS = '宪章 不可违背原则（§3 永不 + §12 约束�
  * 引擎实例。
  */
 export class PolicyEngine {
+  /** @type {Promise<boolean>|null} in-flight reload 的共享 Promise（并发合并为一次全量加载）。 */
+  #inFlightReload = null;
+
   /**
    * @param {{ layout: import('./paths.js').Layout, clock: import('./kernel/time.js').Clock, audit?: { append: Function } }} spec
    */
@@ -107,10 +110,23 @@ export class PolicyEngine {
      * 为什么放在实例上：decide 热路径要用它判断「档案在加载之后被谁改过」。
      */
     this.identityMtimeMs = null;
+    /**
+     * in-flight reload 去重（2026-10-13 第三批性能收口）：身份档案 mtime 一变（每次
+     * assign/seal/markInteraction 都会变）之后的并发 decide 各自触发全量 reload——
+     * 突发下是 N× 全量加载。进行中的 reload 共享同一个 Promise，后到者等结果不重跑。
+     */
+    this.#inFlightReload = null;
   }
 
-  /** 热更新入口：宿主在文件变更时调用；失败不改变「不健康」这个事实。 */
-  async reload() {
+  /** 热更新入口：宿主在文件变更时调用；失败不改变「不健康」这个事实。并发调用合并为一次。 */
+  reload() {
+    this.#inFlightReload ??= this.#reloadOnce().finally(() => {
+      this.#inFlightReload = null;
+    });
+    return this.#inFlightReload;
+  }
+
+  async #reloadOnce() {
     try {
       const { rules, digests } = await this.#loadRules();
       const { defaults, defaults来源, 忽略的默认值键 } = await this.#loadDefaults();
@@ -315,7 +331,11 @@ export class PolicyEngine {
     // 负责人可能是**一个人**，也可能是**一岗多人的一组**（§10）。
     // 拿字符串去比数组会永远不相等，于是多负责人任务上谁也干不了活 —— 这里统一折成名单。
     const 名单 = normalizeList(task.负责人);
-    if (名单.length === 0) return { ok: true };
+    // 空名单 ≠ 人人有份（2026-10-13 审查 P1-4）：负责人缺席是数据异常（解析失败 / 手工编辑 /
+    // 旧数据），按 fail-closed 拒绝——「任务内全权」的安全门槛不许被一个空数组短路。
+    if (名单.length === 0) {
+      return { ok: false, reason: '该任务节点负责人名单为空（解析失败 / 手工编辑 / 旧数据）：为防越权，空名单按「无人有任务内全权」处理，由 Lead 先把负责人补齐' };
+    }
     // ① 实例 id 直配（既有路径，行为不变：按实例派的节点仍精确到实例）。
     if (名单.includes(subject.id)) return { ok: true };
     // ② 缺口4（主权者批准 2026-10-12）：直配不中，经身份档案把实例解析成岗位再比。
@@ -477,7 +497,10 @@ export class PolicyEngine {
       );
     }
 
-    if (write && authority === '自治' && this.presence().lost) {
+    // 失联冻结（§4 · 2026-10-13 裁决第二批 P2-12 扩面）：自治变更冻结之外，Lead 对法律档
+    // 规则件的 publish（升级裁决通道）同样冻结——主权者失联恰恰是 Lead 最不该单方面改规则
+    // 的时段；通道的自我约束（「仅主权者授意」）由纪律级升为机制级。
+    if (write && (authority === '自治' || (authority === '法律' && action === 'publish')) && this.presence().lost) {
       return deny('宪章 失联（§4）', `主权者已失联，所有自治变更冻结；服务与记忆照常，安全类强更不受影响。`, {
         requireAuthority: '主权者',
         howToChange: '主权者任一次交互即解除失联。',
@@ -488,7 +511,29 @@ export class PolicyEngine {
     // 内置档位是**出厂默认文本**，主权者改过的 权限矩阵.md 是同一部法律的现行版本，
     // 所以它必须先于默认生效；而宪章不变式在它之前，任何法律都翻不动。
     const grant = this.#grantRule(subject, action, authority, target);
-    if (grant) return grant;
+    if (grant) {
+      // 宪章档不许被授权块翻转（2026-10-13 审查 P1-3 收尾）：权限矩阵.md 自陈「本文不能
+      // 覆盖宪章不变式」，而三档默认里宪章档的 deny 同样是结构性红线——主权者自己写的
+      // 宽 grant 也不该给非主权者开「写宪章」的门（主权者本来就走三档 allow，不依赖 grant）。
+      //deny/confirm 语义保留（收紧方向永远可以）。
+      if (authority === '宪章' && grant.verdict === 'allow' && subject.kind !== '主权者') {
+        // 落到三档默认（宪章档 deny）——与「本文不能覆盖宪章」的文档口径一字对齐。
+      } else {
+        // 任务边界不许被法律授权块绕过（2026-10-13 审查 P1-3）：宽 grant 可以放宽三档默认
+        // （既有语义：如本部署允许复核者落结论草稿），但「成员任务内全权、任务外无」是
+        // §2 的结构性边界——grant 放行的成员**写**动作仍要过任务上下文这一关。
+        if (grant.verdict === 'allow' && subject.kind === '成员' && action !== 'read') {
+          const scoped = this.scopeOf(subject, context.task ?? target.task ?? null);
+          if (!scoped.ok) {
+            return deny('法律 权限矩阵 · 任务内全权，任务外无（§2）', scoped.reason, {
+              requireAuthority: 'Lead',
+              howToChange: '在本次调用的入参里声明任务上下文（带上你名下任务节点的 id）；名下没有已派发/执行中的节点时，由 Lead 先派发。',
+            });
+          }
+        }
+        return grant;
+      }
+    }
 
     const tierRule = this.#tierRule(subject, action, target, authority, context);
     if (tierRule) return tierRule;
@@ -519,11 +564,21 @@ export class PolicyEngine {
     const write = action !== 'read';
     const authority = target.authority ?? '自治';
 
-    if (action === 'approve' && context.proposerId && String(context.proposerId) === String(subject.id)) {
-      return deny('宪章 §3.4 组织给自己发合格证', '提案者不得自批：本次提案人与批准人是同一个主体。', {
-        requireAuthority: '宪章',
-        howToChange: '换一个未参与提案的主体批准（复核者或主权者）。',
-      });
+    if (action === 'approve') {
+      // 提案人必须可知（2026-10-13 审查 P1-2）：缺席不是「没有提案人」，而是「证据不足」——
+      // 之前 `context.proposerId && ...` 把缺席当「跳过检查」，是 fail-open；按宪章口径倒向拒绝。
+      if (!context.proposerId) {
+        return deny('宪章 §3.4 提案人必须可知', 'approve 动作必须携带 proposerId（提案人）：查不到提案人就无法验证「提案者不得自批」，按最严处理。', {
+          requireAuthority: '宪章',
+          howToChange: '调用方拼装判定上下文时带上提案人 id（proposerId）。',
+        });
+      }
+      if (String(context.proposerId) === String(subject.id)) {
+        return deny('宪章 §3.4 组织给自己发合格证', '提案者不得自批：本次提案人与批准人是同一个主体。', {
+          requireAuthority: '宪章',
+          howToChange: '换一个未参与提案的主体批准（复核者或主权者）。',
+        });
+      }
     }
     // §3.5「成员自扩权 / 再起成员」的准确边界：禁的是**给自己或别人扩权**，
     // 不是「成员不许产生任何对象」——成员把自己的作答与知识记下来是本职。 
@@ -727,7 +782,7 @@ export class PolicyEngine {
         if (parsed.errors.length) {
           throw new Error(`规则件 ${spec.id}（${zone}）无法解析：${parsed.errors.join('；')}`);
         }
-        found = { id: spec.id, authority: spec.authority, zone, text, digest: digest(text), path };
+        found = { id: spec.id, authority: spec.authority, zone, text, digest: digest(text), path, parsed };
         break;
       }
       if (!found) {
@@ -837,6 +892,12 @@ export class PolicyEngine {
     // 全部写动作 fail-closed（§3.6 不许静默失败——静默退回默认清单等于把主权者
     // 写下的收窄无视掉，静默跳过坏条目等于少拦一道，两头都比响亮拒绝更危险）。
     validateDisclosurePatterns(merged.披露敏感模式, 来源.披露敏感模式);
+
+    // 介入度加载期校验（2026-10-13 审查 P2-1）：坏值不许静默回退「零参与」——那是最宽松档，
+    // 与「失联限制只认严格 false」的 fail-safe 方向相反。坏值 ⇒ 响亮抛错 ⇒ 引擎不健康 ⇒ 写全拒。
+    if (!INTERVENTION.includes(merged.介入度)) {
+      throw new Error(`介入度档位非法：${JSON.stringify(merged.介入度)}（来源：${来源.介入度}）。只认 ${INTERVENTION.join(' / ')}。修好对应文件后重载即恢复。`);
+    }
 
     // W2（2026-10-09）·会审讨论预算：部署.json 的 `会审讨论` 是**部分覆盖**（缺键用默认），
     // 加载期校验 + 规范化成全键对象——消费方（src/debate.js）拿到的永远是四键齐全的有效值。
@@ -1033,14 +1094,41 @@ function validateDisclosurePatterns(value, 来源) {
     } catch (error) {
       throw new Error(`披露敏感模式[${item.名}] 的正则非法：${item.正则}（${error instanceof Error ? error.message : String(error)}）。修好 部署.json 里的这个条目后重载即恢复。`);
     }
+    // 回溯安全行为检测（2026-10-13 审查 P1-14）：编译得过 ≠ 跑得动——`(a+)+$` 类灾难性
+    // 回溯正则可在单次晋升的 re.test 上阻塞事件循环（全插件无超时）。加载期用对抗输入
+    // 弹药库实测耗时：超预算 ⇒ 响亮抛错（fail-closed），不许带病上岗。
+    const re = new RegExp(item.正则, 'i');
+    for (const 弹药 of REDOS_PROBES) {
+      const 起 = Date.now();
+      re.test(弹药);
+      if (Date.now() - 起 > 50) {
+        throw new Error(`披露敏感模式[${item.名}] 的正则有灾难性回溯风险：${item.正则}（在长度 ${弹药.length} 的对抗输入上单次匹配超过 50ms）。请改写为无嵌套量词的形式（或收窄字符类）后重载。`);
+      }
+    }
   }
 }
+
+/**
+ * 对抗输入弹药库（回溯安全检测用）：经典 ReDoS 形态的触发串——重复单字符、重复带空格、
+ * 重复分段（交替量词）、近匹配不命中（回溯最贵的路径是「差一点就中」）。
+ * @type {string[]}
+ */
+const REDOS_PROBES = Object.freeze([
+  'a'.repeat(48),
+  'a '.repeat(24).trimEnd(),
+  'ab'.repeat(24),
+  'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaab',
+  'x.y.'.repeat(12) + 'x!',
+  '['.repeat(24) + ']'.repeat(24),
+]);
 
 /** 把各法律件里的 grants 摊平并编上序号（拒绝理由要能指回条款）。 */
 function collectGrants(rules) {
   const out = [];
   for (const rule of rules) {
-    const parsed = parseDocument(rule.text, { defaultAuthority: rule.authority });
+    // 复用 #loadRules 的解析结果（2026-10-13 第三批性能收口）：修前对同一文本再 parseDocument
+    // 一次——每次 reload 双倍解析，身份档案 mtime 一变（每次 assign/seal/markInteraction）就全量重付。
+    const parsed = rule.parsed ?? parseDocument(rule.text, { defaultAuthority: rule.authority });
     const block = extractPolicyBlock(parsed.body);
     // 坏授权块 ⇒ 响亮抛错（W3 批3）：跳过它等于「整部法律的授权块被丢，引擎还报 healthy」。
     if (block?.解析错误?.length) {
@@ -1048,9 +1136,15 @@ function collectGrants(rules) {
     }
     if (!block?.grants) continue;
     block.grants.forEach((grant, index) => {
+      // verdict 白名单（2026-10-13 审查 P1-3）：拼错成「拒绝」/"Deny"/空串 ⇒ 响亮抛错，
+      // 不许静默当 allow（「非 deny 即 allow」= fail-open，与全文件口径相反）。
+      const verdict = grant.verdict ?? 'allow';
+      if (!['allow', 'deny', 'confirm'].includes(verdict)) {
+        throw new Error(`规则件 ${rule.id}（${rule.zone}区）grant#${index + 1} 的 verdict 非法：${JSON.stringify(verdict)}（只认 allow / deny / confirm）。修好该文件后重载即恢复（当前按引擎不健康处理：全部写动作被拒）。`);
+      }
       out.push({
         ...grant,
-        verdict: grant.verdict ?? 'allow',
+        verdict,
         source: `${rule.id}（${rule.zone}区）`,
         index: `${rule.id}#${index + 1}`,
       });

@@ -574,11 +574,17 @@ function 组织说明(org) {
  */
 
 /** 把工具入参里的逗号串与 JSON 串规整成动作表要的形状。 */
-function normalizeArgs(args) {  const out = { ...args };
+
+/** 布尔型参数白名单（与上方 schema 的 type:'boolean' 一一对应）。 */
+const BOOLEAN_ARGS = new Set(['显式', '含失效', '全量', '敏感', '披露豁免', '暂不投递', '延后', '未投递']);
+
+function normalizeArgs(args) {
+  const out = { ...args };
   // 布尔字面量归一（2026-10-12 评审 P3）：命令行/JSON 串里敲的 'true'/'false' 是
   // 字符串——`全量=false` 在 JS 里是 truthy（恒真），反过来按假处理的字段就恒假。
-  // 两头都是谎话，统一在入口归一。
-  for (const key of Object.keys(out)) {
+  // 只对**布尔型参数**归一（2026-10-13 审查 P2-9）：修前遍历全部键，把 内容='true' 这类
+  // 自由文本静默改型落账（记忆/任务数据损坏）。白名单外的字段原样透传。
+  for (const key of BOOLEAN_ARGS) {
     if (out[key] === 'true') out[key] = true;
     else if (out[key] === 'false') out[key] = false;
   }

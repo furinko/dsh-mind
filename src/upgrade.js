@@ -16,7 +16,7 @@ import { InvalidBody } from './kernel/errors.js';
 import { splitClauses } from './kernel/text.js';
 import { RULE_FILES } from './paths.js';
 
-/** 处置三态（「挂起」已按主权者 2026-10-08 裁决并入「保留用户的」：冲突私有优先 + 告警提示）。 */
+/** 处置三态（「挂起」按主权者 2026-10-08 裁决并入「保留用户的」；删除意图墓碑经 2026-10-13 裁决第二批修正为甲′——叠加层是部分副本模型，条款缺席与删除不可区分，维持「缺席=未定制」）。 */
 export const DISPOSITIONS = ['直接替换', '保留用户的', '强制替换'];
 
 export class UpgradeManager {
@@ -264,6 +264,9 @@ export class UpgradeManager {
  * @returns {string} DISPOSITIONS 之一
  */
 export function decide(基线, 出厂, 私有, 安全类 = false) {
+  // 「私有条款缺席」维持「直接替换」（裁决第二批·裁决2 修正为甲′）：私有叠加层是**部分副本**
+  // 模型（用户只写改过的条款），缺席与删除在无历史的情况下不可区分——按墓碑语义判删除
+  // 会把所有部分叠加层误判。真需要表达删除时，引入显式标记（`~已删除~` 条款）再实现。
   if (私有 === null) return '直接替换';
   if (安全类) return '强制替换';
   if (基线 === null) return 出厂 === 私有 ? '直接替换' : '保留用户的';

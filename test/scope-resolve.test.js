@@ -121,14 +121,17 @@ describe('scopeOf 经身份档案解析岗位（缺口4）', () => {
     );
   });
 
-  it('④ 名单语义：按岗名派 ⇒ 该岗任一在岗实例可动；空名单仍放行', async () => {
+  it('④ 名单语义：按岗名派 ⇒ 该岗任一在岗实例可动；空名单按无人有全权拒（2026-10-13 审查 P1-4）', async () => {
     // 甲已在 ① 里动了岗名节点；乙（同岗）也必须有同等的任务内权。
     const 节点 = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '岗名节点二号', 负责人: '插件工程', 判据: ['x'] });
     await org.tasks.dispatch(节点.id, { subject: LEAD, 项目: P });
     const started = await runAction({ org, 项目: P, 主体: 实例乙, args: { action: 'task_start', id: 节点.id } });
     assert.equal(started.节点?.状态, '执行中', '同岗任一在岗实例都可动');
-    // 空名单（policy.js:314 既有语义）：scopeOf 直读判 ok。
-    assert.equal(f.policy.scopeOf(实例乙, { 负责人: [] }).ok, true, '空名单仍放行（语义未动）');
+    // 空名单语义已倒向 fail-closed（2026-10-13 审查 P1-4）：负责人缺席是数据异常，
+    // 「任务内全权」不许被空数组短路——此前 ok:true 等于全员全权。
+    const 空名单 = f.policy.scopeOf(实例乙, { 负责人: [] });
+    assert.equal(空名单.ok, false, '空名单按「无人有任务内全权」拒绝');
+    assert.match(空名单.reason, /空/, '拒绝理由要指向负责人名单为空');
   });
 
   it('⑤ 不引环依赖：policy.js 源码不引用 registry 模块', async () => {

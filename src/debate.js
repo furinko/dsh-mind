@@ -125,7 +125,10 @@ export class DebateService {
     }
     // 揭名：盲评到此为止，讨论阶段亮出彼此身份（§10）。
     const 揭名 = await this.review.reveal({ subject: spec.subject, 项目: spec.项目, 线程: spec.节点, 参与者 });
-    const 指定 = await this.review.pickDissenter({ subject: spec.subject, 项目: spec.项目, 节点: spec.节点, 参与者, 候选: 可指定 });
+    // 只选不记（2026-10-13 审查 P1-12）：修前 pickDissenter 先落审计、debateOpened 后落事件——
+    // 开启失败（如并发双 open 被锁内复检拒）时审计已记，该候选被 #usedDissenters 永久烧掉。
+    // 现在先拿人、等 debate_opened 成功落线再补记：失败路径不耗反趋同资源。
+    const 指定 = await this.review.pickDissenter({ subject: spec.subject, 项目: spec.项目, 节点: spec.节点, 参与者, 候选: 可指定, 只选不记: true });
     const 预算快照 = { 每轮消息上限: 预算.每轮消息上限, 每人每轮字符上限: 预算.每人每轮字符上限 };
     const 节点投影 = await this.tasks.debateOpened(spec.节点, {
       subject: spec.subject,
@@ -136,6 +139,18 @@ export class DebateService {
       反对者: 指定.反对者,
       反对者依据: 指定.依据,
     });
+    // 开启成功 ⇒ 补记指定审计（与 pickDissenter 默认路径同一条形状，「已用过」从此处起算）。
+    if (指定.反对者) {
+      await this.audit.append({
+        动作: '状态变更',
+        主体: { id: 'system', kind: '系统' },
+        对象: { id: spec.节点, kind: '会审' },
+        依据: '§10 反趋同 · 强制反对者',
+        结果: `指定 ${指定.反对者}`,
+        项目: spec.项目,
+        详情: { 强制反对者: 指定.反对者, 节点: spec.节点, 不用过: 指定.已用过 },
+      });
+    }
     return {
       节点: 节点投影,
       参与者,

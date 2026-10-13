@@ -432,6 +432,16 @@ export class RoleRegistry {
       const text = await readTextOrNull(`${dir}/${rel}`);
       if (text === null) continue;
       const parsed = parseDocument(text);
+      // meta.id 与文件名一致性（2026-10-13 裁决第二批 M6）：文件 `x.md` 在 front matter 里
+      // 自称 `id: Lead` ⇒ 索引以「Lead」岗出现而 `get('Lead')` 按文件名读不到它——「列得出的
+      // 岗位」与「取得到的岗位」是两个世界，卡文件可冒名。fail-closed：不一致即响亮拒。
+      if (parsed.meta.id && parsed.meta.id !== id) {
+        throw new Denied(
+          '角色注册表 · 岗位卡 id 与文件名不一致（fail-closed）',
+          `岗位卡文件「${zone}区/${rel}」的 front matter 自称 id=${parsed.meta.id}，与文件名「${id}」不一致：卡文件可借此冒名岗位（列表按 meta.id、读取按文件名，两个世界）。`,
+          { howToChange: `把文件名与 front matter 的 id 统一成同一个值（改 ${rel} 或改它声明的 id），修好后同步/读取即恢复。` },
+        );
+      }
       out.push({
         id: parsed.meta.id ?? id,
         来源: label,

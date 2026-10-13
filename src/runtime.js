@@ -57,7 +57,11 @@ export function shareOrg(spec) {
  */
 export function shareKey(spec) {
   const 私有根 = resolve(spec.privateRoot ?? join(spec.home ?? '', 'mind-data', 'mind-private'));
-  return `${私有根}::${spec.project ?? DEFAULT_PROJECT}`;
+  // Windows 大小写折叠（2026-10-13 审查 P2-16）：盘符大小写两个写法（`C:\x` vs `c:\x`）
+  // 之前是两个键 ⇒ 两个 Org 同写一份账本——正是本缓存要防的事故。只折盘符：全路径折叠
+  // 在大小写敏感文件系统上会把不同目录误合，折盘符在两边都安全（盘符大小写从不区分语义）。
+  const 折盘符 = /^([A-Za-z]):/.test(私有根) ? 私有根[0].toUpperCase() + 私有根.slice(1) : 私有根;
+  return `${折盘符}::${spec.project ?? DEFAULT_PROJECT}`;
 }
 
 /**

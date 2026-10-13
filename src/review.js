@@ -154,6 +154,13 @@ export class ReviewProtocol {
    * @param {{ 项目: string, 节点?: string, 参与者: string[], 候选: string[] }} spec
    * @returns {Promise<{ 反对者: string, 依据: string, 已用过: string[] }>}
    */
+  /**
+   * @param {{ 项目: string, 节点?: string, 参与者: string[], 候选: string[], 只选不记?: boolean }} spec
+   *   `只选不记`（2026-10-13 审查 P1-12）：编排层（debate.open）先把「选谁」拿到手，
+   *   等任务图事件 debate_opened 成功落线后再补记审计——修前先记后开，开启失败会把
+   *   该候选永久烧掉（#usedDissenters 读的是审计，事件没落、名字先耗）。
+   * @returns {Promise<{ 反对者: string, 依据: string, 已用过: string[] }>}
+   */
   async pickDissenter(spec) {
     const 参与者 = new Set(spec.参与者 ?? []);
     const 已用过 = await this.#usedDissenters(spec.节点 ?? null);
@@ -162,6 +169,10 @@ export class ReviewProtocol {
       return { 反对者: '', 依据: '没有可用的未参与成员：强制反对者不可重复，宁缺毋滥。', 已用过 };
     }
     const 反对者 = pool[Math.floor(this.random() * pool.length) % pool.length];
+    if (spec.只选不记 === true) {
+      // 依据文案与默认路径逐字相同（外部契约不变）：只是审计行由编排层在开启成功后补记。
+      return { 反对者, 依据: '系统随机指定一名未参与成员，且不重复', 已用过: [...已用过, 反对者] };
+    }
     await this.audit.append({
       动作: '状态变更',
       主体: { id: 'system', kind: '系统' },
@@ -217,7 +228,10 @@ export class ReviewProtocol {
       });
     }
     // 盲评：第一轮只显示「成员 A / B / C」，揭名在讨论阶段。
-    const 盲标 = (spec.参与者 ?? []).map((id, index) => ({ 盲标: `成员 ${String.fromCharCode(65 + index)}`, id }));
+    // 盲标映射去顺序化（2026-10-13 裁决第二批 P2-13）：修前按参与者数组顺序分配——
+    // 「成员 A 是谁」可由名单元顺序推断（去匿名面）。映射改为从「线程 + 排序名册」的
+    // 确定性种子洗牌：顺序不再跟随数组，而 openBlind / reveal 各自独立计算仍得同一映射。
+    const 盲标 = 盲标分配(spec.线程 ?? '', spec.参与者 ?? []);
     await this.audit.append({
       动作: '状态变更',
       主体: spec.subject,
@@ -242,7 +256,8 @@ export class ReviewProtocol {
       结果: '已揭名',
       项目: spec.项目,
     });
-    return { 揭名: (spec.参与者 ?? []).map((id, index) => ({ 盲标: `成员 ${String.fromCharCode(65 + index)}`, id })) };
+    // 揭名与 openBlind 用同一确定性映射（线程+名册种子）：两边独立算、同一个结果。
+    return { 揭名: 盲标分配(spec.线程 ?? '', spec.参与者 ?? []) };
   }
 
   /**
@@ -255,7 +270,18 @@ export class ReviewProtocol {
    * @returns {Promise<{零分歧: boolean, 触发人工抽检: boolean, 依据: string, 参与人数: number}>}
    */
   async checkZeroDivergence(spec) {
-    const 判定 = judgeZeroDivergence(spec.结论集 ?? []);
+    // 结论集的权威源 = 任务图独立答案（2026-10-13 审查 P1-8）：修前完全信 `spec.结论集` 自报，
+    // Lead 递一份假「反例面」就能压掉零分歧报警。接入任务图时一律现算；只有未注入 tasks
+    // 的独立用法（纯函数式夹具）才接受调用方给的结论集。
+    let 结论集 = spec.结论集 ?? [];
+    let 结论集来源 = '调用方自报（未注入任务图，无法重算）';
+    if (this.tasks && spec.节点) {
+      const node = await this.tasks.get(spec.节点, { 项目: spec.项目 });
+      if (!node) throw new InvalidBody(`没有这个任务节点：${spec.节点}（项目 ${spec.项目}）——零分歧检查要从任务图独立答案重算，节点不存在就没有权威源。`);
+      结论集 = (node.独立答案 ?? []).map((a) => ({ 成员: a.成员, 结论: a.结论, 反例面: a.反例面 ?? [], 结论层: a.结论层 }));
+      结论集来源 = `任务图独立答案重算（${结论集.length} 份）`;
+    }
+    const 判定 = judgeZeroDivergence(结论集);
     if (判定.零分歧) {
       await this.audit.append({
         动作: '零分歧异常',
@@ -265,7 +291,7 @@ export class ReviewProtocol {
         结果: '会审零分歧异常',
         项目: spec.项目,
         告警: true,
-        详情: { 参与人数: 判定.参与人数, 结论层: 判定.结论层, 触发人工抽检: true },
+        详情: { 参与人数: 判定.参与人数, 结论层: 判定.结论层, 触发人工抽检: true, 结论集来源 },
       });
     }
     return {
@@ -273,6 +299,7 @@ export class ReviewProtocol {
       触发人工抽检: 判定.零分歧,
       依据: 判定.依据,
       参与人数: 判定.参与人数,
+      结论集来源,
     };
   }
 
@@ -328,6 +355,35 @@ export class ReviewProtocol {
       .filter((row) => (节点 ? row.详情?.节点 === 节点 : true))
       .map((row) => row.详情.强制反对者);
   }
+}
+
+/**
+ * 盲标分配（§10 · 2026-10-13 裁决第二批 P2-13）：从「线程 + 排序名册」派生确定性置换，
+ * 参与者数组顺序不再决定谁拿「成员 A」。同一线程/名册在 openBlind 与 reveal 各自调用
+ * 都得到同一映射（无共享状态）。种子只依赖线程与名册**集合**（排序后），与会话无关。
+ * @param {string} 线程
+ * @param {string[]} 参与者
+ * @returns {Array<{盲标: string, id: string}>}
+ */
+export function 盲标分配(线程, 参与者) {
+  // 种子与**标位**都基于排序名册：同一集合无论传入顺序如何，id→盲标 映射恒同
+  // （集合语义）；「成员 A 是谁」既不跟随数组顺序，也不可由名单元直接读出。
+  const 排序 = [...参与者].sort();
+  const seed = `${线程}|${排序.join(',')}`;
+  let h = 2166136261;
+  for (const ch of seed) {
+    h ^= ch.codePointAt(0);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  const n = 排序.length;
+  const 置换 = Array.from({ length: n }, (_, i) => i);
+  for (let i = n - 1; i > 0; i--) {
+    h = (Math.imul(h ^ (h >>> 15), 2246822519) + 0x9e3779b9) >>> 0;
+    const j = h % (i + 1);
+    [置换[i], 置换[j]] = [置换[j], 置换[i]];
+  }
+  const 标 = new Map(排序.map((id, i) => [id, `成员 ${String.fromCharCode(65 + 置换[i])}`]));
+  return 参与者.map((id) => ({ 盲标: 标.get(id), id }));
 }
 
 /**

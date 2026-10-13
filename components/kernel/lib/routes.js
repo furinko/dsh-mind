@@ -96,22 +96,32 @@ function 源与宿主同源(origin, host) {
   }
 }
 
-/** 读请求栅栏：挡掉跨站读取（简单请求即可读，不需要 cookie）。 */
+/**
+ * 读请求栅栏：挡掉跨站读取（简单请求即可读，不需要 cookie）。
+ *
+ * `sec-fetch-site` **必须在场**（2026-10-13 审查 P1-10）：修前它缺席时直接放行——浏览器
+ * fetch/XHR 一定带 Fetch Metadata 头，缺席的请求只能来自非浏览器客户端（curl / 本机任意
+ * 进程），而那条路会把全量 Lead 投影零认证地送出去。现在缺席 = 拒绝（fail-closed）。
+ */
 function 同源读请求(req) {
-  if (取头(req, 'sec-fetch-site').toLowerCase() === 'cross-site') return false;
+  const 站点 = 取头(req, 'sec-fetch-site').toLowerCase();
+  if (!站点) return false;
+  if (站点 !== 'same-origin' && 站点 !== 'same-site' && 站点 !== 'none') return false;
   return 源与宿主同源(取头(req, 'origin'), 取头(req, 'host'));
 }
 
 /**
  * 写请求栅栏：
  *  - `content-type` 必须是 `application/json` —— 跨域带这个头必然触发预检，预检失败就写不进来；
- *  - `sec-fetch-site`（浏览器自己带、页面无法伪造）只接受 same-origin / none；
+ *  - `sec-fetch-site`（浏览器自己带、页面无法伪造）**必须在场**且只接受 same-origin / none
+ *    （2026-10-13 审查 P1-10：修前缺席放行 ⇒ 本机任意进程可 POST 改主权者设置）；
  *  - 带 Origin 时必须同源。
  */
 function 同源写请求(req) {
   if (!取头(req, 'content-type').toLowerCase().startsWith('application/json')) return false;
   const 站点 = 取头(req, 'sec-fetch-site').toLowerCase();
-  if (站点 && 站点 !== 'same-origin' && 站点 !== 'none') return false;
+  if (!站点) return false;
+  if (站点 !== 'same-origin' && 站点 !== 'none') return false;
   return 源与宿主同源(取头(req, 'origin'), 取头(req, 'host'));
 }
 

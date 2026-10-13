@@ -59,7 +59,7 @@ export class Org {
     // 而归档逻辑只有一处（MemoryService.archiveAnswers）——不在任务图里再写一份。
     const memory = new MemoryService({ layout, policy, audit, clock });
     const tasks = new TaskGraph({ layout, policy, audit, clock, memory });
-    const bus = new MessageBus({ layout, policy, audit, clock });
+    const bus = new MessageBus({ layout, policy, audit, clock, tasks });
     const capability = new CapabilityLibrary({ layout, policy, audit, clock, store });
     const registry = new RoleRegistry({ layout, policy, audit, clock });
     const upgrade = new UpgradeManager({ layout, policy, audit, clock });

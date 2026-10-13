@@ -13,6 +13,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fakeHost, fakeExec } from './host-harness.mjs';
 import * as plugin from '../components/kernel/lib/index.js';
+import { shareOrg } from '../src/runtime.js';
+import { runAction } from '../lib/actions.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FACTORY = join(here, '..', 'mind');
@@ -96,20 +98,26 @@ describe('装载后的真实调用链', () => {
     const exec = fakeExec({ name: 'mind', sessionId: 'session-e2e' });
     const P = 'e2e';
 
-    const created = JSON.parse(await tool.execute({ action: 'task_create', 描述: '端到端节点', 负责人: 'member-a', 判据: '可建,可派', project: P }, exec));
+    const created = JSON.parse(await tool.execute({ action: 'task_create', 描述: '端到端节点', 负责人: 'member-a,member-b', 模式: '独立会审', 判据: '可建,可派', project: P }, exec));
     assert.equal(created.成功, true);
     const id = created.节点.id;
 
     assert.equal(JSON.parse(await tool.execute({ action: 'task_dispatch', id, project: P }, exec)).节点.判据冻结, true);
     assert.equal(JSON.parse(await tool.execute({ action: 'task_start', id, project: P }, exec)).节点.状态, '执行中');
-    assert.equal(JSON.parse(await tool.execute({ action: 'task_submit', id, project: P, 产出物引用: 'artifact-e2e' }, exec)).节点.状态, '已交卷');
-    const reviewed = JSON.parse(await tool.execute({ action: 'task_review', id, project: P, 三态: '过', 复核者: 'reviewer' }, exec));
-    assert.equal(reviewed.结论.算通过, true);
+    // 两份独立答案经动作表以成员主体落卷（工具面的 主体 恒由会话事实派生——根会话=Lead，
+    // 这里直接走 runAction 注入成员主体，与生产口径同一张动作表）。成员先经注册表在册在岗。
+    const org = await shareOrg({ home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') });
+    const LEAD_SUB = { id: 'lead', kind: 'Lead' };
+    await runAction({ org, 项目: P, subject: LEAD_SUB, 主体: LEAD_SUB, args: { action: 'registry_assign', 岗位: '插件工程', 实例: 'member-a' } });
+    await runAction({ org, 项目: P, subject: LEAD_SUB, 主体: LEAD_SUB, args: { action: 'registry_assign', 岗位: '插件工程', 实例: 'member-b' } });
+    const MEMBER_A = { id: 'member-a', kind: '成员', roleId: '插件工程' };
+    const MEMBER_B = { id: 'member-b', kind: '成员', roleId: '插件工程' };
+    await runAction({ org, 项目: P, subject: MEMBER_A, 主体: MEMBER_A, args: { action: 'task_submit', id, project: P, 结论: '可以' } });
+    const 第二份 = await runAction({ org, 项目: P, subject: MEMBER_B, 主体: MEMBER_B, args: { action: 'task_submit', id, project: P, 结论: '可以' } });
+    assert.equal(第二份.节点.独立答案.length, 2, '两份独立答案按人留');
 
-    const zero = JSON.parse(await tool.execute({
-      action: 'review_zero', id, project: P,
-      结论集: JSON.stringify([{ 成员: 'a', 结论: '可以' }, { 成员: 'b', 结论: '可以' }]),
-    }, exec));
+    // 零分歧从任务图独立答案重算（2026-10-13 审查 P1-8）：结论集自报已不收。
+    const zero = JSON.parse(await tool.execute({ action: 'review_zero', id, project: P }, exec));
     assert.equal(zero.检查.零分歧, true);
     assert.equal(zero.检查.触发人工抽检, true);
 

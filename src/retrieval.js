@@ -76,7 +76,10 @@ export function search(index, query, options = {}) {
     candidateIndexes.push(i);
   });
 
-  const terms = tokenize(query);
+  // 查询词去重（2026-10-13 裁决第二批 P3）：重复词重复累分 ⇒「数据 数据」分数×2，
+  // 同义改写堆词可刷排名。BM25 的 qtf 不建模，去重是正确口径。附 id→doc Map 免 O(n) 回查。
+  const terms = [...new Set(tokenize(query))];
+  const docById = new Map(index.docs.map((d) => [d.id, d]));
   const scoreById = new Map();
   /** 每条候选文档命中的「证据」：CJK 双字与拉丁词分开记。 */
   const evidenceById = new Map();
@@ -120,7 +123,7 @@ export function search(index, query, options = {}) {
       return (queryHasBigram && evidence.bigram > 0) || (queryHasLatin && evidence.latin > 0);
     })
     .map(([id, 分数]) => {
-      const doc = index.docs.find((d) => d.id === id);
+      const doc = docById.get(id);
       return { doc, id, 分数 };
     })
     // 分数降序；同分按 id 升序 —— 相同输入必须给出相同排序（检索回归集的前提）。

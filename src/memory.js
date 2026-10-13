@@ -11,6 +11,7 @@
  * 偏好 = 部署（永不外流）；作答 = 实例（私有区内部，任务结束归档）。
  */
 import { appendLines, exists, listDirs, readJsonl, readTextOrNull, atomicWrite, withLock } from './kernel/fsx.js';
+import { stat } from 'node:fs/promises';
 import { InvalidBody, Denied, Fault } from './kernel/errors.js';
 import { objectId } from './kernel/ids.js';
 import { buildIndex, formatMiss, search } from './retrieval.js';
@@ -18,6 +19,19 @@ import { DIR, MEMORY_KINDS } from './paths.js';
 
 /** 归档后可读的角色（§7 表）。 */
 const ANSWER_READERS = ['主权者', 'Lead', '复核者'];
+
+/**
+ * remember 内部通道记号（2026-10-13 审查 P1-11）：`派生自` / `同锁追加` 只许 overturn
+ * 这一内部调用路径携带（以本模块的 Symbol 键标记）。JSON 入参不可能长出 Symbol 键，
+ * 工具面/命令面/路由面拼的参数天然过不了这道检查。
+ */
+const 内部通道 = Symbol('dsh-mind-memory-internal');
+
+/** 披露正则编译缓存（#disclosureHits 用，按正则源键控，带上限防长胖）。 */
+const 披露正则缓存 = new Map();
+
+/** 检索索引缓存条数上限（每种过滤口径一份够了；超了丢最早）。 */
+const 索引缓存上限 = 8;
 
 /** 记录档位：条目行 vs 状态行。用「有没有 `指向`」区分，避免再加一个字段。 */
 const isStateRow = (row) => typeof row?.指向 === 'string' && typeof row?.追加 === 'string';
@@ -68,6 +82,19 @@ export class MemoryService {
   /** id 用的严格递增时刻（只在内存里；见 `#nextStamp`）。 */
   #lastStamp;
 
+  /** 账本读缓存（2026-10-13 第三批性能收口）：文件 → {签名, rows}。真源仍是文件，签名一变即重读。 */
+  #rowsCache = new Map();
+  /** 本进程写计数（写后即使 mtime/size 撞车也重读）。 */
+  #writeCount = new Map();
+  /**
+   * 检索索引缓存（2026-10-13 第四批性能收口）：键 = 账本签名 + 过滤口径，
+   * 值 = {index}。为什么必须缓存：`buildIndex` 要对每条候选文档分词，
+   * 5000 行账本实测 **351 ms/次查询**（普通读面只要 16 ms）——每次带词检索都重建是白付。
+   */
+  #indexCache = new Map();
+  /** 血缘索引缓存（同上）：`buildLineageIndex` 每次重建实测约 203 ms。 */
+  #lineageCache = new Map();
+
   /**
    * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock }} spec
    */
@@ -76,6 +103,53 @@ export class MemoryService {
     this.policy = spec.policy;
     this.audit = spec.audit;
     this.clock = spec.clock;
+  }
+
+  /**
+   * 某账本文件的签名（mtime+size+本进程写计数）。缓存与索引都拿它当失效依据。
+   * @param {string} file
+   * @returns {Promise<string>}
+   */
+  async #签名(file) {
+    try {
+      const st = await stat(file);
+      return `${st.mtimeMs}:${st.size}:${this.#writeCount.get(file) ?? 0}`;
+    } catch {
+      return `absent:${this.#writeCount.get(file) ?? 0}`;
+    }
+  }
+
+  /**
+   * 一组账本的合成签名（顺序无关：先按路径排序再拼）。
+   * @param {string[]} files
+   * @returns {Promise<string>}
+   */
+  async #签名们(files) {
+    const 排序 = [...files].sort();
+    const 部分 = [];
+    for (const file of 排序) 部分.push(`${file}#${await this.#签名(file)}`);
+    return 部分.join('|');
+  }
+
+  /**
+   * 账本行（带读缓存）：签名 = 盘上 mtime+size + 本进程对该文件的写次数。
+   * 供读面（query/stats/血缘/folded）复用——修前每个读面各自全量读+解析所有账本，
+   * 检索一次查询要扫「类 × 范围」遍。
+   * @param {string} file
+   * @returns {Promise<object[]>}
+   */
+  async #rows(file) {
+    const 签名 = await this.#签名(file);
+    const hit = this.#rowsCache.get(file);
+    if (hit?.签名 === 签名) return hit.rows;
+    const rows = await readJsonl(file);
+    this.#rowsCache.set(file, { 签名, rows });
+    return rows;
+  }
+
+  /** 记一次本进程写入：让该文件的缓存签名失效。 */
+  #bump(file) {
+    this.#writeCount.set(file, (this.#writeCount.get(file) ?? 0) + 1);
   }
 
   /**
@@ -94,6 +168,15 @@ export class MemoryService {
    */
   async remember(input) {
     const kind = input.类;
+    // 内部通道封口（2026-10-13 审查 P1-11）：`派生自`（推翻替换链）与 `同锁追加`（账本伴随行）
+    // 是 overturn 的内部参数——修前 remember 签名照收、零校验，任何调用方传 `派生自` 即可
+    // 伪造「谁推翻谁」的血缘事实，传 `同锁追加` 函数可向账本追加任意构造行。
+    // 现在凭模块内 Symbol 记号放行 overturn 自己，其余一律响亮拒。
+    if ((input.派生自 !== undefined || input.同锁追加 !== undefined) && input[内部通道] !== true) {
+      throw new InvalidBody('派生自 / 同锁追加 是记忆服务的内部通道（推翻替换链与伴随落账），不接受外部传入：血缘是「谁推翻谁」的事实，不是自报项。', {
+        detail: { 收到的内部键: [input.派生自 !== undefined ? '派生自' : null, input.同锁追加 !== undefined ? '同锁追加' : null].filter(Boolean) },
+      });
+    }
     if (!MEMORY_KINDS.includes(kind)) {
       throw new InvalidBody(`记忆只有四类：${MEMORY_KINDS.join(' / ')}；收到「${kind}」。能力不在记忆服务里。`, {
         detail: { 收到: kind, 允许: MEMORY_KINDS },
@@ -337,18 +420,25 @@ export class MemoryService {
     });
     const wanted = query.类 ?? MEMORY_KINDS;
     const rows = [];
+    /** @type {string[]} 本次口径读过的账本（合成签名用；索引缓存按它失效）。 */
+    const 账本文件 = [];
     for (const kind of wanted) {
       if (!MEMORY_KINDS.includes(kind)) continue;
       for (const scope of await this.#scopesFor(kind, query.项目)) {
-        rows.push(...(await readJsonl(this.layout.memoryLog(scope, kind))));
+        const file = this.layout.memoryLog(scope, kind);
+        账本文件.push(file);
+        rows.push(...(await this.#rows(file)));
       }
     }
     const entries = fold(rows).filter((entry) => entry.状态 !== '物理删除');
     const visible = [];
     for (const entry of entries) {
-      if (entry.类 === '作答' && entry.归档 === true && query.显式 !== true) continue;
-      if (entry.类 === '作答' && entry.归档 === true && query.读者) {
-        if (!ANSWER_READERS.includes(query.读者.kind)) continue;
+      // 归档作答的可读性矩阵（§7 · 2026-10-13 审查 P1-9 修复）：默认不召回；显式要看时
+      // 还必须自报读者身份且在可读名单内——此前第二个 if 依赖 `query.读者` 存在才检查，
+      // 「显式:true 但不传读者」会让整道检查静默跳过（fail-open）。
+      if (entry.类 === '作答' && entry.归档 === true) {
+        if (query.显式 !== true) continue;
+        if (!query.读者 || !ANSWER_READERS.includes(query.读者.kind)) continue;
       }
       if (query.项目 && entry.类 === '知识' && entry.项目 && entry.项目 !== query.项目 && entry.归属 !== DIR.跨项目) continue;
       if (query.岗位 && entry.岗位 && entry.岗位 !== query.岗位) continue;
@@ -411,7 +501,16 @@ export class MemoryService {
         ...(说明 ? { 说明 } : {}),
       };
     }
-    const index = buildIndex(可召回.map((entry) => ({ id: entry.id, 正文: entry.内容, 标签: [entry.类, entry.岗位 ?? ''], 来源: entry.归属 })));
+    // 索引缓存（2026-10-13 第四批）：键 = 账本合成签名 + 过滤口径。索引只取决于
+    // 「哪些文档进入检索面」，与查询词无关 ⇒ 同一口径下反复检索（看板展开、连续问）
+    // 只建一次。5000 行实测：每次重建 351 ms → 命中后只剩一次 search。
+    const 索引键 = `${await this.#签名们(账本文件)}|${JSON.stringify([wanted, query.项目 ?? null, query.岗位 ?? null, query.含失效 === true, query.显式 === true, query.读者?.kind ?? null])}`;
+    let index = this.#indexCache.get(索引键);
+    if (!index) {
+      index = buildIndex(可召回.map((entry) => ({ id: entry.id, 正文: entry.内容, 标签: [entry.类, entry.岗位 ?? ''], 来源: entry.归属 })));
+      if (this.#indexCache.size >= 索引缓存上限) this.#indexCache.delete(this.#indexCache.keys().next().value);
+      this.#indexCache.set(索引键, index);
+    }
     const result = search(index, query.文本, { limit: query.limit ?? 10, 范围: `${wanted.join('/')}@${query.项目 ?? '全部项目'}` });
     // 合并顺序与键名都守着「两个数分开报」：检索面的 `文档数`（候选文档数）保留 search 的实算值，
     // 账本侧的可见条数走 `条目数`——同名覆盖会让 `formatMiss` 的「候选文档数」虚高（W3 批2）。
@@ -466,8 +565,13 @@ export class MemoryService {
     });
     const entry = await this.#folded(spec.id);
     if (!entry) throw new InvalidBody(`没有这条记忆：${spec.id}`);
-    const closure = lineageClosure(await this.#lineageIndex(), spec.id);
-    return { id: spec.id, ...closure };
+    const index = await this.#lineageIndex();
+    const closure = lineageClosure(index, spec.id);
+    // 「已不存在」标注（2026-10-13 第四批）：物理删除会抹掉源的**条目行**，但下游那行仍写着
+    // 「我引用过它」——血缘是历史事实，边照旧列出；可读的人必须看得出这一头已经不在盘上了，
+    // 否则一份指向已删除对象的血缘读数就是假读数（§3.6）。
+    const 标注 = (list) => list.map((item) => (index.ids.includes(item.id) ? item : { ...item, 已不存在: true }));
+    return { id: spec.id, ...closure, 上游: 标注(closure.上游 ?? []), 下游: 标注(closure.下游 ?? []) };
   }
 
   /**
@@ -522,6 +626,7 @@ export class MemoryService {
       // 推翻是「追加新条目 + 旧条目入账」双动作：新条目那次 remember 也过策略引擎，
       // 任务上下文必须跟着透传，否则成员任务内推翻会死在内部那次写入上（半动作）。
       任务: spec.任务 ?? null,
+      [内部通道]: true,
       同锁追加: (row) => [{
         id: objectId('账目', `${id}:推翻`, { at: this.clock.ms() }),
         指向: id, 追加: '推翻', 追于: this.clock.iso(),
@@ -642,8 +747,39 @@ export class MemoryService {
             }
           });
         await atomicWrite(file, kept.length ? `${kept.join('\n')}\n` : '');
+        this.#bump(file); // 物理抹除也是写：读缓存失效（第三批）
       });
     }
+
+    // ── ②′ 迟到者补隔离（2026-10-13 审查 P1-13）──────────────────────────────
+    // 闭包算完后、抹除前落账的并发 remember 可能引用了本源——它们不在第一批隔离清单里。
+    // 「待删除」状态行先于抹除入账 + #verifyRefs 的写侧封口挡住了**之后**的新引用，
+    // 但封口生效前已在途/已落账的那几条仍要兜住：抹除后再算一次闭包（血缘索引按
+    // 引用字符串建边，源行已抹不影响迟到者的边），把不在第一批清单里的补隔离。
+    const 迟到 = (await this.#downstreamClosure(id)).filter((x) => !隔离ids.includes(x.id));
+    if (迟到.length > 0) {
+      const 迟到行 = [];
+      for (const child of 迟到) {
+        const childEntry = await this.#folded(child.id);
+        if (!childEntry) continue;
+        迟到行.push({
+          账本: this.layout.memoryLog(childEntry.归属, childEntry.类),
+          行: {
+            id: objectId('账目', `${child.id}:隔离`, { at: this.clock.ms() }),
+            指向: child.id,
+            追加: '隔离',
+            追于: this.clock.iso(),
+            依据: '源对象物理删除·血缘阻断（迟到补扫）',
+            主体: spec.subject,
+          },
+        });
+      }
+      const 迟到按账本 = new Map();
+      for (const { 账本, 行 } of 迟到行) 迟到按账本.set(账本, [...(迟到按账本.get(账本) ?? []), 行]);
+      for (const [账本, 行s] of 迟到按账本) await this.#appendLedger(账本, 行s);
+      隔离行.push(...迟到行);
+    }
+    const 全部隔离ids = 隔离行.map((x) => x.行.指向);
 
     // ── ③ 不可逆操作审计：清理覆盖 + 下游隔离清单 ───────────────────────────────
     await this.audit.append({
@@ -651,11 +787,11 @@ export class MemoryService {
       主体: spec.subject,
       对象: { id, kind: entry.类 },
       依据: 敏感 ? '记忆处置表：敏感数据' : '记忆处置表：主权者明确要求',
-      结果: `物理删除（内容已抹掉；覆盖 ${覆盖.length} 本账：${覆盖.map((x) => x.scope).join(' / ')}；下游隔离 ${隔离ids.length} 条）`,
+      结果: `物理删除（内容已抹掉；覆盖 ${覆盖.length} 本账：${覆盖.map((x) => x.scope).join(' / ')}；下游隔离 ${全部隔离ids.length} 条）`,
       项目: entry.项目,
-      详情: { 理由: spec.理由, 类: entry.类, 清理覆盖: 覆盖.map((x) => x.file), 下游隔离: 隔离ids },
+      详情: { 理由: spec.理由, 类: entry.类, 清理覆盖: 覆盖.map((x) => x.file), 下游隔离: 全部隔离ids },
     });
-    return { id, 已删除: true, 依据: spec.理由, 清理覆盖: 覆盖.map((x) => x.scope), 下游隔离: 隔离ids };
+    return { id, 已删除: true, 依据: spec.理由, 清理覆盖: 覆盖.map((x) => x.scope), 下游隔离: 全部隔离ids };
   }
 
   /**
@@ -677,11 +813,13 @@ export class MemoryService {
     // 选中的是**全部历史条目行**——已归档的条目行照旧在账上 ⇒ 每次结账都给全体老条目
     // 再追加一轮归档行，账本无限长胖、审计读数「归档 N 条」次次虚高）。
     const 归档行 = await withLock(`${file}.lock`, async () => {
+      // 锁内重读真源（fresh）：归档候选集必须建立在锁内看到的行上。
       const rows = await readJsonl(file);
       const open = fold(rows).filter((entry) => entry.归档 !== true);
       if (open.length === 0) return [];
       const lines = open.map((row) => ({ id: objectId('账目', row.id, { at: this.clock.ms() }), 指向: row.id, 追加: '归档', 追于: this.clock.iso(), 依据: spec.任务 ?? '任务结束', 主体: spec.subject }));
       await appendLines(file, lines);
+      this.#bump(file); // 读缓存失效（第三批）
       return lines;
     });
     if (归档行.length === 0) return { 归档条数: 0, 账本: file };
@@ -723,14 +861,20 @@ export class MemoryService {
   async stats(query = {}) {
     /** @type {Record<string, number>} */
     const 计数 = {};
+    // 坏行可见（2026-10-13 裁决第二批·裁决4）：记忆账本无哈希链，撕裂/手改的坏行此前被
+    // readJsonl 静默跳过。最底线=不静默：计数走带体检的读取器，坏行进读数（§3.6）。
+    let 坏行 = 0;
+    const { readJsonlHealth } = await import('./kernel/fsx.js');
     for (const kind of MEMORY_KINDS) {
       const rows = [];
       for (const scope of await this.#scopesFor(kind, query.项目)) {
-        rows.push(...(await readJsonl(this.layout.memoryLog(scope, kind))));
+        const health = await readJsonlHealth(this.layout.memoryLog(scope, kind));
+        rows.push(...health.rows);
+        坏行 += health.坏行;
       }
       计数[kind] = fold(rows).filter((e) => e.状态 !== '物理删除').length;
     }
-    return { 计数, 合计: Object.values(计数).reduce((a, b) => a + b, 0) };
+    return { 计数, 合计: Object.values(计数).reduce((a, b) => a + b, 0), ...(坏行 > 0 ? { 坏行, 坏行告警: '账本里有解析失败的行（崩溃撕裂或手改）：坏行不进计数，但必须可见' } : {}) };
   }
 
   /**
@@ -754,7 +898,7 @@ export class MemoryService {
       按类[kind] = 0;
       const rows = [];
       for (const scope of await this.#scopesFor(kind, query.项目)) {
-        const scopeRows = await readJsonl(this.layout.memoryLog(scope, kind));
+        const scopeRows = await this.#rows(this.layout.memoryLog(scope, kind));
         rows.push(...scopeRows);
         if (kind === '知识') {
           晋升 += scopeRows.filter((r) => r.跨项目判定 && String(r.跨项目判定.于) >= 起点).length;
@@ -780,16 +924,24 @@ export class MemoryService {
    * @returns {Array<{名: string}>} 命中的模式（只带名，不带命中片段——片段正是敏感本体）
    */
   #disclosureHits(entry) {
-    const 面数 = [entry?.标题, entry?.内容, ...(Array.isArray(entry?.标签) ? entry.标签 : [])].filter((s) => typeof s === 'string').join('\n');
+    // 输入面长度上限（2026-10-13 审查 P1-14）：正则执行时间随输入长度放大，
+    // 把被检面截到 20k 字符——超长知识先用前 20k 过机械检查（敏感信息极少只藏在两万字之后）。
+    const 原面 = [entry?.标题, entry?.内容, ...(Array.isArray(entry?.标签) ? entry.标签 : [])].filter((s) => typeof s === 'string').join('\n');
+    const 面数 = 原面.length > 20_000 ? `${原面.slice(0, 20_000)}\n[披露检查：输入已截断，原长 ${原面.length}]` : 原面;
     const 清单 = this.policy.state.defaults?.披露敏感模式 ?? DEFAULT_DISCLOSURE_PATTERNS;
     const 命中 = [];
     for (const { 名, 正则 } of 清单) {
-      // 加载期已校验可编译；这里仍兜住编译/执行异常——机械检查自己炸了不许静默放行。
-      let re;
-      try {
-        re = new RegExp(正则, 'i');
-      } catch {
-        throw new Fault('DISCLOSURE_PATTERN_BROKEN', `披露敏感模式[${名}] 在执行期无法编译：${正则}。按 fail-closed 拒绝本次晋升；请修好部署.json 后重载。`, { detail: { 名 } });
+      // 编译缓存（2026-10-13 审查 P1-14）：修前每次晋升对每个模式 new RegExp 一次；
+      // 按正则源缓存实例（清单整体覆盖时失效键一起换）。
+      let re = 披露正则缓存.get(正则);
+      if (re === undefined) {
+        try {
+          re = new RegExp(正则, 'i');
+        } catch {
+          throw new Fault('DISCLOSURE_PATTERN_BROKEN', `披露敏感模式[${名}] 在执行期无法编译：${正则}。按 fail-closed 拒绝本次晋升；请修好部署.json 后重载。`, { detail: { 名 } });
+        }
+        if (披露正则缓存.size > 256) 披露正则缓存.clear();
+        披露正则缓存.set(正则, re);
       }
       if (re.test(面数)) 命中.push({ 名 });
     }
@@ -807,6 +959,10 @@ export class MemoryService {
    * @param {string[]} refs
    */
   async #verifyRefs(refs) {
+    // 一次折叠建 id→条目 索引（2026-10-13 第三批性能收口）：修前对每个引用调一次 #folded，
+    // 每次都要扫全部账本 × 全部类 ⇒ O(引用数 × 全库行数)。带引用的写入（remember）在
+    // 账本上万行时会明显劣化。这里折叠一遍，引用逐个查表。
+    const 条目表 = await this.#foldAll();
     for (const ref of refs) {
       if (ref.startsWith('artifact-')) continue;
       if (ref.startsWith('task-')) {
@@ -816,8 +972,15 @@ export class MemoryService {
         continue;
       }
       if (/^(know|exp|pref|answ)-/.test(ref)) {
-        if (!(await this.#folded(ref))) {
+        const target = 条目表.get(ref);
+        if (!target) {
           throw new InvalidBody(`悬空引用：账本里折不到 ${ref}。引用必须指向真实存在的记忆（fail-closed）。`, { detail: { 引用: ref, 校验面: '记忆账本' } });
+        }
+        // 已被物理删除的源不许再被引用（2026-10-13 审查 P1-13 的写侧封口）：
+        // purge 的「待删除」状态粘在账上——闭包算完之后才来的 remember 若还能引用它，
+        // 新下游就永远逃过隔离。这里在写入前把这条口子关死。
+        if (target.状态 === '待删除' || target.状态 === '物理删除') {
+          throw new InvalidBody(`悬空引用：${ref} 已被物理删除（状态 ${target.状态}）。不许往已删除的对象上挂新血缘——那会逃过下游隔离（契约A §C8）。`, { detail: { 引用: ref, 状态: target.状态 } });
         }
         continue;
       }
@@ -843,15 +1006,28 @@ export class MemoryService {
     return false;
   }
 
-  /** 扫全部记忆账本行，构建血缘索引（纯投影，不落盘——不变式 #4：可重建、不另立真源）。 */
+  /**
+   * 扫全部记忆账本行，构建血缘索引（纯投影，不落盘——不变式 #4：可重建、不另立真源）。
+   * 带签名缓存（2026-10-13 第四批）：`buildLineageIndex` 对全库建边，5000 行实测约 203 ms，
+   * 而它是 `lineage` 读面与 purge 闭包的共同入口——每次重建是白付。写路径 bump ⇒ 签名变 ⇒ 重算。
+   */
   async #lineageIndex() {
-    const rows = [];
+    const files = [];
     for (const kind of MEMORY_KINDS) {
       for (const scope of [DIR.跨项目, ...(await this.#projectScopes())]) {
-        rows.push(...(await readJsonl(this.layout.memoryLog(scope, kind))));
+        files.push(this.layout.memoryLog(scope, kind));
       }
     }
-    return buildLineageIndex(rows);
+    const 键 = await this.#签名们(files);
+    const hit = this.#lineageCache.get(键);
+    if (hit) return hit;
+    const rows = [];
+    for (const file of files) rows.push(...(await this.#rows(file)));
+    const index = buildLineageIndex(rows);
+    // 只留最近一份：血缘索引随账本整体变化，留旧键没有意义。
+    this.#lineageCache.clear();
+    this.#lineageCache.set(键, index);
+    return index;
   }
 
   /**
@@ -899,6 +1075,7 @@ export class MemoryService {
     await withLock(`${file}.lock`, async () => {
       await appendLines(file, list);
     });
+    this.#bump(file); // 读缓存失效（第三批）：写后即使 mtime/size 撞车也重读
     return list;
   }
 
@@ -919,6 +1096,7 @@ export class MemoryService {
    */
   async #appendEntry(file, spec) {
     return withLock(`${file}.lock`, async () => {
+      // 锁内必须重读真源（fresh）：id 查重建立在锁内看到的行上，缓存可能落后于别的进程。
       const rows = await readJsonl(file);
       const 已用 = new Set(rows.map((row) => row?.id).filter((id) => typeof id === 'string'));
       let id = objectId(spec.kind, spec.seed, { at: this.#nextStamp() });
@@ -926,6 +1104,7 @@ export class MemoryService {
       const row = spec.build(id);
       const 伴随 = typeof spec.同锁追加 === 'function' ? spec.同锁追加(row) : [];
       await appendLines(file, [row, ...伴随]);
+      this.#bump(file); // 读缓存失效（第三批）
       return row;
     });
   }
@@ -952,12 +1131,28 @@ export class MemoryService {
   async #folded(id) {
     for (const kind of MEMORY_KINDS) {
       for (const scope of [DIR.跨项目, ...(await this.#projectScopes())]) {
-        const rows = await readJsonl(this.layout.memoryLog(scope, kind));
+        const rows = await this.#rows(this.layout.memoryLog(scope, kind));
         const hit = fold(rows).find((entry) => entry.id === id);
         if (hit) return hit;
       }
     }
     return null;
+  }
+
+  /**
+   * 全部账本折叠成 id→条目 表（2026-10-13 第三批性能收口）：跨账本合并的**单次**折叠，
+   * 供 #verifyRefs 一次建表多次查（修前每个引用各扫全库一遍）。
+   * 注意这是「合并视图」：晋升副本与项目原件折成一条——与 `query`/`stats` 的口径一致。
+   * @returns {Promise<Map<string, object>>}
+   */
+  async #foldAll() {
+    const rows = [];
+    for (const kind of MEMORY_KINDS) {
+      for (const scope of await this.#scopesFor(kind, undefined)) {
+        rows.push(...(await this.#rows(this.layout.memoryLog(scope, kind))));
+      }
+    }
+    return new Map(fold(rows).map((entry) => [entry.id, entry]));
   }
 
   /**
