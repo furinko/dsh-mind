@@ -297,6 +297,15 @@ window.__ModuleLoader__.load({
       var m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/.exec(String(value || ''));
       return m ? m[2] + '-' + m[3] + ' ' + m[4] + ':' + m[5] + ':' + m[6] : String(value || '');
     }
+    /**
+     * 时刻 → **分钟级**（`MM-DD HH:MM`）：时间线与节律条是「一行一条」的扫读面，秒是噪声。
+     * 只对 ISO 形状裁剪（与 `shortTime` 同款纪律：不依赖 locale、非 ISO 原样返回）。
+     * 审计页仍用 `shortTime` 给全精度 —— 两处精度不同是**有意的**，不是漏改。
+     */
+    function 短时刻(value) {
+      var s = shortTime(value);
+      return /^\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s) ? s.slice(0, 11) : s;
+    }
     /** 从可能带围栏/前后文的文本里抠出 JSON 对象。 */
     function parseLooseJson(text) {
       var raw = String(text === null || text === undefined ? '' : text).trim();
@@ -355,7 +364,7 @@ window.__ModuleLoader__.load({
      *  · 真正说了算的仍是宿主 —— 就算这里漏了，宿主也会拒，页面会因为「回读对不上」而明说没写进去。
      */
     var MAX_RESPONSE_DEADLINE_HOURS = 876000;
-    var TASK_LIMIT = 12;
+    var TASK_LIMIT = 8;
     var AUDIT_LIMIT = 20;
     /**
      * ⑦（2026-10-12，主权者指令「也默认收起呗」）：总线改为**折叠**而不是**截断**。
@@ -461,6 +470,11 @@ window.__ModuleLoader__.load({
         审计尾: arr(firstOf(v, ['审计尾', '审计', 'audit'])),
         // 记忆读数：宿主没给就是 null（不装懂）；给了只取四个标量，数字真伪由投影侧负责。
         记忆: 记忆读数Of(firstOf(v, ['记忆', '记忆读数', 'memory'])),
+        // 能力 × 岗位接线（2026-10-13 重做·图谱）。**宿主没给就是 null**（不装懂）：
+        // 投影层没这门数据时，面板不该画一张「组织里一张卡都没有」的空图。
+        能力: 能力行们(firstOf(v, ['能力', 'capabilities'])),
+        岗位: 岗位行们(firstOf(v, ['岗位', 'roles'])),
+        实例计数: obj(firstOf(v, ['实例计数', 'instances'])),
         任务: taskBag,
         // 投影把节点放在 `任务.节点` 下；`节点` 只是同一件事的直白叫法。
         任务节点: arr(taskBag.节点 || firstOf(v, ['任务节点', '节点', 'tasks'])),
@@ -529,6 +543,96 @@ window.__ModuleLoader__.load({
         窗口天: numOf(firstOf(近段, ['窗口天'])),
         新增: numOf(firstOf(近段, ['新增', '新增合计'])),
         晋升: numOf(firstOf(近段, ['晋升'])),
+        // 按类构成（2026-10-13 重做）：只认三个合法类，数字真伪由投影侧负责。
+        按类: 按类Of(firstOf(b, ['按类'])),
+      };
+    }
+
+    /** 记忆按类计数 → `{经历, 知识, 偏好}`（缺的类给 null，不给 0：0 是「这一类是空的」）。 */
+    function 按类Of(bag) {
+      var b = obj(bag);
+      if (!b) return null;
+      var out = {};
+      var 有值 = false;
+      ['经历', '知识', '偏好'].forEach(function (k) {
+        out[k] = numOf(b[k]);
+        if (out[k] !== null) 有值 = true;
+      });
+      // 三类全空 ⇒ 当作「没给」（null），否则会画出一张 0 的甜甜圈——
+      // 那看起来像「记忆是空的」，而真相是「宿主没给这一格」。
+      return 有值 ? out : null;
+    }
+
+    /**
+     * 能力卡行（2026-10-13 重做·图谱）。**只取结构与三个标量**：id / 来源 / 适用岗位。
+     * 摘要与正文一律不上图（图画的是结构，不是内容）。
+     */
+    function 能力行们(bag) {
+      if (!Array.isArray(bag)) return null;
+      return bag.map(function (row) {
+        var r = obj(row) || {};
+        return {
+          id: line(firstOf(r, ['id', '名', 'name']), ''),
+          来源: line(firstOf(r, ['来源', 'zone', 'source']), ''),
+          适用岗位: arr(firstOf(r, ['适用岗位', 'roles', '适用'])).map(refText).filter(Boolean),
+        };
+      }).filter(function (r) { return r.id !== ''; });
+    }
+
+    /**
+     * 岗位卡行（2026-10-13 重做·图谱）：id / 来源 / 同名 / 摘要 / **能力引用**。
+     * `同名` 是「生效的是哪份、另外还有哪份」的唯一读数——双区同名时不许被拍平成一个来源。
+     */
+    function 岗位行们(bag) {
+      if (!Array.isArray(bag)) return null;
+      return bag.map(function (row) {
+        var r = obj(row) || {};
+        return {
+          id: line(firstOf(r, ['id', 'name']), ''),
+          来源: line(firstOf(r, ['来源', 'zone', 'source']), ''),
+          同名: arr(firstOf(r, ['同名', 'zones'])).map(refText).filter(Boolean),
+          摘要: line(firstOf(r, ['摘要', 'summary']), ''),
+          能力引用: arr(firstOf(r, ['能力引用', 'capabilities'])).map(refText).filter(Boolean),
+        };
+      }).filter(function (r) { return r.id !== ''; });
+    }
+
+    /**
+     * 接线读数（2026-10-13 重做·图谱）：把两个真源对起来。
+     *
+     * **口径**（与投影同源，不另发明）：一条「适用边」= 能力卡的 `适用岗位` 里点名了某岗位；
+     * 它**接线了**当且仅当该岗位卡的 `能力引用` 里出现这张能力卡的 id。两个方向都不许放宽：
+     *  - 只看能力卡声明 ⇒ 把「声明」当「生效」（正是「发卡 ≠ 接线」这个缺陷本身）；
+     *  - 只看岗位引用 ⇒ 看不出「声明了但没人接」的缺口。
+     *
+     * @param {Array|null} 能力
+     * @param {Array|null} 岗位
+     */
+    function 接线读数(能力, 岗位) {
+      if (!Array.isArray(能力) || !Array.isArray(岗位)) return null;
+      var 引用 = {};
+      岗位.forEach(function (r) { 引用[r.id] = r.能力引用; });
+      var 接线 = [], 缺口 = [];
+      能力.forEach(function (c) {
+        c.适用岗位.forEach(function (role) {
+          var hit = (引用[role] || []).indexOf(c.id) >= 0;
+          (hit ? 接线 : 缺口).push({ 能力: c.id, 岗位: role, 来源: c.来源 });
+        });
+      });
+      var 自治适用 = 0, 自治接线 = 0, 出厂适用 = 0, 出厂接线 = 0;
+      (接线.length + 缺口.length) && 能力.forEach(function (c) {
+        c.适用岗位.forEach(function (role) {
+          var hit = (引用[role] || []).indexOf(c.id) >= 0;
+          if (c.来源 === '自治') { 自治适用 += 1; if (hit) 自治接线 += 1; }
+          else if (c.来源 === '出厂') { 出厂适用 += 1; if (hit) 出厂接线 += 1; }
+        });
+      });
+      var 适用边 = 接线.length + 缺口.length;
+      return {
+        适用边: 适用边, 接线: 接线, 缺口: 缺口,
+        接线率: 适用边 ? Math.round(接线.length / 适用边 * 100) : null,
+        自治适用: 自治适用, 自治接线: 自治接线,
+        出厂适用: 出厂适用, 出厂接线: 出厂接线,
       };
     }
 
@@ -669,16 +773,23 @@ window.__ModuleLoader__.load({
       // 拆法：
       //   · `.dshmind-root`  —— **铺满**（无 max-width），承担 `overflow:auto`、`min-height:100%`。
       //                        鼠标落在整屏任何位置（含左右空白）都在它的范围内 ⇒ 都能滚。
-      //   · `.dshmind-page`  —— **内容仍 1040px 居中**，管排版与内边距。显示宽度**不变**
-      //                        （主权者只要求放宽滚动作用域，不要求把正文拉成超宽行）。
+      //   · `.dshmind-page`  —— **内容居中**，管排版与内边距。宽度**随设计走**：
+      //                        2026-10-12 是 1040px（单列长页）；2026-10-13 重做改成两栏
+      //                        （侧栏 + 内容）⇒ 放宽到 **1180px**。**不含 overflow** 这一条不变。
       // 两层之间不要再放 `overflow`，否则又会出现「内层截住滚轮」的同款毛病。
       '.dshmind-root{box-sizing:border-box;display:flex;flex-direction:column;width:100%;',
       'min-height:100%;overflow:auto;',
       'color:var(--dsw-alias-label-primary,#16181d);font-size:13px;line-height:20px;',
       "font-family:var(--ds-font-family-sans,-apple-system,'Segoe UI',system-ui,sans-serif)}",
-      // 内容层：宽度口径原样保留（1040px + 居中 + 同款内边距），只是不再兼任滚动容器。
-      '.dshmind-page{box-sizing:border-box;display:flex;flex-direction:column;gap:14px;width:100%;max-width:1040px;',
-      'margin:0 auto;padding:24px clamp(24px,4vw,48px) 40px}',
+      // 内容层：**铺满**（2026-10-13 晚口径改形：主权者真机问「为啥左右留空这么多」）。
+      // 旧口径（1040 → 1180 居中）来自 2026-10-12 的「滚动作用域 vs 显示宽度」修复，
+      // 当时只要求「滚动作用域放宽、显示宽度不变」；但那在宽屏上就是两侧一大片空白。
+      // 现在：布局铺满，**改由正文自己限行长**（`--mk-measure`）—— 这是"铺满"与"读得动"的分工：
+      //   · 宽度交给容器（卡片、图谱、表格都吃满，宽屏不浪费）；
+      //   · 行长交给正文（标题/正文/命令块 ≤ 78ch，一行不会长到串行）。
+      // ⚠️ 仍然**不许**有 overflow（那是滚动作用域的硬口径，与本行无关）。
+      '.dshmind-page{box-sizing:border-box;display:flex;flex-direction:column;gap:14px;width:100%;',
+      'padding:24px clamp(20px,2.5vw,40px) 40px}',
       '.dshmind-root *{box-sizing:border-box}',
       // ⚠️ 子项**不许被压缩**（2026-10-11 截断事故）：根是 flex 纵向容器 + height:100%，
       // 子项默认 flex-shrink:1 ⇒ 内容变高时先**压扁**子项而不是出滚动条，而各分区
@@ -827,7 +938,7 @@ window.__ModuleLoader__.load({
       // 高度随列宽收窄而爆炸，横向却还空着。改单列吃满宽度，长文本才读得下去。
       // 注：`grid-template-columns:1fr` 而非 `display:block`——保留 grid 的 gap 语义，
       // 且与下方 `.dshmind-node` 的既有样式零冲突（改动面最小）。
-      '.dshmind-nodes{display:grid;grid-template-columns:1fr;gap:10px;margin-top:12px}',
+      '.dshmind-nodes{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:10px;margin-top:12px}',
       '.dshmind-node{border:.5px solid var(--dsw-alias-border-l1,#0000001f);border-radius:var(--dsw-radius-md,8px);',
       'background:var(--dsw-alias-bg-layer-2,#fff);padding:10px 12px;min-width:0;display:flex;flex-direction:column;gap:6px}',
       '.dshmind-nodePending{border-color:var(--dsw-alias-state-warn-primary,#c47f17);',
@@ -867,18 +978,14 @@ window.__ModuleLoader__.load({
       // **可滚动**（Batch 9 后半，主人：「审计流那个框不能滚动」）：
       // 旧版没有 `max-height`/`overflow` ⇒ 行一多就把面板撑长（或在外层被裁），**框内滚不动**。
       // 现在：列表容器给 `max-height` + `overflow-y:auto`，超出的行**框内可滚到**（不裁、不可达）。
-      // 滚动条给足可见度（`scrollbar-width/color` 是标准属性；`::-webkit-*` 管 WebKit 内核），
-      // 并在框尾垫一点内边距，免得最后一行贴着边框像被切掉。
-      '.dshmind-auditScroll{max-height:340px;overflow-y:auto;overscroll-behavior:contain;',
-      'scrollbar-width:thin;scrollbar-color:var(--dsw-alias-border-l3,#00000024) transparent;padding-right:2px}',
-      '.dshmind-auditScroll::-webkit-scrollbar{width:9px}',
-      '.dshmind-auditScroll::-webkit-scrollbar-thumb{border-radius:5px;',
-      'background:var(--dsw-alias-border-l3,#00000024)}',
-      '.dshmind-auditScroll::-webkit-scrollbar-track{background:transparent}',
+      // ⚠️ 2026-10-13 晚：**卡内滚动壳（`.dshmind-auditScroll`）整条删除**。
+      // 它是「五个分区堆一页」时代的产物（主权者当时说「审计流那个框不能滚动」⇒ 加框内滚动）；
+      // 现在审计与总线**各自成页**，根容器本来就是滚动容器 ⇒ 框内再套一个 `overflow-y:auto`
+      // 就是**双层滚动**（滚轮在框里框外行为还不一样）且内容被压在小盒子里看不见。
+      // 现在：行直接进页面流（`.dshmind-audit` / `.dshmind-busMsgs`），超出上限的靠「展开」钮铺开。
       '.dshmind-audit{display:flex;flex-direction:column;gap:1px;padding-bottom:2px}',
-      // ⑦ 总线消息扫描行：**独立类名**（审计区按 .dshmind-auditRow 数行恰好 20 条，
-      // 两个分区共用类名会污染那条「不静默裁掉」的断言）；列形也不同——末列是正文不是主体。
-      // 复用 auditScroll 的滚动壳（换行口径**不复用**，见下）。
+      // ⑥ 总线消息区：**独立类名、独立壳**（审计区按 .dshmind-auditRow 数行，
+      // 两个分区共用类名会污染那条「不静默裁掉」的断言）；换行口径**不复用**（见下）。
       '.dshmind-busMsgs{display:flex;flex-direction:column;gap:1px;padding-bottom:2px}',
       // 扫描行布局（2026-10-12，主权者：「这里单起一行啊」）：
       // 旧版是四列网格 `max-content ×3 + minmax(0,1fr)` —— 时间/类型/发件三格**吃掉左侧宽度**，
@@ -948,6 +1055,325 @@ window.__ModuleLoader__.load({
 
       '.dshmind-foot{display:flex;gap:10px;flex-wrap:wrap;align-items:center;color:var(--dsw-alias-label-caption,#adb2b8);',
       'font-size:11px;padding:2px 2px 4px}',
+
+      // ── 分页外壳（2026-10-13 重做）─────────────────────────────────────────
+      // 为什么是「全部页都渲染、非当前页 display:none」而不是「只渲染当前页」：
+      //  ① 轮询每 3 秒重渲染，只渲染当前页会在切页时闪一次空白；
+      //  ② **渲染树是断言的对象**（client-harness 直接走树，不走 CSS）——
+      //     只渲染当前页会让「会审/任务图/审计流」那批既有断言在默认页面上全部失效，
+      //     而那批断言守的是**内容口径**（不静默截断、盲评遮罩、档位分级），与它在第几页无关。
+      //     显示用 CSS 收，口径仍然全部在树里 —— 两层各管各的。
+      '.dshmind-shell{display:flex;gap:16px;align-items:flex-start;width:100%}',
+      '.dshmind-nav{position:sticky;top:0;flex:none;width:142px;display:flex;flex-direction:column;gap:2px;padding:4px 0}',
+      '.dshmind-navBtn{display:flex;align-items:center;gap:6px;width:100%;text-align:left;font:inherit;font-size:12.5px;',
+      'padding:6px 9px;border-radius:6px;border:0;background:transparent;cursor:pointer;',
+      'color:var(--dsw-alias-label-secondary,#61666b)}',
+      '.dshmind-navBtn:hover{background:var(--dsw-alias-bg-layer-2,#fff)}',
+      '.dshmind-navBtnOn{background:var(--dsw-alias-markdown-code-block,#f5f5f5);',
+      'color:var(--dsw-alias-label-primary,#1a2233);font-weight:600}',
+      '.dshmind-navCount{margin-left:auto;font-size:10.5px;color:var(--dsw-alias-label-caption,#adb2b8)}',
+      // 非当前页：**display:none 收显示，节点仍在树里**（见上）。
+      '.dshmind-pageBox{display:flex;flex-direction:column;gap:14px;min-width:0}',
+      '.dshmind-pageBoxOff{display:none}',
+      '.dshmind-pages{flex:1;min-width:0;display:flex;flex-direction:column;gap:14px}',
+
+      // ── 可视化（甜甜圈 / 统计砖 / 审计节律条）──────────────────────────────
+      '.dshmind-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(138px,1fr));gap:8px}',
+      '.dshmind-tile{border:.5px solid var(--dsw-alias-border-l2,#d3dcea);border-radius:8px;padding:9px 11px;',
+      'background:var(--dsw-alias-bg-layer-1,#fff)}',
+      '.dshmind-tileK{font-size:11px;color:var(--dsw-alias-label-caption,#adb2b8)}',
+      '.dshmind-tileV{font-size:19px;font-weight:600;color:var(--dsw-alias-label-primary,#1a2233);line-height:1.35}',
+      '.dshmind-tileD{font-size:11px;color:var(--dsw-alias-label-secondary,#61666b)}',
+      '.dshmind-vizGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(246px,1fr));gap:8px}',
+      '.dshmind-vizCard{display:flex;gap:12px;align-items:center;border:.5px solid var(--dsw-alias-border-l2,#d3dcea);',
+      'border-radius:8px;padding:10px 12px;background:var(--dsw-alias-bg-layer-1,#fff)}',
+      '.dshmind-vizTitle{font-size:12px;font-weight:600;color:var(--dsw-alias-label-primary,#1a2233);margin-bottom:6px}',
+      '.dshmind-legend{display:flex;flex-direction:column;gap:4px;font-size:11px;',
+      'color:var(--dsw-alias-label-secondary,#61666b);min-width:0}',
+      '.dshmind-legendRow{display:flex;align-items:center;gap:5px;white-space:nowrap}',
+      '.dshmind-swatch{width:8px;height:8px;border-radius:2px;display:inline-block;flex:none}',
+      '.dshmind-actbar{display:flex;gap:1px;height:20px;border-radius:4px;overflow:hidden;margin-top:6px}',
+      // 节律条：**定宽格**（10px）。`flex:1` 在只有几条时会拉成几百像素的大色块——
+      // 那是「一格一条」这条读法的反面（条数与密度都读不出来了）。
+      '.dshmind-actbar>i{flex:0 0 auto;width:10px;display:block;border-radius:2px}',
+
+      // ── 图谱 ───────────────────────────────────────────────────────────────
+      '.dshmind-graphWrap{border:.5px solid var(--dsw-alias-border-l2,#d3dcea);border-radius:8px;',
+      'background:var(--dsw-alias-bg-layer-1,#fff);overflow:hidden}',
+      '.dshmind-graph{display:block;width:100%;height:auto}',
+      '.dshmind-gEdge{fill:none}',
+      '.dshmind-gNode{cursor:pointer}',
+      '.dshmind-gNodeOff{opacity:.10}',
+      '.dshmind-gLabel{font-size:10px;fill:var(--dsw-alias-label-secondary,#61666b)}',
+      '.dshmind-gLabelStrong{font-size:11px;fill:var(--dsw-alias-label-primary,#1a2233)}',
+      '.dshmind-graphBar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px}',
+      '.dshmind-graphNote{font-size:11px;color:var(--dsw-alias-label-caption,#adb2b8);padding:6px 2px 0}',
+      // 缺口榜：窄面板下**横向可滚**，不许把单元格挤成一字一行（与任务图同一款处置）。
+      '.dshmind-tbl{width:100%;border-collapse:collapse;font-size:12px;border-radius:8px;overflow:hidden}',
+      '.dshmind-tbl th{text-align:left;font-weight:500;font-size:11px;padding:6px 10px;',
+      'color:var(--dsw-alias-label-caption,#adb2b8);background:var(--dsw-alias-bg-layer-2,#f5f5f5)}',
+      '.dshmind-tbl td{padding:6px 10px;border-top:.5px solid var(--dsw-alias-border-l2,#d3dcea);',
+      'color:var(--dsw-alias-label-secondary,#61666b);overflow-wrap:anywhere}',
+
+      // ── 动态时间线 ─────────────────────────────────────────────────────────
+      '.dshmind-tl{border:.5px solid var(--dsw-alias-border-l2,#d3dcea);border-radius:8px;overflow:hidden;',
+      'background:var(--dsw-alias-bg-layer-1,#fff)}',
+      '.dshmind-tlRow{display:flex;gap:10px;align-items:baseline;padding:6px 11px;font-size:12px;',
+      'color:var(--dsw-alias-label-secondary,#61666b)}',
+      '.dshmind-tlRow+.dshmind-tlRow{border-top:.5px solid var(--dsw-alias-border-l2,#d3dcea)}',
+      '.dshmind-tlTime{font-size:11px;color:var(--dsw-alias-label-caption,#adb2b8);flex:none;width:52px}',
+      '.dshmind-tlIcon{flex:none;width:14px;text-align:center}',
+      '.dshmind-tlBad{color:var(--dsw-alias-label-error,#d33)}',
+      '.dshmind-tlWarn{color:var(--dsw-alias-label-warning,#c80)}',
+
+      // ══ 表现层重做（2026-10-13 · v2 设计稿落地）══════════════════════════════
+      // 为什么另起一层覆盖、而不去逐条改旧规则：旧规则里混着两类东西——
+      //  ①**行为不变量**（root 铺满+滚动、page 不许 overflow、读数格不许 ellipsis 裁值 ……）
+      //    这些与设计无关，是「滚动作用域」「值不许被裁」那批真机缺陷的产物，继续守着；
+      //  ②**旧设计的呈现口径**（内容列 1040 居中、大号分区序号、读数格 flex:1 1 Npx ……）
+      //    这些**随设计走**：设计稿要「侧栏 + 更宽的内容列」，就把它们改掉——
+      //    对应的断言按「口径改形」处理（写明理由），不是留着一条对不上设计的假绿。
+      //
+      // 调色板：**令牌优先、设计稿配色兜底**——宿主主题里有令牌就用主题色，
+      // 令牌缺也要好看；且一条裸 `var()` 都不许有（client.test.js 的令牌纪律）。
+      '.dshmind-root{--mk-bg:var(--dsw-alias-bg-layer-1,#161a22);--mk-bg2:var(--dsw-alias-bg-layer-2,#1c212b);',
+      '--mk-bd:var(--dsw-alias-border-l2,#2a303d);--mk-tx:var(--dsw-alias-label-primary,#e7e9ee);',
+      '--mk-tx2:var(--dsw-alias-label-secondary,#9aa3b2);--mk-tx3:var(--dsw-alias-label-caption,#6b7280);',
+      '--mk-ac:var(--dsw-alias-state-business-primary,#5b8def);--mk-ok:var(--dsw-alias-state-success-primary,#3fb27f);',
+      '--mk-warn:var(--dsw-alias-state-warning-primary,#d4a053);--mk-bad:var(--dsw-alias-state-error-primary,#e5534b);',
+      // 版面铺满之后，**行长**必须单独管：一行放 200 个字是读不动的（这不是审美，是可读性）。
+      '--mk-measure:78ch}',
+      // 内容列宽度：旧规则已经是 1180px（2026-10-13 重做时改的，见上面 `.dshmind-page`）——
+      // 这里**不再重复声明**，免得同一件事有两个出处（改一处忘一处就是漂移）。
+
+      // 侧栏：**真正的一栏**（背景 + 描边 + 品牌行），不再是内容列左边的裸文字
+      // ⚠️ `top` 必须与 `.dshmind-page` 的 padding-top（24px）对齐：否则滚动开始时
+      // 侧栏会先跟着走 24px、再"啪"地贴住（主权者报的「会随着右侧板滚动稍微移动一点」就是它）。
+      '.dshmind-nav{width:152px;padding:10px 8px;border-radius:12px;background:var(--mk-bg2);',
+      'border:.5px solid var(--mk-bd);align-self:flex-start;gap:1px;position:sticky;top:24px;',
+      'max-height:calc(100vh - 48px);overflow:auto}',
+      '.dshmind-navBrand{display:flex;flex-direction:column;padding:2px 8px 9px}',
+      '.dshmind-navBrand b{font-size:12.5px;font-weight:600;color:var(--mk-tx)}',
+      '.dshmind-navBrand span{font-size:10.5px;color:var(--mk-tx3)}',
+      '.dshmind-navBtn{border-radius:8px;padding:6px 9px;font-size:12.5px;color:var(--mk-tx2)}',
+      '.dshmind-navBtn:hover{background:var(--mk-bg)}',
+      '.dshmind-navBtnOn{background:var(--dsw-alias-bg-layer-3,rgba(91,141,239,.16));color:var(--mk-ac);font-weight:600}',
+      '.dshmind-navCount{font-size:10px;color:var(--mk-tx3)}',
+
+      // 页头：紧凑（设计稿里标题一行、**读数退成一行 pill**）
+      '.dshmind-hero{gap:9px;padding:0}',
+      '.dshmind-title{font-size:16px;color:var(--mk-tx)}',
+      '.dshmind-sub{font-size:11.5px;color:var(--mk-tx3);margin-top:2px}',
+      // 读数＝**一行铺满的 pill**（设计稿的健康条）。旧版是 6 张竖卡、占 350px 高 —— 那是"右侧板过长"
+      // 的一大来源。结构（.dshmind-readout 里仍是 键/值/注）一个字没动，只把它压成行内 pill，
+      // 所以那批"读数格"断言（键、值、注、四态、空壳/破折号注入）依旧成立。
+      // ⚠️ 第二轮：pill 也要**吃满整行**（`flex:1 1 180px`）——只在左边挤着、右半行空着同样难看。
+      '.dshmind-readoutGroups{display:flex;flex-direction:column;gap:6px;align-items:stretch}',
+      '.dshmind-readoutGroup{display:flex;flex-direction:row;flex-wrap:wrap;gap:6px;align-items:center}',
+      '.dshmind-readoutGroupLabel{flex:none;font-size:10.5px;letter-spacing:.08em;color:var(--mk-tx3)}',
+      '.dshmind-readout{flex:1 1 180px;min-width:0;display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;',
+      'background:var(--mk-bg);border:.5px solid var(--mk-bd);border-radius:10px;padding:5px 11px}',
+      '.dshmind-readoutKey{font-size:10.5px;color:var(--mk-tx3)}',
+      '.dshmind-readoutVal{font-size:12px;color:var(--mk-tx)}',
+      '.dshmind-readoutNote{font-size:10.5px;color:var(--mk-tx3)}',
+
+      // 注意力区（设计稿首屏第一块）：平静态一条绿带，异常态一张卡
+      '.dshmind-attn{display:flex;flex-direction:column;gap:8px}',
+      '.dshmind-attnClear{display:flex;align-items:center;gap:9px;padding:11px 14px;border-radius:12px;',
+      'background:rgba(63,178,127,.10);border:.5px solid rgba(63,178,127,.34);color:var(--mk-ok);font-size:13px}',
+      '.dshmind-attnCard{background:var(--mk-bg);border:.5px solid var(--mk-bd);border-left:3px solid var(--mk-warn);',
+      'border-radius:12px;padding:11px 14px}',
+      '.dshmind-attnCardBad{border-left-color:var(--mk-bad)}',
+      '.dshmind-attnCard h4{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--mk-tx)}',
+      '.dshmind-attnCard p{font-size:12px;color:var(--mk-tx2);margin-top:5px}',
+      '.dshmind-attnNodes{display:flex;flex-direction:column;gap:3px;margin-top:7px}',
+      '.dshmind-attnNode{font-size:11.5px;color:var(--mk-tx2);overflow-wrap:anywhere}',
+
+      // 分区与卡片：一块一卡
+      '.dshmind-sec{background:var(--mk-bg);border:.5px solid var(--mk-bd);border-radius:12px;padding:13px 15px}',
+      '.dshmind-secIdx{display:none}',
+      '.dshmind-secTitle{font-size:13px;color:var(--mk-tx);font-weight:600}',
+      '.dshmind-secHint{font-size:11px;color:var(--mk-tx3)}',
+      '.dshmind-secCount{font-size:11px;color:var(--mk-tx3)}',
+      '.dshmind-secBody{margin-top:9px}',
+      '.dshmind-node,.dshmind-review,.dshmind-decideRow,.dshmind-answer{background:var(--mk-bg2);',
+      'border:.5px solid var(--mk-bd);border-radius:10px}',
+      '.dshmind-node,.dshmind-review,.dshmind-decideRow{padding:11px 13px}',
+      '.dshmind-empty{color:var(--mk-tx3);font-size:12px;padding:8px 2px}',
+      '.dshmind-notice{background:rgba(212,160,83,.12);border:.5px solid rgba(212,160,83,.4);border-radius:10px;',
+      'color:var(--mk-warn);padding:9px 12px;font-size:12px}',
+
+      // 时间线：一行一条（设计稿的紧凑度；旧版把时刻与正文挤成两行）
+      '.dshmind-tl{background:var(--mk-bg);border:.5px solid var(--mk-bd);border-radius:12px}',
+      '.dshmind-tlRow{padding:7px 12px;gap:10px;font-size:12px;color:var(--mk-tx2)}',
+      '.dshmind-tlTime{width:86px;font-size:11px;color:var(--mk-tx3);white-space:nowrap}',
+      '.dshmind-tlIcon{width:12px}',
+      // 失败/拦截那几行给一条左强调线：扫一眼就知道账上有没有坏事（不改文案，只加层次）
+      '.dshmind-tlRow{border-left:2px solid transparent}',
+      '.dshmind-tlRow.dshmind-tlBad{border-left-color:var(--mk-bad)}',
+      '.dshmind-tlRow.dshmind-tlWarn{border-left-color:var(--mk-warn)}',
+
+      // 图谱：画布 + 详情抽屉（点节点开；纯显示、零请求）
+      '.dshmind-graphWrap{position:relative;background:var(--mk-bg);border:.5px solid var(--mk-bd);border-radius:12px}',
+      '.dshmind-gDrawer{position:absolute;top:10px;right:10px;width:252px;max-height:calc(100% - 20px);overflow:auto;',
+      'background:var(--mk-bg2);border:.5px solid var(--mk-bd);border-radius:10px;padding:11px 12px;font-size:11.5px;',
+      'color:var(--mk-tx2)}',
+      '.dshmind-gDrawer h5{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--mk-tx);font-weight:600}',
+      '.dshmind-gDrawerRow{display:flex;gap:8px;margin-top:6px}',
+      '.dshmind-gDrawerRow b{flex:none;width:46px;color:var(--mk-tx3);font-weight:400}',
+      '.dshmind-gLinks{margin-top:9px;padding-top:8px;border-top:.5px solid var(--mk-bd);display:flex;',
+      'flex-direction:column;gap:4px}',
+      '.dshmind-gLink{display:flex;align-items:center;gap:6px}',
+      '.dshmind-gNodeOn circle{stroke:var(--mk-tx);stroke-width:1.7}',
+      '.dshmind-gNodeOff{opacity:.12}',
+      '.dshmind-gEdgeOff{opacity:.05}',
+      '.dshmind-graphNote{color:var(--mk-tx3);line-height:1.7}',
+
+      // ══ 视觉打磨（2026-10-13 · 把还没统一的老组件收进同一套间距/字阶/卡片语言）══════
+      // 这一层做两件事：**统一**（间距 4/8/12/16 · 圆角 12/10/8/999 · 字阶 16/13/12/11/10.5）
+      // 与**加层次**（卡片 → 子卡 → 徽章三层；颜色只用于「出事了」）。
+      // 不动任何被断言钉住的行为口径：`.dshmind-readoutVal` 不加 ellipsis、`.dshmind-page` 只许一处、
+      // `.dshmind-auditScroll` 的 max-height/overflow/滚动条不动。
+
+      // 分区头：标题独占一行 + 一条发丝线；读数靠右（层次：谁重要谁在上）
+      '.dshmind-secHead{align-items:baseline;gap:9px;padding-bottom:7px;border-bottom:.5px solid var(--mk-bd)}',
+      '.dshmind-secHint{font-weight:400;opacity:.85}',
+      '.dshmind-secCount{font-variant-numeric:tabular-nums}',
+
+      // 三级容器：卡片（.dshmind-sec）→ 子卡（行/块）→ 徽章；子卡统一间距与悬停
+      // ⚠️ 2026-10-13 晚第二轮：**列表用网格铺满**（原来一律 `flex-direction:column` 单列）。
+      // 单列 + 正文限行宽（--mk-measure）在宽屏上的结果就是「每张卡右半边空着」——
+      // 主权者原话「面板右面空白一大堆太丑了」。改成每列**不低于 420px** 的自动网格：
+      // 窄屏自动回落单列（不会把长描述挤成一面墙），宽屏 2~3 列铺满、卡内文字自然填满卡片。
+      '.dshmind-nodes,.dshmind-reviews,.dshmind-bus{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));',
+      'gap:10px;align-items:start}',
+      '.dshmind-decide,.dshmind-answers{gap:9px}',
+      '.dshmind-decideRow,.dshmind-node,.dshmind-review,.dshmind-busRow,.dshmind-answer{',
+      'transition:border-color .12s ease,background .12s ease}',
+      '.dshmind-decideRow:hover,.dshmind-node:hover,.dshmind-review:hover,.dshmind-busRow:hover{',
+      'border-color:var(--mk-ac)}',
+
+      // 徽章与 chip：药丸 + 淡色（只读投影不该花花绿绿；颜色只留给"出事了"）
+      '.dshmind-badge{display:inline-flex;align-items:center;height:18px;padding:0 8px;border-radius:999px;',
+      'font-size:10.5px;line-height:1;border:.5px solid currentColor;opacity:.92}',
+      '.dshmind-chip{display:inline-flex;align-items:center;height:18px;padding:0 8px;border-radius:999px;',
+      'font-size:10.5px;line-height:1;background:var(--mk-bg2);border:.5px solid var(--mk-bd);color:var(--mk-tx2)}',
+
+      // 判据 / 元信息：小字、贴近、可换行不裁切
+      '.dshmind-meta{gap:10px;font-size:11px;color:var(--mk-tx3);flex-wrap:wrap}',
+      // 判据：**键与值同一行**（旧版竖成两行，每张卡白多一行高）
+      '.dshmind-criteria{display:flex;gap:6px;align-items:baseline;font-size:11.5px;color:var(--mk-tx2);line-height:1.65}',
+      '.dshmind-criteriaVal{overflow-wrap:anywhere}',
+      '.dshmind-chips{gap:5px;flex-wrap:wrap}',
+      '.dshmind-lock{font-size:10.5px;color:var(--mk-tx3)}',
+
+      // 命令块：等宽 + 可选中 + 左强调线（只读面板给的是**可拿走的文本**，不是按钮）
+      '.dshmind-cmd{display:block;margin-top:7px;padding:7px 10px;border-radius:8px;background:var(--mk-bg2);',
+      'border:.5px solid var(--mk-bd);border-left:2px solid var(--mk-ac);',
+      'font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11.5px;line-height:1.6;',
+      'color:var(--mk-tx);white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}',
+
+      // 折叠钮：无底无框，只有指针与下划线（与只读气质一致）
+      '.dshmind-toggle,.dshmind-descToggle{color:var(--mk-ac);font-size:11.5px;cursor:pointer;background:none;',
+      'border:0;padding:2px 0}',
+      '.dshmind-toggle:hover,.dshmind-descToggle:hover{text-decoration:underline}',
+
+      // 会审：三态徽章四色 + 答案块做成子卡
+      '.dshmind-verdict{display:inline-flex;align-items:center;height:19px;padding:0 9px;border-radius:999px;',
+      'font-size:11px;border:.5px solid currentColor}',
+      '.dshmind-verdictPass{color:var(--mk-ok)}',
+      '.dshmind-verdictFail{color:var(--mk-bad)}',
+      '.dshmind-verdictUnverified{color:var(--mk-warn)}',
+      '.dshmind-verdictNone{color:var(--mk-tx3)}',
+      '.dshmind-answer{padding:10px 12px}',
+      '.dshmind-answerHead{font-size:11.5px;color:var(--mk-tx2);margin-bottom:5px}',
+      '.dshmind-answerBody{font-size:12px;color:var(--mk-tx2);line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}',
+      '.dshmind-answerSummary{font-size:11.5px;color:var(--mk-tx3)}',
+      '.dshmind-counter,.dshmind-divergence,.dshmind-consensus{font-size:11.5px;color:var(--mk-tx2)}',
+      '.dshmind-anomaly{font-size:11.5px;color:var(--mk-warn)}',
+
+      // 消息总线：元信息退到 11px 淡色；正文换行口径不动
+      '.dshmind-busRow{padding:9px 12px}',
+      '.dshmind-busMeta{font-size:10.5px;color:var(--mk-tx3);gap:8px;flex-wrap:wrap}',
+      '.dshmind-busTextWrap{margin-top:4px}',
+      '.dshmind-busMsgs{gap:8px}',
+
+      // 审计流：**保留原来的四列 grid**（时刻 / 档位 / 动作 / 主体 150px 靠右）。
+      // ⚠️ 2026-10-13 晚自我订正：上一轮我在这里加了 `display:flex` 覆盖，把 grid 顶掉了 ⇒
+      // 主体不再靠右、行右半边空着，而 harness 那条「四列 grid」断言查的是**源码里的旧规则**、
+      // 于是一直绿着（**假绿**）。现在只动配色与内距，**不改列定义** ⇒ 断言＝生效值。
+      '.dshmind-auditRow{gap:10px;padding:5px 10px;font-size:11.5px;border-radius:6px}',
+      '.dshmind-auditRow:hover{background:var(--mk-bg2)}',
+      '.dshmind-auditAction{font-size:11px;color:var(--mk-tx2)}',
+      '.dshmind-auditWho{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10.5px;',
+      'color:var(--mk-tx3);text-align:right;overflow-wrap:anywhere}',
+      '.dshmind-auditHint{font-size:10.5px;color:var(--mk-tx3)}',
+      '.dshmind-auditFull{border-left-color:var(--mk-ac)}',
+      '.dshmind-auditMid{border-left-color:var(--mk-tx3)}',
+      '.dshmind-auditLow{border-left-color:transparent;opacity:.72}',
+
+      // 任务/会审卡内部：标题位与元信息分层
+      '.dshmind-nodeTop{gap:7px;flex-wrap:wrap;align-items:center}',
+      // 卡片的**第一行**＝身份行：左徽章 + 等宽 id，右对齐元信息（设计稿的卡片解剖）
+      '.dshmind-cardId{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10.5px;',
+      'color:var(--mk-tx3);overflow-wrap:anywhere}',
+      '.dshmind-cardMeta{display:flex;gap:9px;flex-wrap:wrap;margin-left:auto;font-size:11px;color:var(--mk-tx3)}',
+      '.dshmind-nodeTitleFull{line-height:1.6}',
+      '.dshmind-nodeTitleClamped{line-height:1.65}',
+      '.dshmind-nodePending,.dshmind-nodeEscalated{font-size:11.5px}',
+      '.dshmind-reviewTop{gap:7px;flex-wrap:wrap;align-items:center}',
+
+      // 项目 chip 与页脚
+      '.dshmind-projChip,.dshmind-projChipOn{height:22px;line-height:22px;border-radius:999px;',
+      'transition:border-color .12s ease}',
+      '.dshmind-projChip:hover{border-color:var(--mk-ac);color:var(--mk-ac)}',
+      '.dshmind-foot{font-size:10.5px;color:var(--mk-tx3);border-top:.5px solid var(--mk-bd);padding-top:10px}',
+
+      // ── 铺满之后的两条收口（2026-10-13 晚）────────────────────────────────
+      // ① **行长**：布局吃满宽度，但**正文**不许跟着无限变宽（一行 200 字读不动）。
+      //    注意 `--mk-measure` **不管命令块**：命令块是等宽短行，吃满卡片反而更好看、也更像"可复制的文本块"。
+      '.dshmind-nodeTitleFull,.dshmind-nodeTitleClamped,.dshmind-nodeTitleOpen,.dshmind-criteria,',
+      '.dshmind-answerBody,.dshmind-busText,.dshmind-graphNote,.dshmind-attnNode{',
+      'max-width:var(--mk-measure)}',
+      // ② **小块吃满**：统计砖与构成图跟着铺满（右端不再空一截）。
+      //    构成图给 `minmax(360px,1fr)`：宽屏正好三张一行（三张构成图是"一组"，
+      //    落单的那张会变成"孤卡 + 一大片空白"——这才是真正的留空来源）。
+      '.dshmind-tiles{grid-template-columns:repeat(auto-fit,minmax(138px,1fr))}',
+      '.dshmind-vizGrid{grid-template-columns:repeat(auto-fit,minmax(360px,1fr))}',
+
+      // ══ 视觉打磨 v2.1（2026-10-13 深夜 · 设计稿 v2.1 落地实机）════════════════
+      // 这一层**只加表现，不动口径**：不碰任何被断言钉住的行为（滚动作用域、
+      // 值不裁切、审计四列、page 只许一处 ……），全部是增量规则 —— 删掉这一层
+      // 面板回到上一版，功能分毫不损。与设计稿 v2.1（mind-panel-redesign）同源：
+      //  ① 层级（双层柔影：贴边 1px + 远处 26px 低透明）；
+      //  ② 反馈（统计砖/构成图悬浮微抬、边框提亮；图谱节点悬浮发光）；
+      //  ③ 微动效（缺口虚线缓慢流动——实线无 dasharray，动画对其无效，天然安全）；
+      //  ④ 可达性（键盘焦点环：只读面板的按钮/折叠钮也该能被 Tab 看见）。
+      // 阴影色用固定深色而不是令牌：两层柔影要的是"低透明度的深"，各主题通用。
+      '.dshmind-nav,.dshmind-sec,.dshmind-tl,.dshmind-graphWrap,.dshmind-tile,.dshmind-vizCard{',
+      'box-shadow:0 1px 2px rgba(9,12,20,.10),0 10px 26px -18px rgba(9,12,20,.55)}',
+      // 悬浮反馈：抬 1px（不是设计稿的 2px——实机卡片更小、2px 会跳）。
+      '.dshmind-tile,.dshmind-vizCard{transition:border-color .15s ease,box-shadow .15s ease,transform .15s ease}',
+      '.dshmind-tile:hover,.dshmind-vizCard:hover{transform:translateY(-1px);border-color:var(--mk-ac,#5b8def);',
+      'box-shadow:0 1px 2px rgba(9,12,20,.10),0 14px 30px -18px rgba(9,12,20,.65)}',
+      // 甜甜圈：一记很轻的投影，把图从"贴在纸上"变成"浮在纸上"。
+      '.dshmind-donut{filter:drop-shadow(0 4px 10px rgba(9,12,20,.22))}',
+      // 键盘焦点环：与设置页 __btn 同款（2px 主色 + 1px 外距），补齐看板侧的缺口。
+      '.dshmind-navBtn,.dshmind-btn,.dshmind-toggle,.dshmind-descToggle,.dshmind-projChip,',
+      '.dshmind-projChipOn:focus-visible{outline:2px solid var(--mk-ac,#5b8def);outline-offset:2px}',
+      // 侧栏当前页：左侧 2px 强调色内嵌条（设计稿导航同款；不动原底色/字色）。
+      '.dshmind-navBtnOn{box-shadow:inset 2px 0 0 var(--mk-ac,#5b8def)}',
+      '.dshmind-navBtn,.dshmind-btn{transition:background-color .15s,color .15s,border-color .15s}',
+      // 图谱：缺口虚线缓慢流动（给"这是没接上的活口"一点方向感）。
+      // stroke-dashoffset 动画只对带 dasharray 的线可见 ⇒ 实线（已接线）不受影响。
+      '.dshmind-gEdge[data-wired="0"]{animation:dshmind-flow 2.2s linear infinite}',
+      '@keyframes dshmind-flow{to{stroke-dashoffset:-14}}',
+      // 图谱节点：悬浮发光 + 选中节点常亮光晕（circle 的 filter 不影响文本层）。
+      '.dshmind-gNode:hover circle{filter:brightness(1.18) drop-shadow(0 0 5px rgba(91,141,239,.55))}',
+      '.dshmind-gNodeOn circle{filter:drop-shadow(0 0 6px rgba(91,141,239,.6))}',
+      // 详情抽屉：淡入下移一眼（0.18s，快到不挡手、慢到看得见）。
+      '.dshmind-gDrawer{animation:dshmind-in .18s ease-out}',
+      '@keyframes dshmind-in{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}',
 
     ].join('');
 
@@ -1222,6 +1648,683 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dshmind-secBody' }, body),
       ]);
     }
+
+    // ── 分页外壳与可视化（2026-10-13 重做）────────────────────────────────────
+    /**
+     * 七页：id / 标签 / 计数（计数为 `null` 就不画徽章——「没数据就别占位置」）。
+     * **顺序＝注意力顺序**：总览（要我做什么）→ 图谱（组织长什么样）→ 任务/会审/总线/审计（明细）→ 记忆。
+     */
+    function 页清单(ctx) {
+      return [
+        { id: 'overview', 名: '总览' },
+        { id: 'graph', 名: '图谱' },
+        { id: 'tasks', 名: '任务', 计数: ctx.tasks ? ctx.tasks.length : null },
+        { id: 'reviews', 名: '会审', 计数: ctx.会审 ? ctx.会审.length : null },
+        { id: 'bus', 名: '总线', 计数: ctx.总线 ? ctx.总线.length : null },
+        { id: 'audit', 名: '审计' },
+        { id: 'memory', 名: '记忆', 计数: ctx.记忆 ? ctx.记忆.存量 : null },
+      ];
+    }
+
+    function 导航(ctx) {
+      var 现在 = 当前页();
+      return h('nav', { className: 'dshmind-nav', 'data-dshmind': 'nav' }, [
+        h('div', { key: 'brand', className: 'dshmind-navBrand' }, [
+          h('b', { key: 'b' }, '心智 · 数字组织'),
+          h('span', { key: 's' }, '唯一投影视图（只读）'),
+        ]),
+      ].concat(页清单(ctx).map(function (p) {
+        return h('button', {
+          key: p.id,
+          type: 'button',
+          className: 'dshmind-navBtn' + (p.id === 现在 ? ' dshmind-navBtnOn' : ''),
+          'data-page': p.id,
+          'aria-current': p.id === 现在 ? 'page' : null,
+          onClick: function () { 切页(p.id); },
+        }, [
+          h('span', { key: 'n' }, p.名),
+          p.计数 === null || p.计数 === undefined
+            ? null
+            : h('span', { key: 'c', className: 'dshmind-navCount dshmind-mono' }, String(p.计数)),
+        ]);
+      })));
+    }
+
+    /**
+     * 注意力区（2026-10-13 重做·设计稿的首屏第一块）：**3 秒内回答「现在要我做什么」**。
+     *
+     * 三个来源，全部由**已到手的投影**现算（不新取数、不发请求）：
+     *  ① 待你决定清单——空就给一条平静绿带，而不是留一块空白（空白让人以为面板坏了）；
+     *  ② 安全类探针异常——`恒绿` 也算异常：「从来没红过」可能意味着探针失灵；
+     *  ③ **挂有待决说明、但状态不是「待决」的节点**：现行收集口径（`收集待你决定`）只收
+     *     「状态＝待决」的节点，这类节点（负责人消亡后待裁决处置的存档节点等）**会漏出待决清单**——
+     *     而它们恰恰是「需要人拍板」的那一类。这一条是设计稿里唯一新增的**判据性内容**，
+     *     不是装饰：漏掉的正是最需要被看见的。
+     */
+    function 状态区(ctx) {
+      var 待你决定 = ctx.待你决定 || [];
+      var 探针 = ctx.view && obj(ctx.view.状态条) ? obj(ctx.view.状态条.探针) : null;
+      var 挂待决 = (ctx.tasks || []).filter(function (n) { return n.待决原因 && n.状态 !== '待决'; });
+      var 卡 = [];
+      if (!待你决定.length) {
+        卡.push(h('div', { key: 'clear', className: 'dshmind-attnClear' }, [
+          h('span', { key: 'i' }, '✓'),
+          h('span', { key: 't' }, '现在没有需要你拍板的事'),
+        ]));
+      } else {
+        var 计数 = {};
+        待你决定.forEach(function (x) { 计数[x.类型] = (计数[x.类型] || 0) + 1; });
+        卡.push(h('div', { key: 'decide', className: 'dshmind-attnCard dshmind-attnCardBad' }, [
+          h('h4', { key: 'h' }, [h('span', { key: 'i' }, '⚑'), h('span', { key: 't' }, 待你决定.length + ' 件事等你拍板')]),
+          h('p', { key: 'p' }, Object.keys(计数).map(function (k) { return k + ' ' + 计数[k]; }).join('　·　')
+            + '　——　明细与可敲的命令见下方「待你决定」'),
+        ]));
+      }
+      if (探针 && (arr(探针.见红).length > 0 || 探针.恒红 === true || 探针.恒绿 === true)) {
+        var 见红 = arr(探针.见红).filter(Boolean);
+        var 说明 = 见红.length ? '见红：' + 见红.join('、')
+          : 探针.恒红 === true ? '四道封闭探针全部恒红：哨兵可能已经卡死，别当成「刚好都出事」。'
+            : '四道封闭探针全部恒绿 ——「从来没红过」本身是异常信号：可能探针失灵，而不是一切正常。';
+        卡.push(h('div', {
+          key: 'probe',
+          className: 'dshmind-attnCard' + (见红.length ? ' dshmind-attnCardBad' : ''),
+        }, [
+          h('h4', { key: 'h' }, [h('span', { key: 'i' }, '⚠'), h('span', { key: 't' }, '安全类探针')]),
+          h('p', { key: 'p' }, 说明),
+          h('div', { key: 'c', className: 'dshmind-gLink' }, [
+            h('span', { key: 'x', className: 'dshmind-mono' }, '/mind-guard probe'),
+          ]),
+        ]));
+      }
+      if (挂待决.length) {
+        卡.push(h('div', { key: 'orphan', className: 'dshmind-attnCard' }, [
+          h('h4', { key: 'h' }, [
+            h('span', { key: 'i' }, '⚠'),
+            h('span', { key: 't' }, 挂待决.length + ' 个节点挂有待决说明，但不在待决清单里'),
+          ]),
+          h('p', { key: 'p' }, '现行收集口径只收「状态＝待决」的节点，这类会漏出去。它们等你裁决处置'
+            + '（作废 / 保留存档）。**原文照给，不截断**——裁决要看的就是那句话。'),
+          h('div', { key: 'n', className: 'dshmind-attnNodes' }, 挂待决.map(function (n, i) {
+            return h('span', { key: 'x' + i, className: 'dshmind-attnNode', title: n.待决原因 },
+              n.id + '　' + n.待决原因);
+          })),
+        ]));
+      }
+      return h('div', { key: 'attn', className: 'dshmind-attn' }, 卡);
+    }
+
+    /**
+     * 分页外壳：把扁平的 children 拆成「导航 ＋ 七个页容器 ＋ 页脚」。
+     *
+     * 拆法按**节点自身的标识**（`type` / `key` / `className`），**不按位置**：位置会随
+     * 上面增删一行而漂，而 key 是渲染层自己写死的契约。
+     *
+     * 非当前页**只收显示、不收节点**（`display:none` + 类名）：渲染树是断言的读面，
+     * 「会审/任务图/审计流」那一批断言守的是内容口径（不静默截断、盲评遮罩、档位分级），
+     * 与它在第几页无关 —— 只渲染当前页会让那批断言在默认页面上全部落空。
+     */
+    function 分页外壳(children, ctx) {
+      var 样式 = [], 公告 = [], 段 = [], 头 = null, 页脚 = null;
+      (children || []).forEach(function (n) {
+        if (!n || typeof n !== 'object') return;
+        var props = n.props || {};
+        if (n.type === 'style') { 样式.push(n); return; }
+        if (props.className === 'dshmind-notice') { 公告.push(n); return; }
+        if (props.key === 'hero') { 头 = n; return; }
+        if (n.type === 'section') { 段.push(n); return; }
+        if (props.key === 'foot') { 页脚 = n; return; }
+      });
+      var 现在 = 当前页();
+      var 页体 = {
+        // ① 总览＝注意力顺序：状态头 → **注意力区（要我做什么）** → 数字 → 「待你决定」明细 → 最近动态
+        overview: [头, 状态区(ctx), 可视化块(ctx), 段[0] || null, 动态时间线(ctx)],
+        graph: 图谱页(ctx),
+        tasks: [段[2] || null],
+        reviews: [段[1] || null],
+        bus: [段[4] || null],
+        audit: [段[3] || null],
+        memory: 记忆页(ctx),
+      };
+      var 页节点 = 页清单(ctx).map(function (p) {
+        var 在 = p.id === 现在;
+        return h('div', {
+          key: 'page-' + p.id,
+          className: 'dshmind-pageBox' + (在 ? '' : ' dshmind-pageBoxOff'),
+          'data-dshmind-page': p.id,
+          style: 在 ? null : { display: 'none' },
+        }, 页体[p.id] || []);
+      });
+      return 样式.concat(公告, [
+        h('div', { key: 'shell', className: 'dshmind-shell' }, [
+          导航(ctx),
+          h('div', { key: 'pages', className: 'dshmind-pages' }, 页节点),
+        ]),
+      ], 页脚 ? [页脚] : []);
+    }
+
+    /**
+     * 甜甜圈：**不引任何图库**（本插件零依赖且不能编译），用 SVG 圆的 `stroke-dasharray` 画弧。
+     * 值为 0 的段跳过（0 度弧会画出一条看起来像数据的假线）。中心数字＝**该块自己的合计**。
+     */
+    function 甜甜圈(segs, size, thick) {
+      var 总 = 0, i;
+      for (i = 0; i < segs.length; i += 1) 总 += 段值(segs[i]);
+      var r = (size - thick) / 2;
+      var C = 2 * Math.PI * r;
+      var 偏移 = 0;
+      var 弧 = [];
+      for (i = 0; i < segs.length; i += 1) {
+        var 值 = 段值(segs[i]);
+        if (值 <= 0 || 总 <= 0) continue;
+        var 长 = 值 / 总 * C;
+        弧.push(h('circle', {
+          key: 'arc' + i, cx: size / 2, cy: size / 2, r: r, fill: 'none',
+          stroke: segs[i].色, strokeWidth: thick,
+          strokeDasharray: 长.toFixed(2) + ' ' + (C - 长).toFixed(2),
+          strokeDashoffset: (-偏移).toFixed(2),
+          transform: 'rotate(-90 ' + (size / 2) + ' ' + (size / 2) + ')',
+        }));
+        偏移 += 长;
+      }
+      return h('svg', { className: 'dshmind-donut', width: size, height: size, viewBox: '0 0 ' + size + ' ' + size }, [
+        h('circle', {
+          key: 'bg', cx: size / 2, cy: size / 2, r: r, fill: 'none',
+          stroke: 'var(--dsw-alias-border-l2,#d3dcea)', strokeWidth: thick, opacity: 0.35,
+        }),
+      ].concat(弧, [
+        h('text', {
+          key: 'v', x: size / 2, y: size / 2 + 5, textAnchor: 'middle', fontSize: 17, fontWeight: 600,
+          fill: 'var(--dsw-alias-label-primary,#1a2233)',
+        }, String(总)),
+      ]));
+    }
+    /** 段的数值：非有限数按 0 算（投影脏值不许把图算崩）。 */
+    function 段值(s) { return s && typeof s.值 === 'number' && isFinite(s.值) ? s.值 : 0; }
+
+    function 图例(segs) {
+      var 总 = 0, i;
+      for (i = 0; i < segs.length; i += 1) 总 += 段值(segs[i]);
+      return h('div', { className: 'dshmind-legend' }, segs.map(function (s, i) {
+        return h('span', { key: 'l' + i, className: 'dshmind-legendRow' }, [
+          h('i', { key: 's', className: 'dshmind-swatch', style: { background: s.色 } }),
+          h('span', { key: 'n' }, s.名),
+          h('b', { key: 'v', className: 'dshmind-mono' }, String(段值(s))),
+          h('span', { key: 'p', className: 'dshmind-mono' }, 总 > 0 ? Math.round(段值(s) / 总 * 100) + '%' : '—'),
+        ]);
+      }));
+    }
+
+    /** 一张可视化卡：左图右例。**图与例用同一份 segs**（口径单源，不许两处各数一遍）。 */
+    function 可视化卡(标题, 副题, segs) {
+      return h('div', { className: 'dshmind-vizCard' }, [
+        h('div', { key: 'l', style: { flex: 'none' } }, 甜甜圈(segs, 96, 12)),
+        h('div', { key: 'r', style: { minWidth: 0, flex: 1 } }, [
+          h('div', { className: 'dshmind-vizTitle' }, 标题 + (副题 ? '　' + 副题 : '')),
+          图例(segs),
+        ]),
+      ]);
+    }
+
+    /**
+     * 总览的可视化块：统计砖 ＋ 三个构成图 ＋ 审计节律条。
+     *
+     * **没数据的块整块不画**（Batch 9 纪律）：能力/岗位没投影过来时，那块砖与那张图都不出现，
+     * 而不是画一张空图让读的人以为「组织里一张卡都没有」。
+     */
+    function 可视化块(ctx) {
+      var 任务袋 = ctx.view ? obj(ctx.view.任务) : null;
+      var 计数 = 任务袋 ? obj(任务袋.计数) : null;
+      var 接线 = 接线读数(ctx.能力, ctx.岗位);
+      var 记忆 = ctx.记忆;
+      var 任务总 = 任务袋 && typeof 任务袋.总数 === 'number' ? 任务袋.总数 : null;
+      var 砖 = [
+        ctx.审计总条数 ? { k: '审计条目（只增）', v: ctx.审计总条数, d: '近 ' + (ctx.audit ? ctx.audit.length : 0) + ' 条在「审计」页' } : null,
+        记忆 ? { k: '记忆存量', v: 记忆.存量, d: 记忆.新增 === null ? '' : '近 ' + (记忆.窗口天 || 7) + ' 天 +' + 记忆.新增 } : null,
+        任务总 === null ? null : { k: '任务节点', v: 任务总, d: 计数 ? '进行中 ' + (计数.进行中 || 0) + ' · 已交卷 ' + (计数.已交卷 || 0) : '' },
+        接线 ? { k: '能力卡', v: ctx.能力.length, d: '岗位接线 ' + 接线.接线.length + '/' + 接线.适用边 + '（' + 接线.接线率 + '%）' + (接线.缺口.length ? ' ⚠ 有缺口' : ' ✓') } : null,
+      ].filter(Boolean);
+      var 卡 = [];
+      if (计数) {
+        卡.push(可视化卡('任务状态', '共 ' + (任务总 === null ? '—' : 任务总) + ' 节点', [
+          { 名: '进行中', 值: 计数.进行中 || 0, 色: '#5b8def' },
+          { 名: '已交卷', 值: 计数.已交卷 || 0, 色: '#d4a053' },
+          { 名: '已结账', 值: 计数.已结账 || 0, 色: '#3fb27f' },
+          { 名: '待决', 值: 计数.待决 || 0, 色: '#e5534b' },
+        ]));
+      }
+      if (记忆 && 记忆.按类) {
+        卡.push(可视化卡('记忆构成', 记忆.存量 === null ? '' : '共 ' + 记忆.存量 + ' 条', [
+          { 名: '经历', 值: 记忆.按类.经历, 色: '#4bb8c8' },
+          { 名: '知识', 值: 记忆.按类.知识, 色: '#a97bea' },
+          { 名: '偏好', 值: 记忆.按类.偏好, 色: '#d4a053' },
+        ]));
+      }
+      if (ctx.会审 && ctx.会审.length) {
+        var 过 = 0, 不过 = 0, 未验 = 0, 未知 = 0;
+        ctx.会审.forEach(function (r) {
+          if (r.复核三态 === '过') 过 += 1;
+          else if (r.复核三态 === '不过') 不过 += 1;
+          else if (r.复核三态 === '未验') 未验 += 1;
+          else 未知 += 1;
+        });
+        卡.push(可视化卡('会审复核结论', '共 ' + ctx.会审.length + ' 场', [
+          { 名: '过', 值: 过, 色: '#3fb27f' },
+          { 名: '不过', 值: 不过, 色: '#e5534b' },
+          { 名: '未验', 值: 未验, 色: '#7d8590' },
+          { 名: '未出结论', 值: 未知, 色: '#adb2b8' },
+        ]));
+      }
+      if (!砖.length && !卡.length) return null;
+      return h('div', { key: 'viz', className: 'dshmind-viz' }, [
+        砖.length ? h('div', { key: 'tiles', className: 'dshmind-tiles' }, 砖.map(function (t, i) {
+          return h('div', { key: 't' + i, className: 'dshmind-tile' }, [
+            h('div', { key: 'k', className: 'dshmind-tileK' }, t.k),
+            h('div', { key: 'v', className: 'dshmind-tileV dshmind-mono' }, t.v === null || t.v === undefined ? '—' : String(t.v)),
+            t.d ? h('div', { key: 'd', className: 'dshmind-tileD' }, t.d) : null,
+          ]);
+        })) : null,
+        卡.length ? h('div', { key: 'cards', className: 'dshmind-vizGrid' }, 卡) : null,
+        审计节律条(ctx),
+      ].filter(Boolean));
+    }
+
+    /**
+     * 审计节律条：把**已经到手的那几条审计**画成一格一条。
+     *
+     * ⚠️ 它的读数是「投影给了多少条」，**不是**账本总数（总数在标题里另说）：
+     * 一条一格，颜色按 动作/结果 分级（失败红、拦截黄、其余蓝）。这是**唯一一处界面自己数**，
+     * 所以在下面把口径写出来，免得读的人把节律条当全量分布。
+     */
+    function 审计节律条(ctx) {
+      var 行 = ctx.audit || [];
+      if (!行.length) return null;
+      var 计数 = { 状态变更: 0, 失败: 0, 拦截: 0, 其他: 0 };
+      var 格 = 行.map(function (r, i) {
+        var 失败 = r.结果 === '失败';
+        var 拦截 = r.动作 === '动作拦截' || r.结果 === '拒绝';
+        var 色 = 失败 ? '#e5534b' : 拦截 ? '#d4a053' : '#5b8def';
+        if (失败) 计数.失败 += 1; else if (拦截) 计数.拦截 += 1; else if (r.动作 === '状态变更') 计数.状态变更 += 1; else 计数.其他 += 1;
+        return h('i', {
+          key: 'b' + i, style: { background: 色 },
+          title: shortTime(r.时间) + ' · ' + (r.动作 || '') + ' · ' + (源主体短(r.主体)) + ' · ' + (r.结果 || ''),
+        });
+      });
+      return h('div', { key: 'act', style: { marginTop: 8 } }, [
+        h('div', { key: 'h', className: 'dshmind-tileK' }, '审计节律（一格一条，共 ' + 行.length + ' 条；全量 ' + ctx.审计总条数 + ' 条）'),
+        h('div', { key: 'bar', className: 'dshmind-actbar' }, 格),
+        h('div', { key: 'lg', className: 'dshmind-legend', style: { flexDirection: 'row', gap: 12, marginTop: 6 } }, [
+          h('span', { key: 'a', className: 'dshmind-legendRow' }, ['状态变更 ' + 计数.状态变更]),
+          h('span', { key: 'b', className: 'dshmind-legendRow' }, ['失败 ' + 计数.失败]),
+          h('span', { key: 'c', className: 'dshmind-legendRow' }, ['拦截 ' + 计数.拦截]),
+          h('span', { key: 'd', className: 'dshmind-legendRow' }, ['其他 ' + 计数.其他]),
+        ]),
+      ]);
+    }
+
+    /**
+     * 最近动态：把审计尾翻译成「人话一行」——**失败与拦截优先上色**，
+     * 因为它答的是「我说过的做完了，账上对得上吗」。
+     */
+    function 动态时间线(ctx) {
+      var 行 = (ctx.audit || []).slice(0, 8);
+      if (!行.length) return null;
+      return h('div', { key: 'tl', className: 'dshmind-tl' }, 行.map(function (r, i) {
+        var 失败 = r.结果 === '失败';
+        var 拦截 = r.动作 === '动作拦截' || r.结果 === '拒绝';
+        return h('div', {
+          key: 'r' + i,
+          className: 'dshmind-tlRow' + (失败 ? ' dshmind-tlBad' : 拦截 ? ' dshmind-tlWarn' : ''),
+        }, [
+          h('span', { key: 't', className: 'dshmind-tlTime dshmind-mono' }, 短时刻(r.时间) || '—'),
+          h('span', { key: 'i', className: 'dshmind-tlIcon' }, 失败 ? '✗' : 拦截 ? '⛔' : r.动作 === '状态变更' ? '·' : '•'),
+          h('span', { key: 'b' }, (r.动作 || '记录') + '　' + (源主体短(r.主体) || '') + (r.结果 ? '　' + r.结果 : '')),
+        ]);
+      }));
+    }
+    /** 主体短名：`session-<uuid>` 长达 38 字符，列表里只留前 12 位（全名在 title 上）。 */
+    function 源主体短(主体) {
+      var s = line(主体, '');
+      if (!s) return '';
+      return s.length > 12 ? s.slice(0, 12) : s;
+    }
+
+    // ── 图谱（岗位 × 能力接线）─────────────────────────────────────────────────
+    /**
+     * 布局：**两列定宽 + 纵向均分**（岗位左、能力右）。不用力导向——
+     * 力导向每次渲染位置都变，读的人记不住「上次那个红点在哪」，而这张图上
+     * 「哪条红线在哪个岗位」正是要一眼看出来的东西。
+     */
+    function 图谱坐标(岗位, 能力) {
+      // 两列拉开到画布两侧（2026-10-13 晚第二轮）：原来 120/540 挤在左边，
+      // 宽屏上卡片右 1/3 全空（主权者：「面板右面空白一大堆」）。现在 150/760，标签向右吃到边。
+      var 宽 = 1240;
+      var 高 = Math.max(240, 能力.length * 34 + 48);
+      var pos = {};
+      var i;
+      for (i = 0; i < 岗位.length; i += 1) {
+        pos['角色:' + 岗位[i].id] = {
+          x: 150,
+          y: 岗位.length <= 1 ? 高 / 2 : 46 + (高 - 92) * i / (岗位.length - 1),
+        };
+      }
+      for (i = 0; i < 能力.length; i += 1) {
+        pos['能力:' + 能力[i].id] = {
+          x: 760,
+          y: 能力.length <= 1 ? 高 / 2 : 30 + (高 - 60) * i / (能力.length - 1),
+        };
+      }
+      return { 宽: 宽, 高: 高, pos: pos };
+    }
+
+    /**
+     * 图谱页：岗位 × 能力的接线图 ＋ 缺口清单。
+     *
+     * **为什么记忆/任务不在这一页的图里**（如实标注，不许画假边）：这一版的投影只给到
+     * 记忆的**按类计数**，条目级（含 `来源引用` 血缘）还没开——`memory.query` 走契约B 要记审计，
+     * 而工作台是 3 秒轮询的投影，挂上去会把审计链灌成流水。要画「教训 → 能力卡」那条血缘，
+     * 得先有一条**免审计的浅读面**（`memory.stats` 同款）＋「标题算不算内容」这个披露口径的裁决。
+     * 在那之前，宁可不画，也不画一条自己编的关系。
+     */
+    function 图谱页(ctx) {
+      var 岗位 = ctx.岗位, 能力 = ctx.能力, 接线 = 接线读数(能力, 岗位);
+      if (!岗位 || !能力) {
+        return [h('div', { key: 'nog', className: 'dshmind-empty' },
+          '这次投影没带能力/岗位接线（宿主没给 ⇒ 不装懂）：图谱要的是 `capability.list` 与 `registry.list` 两份只读真源。')];
+      }
+      var 坐标 = 图谱坐标(岗位, 能力);
+      var 引用表 = {};
+      岗位.forEach(function (r) { 引用表[r.id] = r.能力引用; });
+      // 邻接表（选中态要高亮「它的邻居」）：键一律与 `data-node` 同源，别在两处各拼一遍。
+      var 邻接 = {};
+      function 连(a, b) {
+        (邻接[a] = 邻接[a] || {})[b] = 1;
+        (邻接[b] = 邻接[b] || {})[a] = 1;
+      }
+      能力.forEach(function (c) { c.适用岗位.forEach(function (role) { 连('能力:' + c.id, '角色:' + role); }); });
+      var 选中 = 图谱选中();
+      var 类名 = function (key) {
+        if (!选中) return 'dshmind-gNode';
+        if (key === 选中) return 'dshmind-gNode dshmind-gNodeOn';
+        return 邻接[选中] && 邻接[选中][key] ? 'dshmind-gNode' : 'dshmind-gNode dshmind-gNodeOff';
+      };
+      var 边类名 = function (a, b) {
+        if (!选中) return 'dshmind-gEdge';
+        return (a === 选中 || b === 选中) ? 'dshmind-gEdge' : 'dshmind-gEdge dshmind-gEdgeOff';
+      };
+      var 边 = [], 节点 = [], i, j;
+      // ⚠️ 闭包要**按节点绑定**：`var` 是函数作用域，直接在循环里写
+      // `onClick: function () { 切图谱选中(r键) }` 会让所有节点共享同一个变量 ⇒
+      // 点哪个都选到最后一个（2026-10-13 首跑被 ⑪e 当场抓出）。工厂把键固化进参数。
+      var 点击器 = function (键) { return function () { 切图谱选中(键); }; };
+      for (i = 0; i < 岗位.length; i += 1) {
+        var r = 岗位[i], rp = 坐标.pos['角色:' + r.id], r键 = '角色:' + r.id;
+        var 实例 = 实例计数Of(ctx.实例计数, r.id);
+        节点.push(h('g', {
+          key: 'r' + i, className: 类名(r键), 'data-node': r键,
+          onClick: 点击器(r键),
+        }, [
+          h('circle', { key: 'c', cx: rp.x, cy: rp.y, r: 12, fill: '#5b8def', fillOpacity: 0.9 }),
+          h('text', { key: 't', x: rp.x + 17, y: rp.y + 4, className: 'dshmind-gLabelStrong' }, r.id),
+          h('text', { key: 's', x: rp.x + 17, y: rp.y + 17, className: 'dshmind-gLabel' },
+            '在岗 ' + 实例.在岗 + (实例.封存 ? ' · 封存 ' + 实例.封存 : '') + ' · 接线 ' + (r.能力引用 ? r.能力引用.length : 0)),
+        ]));
+      }
+      for (i = 0; i < 能力.length; i += 1) {
+        var c = 能力[i], cp = 坐标.pos['能力:' + c.id], c键 = '能力:' + c.id;
+        var 色 = c.来源 === '自治' ? '#a97bea' : c.来源 === '出厂' ? '#3fb27f' : '#7d8590';
+        节点.push(h('g', {
+          key: 'c' + i, className: 类名(c键), 'data-node': c键,
+          onClick: 点击器(c键),
+        }, [
+          h('circle', { key: 'o', cx: cp.x, cy: cp.y, r: 8, fill: 色, fillOpacity: 0.9 }),
+          h('text', { key: 't', x: cp.x + 13, y: cp.y + 4, className: 'dshmind-gLabel' }, c.id),
+        ]));
+      }
+      for (i = 0; i < 能力.length; i += 1) {
+        for (j = 0; j < 能力[i].适用岗位.length; j += 1) {
+          var 岗位名 = 能力[i].适用岗位[j];
+          var A = 坐标.pos['角色:' + 岗位名], B = 坐标.pos['能力:' + 能力[i].id];
+          if (!A || !B) continue;
+          var 已接 = (引用表[岗位名] || []).indexOf(能力[i].id) >= 0;
+          // 单段二次曲线 + **每条边给一点纵向错位**：48 条边全走同一根中线会结成死结
+          // （截图实测）。错位按边序取 ±2 档，够把线束摊开成"扇"，又不至于看着乱。
+          var 中线 = (A.y + B.y) / 2 + ((i % 5) - 2) * 5;
+          var 控制x = (A.x + B.x) / 2;
+          var 相关 = !!选中 && (('角色:' + 岗位名) === 选中 || ('能力:' + 能力[i].id) === 选中);
+          边.push(h('path', {
+            key: 'e' + i + '-' + j,
+            className: 边类名('角色:' + 岗位名, '能力:' + 能力[i].id),
+            'data-wired': 已接 ? '1' : '0',
+            d: 'M' + A.x + ' ' + A.y + ' Q' + 控制x + ' ' + 中线 + ' ' + B.x + ' ' + B.y,
+            style: 已接
+              // 默认**压低不透明度**：48 条线是「纹理」不是主角；选中/悬停时才亮起来
+              ? { stroke: '#3fb27f', strokeWidth: 相关 ? 1.7 : 1, opacity: 相关 ? 0.95 : 0.42 }
+              : { stroke: '#e5534b', strokeWidth: 相关 ? 1.8 : 1.2, strokeDasharray: '4 3', opacity: 相关 ? 0.95 : 0.75 },
+          }));
+        }
+      }
+      var 缺口榜 = 能力.map(function (c) {
+        var 缺 = c.适用岗位.filter(function (role) { return (引用表[role] || []).indexOf(c.id) < 0; });
+        return { id: c.id, 来源: c.来源, 适用: c.适用岗位, 缺: 缺 };
+      }).filter(function (x) { return x.缺.length > 0; }).sort(function (a, b) { return b.缺.length - a.缺.length; });
+
+      return [
+        h('div', { key: 'bar', className: 'dshmind-graphBar' }, [
+          h('span', { key: 'a', className: 'dshmind-badge', style: { color: '#3fb27f', borderColor: '#3fb27f' } }, '已接线 ' + 接线.接线.length),
+          h('span', { key: 'b', className: 'dshmind-badge', style: { color: 接线.缺口.length ? '#e5534b' : '#7d8590', borderColor: 接线.缺口.length ? '#e5534b' : '#7d8590' } }, '未接线 ' + 接线.缺口.length),
+          h('span', { key: 'c', className: 'dshmind-tileK' },
+            '适用边 ' + 接线.适用边 + ' 条 ⇒ 接线率 ' + (接线.接线率 === null ? '—' : 接线.接线率 + '%')
+            + '（自治卡 ' + 接线.自治接线 + '/' + 接线.自治适用 + '）'),
+        ]),
+        h('div', { key: 'wrap', className: 'dshmind-graphWrap' }, [
+          h('svg', {
+            key: 'svg', className: 'dshmind-graph',
+            viewBox: '0 0 ' + 坐标.宽 + ' ' + 坐标.高,
+            'data-dshmind': 'graph',
+            preserveAspectRatio: 'xMidYMid meet',
+          }, [
+            // 空白层：铺满画布、垫在节点下面。点空白 ⇒ 取消选中（见 清图谱选中 的注释）。
+            // `fill:'transparent'` 而不是 `none`：`none` 不接收指针事件。
+            h('rect', {
+              key: 'bg', 'data-graph-bg': '1',
+              x: 0, y: 0, width: 坐标.宽, height: 坐标.高, fill: 'transparent',
+              onClick: function () { 清图谱选中(); },
+            }),
+          ].concat(边, 节点)),
+          // 详情抽屉：点节点开（纯显示动作）。不选就不画 —— 不给一壳空抽屉。
+          选中 ? 图谱详情(选中, ctx, 引用表, 邻接) : null,
+        ]),
+        // 两段说明**并排**（各占一半）—— 单列时右半边空着（宽屏上很扎眼）
+        h('div', {
+          key: 'notes',
+          style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(380px,1fr))', gap: '10px', marginTop: 8 },
+        }, [
+          h('div', { key: 'note', className: 'dshmind-graphNote', style: { maxWidth: 'none' } },
+            '左列＝岗位卡（蓝）· 右列＝能力卡（紫＝自治／绿＝出厂）。绿实线＝岗位卡的 个体L2 真引用了这张卡；'
+            + '红虚线＝能力卡声明「适用这个岗位」但岗位卡里没有 ⇒ **成员实际看不到这张卡**（发卡 ≠ 接线）。'),
+          h('div', { key: 'mem', className: 'dshmind-graphNote', style: { maxWidth: 'none' } },
+            '记忆（按类）：' + (ctx.记忆 && ctx.记忆.按类
+              ? '经历 ' + (ctx.记忆.按类.经历 === null ? '—' : ctx.记忆.按类.经历)
+                + ' · 知识 ' + (ctx.记忆.按类.知识 === null ? '—' : ctx.记忆.按类.知识)
+                + ' · 偏好 ' + (ctx.记忆.按类.偏好 === null ? '—' : ctx.记忆.按类.偏好)
+                + '　—　**条目级血缘（「教训立卡」）暂不上图**：它要一条免审计的条目浅读面（工作台是 3 秒轮询，'
+                + '走 memory.query 会把审计链灌成流水），且「标题算不算内容」需先定披露口径。宁可不画，不画编的关系。'
+              : '宿主没给按类计数 ⇒ 不画。')),
+        ]),
+        // 图例：把上面那句话里的颜色/线型**画出来**（文字解释留一处，图例只做对照）
+        h('div', { key: 'legend', className: 'dshmind-legend',
+          style: { flexDirection: 'row', flexWrap: 'wrap', gap: 14, marginTop: 8 } }, [
+          h('span', { key: 'r', className: 'dshmind-legendRow' }, [
+            h('i', { key: 's', className: 'dshmind-swatch', style: { borderRadius: '50%', background: '#5b8def' } }),
+            h('span', { key: 't' }, '岗位'),
+          ]),
+          h('span', { key: 'ca', className: 'dshmind-legendRow' }, [
+            h('i', { key: 's', className: 'dshmind-swatch', style: { borderRadius: '50%', background: '#a97bea' } }),
+            h('span', { key: 't' }, '自治能力卡'),
+          ]),
+          h('span', { key: 'cf', className: 'dshmind-legendRow' }, [
+            h('i', { key: 's', className: 'dshmind-swatch', style: { borderRadius: '50%', background: '#3fb27f' } }),
+            h('span', { key: 't' }, '出厂能力卡'),
+          ]),
+          h('span', { key: 'w', className: 'dshmind-legendRow' }, [
+            h('i', { key: 's', className: 'dshmind-swatch', style: { background: '#3fb27f' } }),
+            h('span', { key: 't' }, '已接线（岗位卡真引用了它）'),
+          ]),
+          h('span', { key: 'u', className: 'dshmind-legendRow' }, [
+            h('i', { key: 's', className: 'dshmind-swatch',
+              style: { background: 'repeating-linear-gradient(90deg,#e5534b 0 4px,transparent 4px 7px)' } }),
+            h('span', { key: 't' }, '未接线（声明了，但成员看不到）'),
+          ]),
+        ]),
+        // 缺口榜收进卡片（与其它分区同一套卡片语言；裸标题会显得像没做完的一页）
+        h('section', { key: 'gap', className: 'dshmind-sec' }, [
+          h('div', { className: 'dshmind-secHead' }, [
+            h('h3', { key: 't', className: 'dshmind-secTitle' }, '接线缺口榜'),
+            h('span', { key: 'h', className: 'dshmind-secHint' },
+              缺口榜.length ? '能力卡声明了适用、岗位卡里却没引用 ⇒ 成员实际看不到这张卡' : '没有缺口：声明与接线一致'),
+            h('span', { key: 'c', className: 'dshmind-secCount dshmind-mono' }, String(缺口榜.length)),
+          ]),
+          h('div', { key: 'b', className: 'dshmind-secBody' }, 缺口榜.length
+            ? h('table', { key: 'tbl', className: 'dshmind-tbl' }, [
+                h('thead', { key: 'h' }, h('tr', {}, [
+                  h('th', { key: 'a' }, '能力卡'), h('th', { key: 'b' }, '来源'),
+                  h('th', { key: 'c' }, '声明适用'), h('th', { key: 'd' }, '未接线岗位'),
+                ])),
+                h('tbody', { key: 'b' }, 缺口榜.map(function (x, i) {
+                  return h('tr', { key: 'r' + i }, [
+                    h('td', { key: 'a', className: 'dshmind-mono' }, x.id),
+                    h('td', { key: 'b' }, x.来源 === '自治' ? '自治' : x.来源 === '出厂' ? '出厂' : (x.来源 || '—')),
+                    h('td', { key: 'c' }, x.适用.join('、')),
+                    h('td', { key: 'd', className: 'dshmind-tlBad' }, x.缺.join('、')),
+                  ]);
+                })),
+              ])
+            : h('div', { key: 'ok', className: 'dshmind-empty' }, '✓ 无接线缺口：' + 接线.适用边 + ' 条适用边全部接上')),
+        ]),
+      ];
+    }
+    /**
+     * 图谱的详情抽屉（2026-10-13 重做）：点开一个节点，回答「**它到底接了谁**」。
+     *
+     * 只读投影的现算，不新取数：岗位侧列它引用的每张卡（已接/未接），
+     * 能力侧列它声明的每个岗位（已接/未接）。未接的一律显式写「未接线」——
+     * 这正是「发卡 ≠ 接线」在单个节点上的读法。
+     */
+    function 图谱详情(键, ctx, 引用表, 邻接) {
+      var 是岗位 = 键.indexOf('角色:') === 0;
+      var id = 键.slice(3);
+      var 邻居 = Object.keys(邻接[键] || {});
+      var 行 = [];
+      if (是岗位) {
+        var 岗位 = (ctx.岗位 || []).filter(function (r) { return r.id === id; })[0];
+        var 实例 = 实例计数Of(ctx.实例计数, id);
+        行.push(['来源', (岗位 && 岗位.来源 ? 岗位.来源 + '区' : '—')
+          + (岗位 && 岗位.同名 && 岗位.同名.length > 1 ? '（同名：' + 岗位.同名.join(' · ') + '，生效＝' + 岗位.来源 + '）' : '')]);
+        行.push(['实例', '在岗 ' + (实例.在岗 === null ? '—' : 实例.在岗) + ' · 封存 ' + (实例.封存 === null ? '—' : 实例.封存)]);
+        行.push(['接线', (岗位 && 岗位.能力引用 ? 岗位.能力引用.length : 0) + ' 张（声明适用它的一共 ' + 邻居.length + ' 张）']);
+      } else {
+        var 能力 = (ctx.能力 || []).filter(function (c) { return c.id === id; })[0];
+        行.push(['来源', 能力 && 能力.来源 ? 能力.来源 + '能力库' : '—']);
+        行.push(['适用', (能力 ? 能力.适用岗位.length : 0) + ' 个岗位']);
+      }
+      return h('div', { key: 'drawer', className: 'dshmind-gDrawer' }, [
+        h('h5', { key: 'h' }, [
+          h('span', { key: 'i' }, 是岗位 ? '岗位' : '能力卡'),
+          h('span', { key: 'x', className: 'dshmind-mono' }, id),
+        ]),
+      ].concat(
+        // 取消方式写在抽屉里（不然「怎么收起来」得靠猜；点同一个节点也能收）
+        [h('div', { key: 'hint', className: 'dshmind-graphNote', style: { marginTop: 3 } }, '点空白处或再点它一次即可取消')],
+        行.map(function (r, i) {
+          return h('div', { key: 'r' + i, className: 'dshmind-gDrawerRow' }, [
+            h('b', { key: 'k' }, r[0]), h('span', { key: 'v' }, r[1]),
+          ]);
+        }),
+        [h('div', { key: 'links', className: 'dshmind-gLinks' }, 邻居.length
+          ? 邻居.map(function (n, i) {
+              var 邻居是岗位 = n.indexOf('角色:') === 0;
+              var 邻居id = n.slice(3);
+              var 已接 = 是岗位
+                ? (引用表[键.slice(3)] || []).indexOf(邻居id) >= 0
+                : (引用表[邻居id] || []).indexOf(键.slice(3)) >= 0;
+              return h('span', { key: 'l' + i, className: 'dshmind-gLink' }, [
+                h('span', { key: 'd', className: 'dshmind-swatch', style: { background: 已接 ? '#3fb27f' : '#e5534b' } }),
+                h('span', { key: 'n', className: 'dshmind-mono' }, (邻居是岗位 ? '' : '') + 邻居id),
+                h('span', { key: 'w' }, 已接 ? '已接线' : '未接线'),
+              ]);
+            })
+          : [h('span', { key: 'none', className: 'dshmind-gLink' }, '没有声明关系（既没适用岗位，也没被引用）')]),
+        ]));
+    }
+
+    /** 岗位的实例计数（宿主没给 ⇒ 全 null，不装懂成 0）。 */
+    function 实例计数Of(袋, 岗位名) {
+      var b = obj(袋);
+      var 按 = b ? obj(b.按岗位) : null;
+      var 行 = 按 ? obj(按[岗位名]) : null;
+      return {
+        在岗: 行 && typeof 行.在岗 === 'number' ? 行.在岗 : null,
+        封存: 行 && typeof 行.封存 === 'number' ? 行.封存 : null,
+        已知: !!行,
+      };
+    }
+
+    /** 记忆页：读数与构成 + 「正文不在这里」的口径说明（内容出口是对话）。 */
+    function 记忆页(ctx) {
+      var 记忆 = ctx.记忆;
+      if (!记忆) {
+        return [h('div', { key: 'nomem', className: 'dshmind-empty' }, '这次投影没带记忆读数（宿主没给 ⇒ 不装懂）。')];
+      }
+      var 卡 = [];
+      if (记忆.按类) {
+        卡.push(可视化卡('按类构成', 记忆.存量 === null ? '' : '共 ' + 记忆.存量 + ' 条', [
+          { 名: '经历', 值: 记忆.按类.经历, 色: '#4bb8c8' },
+          { 名: '知识', 值: 记忆.按类.知识, 色: '#a97bea' },
+          { 名: '偏好', 值: 记忆.按类.偏好, 色: '#d4a053' },
+        ]));
+      }
+      return [
+        // ① 四个读数砖铺满一行（原来只有三个、每个又宽又空；第四格放"按类"的实际数字）
+        h('div', { key: 'tiles', className: 'dshmind-tiles' }, [
+          h('div', { key: 'a', className: 'dshmind-tile' }, [
+            h('div', { key: 'k', className: 'dshmind-tileK' }, '存量'),
+            h('div', { key: 'v', className: 'dshmind-tileV dshmind-mono' }, 记忆.存量 === null ? '—' : String(记忆.存量)),
+            h('div', { key: 'd', className: 'dshmind-tileD' }, '四类账目合计（知识 / 经历 / 偏好 / 作答）'),
+          ]),
+          h('div', { key: 'b', className: 'dshmind-tile' }, [
+            h('div', { key: 'k', className: 'dshmind-tileK' }, '近 ' + (记忆.窗口天 || 7) + ' 天新增'),
+            h('div', { key: 'v', className: 'dshmind-tileV dshmind-mono' }, 记忆.新增 === null ? '—' : String(记忆.新增)),
+            h('div', { key: 'd', className: 'dshmind-tileD' }, '窗口外的旧条目不进这一格'),
+          ]),
+          h('div', { key: 'c', className: 'dshmind-tile' }, [
+            h('div', { key: 'k', className: 'dshmind-tileK' }, '近段晋升'),
+            h('div', { key: 'v', className: 'dshmind-tileV dshmind-mono' }, 记忆.晋升 === null ? '—' : String(记忆.晋升)),
+            h('div', { key: 'd', className: 'dshmind-tileD' }, '跨项目共享的条目'),
+          ]),
+          记忆.按类
+            ? h('div', { key: 'd', className: 'dshmind-tile' }, [
+                h('div', { key: 'k', className: 'dshmind-tileK' }, '按类'),
+                h('div', { key: 'v', className: 'dshmind-tileV dshmind-mono' },
+                  '经历 ' + (记忆.按类.经历 === null ? '—' : 记忆.按类.经历)
+                  + ' · 知识 ' + (记忆.按类.知识 === null ? '—' : 记忆.按类.知识)
+                  + ' · 偏好 ' + (记忆.按类.偏好 === null ? '—' : 记忆.按类.偏好)),
+                h('div', { key: 'd', className: 'dshmind-tileD' }, '作答按实例归档，不计入常驻三类'),
+              ])
+            : null,
+        ].filter(Boolean)),
+        // ② 构成图与「为什么不列条目」并排 —— 两块各占一半，不再是一块挤在左、右半边空着
+        h('div', {
+          key: 'grid',
+          style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(380px,1fr))', gap: '10px', alignItems: 'start' },
+        }, [
+          卡.length ? 卡[0] : null,
+          h('div', { key: 'why', className: 'dshmind-graphNote', style: { maxWidth: 'none', paddingTop: 2 } },
+            '为什么这里没有条目列表：记忆正文可能含敏感上下文，面板只做**读数与结构**（存量／新增／晋升／按类），'
+            + '不做全文陈列。要查内容，在对话里说一句「memory_query ×××」——命中的条目与来源会一起给你。'
+            + '**面板管「状态与账」，对话管「内容与意图」。**'),
+        ].filter(Boolean)),
+      ];
+    }
     /**
      * 一格读数：**键在上、值在下**。
      *
@@ -1412,11 +2515,16 @@ window.__ModuleLoader__.load({
           return;
         }
         var 选项 = { method: 方法 };
+        // 插件通道标记（2026-10-13 真机取证用）：官方客户端里插件页的请求到达路由时
+        // **不带 Fetch Metadata 头**（`sec-fetch-site` 缺席）⇒ 与「本机任意进程」无法区分
+        // ⇒ 被同源栅栏整类拒掉（P1-10 的 fail-closed）。这里带一个自有标记头，用来实测
+        // **自定义头能不能穿过那条通道**：能穿过，才谈得上拿它做凭据（认凭据而不是认来源）。
+        选项.headers = { 'x-dsh-mind-panel': '1' };
         if (方法 === 'GET') {
           // 照同机跑通的第三方插件：GET 一律绕开缓存。
           选项.cache = 'no-store';
         } else if (请求.body !== undefined) {
-          选项.headers = { 'content-type': 'application/json' };
+          选项.headers['content-type'] = 'application/json';
           选项.body = JSON.stringify(请求.body);
         }
         var pending;
@@ -1676,7 +2784,7 @@ window.__ModuleLoader__.load({
      * **不挂 useEffect**（设计债⑩：这个宿主给插件的 effect 可能是空实现，取数如此，UI 状态也如此）。
      * `折叠会审` 是覆盖表（id → 折不折）；没点过的场次走默认（首场展开、其余折叠）。
      */
-    var 界面store = { 快照: { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null }, 订阅者: [] };
+    var 界面store = { 快照: { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null, 当前页: null, 图谱选中: null, 审计展开: null }, 订阅者: [] };
     /** 轮询间隔：2~5 秒量级（人看的板子，又不至于把宿主问烦）。 */
     var POLL_MS = 3000;
     /** 轮询把手：`apply` 起、disposer 清（**不许留定时器**）。 */
@@ -1727,7 +2835,7 @@ window.__ModuleLoader__.load({
     function 清空store() {
       投影store.快照 = EMPTY;
       设置store.快照 = { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' };
-      界面store.快照 = { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null };
+      界面store.快照 = { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null, 当前页: null, 图谱选中: null, 审计展开: null };
     }
 
     /**
@@ -1755,6 +2863,76 @@ window.__ModuleLoader__.load({
       下[id] = !会审折叠(id, 默认折叠);
       // 整表替换会把 项目选择 一起抹掉（同一个 store），所以用 `Object.assign` 合并。
       发通知(界面store, Object.assign({}, 界面store.快照, { 折叠会审: 下 }));
+    }
+
+    // ── 分页状态（2026-10-13 重做）────────────────────────────────────────────
+    /**
+     * 七页的 id 与标签（**顺序＝注意力顺序**，与 {@link 页清单} 同源：这里只判合法值）。
+     * 这个数组只服务「值合法吗」，标签与计数由 `页清单(ctx)` 给。
+     */
+    var 合法页 = { overview: 1, graph: 1, tasks: 1, reviews: 1, bus: 1, audit: 1, memory: 1 };
+
+    /** 当前页：**非法值一律落回总览**——切页状态坏掉不许把整块面板画没。 */
+    function 当前页() {
+      var 值 = 界面store.快照.当前页;
+      return 合法页[值] === 1 ? 值 : 'overview';
+    }
+
+    /**
+     * 切页：**纯显示动作**（零请求、零写账），与折叠钮同类。
+     * 同一个 store 里还有 项目选择 / 各种折叠表，所以整表替换必须走 `Object.assign` 合并。
+     */
+    function 切页(id) {
+      if (合法页[id] !== 1 || 当前页() === id) return;
+      发通知(界面store, Object.assign({}, 界面store.快照, { 当前页: id }));
+    }
+
+    /** 图谱里当前选中的节点键（`角色:<id>` / `能力:<id>`）；没选 ⇒ `null`。 */
+    function 图谱选中() {
+      var 值 = 界面store.快照.图谱选中;
+      return typeof 值 === 'string' && 值 !== '' ? 值 : null;
+    }
+
+    /**
+     * 审计流是否**展开全部**（2026-10-13 晚）。
+     *
+     * 背景：审计流此前靠**卡内滚动框**（`max-height + overflow-y:auto`）把二十行装进一个小盒子里。
+     * 那是"五个分区堆一页"时代的产物；现在审计**自成一页**、根容器本来就是滚动容器 ⇒
+     * 卡内再套一个滚动容器就是**双层滚动条**（滚轮在框里框外行为还不一样），而且内容被压在框里看不见。
+     * 现在：行**直接进页面流**，超出 `AUDIT_LIMIT` 的由这个钮铺开（纯显示、零请求），
+     * 并且**照旧明说**「投影共 N 条 · 已列 M 条」（不静默截断这条纪律一个字没动）。
+     */
+    function 审计展开() {
+      return 界面store.快照.审计展开 === true;
+    }
+
+    /** 点「展开全部审计」：纯显示动作（零请求、零写账）。 */
+    function 切审计展开() {
+      发通知(界面store, Object.assign({}, 界面store.快照, { 审计展开: !审计展开() }));
+    }
+
+    /**
+     * 点图谱里的一个节点：选中它（再点同一个 ⇒ 取消）。
+     *
+     * 与折叠钮、切页同款：**纯显示动作**（零请求、零写账）。选中态只改一件事——
+     * 把无关节点/边调暗 + 开一张详情卡，让「这个岗位到底接了哪几张卡」不必来回对照两列。
+     */
+    function 切图谱选中(key) {
+      if (typeof key !== 'string' || key === '') return;
+      发通知(界面store, Object.assign({}, 界面store.快照, { 图谱选中: 图谱选中() === key ? null : key }));
+    }
+
+    /**
+     * 点图谱**空白处** ⇒ 取消选中（2026-10-13 晚，主权者提的交互缺口）。
+     *
+     * 实现走**空白层**（铺满画布的不可见 `<rect>`，垫在所有节点下面），不靠事件冒泡：
+     *  - SVG 里后画的元素在上层，点节点命中的是节点、点空白命中的才是这层；
+     *  - 于是「点节点」与「点空白」是两个互不干扰的处理器，不必依赖 stopPropagation，
+     *    也不必赌宿主把事件对象传成什么形状（本仓的渲染层只保证 `onClick()` 被调到）。
+     */
+    function 清图谱选中() {
+      if (!图谱选中()) return;
+      发通知(界面store, Object.assign({}, 界面store.快照, { 图谱选中: null }));
     }
 
     /**
@@ -2092,8 +3270,11 @@ window.__ModuleLoader__.load({
       var 项目清单 = view ? view.项目清单 : null;
       var 当前项目 = view ? view.项目 : '';
       var 自动选择 = line(snap.自动选择, '') || null;
-      var audit = view ? view.审计尾.slice(-AUDIT_LIMIT).reverse() : [];
-      // 投影里**一共**多少条（用来在框尾说清"看不全是因为投影只有这些/还有多少没列"）。
+      // 审计：**全量留着**，渲染多少由「展开」决定（2026-10-13 晚去掉卡内滚动框）。
+      // 旧写法在这里就 `.slice(-AUDIT_LIMIT)` 把多出来的行丢掉 ⇒ 展开钮根本无从展开。
+      var 审计全 = view ? view.审计尾.slice().reverse() : [];
+      var audit = 审计展开() ? 审计全 : 审计全.slice(0, AUDIT_LIMIT);
+      // 投影里**一共**多少条（用来在列表尾部说清"看不全是因为投影只有这些/还有多少没列"）。
       var 审计总条数 = view ? view.审计尾.length : 0;
       var boundReadOnly = view ? boolOf(firstOf(view.边界, ['只读', 'readonly'])) : null;
       // 闸不在位 / 已失联 / 已关闭是「现在能不能干活」的事：确定的不良态才告警，
@@ -2280,11 +3461,8 @@ window.__ModuleLoader__.load({
                 var 会审描述长 = 会审描述.length > 80;
                 var 会审折 = 描述折叠(会审id);
                 return h('article', { key: 会审id, className: 'dshmind-review' }, [
+                  // ① 身份行：左＝交卷徽章 + 模式 + 复核三态，右＝节点 id（设计稿解剖，与任务卡同一套）
                   h('div', { key: 'top', className: 'dshmind-reviewTop' }, [
-                    h('span', {
-                      key: 't',
-                      className: 'dshmind-nodeTitle dshmind-nodeTitleFull' + (会审描述长 && 会审折 ? ' dshmind-nodeTitleClamped' : ''),
-                    }, 会审描述),
                     h('span', {
                       key: 'p',
                       className: 'dshmind-badge',
@@ -2298,7 +3476,14 @@ window.__ModuleLoader__.load({
                     // 复核三态各占一个类名：`未验` 必须与「过」在版面上就分得开。
                     h('span', { key: 'v', className: 'dshmind-verdict ' + verdict.类 },
                       '复核 ' + verdict.文本 + (row.复核者 ? ' · ' + row.复核者 : '')),
+                    h('span', { key: 'id', className: 'dshmind-cardMeta' },
+                      h('span', { key: 'i', className: 'dshmind-cardId', title: 会审id }, 会审id)),
                   ].filter(Boolean)),
+                  // ② 描述（长的 3 行钳位 + 展开钮）
+                  h('span', {
+                    key: 't',
+                    className: 'dshmind-nodeTitle dshmind-nodeTitleFull' + (会审描述长 && 会审折 ? ' dshmind-nodeTitleClamped' : ''),
+                  }, 会审描述),
                   // 描述折叠（2026-10-12）：长的才给钮；短的（如一行摘要）不必多一个控件。
                   // 展开态全文**另起一块**（不进 reviewTop 那个 flex 行，免得和徽章挤在一起）。
                   // 纯显示动作、零请求，与「独立答案」折叠同款。
@@ -2402,22 +3587,35 @@ window.__ModuleLoader__.load({
                   var 任务描述长 = 任务描述.length > 80;
                   var 任务折 = 描述折叠(任务id);
                   return h('article', { key: 任务id, className: cls }, [
+                    // ① 身份行（设计稿解剖）：左＝状态徽章 + 等宽 id，右＝负责人/模式/交卷/打回。
+                    // 旧版把**描述当标题置顶**、徽章跟在后面 ⇒ 一屏全是长句，状态反而要往下找。
                     h('div', { key: 'top', className: 'dshmind-nodeTop' }, [
                       h('span', {
-                        key: 't',
-                        className: 'dshmind-nodeTitle dshmind-nodeTitleFull' + (任务描述长 && 任务折 ? ' dshmind-nodeTitleClamped' : ''),
-                      }, 任务描述),
-                      h('span', { key: 'st', className: 'dshmind-badge', style: 徽色 ? {
-                        // 着色体例照抄会审交卷徽章：color + borderColor 同色值 + 底色 layer-1。
-                        color: 徽色,
-                        borderColor: 徽色,
-                        background: 'var(--dsw-alias-bg-layer-1,#fff)',
-                      } : {
-                        // 查表之外保灰（现状样式原样）：待派发 / 已结账 / 未验 / 未知 / 缺失 / 白名单外。
-                        borderColor: 'var(--dsw-alias-border-l2,#0000001f)',
-                        color: 'var(--dsw-alias-label-secondary,#61666b)',
-                      } }, line(task.状态, '未知')),
+                        key: 'st',
+                        className: 'dshmind-badge',
+                        style: 徽色 ? {
+                          color: 徽色,
+                          borderColor: 徽色,
+                          background: 'var(--dsw-alias-bg-layer-1,#fff)',
+                        } : {
+                          borderColor: 'var(--dsw-alias-border-l2,#0000001f)',
+                          color: 'var(--dsw-alias-label-secondary,#61666b)',
+                        },
+                      }, line(task.状态, '未知')),
+                      h('span', { key: 'id', className: 'dshmind-cardId', title: 任务id }, 任务id),
+                      h('span', { key: 'meta', className: 'dshmind-cardMeta' }, [
+                        h('span', { key: 'o' }, '负责人 ' + (owners.length ? owners.join('、') : '未指派')),
+                        task.模式 ? h('span', { key: 'm' }, line(task.模式)) : null,
+                        h('span', { key: 's', className: 'dshmind-mono' }, '交卷 ' + progressText(task.交卷)),
+                        rejects ? h('span', { key: 'r', className: 'dshmind-mono' }, '打回 ' + rejects + ' 次') : null,
+                        arr(task.依赖).length ? h('span', { key: 'd' }, '依赖 ' + arr(task.依赖).map(refText).join('、')) : null,
+                      ].filter(Boolean)),
                     ]),
+                    // ② 描述（长描述 3 行钳位 + 展开钮；展开后在卡内另起一块铺全文）
+                    h('span', {
+                      key: 't',
+                      className: 'dshmind-nodeTitle dshmind-nodeTitleFull' + (任务描述长 && 任务折 ? ' dshmind-nodeTitleClamped' : ''),
+                    }, 任务描述),
                     // 描述折叠（2026-10-12，与会审卡同款）：长的才给钮，展开后卡内另起一块铺全文。
                     任务描述长
                       ? h('button', {
@@ -2429,13 +3627,6 @@ window.__ModuleLoader__.load({
                     任务描述长 && !任务折
                       ? h('div', { key: 'descfull', className: 'dshmind-nodeTitleOpen' }, 任务描述)
                       : null,
-                    h('div', { key: 'meta', className: 'dshmind-meta' }, [
-                      h('span', { key: 'o' }, '负责人 ' + (owners.length ? owners.join('、') : '未指派')),
-                      task.模式 ? h('span', { key: 'm' }, '模式 ' + line(task.模式)) : null,
-                      h('span', { key: 'r', className: 'dshmind-mono' }, '打回 ' + rejects + ' 次'),
-                      h('span', { key: 's', className: 'dshmind-mono' }, '交卷 ' + progressText(task.交卷)),
-                      arr(task.依赖).length ? h('span', { key: 'd' }, '依赖 ' + arr(task.依赖).map(refText).join('、')) : null,
-                    ].filter(Boolean)),
                     h('div', { key: 'c', className: 'dshmind-criteria' }, [
                       h('span', { key: 'k', style: { color: 'var(--dsw-alias-label-tertiary,#81858c)' } }, '判据：'),
                       // 优化批⑤：长判据最多两行（.dshmind-criteriaVal 的 line-clamp），截断不丢信息——
@@ -2472,35 +3663,44 @@ window.__ModuleLoader__.load({
           ]),
 
         // ④ 审计流
-        // **别静默截断**（Batch 9）：`AUDIT_LIMIT` 只是"一次渲染多少行"的上限，
-        // 超出时必须**看得出来**（那句「投影共 N 条」）并且**框内滚得到**（`.dshmind-auditScroll`）。
-        section(4, '审计流', '只增的事实记录 · 写入无条件 · 框内可滚动',
-          audit.length ? '末 ' + audit.length + ' 条' + (审计总条数 > audit.length ? ' / 共 ' + 审计总条数 : '') : '',
+        // **别静默截断**（Batch 9）这条没变：`AUDIT_LIMIT` 只是"一次渲染多少行"的上限，
+        // 超出时必须**看得出来**（「投影共 N 条 · 已列 M 条」）并且**能铺开**。
+        // ⚠️ 2026-10-13 晚改形：**去掉卡内滚动框**。审计自成一页后，根容器就是滚动容器 ⇒
+        // 框内再套一个 `overflow-y:auto` 是双层滚动（滚轮在框里框外还不一样），
+        // 而且内容被压在一个小盒子里看不见。现在行**直接进页面流**，铺开靠「展开全部」钮
+        // （纯显示、零请求，同折叠钮）。
+        section(4, '审计流', '只增的事实记录 · 写入无条件 · 页面滚动',
+          audit.length ? '已列 ' + audit.length + (审计总条数 > audit.length ? ' / 共 ' + 审计总条数 : '') : '',
           audit.length
             ? [
-                // 滚动容器：内容高过 `max-height` 时**框内滚**（不裁、不可达的代名词就是没有它）。
-                h('div', { key: 'scroll', className: 'dshmind-auditScroll' },
-                  h('div', { className: 'dshmind-audit' }, audit.map(function (row, index) {
-                    var grade = auditGrade(row);
-                    var alarm = boolOf(firstOf(row, ['告警', 'alarm'])) === true;
-                    return h('div', { key: 'a' + index, className: 'dshmind-auditRow ' + auditClass(row) }, [
-                      h('span', { key: 't', className: 'dshmind-mono', style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary,#81858c)' } },
-                        shortTime(firstOf(row, ['时间', 'at', 'time'])) || '—'),
-                      h('span', { key: 'g', style: { fontSize: 11 } }, grade),
-                      h('span', { key: 'a', className: 'dshmind-auditAction' }, [
-                        alarm ? h('span', { key: 'x', style: { color: RED, marginRight: 4 } }, '⚑') : null,
-                        line(firstOf(row, ['动作', 'action']), '未命名动作'),
-                        line(firstOf(row, ['结果', 'result'])) ? h('span', { key: 'r', style: { color: 'var(--dsw-alias-label-tertiary,#81858c)' } }, ' · ' + line(firstOf(row, ['结果', 'result']))) : null,
-                      ].filter(Boolean)),
-                      h('span', { key: 'w', className: 'dshmind-auditWho', title: actorOf(row) }, 短主体(actorOf(row))),
-                    ]);
-                  }))),
-                // 框尾说明：有多少条、看不全就去滚（不让人猜是不是被裁了）。
-                审计总条数 > audit.length
-                  ? h('div', { key: 'hint', className: 'dshmind-auditHint' },
-                      '另有 ' + (审计总条数 - audit.length) + ' 条未在此列出（投影共 ' + 审计总条数 + ' 条）；框内可滚动查看已列出的 ' + audit.length + ' 条。')
-                  : h('div', { key: 'hint', className: 'dshmind-auditHint' },
-                      '投影共 ' + 审计总条数 + ' 条，已全部列出；框内可滚动。'),
+                h('div', { key: 'list', className: 'dshmind-audit' }, audit.map(function (row, index) {
+                  var grade = auditGrade(row);
+                  var alarm = boolOf(firstOf(row, ['告警', 'alarm'])) === true;
+                  return h('div', { key: 'a' + index, className: 'dshmind-auditRow ' + auditClass(row) }, [
+                    h('span', { key: 't', className: 'dshmind-mono', style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary,#81858c)' } },
+                      shortTime(firstOf(row, ['时间', 'at', 'time'])) || '—'),
+                    h('span', { key: 'g', style: { fontSize: 11 } }, grade),
+                    h('span', { key: 'a', className: 'dshmind-auditAction' }, [
+                      alarm ? h('span', { key: 'x', style: { color: RED, marginRight: 4 } }, '⚑') : null,
+                      line(firstOf(row, ['动作', 'action']), '未命名动作'),
+                      line(firstOf(row, ['结果', 'result'])) ? h('span', { key: 'r', style: { color: 'var(--dsw-alias-label-tertiary,#81858c)' } }, ' · ' + line(firstOf(row, ['结果', 'result']))) : null,
+                    ].filter(Boolean)),
+                    h('span', { key: 'w', className: 'dshmind-auditWho', title: actorOf(row) }, 短主体(actorOf(row))),
+                  ]);
+                })),
+                // 尾部说明 + 铺开钮：有多少条、看不全怎么铺开（不让人猜是不是被裁了）。
+                h('div', { key: 'hint', className: 'dshmind-auditHint' }, [
+                  h('span', { key: 't' }, 审计总条数 > audit.length
+                    ? '投影共 ' + 审计总条数 + ' 条 · 已列 ' + audit.length + ' 条'
+                    : '投影共 ' + 审计总条数 + ' 条，已全部列出'),
+                  audit.length > AUDIT_LIMIT || 审计总条数 > AUDIT_LIMIT
+                    ? h('button', {
+                        key: 'b', type: 'button', className: 'dshmind-toggle',
+                        onClick: function () { 切审计展开(); },
+                        title: 审计展开() ? '只列最近的一批' : '把投影里的审计全铺开',
+                      }, 审计展开() ? '▾ 收起（只列最近 ' + AUDIT_LIMIT + ' 条）' : '▸ 展开全部（共 ' + audit.length + ' 条待铺开）')
+                    : null,
+                ].filter(Boolean)),
               ]
             : h('div', { className: 'dshmind-empty' }, '审计尾为空 —— 没有事实记录，或工作台投影未附带审计尾。')),
 
@@ -2539,7 +3739,7 @@ window.__ModuleLoader__.load({
                     ? h('div', { key: 'mask', className: 'dshmind-decideWhy' },
                         '讨论发言按盲评口径收起（未交齐不揭名）；讨论读数见上方会审区。')
                     : (全部消息.length
-                        ? h('div', { key: 'msgs', className: 'dshmind-auditScroll' }, [
+                        ? h('div', { key: 'msgs', className: 'dshmind-busMsgs' }, [
                             // 消息层：被收起时明说还有多少条（不静默）。
                             收起消息数 > 0
                               ? h('button', {
@@ -2633,10 +3833,24 @@ window.__ModuleLoader__.load({
         ].filter(Boolean)),
       ];
 
-      // 两层（2026-10-12）：root = 铺满 + 滚动容器；page = 内容 1040px 居中（显示宽度不变）。
+      // 两层（2026-10-12）：root = 铺满 + 滚动容器；page = 内容居中（宽度随设计走，2026-10-13 起 1180px）。
       // 鼠标落在左右空白上时命中的是 root（它铺满整屏）⇒ 也能滚。
+      // 2026-10-13 重做：page 里再分「导航 + 七个页容器」——分页只收显示，节点仍在树里（见 分页外壳）。
+      var 页 = 分页外壳(children, {
+        view: view,
+        待你决定: 待你决定,
+        会审: 会审,
+        tasks: tasks,
+        总线: 总线,
+        audit: audit,
+        审计总条数: 审计总条数,
+        记忆: view ? view.记忆 : null,
+        能力: view ? view.能力 : null,
+        岗位: view ? view.岗位 : null,
+        实例计数: view ? view.实例计数 : null,
+      });
       return h('div', { className: 'dshmind-root', 'data-dshmind': 'root' }, [
-        h('div', { key: 'page', className: 'dshmind-page', 'data-dshmind': 'page' }, children),
+        h('div', { key: 'page', className: 'dshmind-page', 'data-dshmind': 'page' }, 页),
       ]);
     }
 

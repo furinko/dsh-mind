@@ -1085,8 +1085,18 @@ export async function runHarness() {
   const cmd = collect(r1.tree, { skipStyle: true }).elements.find((el) => el.type === 'code');
   passed.push(check(!!cmd && String(cmd.props.className).indexOf('dshmind-cmd') >= 0,
     '命令用等宽可选中的 code 块渲染（只读工作台给文本，不给按钮）'));
-  passed.push(check(c1.elements.every((el) => !el.props || typeof el.props.onClick !== 'function' || el.type === 'button'),
-    '除刷新按钮外没有可点动作：待你决定里不得有按钮'));
+  // ⚠️ 口径改形（2026-10-13 重做·图谱）：原来这条是「凡带 onClick 的必须是 button」。
+  //    图谱的节点是 SVG `<g>`（SVG 里放不了 button），选中它只为看详情抽屉——
+  //    与折叠钮同款的**纯显示动作**（零请求、零写账，由 ⑪e「点节点零请求」钉死）。
+  //    所以例外开在「带 data-node 的 g」上，**不是**把整条放宽：除它以外仍只许 button。
+  passed.push(check(c1.elements.every((el) => !el.props || typeof el.props.onClick !== 'function'
+    || el.type === 'button'
+    || (el.type === 'g' && typeof el.props['data-node'] === 'string')),
+    '除刷新按钮与图谱节点外没有可点动作：待你决定里不得有按钮'));
+  // 反向：图谱节点**只许**在真的画了图谱时出现（没数据不许留可点空壳）
+  const 假节点 = c1.elements.filter((el) => el.type === 'g' && typeof el.props['data-node'] === 'string'
+    && typeof el.props.onClick !== 'function');
+  passed.push(check(假节点.length === 0, '图谱节点都带 onClick（不许有画出来却点不动的节点）', String(假节点.length)));
   const decideButtons = collect(r1.tree, { skipStyle: true }).elements
     .filter((el) => el.type === 'button' && String(el.props.className || '').indexOf('dshmind-cmd') >= 0);
   passed.push(check(decideButtons.length === 0, '命令不是按钮'));
@@ -1315,17 +1325,23 @@ export async function runHarness() {
   // 是长描述的展开/收起钮——同样是**纯显示切换**（onClick 只改本地折叠态，不发任何命令，
   // 由 ⑩d 的「零请求」断言钉死）。加它的理由：描述是 2037 字级全文，硬截断会丢全文，
   // 主权者明确要「可看全文」——折叠是唯一既不丢字、又不把面板撑爆、也不引入写入口的做法。
-  // 本条仍不许出现第五种按钮，也不许出现任何写控件。
+  //
+  // ⚠️ 分页导航（2026-10-13 重做）新增第五种：`dshmind-navBtn` 是七页之间的切换钮——
+  // 与折叠钮同款**纯显示切换**（onClick 只写本地 `当前页`，零请求、零写账，由新增的
+  // ⑪a「切页零请求」断言钉死）。加它的理由：五个分区从一条长页拆成七页之后，
+  // 「切页」是唯一的导航动作；它不引入任何写入口，也不发任何命令。
+  // 本条仍不许出现第六种按钮，也不许出现任何写控件。
   const 非法按钮 = 面板按钮.filter((el) => {
     const 类 = String(el.props.className || '');
     if (类.indexOf('dshmind-btn') >= 0 && String(el.props.children).indexOf('刷新') >= 0) return false;
     if (类.indexOf('dshmind-toggle') >= 0) return false;
     if (类.indexOf('dshmind-projChip') >= 0) return false;
     if (类.indexOf('dshmind-descToggle') >= 0) return false;
+    if (类.indexOf('dshmind-navBtn') >= 0) return false;
     return true;
   });
   passed.push(check(面板按钮.length >= 1 && 非法按钮.length === 0,
-    '④ 工作台面板的可点动作只有「刷新」与会审折叠钮、描述折叠钮、项目 chip（纯显示切换；仍无任何写动作）',
+    '④ 工作台面板的可点动作只有「刷新」与会审折叠钮、描述折叠钮、项目 chip、分页导航（纯显示切换；仍无任何写动作）',
     面板按钮.map((el) => String(el.props.children)).join(',')));
   passed.push(check(!面板控件.some((el) => typeof el.props.onChange === 'function'),
     '④ 工作台面板里没有 onChange 绑定的表单控件（没有任何「写」的入口）'));
@@ -2371,12 +2387,13 @@ export async function runHarness() {
         '⑦e 长正文默认折叠（busTextClamped）'));
     }
 
-    // ① 面板里**不许有"看起来能点"的东西**。例外四种：刷新按钮 + 会审折叠切换钮
+    // ① 面板里**不许有"看起来能点"的东西**。例外五种：刷新按钮 + 会审折叠切换钮
     //    （优化批③：纯显示切换，不发命令——「不是写动作」由 ③c 的零请求断言钉死）
     //    + 项目 chip（项目解析修正·2026-10-11：换投影的纯显示动作，不写账——由 ⑧b 钉死）
-    //    + 描述折叠钮（2026-10-12 主权者要「全文+默认折叠」：纯显示切换，零请求——由 ⑩d 钉死）。
+    //    + 描述折叠钮（2026-10-12 主权者要「全文+默认折叠」：纯显示切换，零请求——由 ⑩d 钉死）
+    //    + 分页导航钮（2026-10-13 重做：七页之间切换，纯显示、零请求零写账——由 ⑪a 钉死）。
     //    旧版「介入度档位」画成 4 个 chip（零参与/事后抽检/变更预审/逐条审批）——
-    //    只读投影长得像按钮，会误导人以为能点。四者之外多一个按钮都算破规。
+    //    只读投影长得像按钮，会误导人以为能点。五者之外多一个按钮都算破规。
     const 面板 = await 状态render(sampleView());
     const 面板元素 = collect(面板.tree, { skipStyle: true }).elements;
     const 可点按钮 = 面板元素.filter((el) => el.type === 'button');
@@ -2386,10 +2403,11 @@ export async function runHarness() {
       if (类.indexOf('dshmind-toggle') >= 0) return false;
       if (类.indexOf('dshmind-projChip') >= 0) return false;
       if (类.indexOf('dshmind-descToggle') >= 0) return false;
+      if (类.indexOf('dshmind-navBtn') >= 0) return false;
       return true;
     });
     passed.push(check(可点按钮.length >= 1 && 非规按钮.length === 0,
-      '① 面板里可点的只有「刷新」与会审折叠钮、描述折叠钮、项目 chip（其余一律不许可点）',
+      '① 面板里可点的只有「刷新」与会审折叠钮、描述折叠钮、项目 chip、分页导航（其余一律不许可点）',
       JSON.stringify(可点按钮.map((el) => String(el.props.children)))));
     passed.push(check(面板元素.every((el) => el.props.role !== 'button'),
       '① 没有任何 role=button 的伪按钮', JSON.stringify(面板元素.filter((el) => el.props.role === 'button').map((el) => el.type))));
@@ -2542,32 +2560,51 @@ export async function runHarness() {
     缺探针面板.unmount();
     缺数据面板.unmount();
 
-    // ④ 审计列表容器**可滚动**（样式源里有 max-height + overflow-y:auto）。
-    passed.push(check(/\.dshmind-auditScroll\{[^}]*max-height:[^;}]+/.test(面板源码),
-      '④ 审计容器有 max-height（超高的内容不会把面板撑长）'));
-    passed.push(check(/\.dshmind-auditScroll\{[^}]*overflow-y:auto/.test(面板源码),
-      '④ 审计容器 overflow-y:auto —— **框内可滚**（Batch 9 后半的硬要求）'));
-    passed.push(check(/\.dshmind-auditScroll\{[^}]*scrollbar-width:thin/.test(面板源码),
-      '④ 滚动条可见（让人知道能滚，`scrollbar-width:thin`）'));
+    // ④ ⚠️ **口径改形（2026-10-13 晚）：审计不再有"卡内滚动框"**。
+    //    旧口径（Batch 9 后半）是「审计流那个框不能滚动 ⇒ 给它 max-height + overflow-y:auto」，
+    //    那是「五个分区堆一页」时代的补丁。审计**自成一页**之后，根容器（`.dshmind-root`）
+    //    本来就是滚动容器 ⇒ 框内再套一个 `overflow-y:auto` 就是**双层滚动**
+    //    （滚轮在框里框外行为还不一样），而且内容被压在小盒子里看不见（主权者原话：
+    //    「审计你还使用卡片内部滚动的做法呢」）。现在：**行直接进页面流**，超上限靠「展开」钮铺开。
+    //    所以这三条改成**反向判据**：那个壳必须**不存在**（不是把红删掉，是把要求改对了）。
+    passed.push(check(!/\.dshmind-auditScroll\{/.test(面板源码),
+      '④ 审计**不许**再有卡内滚动壳（`.dshmind-auditScroll` 必须不存在）—— 审计自成一页，页面自己滚'));
+    passed.push(check(!/\.dshmind-busMsgs\{[^}]*overflow(-y)?:\s*auto/.test(面板源码),
+      '④ 总线消息区同样不许卡内滚动（独立壳、无 overflow）'));
+    passed.push(check(/\.dshmind-root\{[^}]*overflow:\s*auto/.test(面板源码),
+      '④ 唯一的滚动容器是根容器（页面级滚动）'));
 
-    // ⑤ **渲染出的审计行数 === 投影给的行数**（不许静默裁掉、不许渲染了却不可达）。
+    // ⑤ **渲染出的审计行数 === 该列出的行数**（不许静默裁掉），且**能铺开全部**。
     {
       const 多行 = sampleView();
-      // 造一份"条数明显超可视高度"的投影（40 条，超过 AUDIT_LIMIT=20 ⇒ 也要如实说明）。
+      // 造一份"条数明显超上限"的投影（40 条，超过 AUDIT_LIMIT=20 ⇒ 也要如实说明）。
       const 基 = 多行.审计尾[0];
       多行.审计尾 = Array.from({ length: 40 }, (_, i) => Object.assign({}, 基, { seq: i + 1 }));
       const r = await 状态render(多行);
       const 行 = findAllByClass(r.tree, 'dshmind-auditRow');
       const 应渲染 = Math.min(40, 20); // AUDIT_LIMIT
       passed.push(check(行.length === 应渲染,
-        '⑤ 审计行**渲染数 === 该列出的行数**（'+应渲染+' 条，不静默裁掉）', String(行.length)));
-      const 滚动容器 = findAllByClass(r.tree, 'dshmind-auditScroll')[0];
-      passed.push(check(!!滚动容器 && findAllByClass(滚动容器, 'dshmind-auditRow').length === 行.length,
-        '⑤ 渲染出的行**全部落在滚动容器里**（渲染了却不可达 ＝ 等于没渲染）',
-        String(滚动容器 ? findAllByClass(滚动容器, 'dshmind-auditRow').length : -1)));
+        '⑤ 审计行**渲染数 === 该列出的行数**（' + 应渲染 + ' 条，不静默裁掉）', String(行.length)));
       const 文本 = collect(r.tree, { skipStyle: true }).text;
-      passed.push(check(文本.indexOf('投影共 40 条') >= 0 && 文本.indexOf('另有 20 条') >= 0,
-        '⑤ 框尾如实说清「投影共 40 条 / 另有 20 条未列出」（不是静默截断）', 文本.slice(-160)));
+      passed.push(check(文本.indexOf('投影共 40 条') >= 0 && 文本.indexOf('已列 20 条') >= 0,
+        '⑤ 尾部如实说清「投影共 40 条 · 已列 20 条」（不是静默截断）', 文本.slice(-160)));
+      // 铺开：点「展开全部」⇒ 40 行全在页面流里，且**零请求**（纯显示动作）
+      const 展开钮 = collect(r.tree, { skipStyle: true }).elements
+        .find((el) => el.type === 'button' && String(el.props.className || '').indexOf('dshmind-toggle') >= 0
+          && collect(el, { skipStyle: true }).text.indexOf('展开全部') >= 0);
+      passed.push(check(!!展开钮, '⑤ 超上限时给「展开全部」钮（而不是让人去滚一个小框）'));
+      if (展开钮) {
+        const 请求前 = r.spy ? r.spy.calls.length : null;
+        展开钮.props.onClick();
+        await settle();
+        r.flush();
+        const 全行 = findAllByClass(r.tree, 'dshmind-auditRow');
+        passed.push(check(全行.length === 40, '⑤ 展开后 40 行全在页面流里（不再被框裁）', String(全行.length)));
+        if (请求前 !== null) {
+          passed.push(check(r.spy.calls.length === 请求前,
+            '⑤ 展开是纯显示动作（零请求）', String(r.spy.calls.length - 请求前)));
+        }
+      }
       r.unmount();
     }
     // 行数没超上限时：如实说"已全部列出"。
@@ -2824,11 +2861,18 @@ export async function runHarness() {
         const 样式9 = collect(r9.tree, {}).elements
           .filter((el) => el.type === 'style')
           .map((el) => String(el.props && el.props.children || '')).join('\n');
-        // ①单列：多列对长正文是错的布局（列窄⇒高度爆炸，横向还空着）。
+        // ①网格（**口径改形 · 2026-10-13 晚第二轮**）：
+        //    旧口径是「必须 `1fr` 单列、不许出现 auto-fit 多列」；当时的理由是
+        //    **列窄会让长描述高度爆炸**（1040px 容器排 3 列 ⇒ 每卡约 340px ⇒ 2037 字描述约 85 行）。
+        //    宽度铺满之后出了新问题：单列 + 正文限行宽 ⇒ **每张卡右半边空着**
+        //    （主权者原话「面板右面空白一大堆太丑了」）。
+        //    新口径：**列宽下限 ≥380px 的自动网格** —— 窄屏自动回落单列（长描述照样不会被挤），
+        //    宽屏 2~3 列铺满。守的仍是那条本意：**任何一列都窄不到让描述爆炸**。
+        // 塞 bug 校准：把下限改到 200px 以下、或改回无下限的裸 1fr 多列 ⇒ 本组必红。
         const 网格规则 = (样式9.match(/\.dshmind-nodes\{[^}]*\}/) || [''])[0];
-        passed.push(check(/grid-template-columns:\s*1fr/.test(网格规则)
-          && !/auto-fit/.test(网格规则),
-          '⑩ 任务图是**单列**（不许再出现 auto-fit 多列 —— 列窄会让长描述高度爆炸）',
+        const 列下限 = Number((/minmax\((\d+)px/.exec(网格规则) || [])[1] || 0);
+        passed.push(check(列下限 >= 380,
+          '⑩ 任务图网格列宽下限 ≥380px（宽屏多列铺满、窄屏回落单列；长描述仍不会被挤成一面墙）',
           JSON.stringify(网格规则)));
         // ②折叠态钳位：只查「有没有 line-clamp」不够，`999` 也是合法声明却等于没限行。
         const 折叠规则 = (样式9.match(/\.dshmind-nodeTitleClamped\{[^}]*\}/) || [''])[0];
@@ -3095,10 +3139,19 @@ export async function runHarness() {
       // ⑦g 滚动作用域 vs 显示宽度，**拆成两层**（2026-10-12）：
       // 主权者先报「面板整体的纵向滚动作用域太小」，我改 min-height 未解决；随后他框出
       // **面板左右两侧的空白**并说明「不能只放宽滚动作用域吗」——根因是两者原先**共用一个元素**：
-      // `.dshmind-root` 既是面板 DOM 边界（`max-width:1040px`，两侧空白不属于它）、又是滚动容器
+      // `.dshmind-root` 既是面板 DOM 边界（原先自己带 `max-width`，两侧空白不属于它）、又是滚动容器
       // （`overflow:auto`）⇒ 滚轮落在两侧空白上命中的是宿主容器、而宿主不是滚动容器 ⇒ 滚不动。
-      // 现在：root 铺满（无 max-width）+ 滚动容器；page 保持 1040px 居中的**显示宽度不变**。
-      // 塞 bug 校准：把 max-width 加回 root、或把 overflow 挪到 page ⇒ 必红。
+      // 现在：root 铺满（无 max-width）+ 滚动容器；page 负责居中排版。
+      //
+      // ⚠️ 口径改形（2026-10-13 重做）：page 的宽度**从 1040 改成 1180**。
+      //    理由（不是把红删掉）：1040 是「单列长页」时代的产物；重做后是「侧栏 + 内容」两栏，
+      //    1040 塞不下侧栏与内容且两侧留白过大。**本条真正守的两件事没变**：
+      //      ① 滚动容器只能有一个（root），page **不许**有 overflow；
+      //      ② root 必须是铺满的那个（不许自己限宽）。
+      //    所以断言改成「页宽等于设计值 1180 + 居中 + 无 overflow」，并**不许**再出现
+      //    「源码里某处写着 1040」这种对不上生效值的假绿（旧写法只对源码文本取一次匹配，
+      //    覆盖层一加就会出现「写着 1040、实际 1180」的假绿）。
+      // 塞 bug 校准：把 max-width 加回 root、把 overflow 挪到 page、或把页宽改回 1040 ⇒ 必红。
       {
         const 样式g = collect(r.tree, {}).elements
           .filter((el) => el.type === 'style')
@@ -3114,12 +3167,26 @@ export async function runHarness() {
           JSON.stringify(根规则g)));
         passed.push(check(/min-height:\s*100%/.test(根规则g) && !/(?:^|;)\s*height:\s*100%/.test(根规则g),
           '⑦g 根容器 min-height:100% 而非 height:100%（不锁死高度）', JSON.stringify(根规则g)));
-        // page：显示宽度口径保留（1040 居中），且**不许**自己再成为滚动容器（否则又截住滚轮）。
-        passed.push(check(/max-width:\s*1040px/.test(页规则g) && /margin:\s*0\s+auto/.test(页规则g),
-          '⑦g 内容层仍是 1040px 居中（显示宽度不变——主权者只要求放宽滚动作用域）',
-          JSON.stringify(页规则g)));
+        // page：**不许**自己再成为滚动容器（否则又截住滚轮）；宽度口径见下面那条改形说明。
         passed.push(check(页规则g.length > 0 && !/overflow/.test(页规则g),
           '⑦g 内容层不许有 overflow（否则内层又会截住滚轮）', JSON.stringify(页规则g)));
+        // ⚠️ 口径改形（2026-10-13 晚）：「1180px 居中」→ **铺满**。
+        // 理由（不是删红）：旧口径来自 2026-10-12 的「滚动作用域 vs 显示宽度」修复，
+        // 当时主权者只要求放宽滚动作用域、显示宽度不变；宽屏真机上那条款就成了两侧一大片空白
+        // （主权者原话「为啥左右留空这么多」）。现在布局铺满，**可读性改由行长上限保证**
+        // （`--mk-measure`，下一条断言钉着）——这是「铺满」与「读得动」的分工。
+        passed.push(check(!/max-width/.test(页规则g) && /width:\s*100%/.test(页规则g),
+          '⑦g 内容层铺满（无 max-width + width:100%）—— 宽屏不留大片空白',
+          JSON.stringify(页规则g)));
+        passed.push(check(/--mk-measure:\s*\d+ch/.test(readFileSync(CLIENT_PATH, 'utf8'))
+          && /\.dshmind-nodeTitleFull[^{]*\{[^}]*max-width:\s*var\(--mk-measure\)/.test(readFileSync(CLIENT_PATH, 'utf8')),
+          '⑦g 铺满的同时**正文有行长上限**（铺满的可读性代价必须对冲：一行的字太多读不动）',
+          '--mk-measure 在位：' + /--mk-measure:\s*\d+ch/.test(readFileSync(CLIENT_PATH, 'utf8'))));
+        // 覆盖层不许再偷偷声明第二份 page 宽度（同一件事两个出处 ⇒ 迟早漂移）
+        const 页规则们 = 样式g.match(/\.dshmind-page\{[^}]*\}/g) || [];
+        passed.push(check(页规则们.length === 1,
+          '⑦g 内容层宽度只有一个出处（覆盖层不许再声明一份，改一处忘一处就是漂移）',
+          String(页规则们.length)));
         // 结构上确实存在两层。
         passed.push(check(findAllByClass(r.tree, 'dshmind-root').length === 1
           && findAllByClass(r.tree, 'dshmind-page').length === 1,
@@ -3221,6 +3288,215 @@ export async function runHarness() {
       passed.push(check(毒页.text.indexOf('毒项目') < 0,
         '⑨ own __proto__ 不许污染合并结果（修前「毒项目」借原型上屏成 chip）', 毒页.text.slice(0, 160)));
       passed.push(check(({}).项目清单 === undefined, '⑨ 全局 Object.prototype 没被碰'));
+    }
+
+    // ⑪ 分页外壳 / 可视化 / 能力×岗位图谱（2026-10-13 重做）。
+    //    这批新口径每条都配行为判据；接线判定那两条另配塞 bug 校准（判定反了必红）。
+    {
+      /**
+       * 挂一块面板并等数据到位。**不是**复制上面 Batch 8 那个 `状态render` 的语义——
+       * 它被定义在更早的块作用域里、这里拿不到；名字故意不同（`挂`），
+       * 并额外把请求记录挂回渲染器（⑪a 要证「切页零请求」）。
+       */
+      const 挂 = async (view) => {
+        const spy = makeRemote(() => okReply(view));
+        const b = boot({ store, services: Object.assign(session(), { remote: spy.remote }) });
+        const r = mountDashboard(b);
+        r.flush();
+        await settle();
+        r.flush();
+        r.spy = spy;
+        return r;
+      };
+      /** 带接线的投影：2 张能力卡 × 2 个岗位 ⇒ 适用边 3 条，其中 1 条未接线。 */
+      const 接线视图 = (全接上) => {
+        const v = sampleView();
+        v.能力 = [
+          { id: 'policy-decision', 来源: '出厂', 适用岗位: ['Lead', '复核员'] },
+          { id: 'assert-with-evidence', 来源: '自治', 适用岗位: ['Lead'] },
+        ];
+        v.岗位 = [
+          { id: 'Lead', 来源: '私有', 同名: ['私有'], 摘要: '常驻、唯一', 能力引用: ['policy-decision'].concat(全接上 ? ['assert-with-evidence'] : []) },
+          { id: '复核员', 来源: '私有', 同名: ['私有', '出厂'], 摘要: '常驻岗', 能力引用: ['policy-decision'] },
+        ];
+        v.实例计数 = { 按岗位: { Lead: { 在岗: 1, 封存: 0 }, 复核员: { 在岗: 2, 封存: 1 } }, 异常键: 0, 合计: 4 };
+        v.记忆 = { 存量: 44, 窗口天: 7, 新增: 44, 晋升: 0, 按类: { 经历: 31, 知识: 10, 偏好: 3 } };
+        return v;
+      };
+
+      // ── ⑪a 分页外壳 ──
+      const r11 = await 挂(接线视图());
+      const 页容器 = findAllByClass(r11.tree, 'dshmind-pageBox');
+      const 页序 = 页容器.map((el) => el.props['data-dshmind-page']);
+      passed.push(check(页序.join(',') === 'overview,graph,tasks,reviews,bus,audit,memory',
+        '⑪a 七个页容器按注意力顺序在树里（总览→图谱→任务→会审→总线→审计→记忆）', 页序.join(',')));
+      const 显示中 = 页容器.filter((el) => !(el.props.style && el.props.style.display === 'none'));
+      passed.push(check(显示中.length === 1 && 显示中[0].props['data-dshmind-page'] === 'overview',
+        '⑪a 默认只显示总览，其余六页 display:none（节点仍在树里 ⇒ 内容口径断言不受页影响）',
+        显示中.map((el) => el.props['data-dshmind-page']).join(',')));
+      const 导航钮 = findAllByClass(r11.tree, 'dshmind-navBtn');
+      passed.push(check(导航钮.length === 7, '⑪a 导航七个钮（一页一个）', String(导航钮.length)));
+      passed.push(check(findAllByClass(r11.tree, 'dshmind-navBtnOn').length === 1
+        && textOf(findAllByClass(r11.tree, 'dshmind-navBtnOn')[0]).indexOf('总览') >= 0,
+        '⑪a 当前页那一个带 On（且是总览）'));
+      const 请求前 = r11.spy.calls.length;
+      const 图谱钮 = 导航钮.find((el) => el.props['data-page'] === 'graph');
+      图谱钮.props.onClick();
+      await settle();
+      r11.flush();
+      const 显示中2 = findAllByClass(r11.tree, 'dshmind-pageBox')
+        .filter((el) => !(el.props.style && el.props.style.display === 'none'));
+      passed.push(check(r11.spy.calls.length === 请求前,
+        '⑪a 切页不发任何请求（纯显示切换，与折叠钮同款判据）', String(r11.spy.calls.length - 请求前)));
+      passed.push(check(显示中2.length === 1 && 显示中2[0].props['data-dshmind-page'] === 'graph',
+        '⑪a 点了「图谱」⇒ 只有图谱页可见（总览收起）',
+        显示中2.map((el) => el.props['data-dshmind-page']).join(',')));
+      passed.push(check(findAllByClass(r11.tree, 'dshmind-navBtn').length === 7, '⑪a 切页后导航仍在（渲染没崩）'));
+
+      // ── ⑪b 可视化：甜甜圈与统计砖 ──
+      const 图 = findAllByClass(r11.tree, 'dshmind-donut');
+      passed.push(check(图.length >= 1, '⑪b 构成图（甜甜圈）渲染出来', String(图.length)));
+      const 弧段 = collect(图[0], { skipStyle: true }).elements
+        .filter((el) => el.type === 'circle' && typeof el.props.strokeDasharray === 'string');
+      passed.push(check(弧段.length >= 1, '⑪b 弧段用 strokeDasharray 画（不引第三方图库）', String(弧段.length)));
+      const 文本11 = collect(r11.tree, { skipStyle: true }).text;
+      passed.push(check(文本11.indexOf('岗位接线 2/3（67%）') >= 0,
+        '⑪b 统计砖读出接线率（2/3 = 67%，口径＝适用边 ∩ 岗位能力引用）', 文本11.slice(0, 120)));
+      const 无接线 = await renderView(sampleView());
+      // ⚠️ 判据要落在**没画**上，不能拿「文本里有没有『岗位接线』四个字」当判据：
+      //    图谱页在没数据时的空态说明里**明说**了「没带能力/岗位接线」，那句话本身就含这四个字
+      //    （2026-10-13 首跑当场抓出的假红）。所以改判：统计砖的标签「能力卡」不出现，
+      //    **且**图一个都没画出来（没有 data-dshmind=graph 的 svg）。
+      const 无接线图 = collect(无接线.tree, { skipStyle: true }).elements
+        .filter((el) => el.type === 'svg' && el.props['data-dshmind'] === 'graph');
+      passed.push(check(无接线.text.indexOf('能力卡') < 0 && 无接线图.length === 0
+        && 无接线.text.indexOf('不装懂') >= 0,
+        '⑪b 投影没带能力/岗位 ⇒ 不画接线砖、不画图谱，只明说「宿主没给」（不装懂）',
+        '能力卡=' + (无接线.text.indexOf('能力卡') >= 0) + ' 图=' + 无接线图.length));
+
+      // ── ⑪c 图谱：节点 / 边 / 缺口 ──
+      const 取图 = (tree) => collect(tree, { skipStyle: true }).elements
+        .filter((el) => el.type === 'svg' && el.props['data-dshmind'] === 'graph')[0] || null;
+      const 图节点 = collect(取图(r11.tree), { skipStyle: true }).elements
+        .filter((el) => typeof el.props['data-node'] === 'string');
+      passed.push(check(图节点.length === 4, '⑪c 图谱节点 = 2 岗位 + 2 能力', String(图节点.length)));
+      const 图边 = collect(取图(r11.tree), { skipStyle: true }).elements
+        .filter((el) => typeof el.props['data-wired'] === 'string');
+      const 未接边 = 图边.filter((el) => el.props['data-wired'] === '0');
+      passed.push(check(图边.length === 3, '⑪c 图谱边 = 适用边 3 条（一张卡声明了几个岗位就几条边）', String(图边.length)));
+      passed.push(check(未接边.length === 1, '⑪c 未接线的边恰 1 条（assert-with-evidence → Lead）', String(未接边.length)));
+      passed.push(check(文本11.indexOf('接线缺口榜') >= 0 && 文本11.indexOf('assert-with-evidence') >= 0
+        && 文本11.indexOf('无接线缺口') < 0,
+        '⑪c 有缺口 ⇒ 画缺口榜并点名那张卡（不是静默）'));
+      const 全接 = await renderView(接线视图(true));
+      const 全接边 = collect(取图(全接.tree), { skipStyle: true }).elements
+        .filter((el) => typeof el.props['data-wired'] === 'string');
+      passed.push(check(全接边.length === 3 && 全接边.every((el) => el.props['data-wired'] === '1'),
+        '⑪c 全部接线时没有一条红线（data-wired 全 1）', String(全接边.filter((el) => el.props['data-wired'] === '0').length)));
+      passed.push(check(全接.text.indexOf('无接线缺口') >= 0, '⑪c 无缺口时明说「无接线缺口」（不给空表）'));
+
+      // ── ⑪d 记忆页：读数与构成，正文不上面板 ──
+      passed.push(check(文本11.indexOf('对话管「内容与意图」') >= 0,
+        '⑪d 记忆页写明口径：正文出口是对话（面板只做读数与结构）'));
+      passed.push(check(文本11.indexOf('记忆构成') >= 0 && 文本11.indexOf('经历') >= 0,
+        '⑪d 记忆按类构成画出来'));
+      const 无记忆 = sampleView();
+      无记忆.记忆 = null;
+      const 无记忆页 = await renderView(无记忆);
+      passed.push(check(无记忆页.text.indexOf('没带记忆读数') >= 0,
+        '⑪d 宿主没给记忆 ⇒ 明说「没带」而不是画 0（不装懂）'));
+      // ── ⑪e 图谱交互：点节点开详情（纯显示、零请求）──
+      {
+        passed.push(check(findAllByClass(r11.tree, 'dshmind-gDrawer').length === 0,
+          '⑪e 没选节点时不画详情抽屉（不给空壳）'));
+        const 岗位节点 = findAllByClass(r11.tree, 'dshmind-gNode')
+          .find((el) => el.props['data-node'] === '角色:Lead');
+        passed.push(check(!!岗位节点 && typeof 岗位节点.props.onClick === 'function',
+          '⑪e 图谱节点带 onClick（点得动）'));
+        const 请求前2 = r11.spy.calls.length;
+        岗位节点.props.onClick();
+        await settle();
+        r11.flush();
+        passed.push(check(r11.spy.calls.length === 请求前2,
+          '⑪e 点节点不发任何请求（纯显示动作，与折叠钮同款判据）', String(r11.spy.calls.length - 请求前2)));
+        const 抽屉 = findAllByClass(r11.tree, 'dshmind-gDrawer');
+        passed.push(check(抽屉.length === 1, '⑪e 点节点 ⇒ 详情抽屉出现', String(抽屉.length)));
+        const 抽屉文本 = 抽屉.length ? textOf(抽屉[0]) : '';
+        passed.push(check(抽屉文本.indexOf('policy-decision') >= 0 && 抽屉文本.indexOf('已接线') >= 0
+          && 抽屉文本.indexOf('assert-with-evidence') >= 0 && 抽屉文本.indexOf('未接线') >= 0,
+          '⑪e 抽屉逐条列出邻居并标已接/未接（「发卡 ≠ 接线」在单点上的读法）', 抽屉文本.slice(0, 90)));
+        passed.push(check(findAllByClass(r11.tree, 'dshmind-gNodeOff').length >= 1,
+          '⑪e 选中后无关节点被调暗（一眼看出它连的是谁）',
+          String(findAllByClass(r11.tree, 'dshmind-gNodeOff').length)));
+        passed.push(check(findAllByClass(r11.tree, 'dshmind-gEdgeOff').length >= 1,
+          '⑪e 选中后无关的边被调暗'));
+        const 选中节点 = findAllByClass(r11.tree, 'dshmind-gNodeOn');
+        passed.push(check(选中节点.length === 1 && 选中节点[0].props['data-node'] === '角色:Lead',
+          '⑪e 选中的那个节点带 On 类'));
+        const 同节点 = findAllByClass(r11.tree, 'dshmind-gNode')
+          .find((el) => el.props['data-node'] === '角色:Lead');
+        // 先验另一条取消路径：**点空白处**（2026-10-13 晚主权者提的缺口）——
+        // 空白层是垫在所有节点下面的不可见 rect，点它 ⇒ 取消选中；纯显示、零请求。
+        const 空白层 = collect(r11.tree, { skipStyle: true }).elements
+          .find((el) => el.props && el.props['data-graph-bg'] === '1');
+        passed.push(check(!!空白层 && typeof 空白层.props.onClick === 'function',
+          '⑪e 图谱有空白层且点得动（点空白 ⇒ 取消选中的入口）'));
+        if (空白层) {
+          const 请求前3 = r11.spy.calls.length;
+          空白层.props.onClick();
+          await settle();
+          r11.flush();
+          passed.push(check(findAllByClass(r11.tree, 'dshmind-gDrawer').length === 0
+            && findAllByClass(r11.tree, 'dshmind-gNodeOn').length === 0
+            && findAllByClass(r11.tree, 'dshmind-gNodeOff').length === 0,
+            '⑪e 点空白处 ⇒ 取消选中（抽屉收起、调暗复原）'));
+          passed.push(check(r11.spy.calls.length === 请求前3,
+            '⑪e 点空白处不发任何请求（纯显示动作）', String(r11.spy.calls.length - 请求前3)));
+        }
+        // 再选中一次，验另一条路径：**再点同一个节点** ⇒ 取消。
+        const 重选 = findAllByClass(r11.tree, 'dshmind-gNode')
+          .find((el) => el.props['data-node'] === '角色:Lead');
+        重选.props.onClick();
+        await settle();
+        r11.flush();
+        同节点.props.onClick();
+        await settle();
+        r11.flush();
+        passed.push(check(findAllByClass(r11.tree, 'dshmind-gDrawer').length === 0
+          && findAllByClass(r11.tree, 'dshmind-gNodeOn').length === 0,
+          '⑪e 再点同一个节点 ⇒ 取消选中（抽屉收起、调暗复原）'));
+      }
+
+      // ── ⑪f 注意力区（3 秒层）：平静 / 探针异常 / **漏项捕获** ──
+      {
+        const 空待决 = 接线视图();
+        空待决.待你决定 = [];
+        const 平静 = await renderView(空待决);
+        passed.push(check(平静.text.indexOf('现在没有需要你拍板的事') >= 0,
+          '⑪f 待你决定为空 ⇒ 一条平静绿带（不留一块空白让人以为面板坏了）'));
+        const 恒绿 = 接线视图();
+        恒绿.状态条 = Object.assign({}, 恒绿.状态条, { 探针: { 状态: '恒绿', 见红: [], 恒红: false, 恒绿: true } });
+        const 恒绿页 = await renderView(恒绿);
+        passed.push(check(恒绿页.text.indexOf('从来没红过') >= 0,
+          '⑪f 探针恒绿也进注意力区（「从来没红过」是异常信号，不是平安）'));
+        // 漏项捕获：**带待决说明、但状态不是「待决」**的节点——现行收集口径会漏掉它
+        const 漏项 = 接线视图();
+        const 节点们 = (漏项.任务 && 漏项.任务.节点) || [];
+        漏项.任务 = Object.assign({}, 漏项.任务, {
+          节点: 节点们.concat([{
+            id: 'task-存档-9', 描述: '存档节点', 状态: '已派发', 负责人: ['插件工程'], 模式: '独立会审',
+            判据: [], 判据冻结: true, 依赖: [], 打回次数: 0, 产物: [],
+            交卷: { 已交: 0, 应交: 1, 齐: false }, 待决原因: '负责人实例消亡，待裁决处置（作废/存档）',
+          }]),
+        });
+        const 漏项页 = await renderView(漏项);
+        passed.push(check(漏项页.text.indexOf('挂有待决说明，但不在待决清单里') >= 0
+          && 漏项页.text.indexOf('task-存档-9') >= 0
+          && 漏项页.text.indexOf('负责人实例消亡，待裁决处置（作废/存档）') >= 0,
+          '⑪f 挂待决说明但状态非「待决」的节点被顶到注意力区，原因**全文照给**（不截断）',
+          漏项页.text.slice(0, 90)));
+      }
+      r11.unmount();
     }
   }
 

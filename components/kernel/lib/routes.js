@@ -86,43 +86,148 @@ function 取头(req, 名) {
   return String(headers[名] ?? '');
 }
 
-/** Origin 头（若有）必须与请求 Host 完全同源。 */
-function 源与宿主同源(origin, host) {
+/**
+ * 请求指纹：只取**传输层事实**，供「为什么被拒」写清楚。
+ *
+ * 为什么要有它（2026-10-13 真机取证）：主权者真机上面板报「跨站读取被拒」，但端点用
+ * 带 `sec-fetch-site: same-origin` 的探针**打得通** ⇒ 光看「被拒」两个字定位不了真因
+ * （是页面源不同？是 Referer 露了别的源？还是宿主转发时改了 Host？）。传输层拒绝**不入账**
+ * （入账会变成 3 秒轮询的洪水），所以把它挂在**拒绝理由**与 **ping 端点**上：
+ * 面板那条「未连接」提示会原样显示指纹，刷新一次就能读出真因。
+ *
+ * ⚠️ 只取这几个传输层头，**一个业务入参都不抄**（理由与 8dt59 同款：传输层诊断不许变成内容泄露面）。
+ */
+function 请求指纹(req) {
+  const 头 = (req && req.headers) || {};
+  const 取 = (名) => String(头[名] ?? '') || '（无）';
+  return {
+    secFetchSite: 取('sec-fetch-site'),
+    origin: 取('origin'),
+    host: 取('host'),
+    referer: 取('referer'),
+    // 插件半边自己带的标记头（`x-dsh-mind-panel`）。真机读数（2026-10-13 17:25）：
+    // 官方客户端里插件页的请求**不带任何 Fetch Metadata 头**（sec-fetch-site / origin / referer 全无），
+    // 与「本机任意进程」在传输层无法区分 ⇒ 被 P1-10 的 fail-closed 整类拒掉。
+    // 这个标记头的到位与否，直接回答「自定义头能不能穿过那条通道」——
+    // 能穿过，才谈得上把栅栏从「认来源」改成「认凭据」。
+    标记: 取('x-dsh-mind-panel'),
+  };
+}
+
+/** 指纹 → 一行可读串（进拒绝理由；面板会显示它）。 */
+function 指纹串(req) {
+  const f = 请求指纹(req);
+  return 'sec-fetch-site=' + f.secFetchSite + ' · origin=' + f.origin + ' · host=' + f.host
+    + (f.referer === '（无）' ? '' : ' · referer=' + f.referer)
+    + ' · 插件标记=' + f.标记;
+}
+
+/**
+ * 最近一次同源拒绝（只留最后一条）。
+ *
+ * 存下来是为了给**看门人一条自证通路**：面板被拒时它自己看得到理由，
+ * 而外部（人和工具）可以打 `GET /plugins/dsh-mind/ping` 读到同一条指纹 —— 不必靠截图传话。
+ * 不入账、不落盘：这是**运行态诊断**，不是事实记录（事实记录是审计链，它不收传输层噪声）。
+ */
+const 最近同源拒绝 = { 于: null, 端点: null, 指纹: null, 期望: null };
+
+/** 记一笔同源拒绝（内存，不落盘）。 */
+function 记同源拒绝(端点, req, 期望) {
+  最近同源拒绝.于 = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  最近同源拒绝.端点 = 端点;
+  最近同源拒绝.指纹 = 请求指纹(req);
+  最近同源拒绝.期望 = 期望;
+}
+
+/**
+ * Host / Origin 是不是回环地址（这个端点只服务本机）。
+ * 参数 `origin` 传整条 URL，`host` 传 `host` 头；两者都容忍缺省。
+ */
+function 源是回环(origin) {
   if (!origin) return true;
   try {
-    return new URL(origin).host === String(host || '');
+    const h = new URL(origin).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    return h === '127.0.0.1' || h === 'localhost' || h === '::1';
   } catch {
     return false;
   }
 }
-
-/**
- * 读请求栅栏：挡掉跨站读取（简单请求即可读，不需要 cookie）。
- *
- * `sec-fetch-site` **必须在场**（2026-10-13 审查 P1-10）：修前它缺席时直接放行——浏览器
- * fetch/XHR 一定带 Fetch Metadata 头，缺席的请求只能来自非浏览器客户端（curl / 本机任意
- * 进程），而那条路会把全量 Lead 投影零认证地送出去。现在缺席 = 拒绝（fail-closed）。
- */
-function 同源读请求(req) {
-  const 站点 = 取头(req, 'sec-fetch-site').toLowerCase();
-  if (!站点) return false;
-  if (站点 !== 'same-origin' && 站点 !== 'same-site' && 站点 !== 'none') return false;
-  return 源与宿主同源(取头(req, 'origin'), 取头(req, 'host'));
+function 宿主是回环(host) {
+  const h = String(host || '').toLowerCase().replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+  return h === '127.0.0.1' || h === 'localhost' || h === '::1';
 }
 
 /**
- * 写请求栅栏：
- *  - `content-type` 必须是 `application/json` —— 跨域带这个头必然触发预检，预检失败就写不进来；
- *  - `sec-fetch-site`（浏览器自己带、页面无法伪造）**必须在场**且只接受 same-origin / none
- *    （2026-10-13 审查 P1-10：修前缺席放行 ⇒ 本机任意进程可 POST 改主权者设置）；
- *  - 带 Origin 时必须同源。
+ * 本机无头通道开关（2026-10-13 真机取证后的**主权者级权衡**，一行可退）。
+ *
+ * 事由：P1-10（同日早些时候）把「`sec-fetch-site` 缺席 = 非浏览器 = 拒」写成 fail-closed。
+ * 随后真机取证发现：**官方客户端里插件页发出的请求压根不带 Fetch Metadata 头**
+ * （指纹实测 `sec-fetch-site=（无）· origin=（无）· referer=（无）`，只剩 `host`）——
+ * 那条通道是宿主替页面发的（没有浏览器指纹），于是面板与设置页**整类被拒**：
+ * 看板每 3 秒轮询 `Promise.all([workbench, presence])` 全部 403，面板恒「未连接」。
+ *
+ * 取舍（**如实标注，别读成"已解决"**）：
+ *  - 保留：浏览器**明说** `cross-site` / `same-site` ⇒ 一律拒（网页攻击的特征，且页面无法伪造）；
+ *    非回环 Host / 非回环 Origin ⇒ 一律拒。
+ *  - 接受：缺声明的**本机**请求（宿主代理通道 / 本机进程）放行，但**不再无声**——
+ *    计数并进 `ping` 读数（`本机通道`），拒绝理由也带指纹。
+ *  - 残余风险：本机任意进程仍可读到投影（它本来也能直接读盘）。这条权衡**属主权者级**，
+ *    要收紧就把下面这个常量改 `false`（一行，无需改逻辑）。
  */
-function 同源写请求(req) {
-  if (!取头(req, 'content-type').toLowerCase().startsWith('application/json')) return false;
+const 允许无头本机读 = true;
+
+/** 无头通道计数（内存诊断；进 ping，不落盘不入账——传输层不写事实记录）。 */
+const 无头通道 = { 读: 0, 写: 0, 首次于: null, 最近于: null, 最近指纹: null };
+function 记无头请求(类, req) {
+  const 于 = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  无头通道[类] += 1;
+  if (!无头通道.首次于) 无头通道.首次于 = 于;
+  无头通道.最近于 = 于;
+  无头通道.最近指纹 = 请求指纹(req);
+}
+
+/**
+ * 读请求栅栏（2026-10-13 改形，见 `允许无头本机读` 的说明）。
+ *
+ * 判据顺序：**先看浏览器有没有"明说跨站"，再看是不是本机，最后才看缺不缺声明**。
+ * 这与 P1-10 的差别只在第三条：P1-10 把「缺声明」直接当敌意；真机证明本机官方客户端
+ * 的插件通道正是这个形状 ⇒ 缺声明在本机回环下**放行且计数**，其余照旧一律拒。
+ *
+ * @returns {{ok: boolean, 为什么?: string}}
+ */
+function 读栅栏(req) {
   const 站点 = 取头(req, 'sec-fetch-site').toLowerCase();
-  if (!站点) return false;
-  if (站点 !== 'same-origin' && 站点 !== 'none') return false;
-  return 源与宿主同源(取头(req, 'origin'), 取头(req, 'host'));
+  if (站点 === 'cross-site' || 站点 === 'same-site') return { ok: false, 为什么: '浏览器声明跨站（sec-fetch-site=' + 站点 + '）' };
+  if (站点 && 站点 !== 'same-origin' && 站点 !== 'none') return { ok: false, 为什么: '未知的 sec-fetch-site 取值：' + 站点 };
+  if (!宿主是回环(取头(req, 'host'))) return { ok: false, 为什么: 'Host 不是回环地址（这个端点只服务本机）' };
+  if (!源是回环(取头(req, 'origin'))) return { ok: false, 为什么: 'Origin 不是回环来源' };
+  if (!站点) {
+    if (!允许无头本机读) return { ok: false, 为什么: '无 Fetch Metadata 头（本机无头通道已关闭）' };
+    记无头请求('读', req);
+  }
+  return { ok: true };
+}
+
+/**
+ * 写请求栅栏（同样是改形后的口径，见 `允许无头本机读`）：
+ *  - `content-type` 必须是 `application/json`（跨域带这个头必然触发预检）；
+ *  - 明说 `cross-site` / `same-site` ⇒ 拒；非回环 Host / Origin ⇒ 拒；
+ *  - 缺声明但本机回环 ⇒ 放行且计数（本机客户端写主权者设置本来就要走这条路）。
+ *
+ * @returns {{ok: boolean, 为什么?: string}}
+ */
+function 写栅栏(req) {
+  if (!取头(req, 'content-type').toLowerCase().startsWith('application/json')) return { ok: false, 为什么: 'content-type 不是 application/json' };
+  const 站点 = 取头(req, 'sec-fetch-site').toLowerCase();
+  if (站点 === 'cross-site' || 站点 === 'same-site') return { ok: false, 为什么: '浏览器声明跨站（sec-fetch-site=' + 站点 + '）' };
+  if (站点 && 站点 !== 'same-origin' && 站点 !== 'none') return { ok: false, 为什么: '未知的 sec-fetch-site 取值：' + 站点 };
+  if (!宿主是回环(取头(req, 'host'))) return { ok: false, 为什么: 'Host 不是回环地址' };
+  if (!源是回环(取头(req, 'origin'))) return { ok: false, 为什么: 'Origin 不是回环来源' };
+  if (!站点) {
+    if (!允许无头本机读) return { ok: false, 为什么: '无 Fetch Metadata 头（本机无头通道已关闭）' };
+    记无头请求('写', req);
+  }
+  return { ok: true };
 }
 
 /** @param {any} req @returns {Promise<string>} */
@@ -196,7 +301,11 @@ export function presence路由({ org, 项目 }) {
   return async function presence端点(req, res) {
     const 方法 = String(req?.method ?? 'GET').toUpperCase();
     if (方法 === 'GET' || 方法 === 'HEAD') {
-      if (!同源读请求(req)) return 回拒绝(res, 403, '跨站读取被拒：这个端点只服务同源页面。', '从本机页面访问该端点。');
+      const 判读 = 读栅栏(req);
+      if (!判读.ok) {
+        记同源拒绝('presence·读', req, 判读.为什么);
+        return 回拒绝(res, 403, '读取被拒：' + 判读.为什么 + '。收到：' + 指纹串(req), '从本机页面访问该端点。');
+      }
       try {
         回JSON(res, 200, await presence包({ org, 项目 }));
       } catch (error) {
@@ -205,8 +314,10 @@ export function presence路由({ org, 项目 }) {
       return;
     }
     if (方法 === 'POST' || 方法 === 'PUT') {
-      if (!同源写请求(req)) {
-        return 回拒绝(res, 403, '跨站写入被拒：写请求必须同源，且 content-type 为 application/json。', '从本机页面用 fetch 提交 JSON。');
+      const 判写 = 写栅栏(req);
+      if (!判写.ok) {
+        记同源拒绝('presence·写', req, 判写.为什么);
+        return 回拒绝(res, 403, '写入被拒：' + 判写.为什么 + '。收到：' + 指纹串(req), '从本机页面用 fetch 提交 JSON。');
       }
       let 原文;
       try {
@@ -249,7 +360,11 @@ export function workbench路由({ org, 项目 }) {
   return async function workbench端点(req, res) {
     const 方法 = String(req?.method ?? 'GET').toUpperCase();
     if (方法 !== 'GET' && 方法 !== 'HEAD') return 回方法不对(res, 方法, 'GET');
-    if (!同源读请求(req)) return 回拒绝(res, 403, '跨站读取被拒：这个端点只服务同源页面。', '从本机页面访问该端点。');
+    const 判读 = 读栅栏(req);
+    if (!判读.ok) {
+      记同源拒绝('workbench', req, 判读.为什么);
+      return 回拒绝(res, 403, '读取被拒：' + 判读.为什么 + '。收到：' + 指纹串(req), '从本机页面访问该端点。');
+    }
     try {
       // 读者固定是「设置页」这个 Lead 身份：命令面上根会话（Lead）看到的就是全量投影。
       回JSON(res, 200, await 看板包({ org, 项目: 取项目(req, 项目), 读者: 设置页主体(), 审计条数: 40 }));
@@ -272,7 +387,11 @@ export function ping路由({ org, ctx }) {
   return async function ping端点(req, res) {
     const 方法 = String(req?.method ?? 'GET').toUpperCase();
     if (方法 !== 'GET' && 方法 !== 'HEAD') return 回方法不对(res, 方法, 'GET');
-    if (!同源读请求(req)) return 回拒绝(res, 403, '跨站读取被拒：这个端点只服务同源页面。', '从本机页面访问该端点。');
+    const 判ping = 读栅栏(req);
+    if (!判ping.ok) {
+      记同源拒绝('ping', req, 判ping.为什么);
+      return 回拒绝(res, 403, '读取被拒：' + 判ping.为什么 + '。收到：' + 指纹串(req), '从本机页面访问该端点。');
+    }
     const ws = ctx ? 取webServer(ctx) : null;
     const 有webServer = Boolean(ws && typeof ws.register === 'function');
     回JSON(res, 200, {
@@ -280,6 +399,10 @@ export function ping路由({ org, ctx }) {
       组件: 组件名,
       有webServer,
       ...(有webServer ? {} : { 状态: 'webServer未接入', 说明: '宿主上此刻取不到 webServer 服务；面板/设置页可能空白，诊断见宿主日志。' }),
+      // 最近一次被栅栏拒掉的请求 + **本机无头通道**的计数（内存诊断读数，不落盘、不入账）：
+      // 面板自己被拒时看不到别人的证据，外部一打 ping 就能读到同一条指纹 —— 诊断不必靠截图传话。
+      ...(最近同源拒绝.于 ? { 最近同源拒绝: { ...最近同源拒绝 } } : {}),
+      ...(无头通道.读 + 无头通道.写 > 0 ? { 本机通道: { ...无头通道 } } : {}),
       时间: 当前ISO(org),
     });
   };

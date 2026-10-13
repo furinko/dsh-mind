@@ -179,6 +179,12 @@ export class Org {
       // 面板就永远一片空白（主人真机截图：任务图/消息总线全空）。给这份清单，
       // 界面才可能说出「还有哪些项目有账」并一键切过去，而不是继续假装组织是空的。
       项目清单: await this.projectList(项目),
+      // 能力 × 岗位接线（2026-10-13 重做·图谱）：两个只读真源 + 实例规模。
+      // 三条都走**免审计的只读取数**（`capability.list` / `registry.list` / `identity` 都不入账）——
+      // 工作台是轮询的投影，取数一旦入账就会把审计链灌成流水。
+      能力: await this.capability.list(),
+      岗位: await this.registry.list(),
+      实例计数: 计实例计数(await this.registry.identity()),
       生成于: this.clock.iso(),
     });
     return spec.读者 ? sliceForViewer(view, spec.读者) : view;
@@ -310,4 +316,30 @@ export function subjectFor(spec) {
   // `args.role` 不再参与主体构造 ⇒「自报岗位」那条路**已不存在**；本 `岗位` 分支现在只服务
   // **宿主显式给的主体**（工具面/命令面 = `agentSubject`，路由面 = 设置页主体）。
   return { id: 实例, kind: '成员' };
+}
+
+/**
+ * 身份档案 → 岗位级实例计数（2026-10-13 重做·图谱）。
+ *
+ * 口径：**只给计数，不给实例 id** —— 图谱上岗位是一个节点，实例是它的规模；
+ * 把 id 搬上投影等于把「谁在岗」这份名单多复制一份，而真源是身份档案本身。
+ * `undefined` 键（历史上 `registry_assign` 漏传实例时落下的坏键，见 exp 422ca5）照实计入：
+ * 它不是「一个岗位」，所以单独放在 `异常键` 里可见，**不混进任何岗位的计数**。
+ *
+ * @param {{ members?: Record<string, {岗位?: string, status?: string}> }} identity
+ * @returns {{ 按岗位: Record<string, {在岗: number, 封存: number}>, 异常键: number, 合计: number }}
+ */
+export function 计实例计数(identity) {
+  const 按岗位 = {};
+  let 异常键 = 0;
+  const members = identity?.members ?? {};
+  for (const key of Object.keys(members)) {
+    if (key === 'undefined') { 异常键 += 1; continue; }
+    const 岗位 = members[key]?.岗位;
+    if (typeof 岗位 !== 'string' || 岗位 === '') continue;
+    const 桶 = (按岗位[岗位] ??= { 在岗: 0, 封存: 0 });
+    if (members[key]?.status === '封存') 桶.封存 += 1;
+    else 桶.在岗 += 1;
+  }
+  return { 按岗位, 异常键, 合计: Object.keys(members).length };
 }
