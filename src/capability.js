@@ -142,7 +142,10 @@ export class CapabilityLibrary {
    * 过（create/write 按是否存在自动分档），此处不再重复过闸。
    * 存量卡零迁移：既有卡 front matter 带 version ⇒ 重发布自动 v1→v2 并留 v1 历史。
    *
-   * @param {{ subject: object, 名: string, id?: string, 正文: string, 适用岗位: string[], 依据: string }} input
+   * @param {{ subject: object, 名: string, id?: string, 正文: string, 适用岗位: string[], 依据: string, 任务?: object }} input
+   *   `任务` 是**任务内全权**的凭据（task-修复-lib-actions-j-649a4）：成员在任务内发卡时
+   *   由动作层从任务图取出节点本体传入，这里原样转交 store.write 的 spec.task——
+   *   断在这一层的话，handler 透传了也到不了策略判定（本会话实测撞墙点）。
    * @returns {Promise<{ id: string, version: number, 来源: string, path: string }>}
    */
   async publish(input) {
@@ -159,7 +162,7 @@ export class CapabilityLibrary {
       // version 不许在这里写死：版本归 ObjectStore 管（存在 ⇒ 递增并留档）。
     };
     const body = `\n# ${input.名}\n\n## 适用岗位\n${适用岗位.map((r) => `- ${r}`).join('\n')}\n\n## 怎么做\n${input.正文}\n`;
-    const written = await this.store.write('能力', { meta, body }, { subject: input.subject, reason: input.依据 });
+    const written = await this.store.write('能力', { meta, body }, { subject: input.subject, reason: input.依据, task: input.任务 ?? null });
     return { id, version: written.version, 来源: SOURCE_AUTONOMOUS, path: written.path };
   }
 

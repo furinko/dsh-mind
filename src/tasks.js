@@ -42,6 +42,10 @@ const TRANSITIONS = {
   // settle（W3 批3）：结账是环路的**最后一步**，只从「已采纳」出发——
   // 复核没过就打回重做，没采纳的节点不许结账（那会把未验收的工作收进终态）。
   settle: ['已采纳'],
+  // reassign（task-机制缺口-10th0 · 裁决③ · 2026-10-13）：改派负责人。
+  // 只许在「待派发 / 已派发」改——执行中改派会让「谁在干活」与已交的作业归属脱钩，
+  // 交卷后改派会洗掉「谁交的卷」。负责人实例消亡 ⇒ 只能重建节点的死路由此打通。
+  reassign: ['待派发', '已派发'],
 };
 
 /**
@@ -150,6 +154,55 @@ export class TaskGraph {
     await this.#checkWrite(id, node, spec);
     await this.#append(spec.项目, { kind: 'started', id, 状态: '执行中' }, spec.subject);
     return this.get(id, { 项目: spec.项目 });
+  }
+
+  /**
+   * 改派负责人（task-机制缺口-10th0 · 裁决③ · 2026-10-13）。
+   *
+   * 背景：`create` 之后再没有任何接口能动 `负责人`——负责人实例消亡后节点只能重建
+   * （workbench 三个节点全卡在「派了活但成员跑不起来」就是这条死路）。
+   *
+   * 三条边界（裁决原文）：
+   *  - **仅 Lead**：改派是「把活从一个人手里挪到另一个人手里」的排兵动作，成员不能自派；
+   *  - **仅 待派发 / 已派发**：执行中改派会让作业归属脱钩、交卷后改派会洗掉交卷人（状态机守着）；
+   *  - **入审计**：谁把哪个节点从谁改派给谁，走事件流（fold 可重建）+ 审计一条。
+   *
+   * @param {string} id
+   * @param {{ subject: object, 项目: string, 负责人: string|string[] }} spec
+   */
+  async reassign(id, spec) {
+    if (spec.subject?.kind !== 'Lead') {
+      throw new Denied('任务图 · 改派负责人仅 Lead', `改派是排兵动作（把节点的负责人换成别人）：${spec.subject?.kind ?? '未知'} 没有这只手，成员不能自派、也不能把别人的活挪走。`, {
+        requireAuthority: 'Lead',
+        howToChange: '由 Lead 执行 task_reassign（改派事实与新旧负责人都进审计）。',
+      });
+    }
+    const node = await this.#require(id, spec.项目);
+    this.#requireTransition(node, 'reassign');
+    const 负责人 = [...new Set(normalizeList(spec.负责人))];
+    if (负责人.length === 0) throw new InvalidBody('改派后的负责人名单不能为空。', { missing: ['负责人'] });
+    if (负责人.length > 1 && !MULTI_MODES.includes(node.模式)) {
+      throw new InvalidBody(`改成多人负责必须节点已声明多人模式：${MULTI_MODES.join(' / ')}（本节点模式：${node.模式 ?? '未声明'}）。`, { missing: ['模式'] });
+    }
+    await this.#checkWrite(id, node, spec);
+    const 旧负责人 = node.负责人 ?? [];
+    await this.#append(
+      spec.项目,
+      { kind: 'reassigned', id, 负责人 },
+      spec.subject,
+      '状态变更',
+      (nodeInLock) => {
+        // 锁内复检状态：拿号到落笔之间节点可能已被推进（执行中/交卷后不许改派）。
+        if (!['待派发', '已派发'].includes(nodeInLock.状态)) {
+          throw new Denied('任务图 · 状态机', `节点 ${id} 在锁内已推进为 ${nodeInLock.状态}，不能执行 reassign（允许的状态：待派发 / 已派发）。`, {
+            howToChange: '主干环路的次序是 受理→定判据→派发→执行→交卷→复核→采纳/打回；按当前状态选下一步动作。',
+          });
+        }
+        return { kind: 'reassigned', id, 负责人 };
+      },
+    );
+    const after = await this.get(id, { 项目: spec.项目 });
+    return { ...after, 改派: { 从: 旧负责人, 到: 负责人 } };
   }
 
   /**
@@ -603,6 +656,12 @@ export function fold(rows) {
         node.状态 = '已派发';
         node.判据冻结 = true;
         node.派发于 = row.at;
+        break;
+      // 改派负责人（task-机制缺口-10th0）：名单整体替换，历史逐次留痕（谁改的、何时）。
+      // 只在 待派发/已派发 态发生（写入面状态机守着），fold 不必再判——投影如实折事件流。
+      case 'reassigned':
+        node.负责人 = row.负责人;
+        node.改派记录 = [...(node.改派记录 ?? []), { 负责人: row.负责人, 由: row.by?.id ?? null, 于: row.at }];
         break;
       case 'started':
         node.状态 = row.状态 ?? '执行中';

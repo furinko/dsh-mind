@@ -43,6 +43,10 @@ const 冻结动作表 = [
   'workbench',
   'policy_check',
   'task_create',
+  // task_reassign（task-机制缺口-10th0 · 裁决③ · 2026-10-13）：改派负责人。
+  // 过这一关时回答「是不是改设置的动作」：不是——它改的是任务图节点的负责人名单，
+  // 仅 Lead、仅 待派发/已派发 态（服务层状态机 + Lead 闸守着），事件流与审计都留痕。
+  'task_reassign',
   'task_dispatch',
   'task_start',
   'task_submit',

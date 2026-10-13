@@ -222,7 +222,8 @@ export class RoleRegistry {
    * 所以封存那一格按目标岗位分流：同岗位 = 复活（拒，指 restore）；不同岗位 = 换岗（放行，
    * 且 `代` 由调用方显式给、留一条「登记到岗位 X」的审计）。
    *
-   * @param {{ subject: object, 岗位: string, 实例: string, 代?: number }} spec
+   * @param {{ subject: object, 岗位: string, 实例: string, 代?: number, 授权引用?: string }} spec
+   *   `授权引用`：目标岗位＝复核员时必填（主权者授权依据，原样进链接受复核）。
    */
   async assign(spec) {
     const card = await this.get({ id: spec.岗位 });
@@ -232,6 +233,20 @@ export class RoleRegistry {
         howToChange: '先在 集体L3-成员角色卡/ 建岗位卡，再派实例。',
       });
     }
+    // 复核员任命特判（task-机制缺口-10th0 · 裁决② · 2026-10-13）：岗位锁只保证「在岗后」
+    // 不能写，不约束「谁能把我放进复核员岗」——任命权与岗位锁是两件事（独立复核 4yuxq 定案）。
+    // 与 audit_correct 的授权闸同族：空授权 = 默认拒绝，授权依据原样进链接受复核。
+    const 授权引用 = typeof spec.授权引用 === 'string' ? spec.授权引用.trim() : '';
+    if (spec.岗位 === '复核员' && !授权引用) {
+      throw new Denied(
+        '角色注册表 · 复核员任命须主权者授权（§7）',
+        `把实例 ${spec.实例} 登记到「复核员」是任命独立复核者：这一步必须携带主权者授权依据（授权引用 = 决议 / 任务节点 id），空授权 = 默认拒绝。`,
+        {
+          requireAuthority: '主权者',
+          howToChange: '由主权者授权后，把授权依据 id 作为「授权引用」传入 registry_assign（它会原样进链接受复核）。',
+        },
+      );
+    }
     await this.policy.check({
       subject: spec.subject,
       action: 'create',
@@ -240,8 +255,11 @@ export class RoleRegistry {
     });
     /** @type {object|null} */
     let 幂等现状 = null;
+    /** 首次登记 = 这个实例第一次进身份档案（「创建」在账上的锚点，见方法头注释）。 */
+    let 首登 = false;
     const updated = await this.#mutateIdentity((current) => {
       const 现存 = current.members[spec.实例];
+      首登 = !现存;
       if (现存?.status === '封存' && 现存.岗位 === spec.岗位) {
         throw new Denied('角色注册表 · 封存实例不得靠 assign 复活（§7）', `实例 ${spec.实例} 已封存在「${现存.岗位}」：assign 到**同一个岗位**会把它静默写回在岗，并把代数重置成 ${spec.代 ?? 1}（停岗决定被一次「补登记」撤销）。`, {
           requireAuthority: 'Lead',
@@ -274,6 +292,22 @@ export class RoleRegistry {
       结果: `登记到岗位 ${spec.岗位}（第 ${spec.代 ?? 1} 代）`,
       详情: { 实例数: Object.keys(updated.members).length },
     });
+    // 主体创建入账（task-机制缺口-10th0 · 裁决① · 2026-10-13）：spawn 发生在宿主侧（Agent Teams），
+    // 组织侧看不见——891jd 决策备忘录已判「宿主侧挂钩归属错」（选项 C），本条走裁决给的
+    // 退路：**首次登记即创建入账**，把「这个主体是什么时候第一次在账上出现」钉进审计链。
+    // 防泄密口径与 8dt59 同源：只记实例 id 与动作名，详情为空，不抄任何入参内容。
+    // 残余盲区（如实标注）：被创建但**从未登记、也从未敲过门**的主体，账上仍不可见——
+    // 敲过门的由「身份未登记拦截」入账（8dt59），报告面（registry_list）会把两者对出来。
+    if (首登) {
+      await this.audit.append({
+        动作: '主体创建',
+        主体: spec.subject,
+        对象: { id: spec.实例, kind: '身份' },
+        依据: '角色注册表：首次登记即创建入账（spawn 在宿主侧，账上以首登为锚）',
+        结果: '已入账',
+        详情: 授权引用 ? { 授权引用 } : {},
+      });
+    }
     return { 实例: spec.实例, 岗位: spec.岗位, 代: spec.代 ?? 1, 状态: '在岗' };
   }
 
