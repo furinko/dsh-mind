@@ -938,7 +938,17 @@ window.__ModuleLoader__.load({
       // 高度随列宽收窄而爆炸，横向却还空着。改单列吃满宽度，长文本才读得下去。
       // 注：`grid-template-columns:1fr` 而非 `display:block`——保留 grid 的 gap 语义，
       // 且与下方 `.dshmind-node` 的既有样式零冲突（改动面最小）。
-      '.dshmind-nodes{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:10px;margin-top:12px}',
+      // 📌 **口径改形（2026-10-14 · 主权者指令「不要用多列，就按 mockup 做」）**：
+      //    2026-10-13 晚这里被改成 `repeat(auto-fill,minmax(420px,1fr))` 的自动网格，
+      //    理由是「单列 + 正文限行宽 ⇒ 每张卡右半边空着」。**那个诊断把因果搞反了。**
+      //    右半边空的成因是**逐元素的行长上限**（`--mk-measure:78ch`），不是单列本身 ——
+      //    设计稿（`mind-panel-redesign/mockup.html`）正是**单列**，而它的 `.tcard .desc`
+      //    **没有任何行长上限**，卡片自然吃满整宽。
+      //    ⇒ 正确改法：**回单列，同时放开卡内预览文本的限宽**（见下方 V19），
+      //    而不是靠多列去把卡片切窄。多列的代价：每卡只剩 420px、长正文疯狂折行，
+      //    读者要竖着扫三遍（主权者原话「不好看」）。
+      //    守的本意不变：**任何一列都窄不到让长描述爆炸** —— 单列是最宽的那一档。
+      '.dshmind-nodes{display:grid;grid-template-columns:1fr;gap:10px;margin-top:12px}',
       '.dshmind-node{border:.5px solid var(--dsw-alias-border-l1,#0000001f);border-radius:var(--dsw-radius-md,8px);',
       'background:var(--dsw-alias-bg-layer-2,#fff);padding:10px 12px;min-width:0;display:flex;flex-direction:column;gap:6px}',
       '.dshmind-nodePending{border-color:var(--dsw-alias-state-warn-primary,#c47f17);',
@@ -1142,7 +1152,17 @@ window.__ModuleLoader__.load({
       '--mk-ac:var(--dsw-alias-state-business-primary,#5b8def);--mk-ok:var(--dsw-alias-state-success-primary,#3fb27f);',
       '--mk-warn:var(--dsw-alias-state-warning-primary,#d4a053);--mk-bad:var(--dsw-alias-state-error-primary,#e5534b);',
       // 版面铺满之后，**行长**必须单独管：一行放 200 个字是读不动的（这不是审美，是可读性）。
-      '--mk-measure:78ch}',
+      // 📌 **值改形（2026-10-14 · 主权者：「描述展开后就只占一半了」）**：
+      //    原值 `78ch`（≈550px @14px）。但 `ch` 是**西文 "0" 的宽度**，中文一个字约等于 2ch
+      //    ⇒ 78ch 对中文只有约 39 字/行，落在**卡宽 1300~1800px** 的卡里就是"只占左半"。
+      //    设计稿（`.tcard .desc`，含 `.open` 展开态）**没有任何限宽**；我上一步却把 78ch
+      //    保留在展开态、理由是"大段正文要控行长" —— **那是我自作主张，偏离了设计稿**。
+      //    现在把值提到**实际不构成视觉上限**的一档（200ch ≈ 1560px @14px）：
+      //    正常窗口下正文吃满卡片，同时**保留一个上界**（4K 超宽屏仍不许一行铺满整屏）。
+      //    ⚠️ 诚实标注代价：中文在这种宽度下一行可达 60~100 字，**行长确实偏长**，
+      //    眼睛换行容易串行。若主权者更看重可读性，另一条路是**把卡片收窄**
+      //    （设计稿的 `.main{max-width:1180px}` 就是那么做的）——两条路我都能走，等一句话。
+      '--mk-measure:200ch}',
       // 内容列宽度：旧规则已经是 1180px（2026-10-13 重做时改的，见上面 `.dshmind-page`）——
       // 这里**不再重复声明**，免得同一件事有两个出处（改一处忘一处就是漂移）。
 
@@ -1215,6 +1235,10 @@ window.__ModuleLoader__.load({
 
       // 图谱：画布 + 详情抽屉（点节点开；纯显示、零请求）
       '.dshmind-graphWrap{position:relative;background:var(--mk-bg);border:.5px solid var(--mk-bd);border-radius:12px}',
+      // 手势光标（2026-10-14 加缩放/平移）：抓取态一眼可读。
+      // 纯 CSS，**不新增控件**——只读面板的可点面白名单原样不动。
+      '.dshmind-graph{cursor:grab;touch-action:none}',
+      '.dshmind-graph:active{cursor:grabbing}',
       '.dshmind-gDrawer{position:absolute;top:10px;right:10px;width:252px;max-height:calc(100% - 20px);overflow:auto;',
       'background:var(--mk-bg2);border:.5px solid var(--mk-bd);border-radius:10px;padding:11px 12px;font-size:11.5px;',
       'color:var(--mk-tx2)}',
@@ -1245,7 +1269,10 @@ window.__ModuleLoader__.load({
       // 单列 + 正文限行宽（--mk-measure）在宽屏上的结果就是「每张卡右半边空着」——
       // 主权者原话「面板右面空白一大堆太丑了」。改成每列**不低于 420px** 的自动网格：
       // 窄屏自动回落单列（不会把长描述挤成一面墙），宽屏 2~3 列铺满、卡内文字自然填满卡片。
-      '.dshmind-nodes,.dshmind-reviews,.dshmind-bus{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));',
+      // ⚠️ 2026-10-13 晚第二轮曾把这里改成 `minmax(420px,1fr)` 多列；
+      //    **2026-10-14 按主权者指令改回单列**（理由见上面 `.dshmind-nodes` 那条口径改形）——
+      //    三处（任务/会审/总线）一起改，只改一处就是漏。
+      '.dshmind-nodes,.dshmind-reviews,.dshmind-bus{display:grid;grid-template-columns:1fr;',
       'gap:10px;align-items:start}',
       '.dshmind-decide,.dshmind-answers{gap:9px}',
       '.dshmind-decideRow,.dshmind-node,.dshmind-review,.dshmind-busRow,.dshmind-answer{',
@@ -1359,8 +1386,15 @@ window.__ModuleLoader__.load({
       // 甜甜圈：一记很轻的投影，把图从"贴在纸上"变成"浮在纸上"。
       '.dshmind-donut{filter:drop-shadow(0 4px 10px rgba(9,12,20,.22))}',
       // 键盘焦点环：与设置页 __btn 同款（2px 主色 + 1px 外距），补齐看板侧的缺口。
-      '.dshmind-navBtn,.dshmind-btn,.dshmind-toggle,.dshmind-descToggle,.dshmind-projChip,',
-      '.dshmind-projChipOn:focus-visible{outline:2px solid var(--mk-ac,#5b8def);outline-offset:2px}',
+      // ⚠️ **`:focus-visible` 必须逐个选择器都写**（2026-10-14 修的真缺陷）：
+      //    选择器列表里伪类的**作用域只到它所在的那一个复杂选择器**——
+      //    写成 `A,B,C,.D:focus-visible` 时，A/B/C **无条件命中**，于是
+      //    导航钮、刷新钮、折叠钮、项目 chip **常年顶着一圈蓝描边**（实测：未聚焦时
+      //    `outline: 2px solid rgb(91,141,239)` 就已在生效，activeElement = BODY）。
+      //    这属于「看着像能点的东西」多了一圈"选中态"，与只读面板的气质冲突。
+      '.dshmind-navBtn:focus-visible,.dshmind-btn:focus-visible,.dshmind-toggle:focus-visible,',
+      '.dshmind-descToggle:focus-visible,.dshmind-projChip:focus-visible,.dshmind-projChipOn:focus-visible{',
+      'outline:2px solid var(--mk-ac,#5b8def);outline-offset:2px}',
       // 侧栏当前页：左侧 2px 强调色内嵌条（设计稿导航同款；不动原底色/字色）。
       '.dshmind-navBtnOn{box-shadow:inset 2px 0 0 var(--mk-ac,#5b8def)}',
       '.dshmind-navBtn,.dshmind-btn{transition:background-color .15s,color .15s,border-color .15s}',
@@ -1375,6 +1409,214 @@ window.__ModuleLoader__.load({
       '.dshmind-gDrawer{animation:dshmind-in .18s ease-out}',
       '@keyframes dshmind-in{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}',
 
+      // ══ 视觉打磨 v2.2（2026-10-14 · 按真机截图逐条收口）════════════════════════
+      // 这一层与上面各层同性质：**纯增量表现**，删掉即回到 v2.1，功能分毫不损。
+      // 每条都来自一张实机渲染图上的可指认现象（不是设计推演），根因写在各条上方。
+      //
+      // 为什么另起一层而不改上面的规则：上面那些规则里混着**被断言钉住的行为口径**
+      // （root 铺满+滚动 / page 无 overflow / 值不裁切 / 审计四列 / page 只许一处），
+      // 就地改会连带碰到它们。另起一层只覆盖"长相"，碰不到"行为"。
+
+      // ── V2 长文墙：注意力区正文 12px 密排 + 长 id 被从词中间断开 ──────────────
+      // 根因：`.dshmind-attnNode` 只声明 `overflow-wrap:anywhere`，行高走 `--mk-*` 默认
+      //      （全局 13px/20px 的 body 行高对 11.5px 正文偏紧），于是三行 200 多字的节点说明
+      //      糊成一块；而 `anywhere` 会在**任意字符处**断行 ⇒ `...-7lost` / `be17d628939d`
+      //      这类无空格长 id 被从中间劈开，读者认不出这是同一个 id。
+      // 改法：正文给**可读行高**（1.75）+ `word-break:keep-all` 让断行尽量发生在空格/标点，
+      //      长 id 再退到 `overflow-wrap:anywhere` 兜底（不裁切这条硬口径不变）。
+      //      节点之间用发丝线分隔（原文照给、不截断，只加层次）。
+      '.dshmind-attnCard p{font-size:12.5px;line-height:1.7}',
+      '.dshmind-attnNodes{gap:0}',
+      '.dshmind-attnNode{font-size:12px;line-height:1.75;word-break:keep-all;overflow-wrap:anywhere;',
+      'padding:7px 0}',
+      '.dshmind-attnNode+.dshmind-attnNode{border-top:.5px solid var(--mk-bd)}',
+      // V6 折叠态（2026-10-14 二次收口）：**整块收起**，不做"钳 1 行"。
+      // 📌 口径改形（主权者：「这里有截断。这部分需要做收起吗」）：
+      //    上一版给每条挂 `-webkit-line-clamp:1`，结果是**5 条各切半句、末尾点一串 `…`**
+      //    —— 看上去就是"文本被截断坏了"，而它既没给出全文、也没真正省下地方（5 行还在）。
+      //    这正撞本仓 2026-10-12 已定的口径：**硬截断被否，要的是「要全文 + 默认折叠」**。
+      //    ⇒ 现在默认把**整段条目列表收起来**（`display:none`），只留标题 + 一句说明 +
+      //    「展开全部（N 条 · 共 M 字）」；点开才逐条给**全文**。
+      //    ⚠️ 文本**仍在 DOM 里**（只是不显示）⇒ 「原文照给，不截断」不破，
+      //    harness ⑪f「原因全文照给」照样绿（它量文本，不量可见性）。
+      '.dshmind-attnNodesOff{display:none}',
+      // 说明句的折叠态：**1 行**（它是流程注解，不是读数）。
+      // 与条目同吃一张折叠表 ⇒ 一个钮管两处，不会出现"展开了一半"的半吊子态。
+      '.dshmind-attnIntroClamped{display:-webkit-box;-webkit-box-orient:vertical;',
+      '-webkit-line-clamp:1;overflow:hidden}',
+      // ⚠️ 行长上限（`--mk-measure:78ch`）**不该管这一块**（2026-10-14 实测发现）：
+      //    v2.1 把 `.dshmind-attnNode` 一起塞进了「正文限 78ch」那条规则。可注意力区这张卡
+      //    在 1242px 宽的面板里**是一个待决记录列表，不是散文**——结果每条都被 78ch 卡住、
+      //    折成 2 行，而卡片**右半边整片空着**（这与主权者框出的"这块有问题"是同一个病：
+      //    既高又空）。实测：条目块 170px（3 条 × 2 行）。
+      //    改法：这一块放开限宽（卡片多宽就用多宽）。这些条目是「id + 一句原因」的记录式短句，
+      //    不是需要控行长的大段正文；放开后多数条目自然落到 1 行，右半边也不再空。
+      //    `--mk-measure` 那条规则本身不动（任务卡/会审卡的长描述仍受它管，那是散文）。
+      '.dshmind-attnNode{max-width:none}',
+      // 折叠钮与条目之间留一口气，别贴在分隔线上
+      '.dshmind-attnCard .dshmind-descToggle{margin-top:7px}',
+      // 注意力区的说明句（"现行收集口径只收……"）与正文拉开一点，别与考语糊在一起
+      '.dshmind-attnCard h4{line-height:1.5}',
+      '.dshmind-attnCard p+p{margin-top:7px}',
+
+      // ── V4 审计节律条：一排彩色小方块，没有标题/刻度/口径 ─────────────────────
+      // 根因：`.dshmind-actbar` 只画色块（`>i` 定宽 10px），既不说明"一格＝一条"，
+      //      也不给起点/终点时刻 ⇒ 读者无法把某个红块对应到某个时间。
+      //      这不是审美问题，是**读数缺了坐标系**（同族于"报 0 命中必须连口径一起报"）。
+      // 改法：色块之间留缝、块本身圆角（看得出"一格一条"的粒度），并在条下压一行
+      //      **起止时刻**（数据已在投影里，不新取数）。图例文案由渲染处给。
+      '.dshmind-actbar{gap:2px;height:22px;align-items:stretch;margin-top:8px}',
+      '.dshmind-actbar>i{width:12px;border-radius:3px;min-height:22px}',
+      '.dshmind-actbarAxis{display:flex;justify-content:space-between;margin-top:5px;',
+      'font-size:10.5px;color:var(--mk-tx3);font-variant-numeric:tabular-nums}',
+
+      // ── V1 卡片内空：分区卡与统计砖下缘留白偏大 ───────────────────────────────
+      // 根因：`.dshmind-sec` 的 `padding:13px 15px` 与 `.dshmind-secBody{margin-top:9px}`
+      //      叠加后，正文只有一行时下缘显得空；统计砖 `padding:9px 11px` 而内容 66px /
+      //      卡高 86px，多出的 20px 全落在下缘（上缘贴、下缘松 ⇒ 视觉重心偏下）。
+      // 改法：把不对称的空收成**对称的小内距**，让内容与边框的距离上下一致。
+      //      ⚠️ 不动 `.dshmind-secBody`（多处断言按它定位），只调卡的 padding。
+      '.dshmind-sec{padding:12px 15px}',
+      '.dshmind-tile{padding:10px 12px}',
+      // 统计砖里的"说明行"与数值贴紧一点（数值大、说明小，原本被 line-height 撑开）
+      '.dshmind-tileD{margin-top:1px}',
+
+      // ── V3 统计区与分布卡之间的空带 ──────────────────────────────────────────
+      // 根因：统计砖网格与构成图网格是两个独立块，各自带 gap，叠起来在两者之间形成
+      //      比"块内"明显更大的缝（视觉上像是少画了一张卡）。
+      // 改法：把这一段的行间距交给统一的节奏值（12px），块内 10px、块间 12px。
+      '.dshmind-tiles{gap:10px;margin-bottom:2px}',
+      '.dshmind-vizGrid{gap:10px}',
+
+      // ── V5 页头读数区：6 格挤成两行、高度参差 ────────────────────────────────
+      // 根因：`.dshmind-readouts` 用 `auto-fit,minmax(190px,1fr)` ⇒ 1242px 宽下排 6 列、
+      //      但"失联"那格带多行附注时整格变高，同行的其余格被 stretch 拉齐 ⇒ 每格内部
+      //      上贴下空、看着像没对齐。
+      // 改法：格子**顶部对齐**（不再互拉），高度各随内容——读数行看起来是"一排标签"，
+      //      不是"一排高度不一的盒子"。
+      '.dshmind-readout{align-self:start}',
+
+      // ══ 视觉打磨 v2.3（2026-10-14 · 把设计稿里**可搬的那部分**搬齐）════════════════
+      // 起因：主权者拿设计稿（`mind-panel-redesign/mockup.html`）对本机截图，问
+      // 「设计稿挺好，为什么落到客户端就差这么多」。逐条比对后结论是：
+      //   **能搬的没搬全，不能搬的被当成了"已经搬了"。**
+      //   · **不能搬的**：设计稿自带一套 `:root` 调色板（`--bg/--card/--border-soft`）
+      //     与页面背景辉光——面板有硬纪律「只用宿主令牌 `--dsw-alias-*` + 兜底」，
+      //     宿主不暴露"卡片底色"这类令牌 ⇒ 那套配色本来就落不进来（这是**边界，不是漏做**）；
+      //   · **能搬却没搬的**（本层补的就是这批）：字阶、分区标题的强调条、卡片微渐变、
+      //     阴影强度、页头留白、页面辉光。这些**不依赖任何宿主令牌**，却一直是旧值的。
+      // 参照值全部取自设计稿实测：body `14px/1.6` · h1 `19px` · `.sec-title` 带
+      // `::before` 3px 主色渐变条 + `letter-spacing:.05em` · 卡片
+      // `linear-gradient(180deg, var(--card), #171b24)` · 阴影 `rgba(0,0,0,.28)/.65` ·
+      // `.main{padding:22px 28px 60px}`。
+
+      // ── V7 字阶：整页基线 13px→14px、行高 20px→1.6（设计稿 body 实测值）
+      '.dshmind-root{font-size:14px;line-height:1.6}',
+      // ── V8 页标题 16px→19px；设计稿那手「渐变字」也一并给上（纯装饰，掉了不影响读）
+      '.dshmind-title{font-size:19px;letter-spacing:.01em;',
+      'background:linear-gradient(90deg,var(--mk-tx),var(--mk-tx2));-webkit-background-clip:text;',
+      'background-clip:text;-webkit-text-fill-color:transparent}',
+      // ── V9 分区标题：字距 + 左侧 3px 主色渐变强调条（设计稿 `.sec-title::before`）
+      //     ⚠️ 用伪元素而非新增 DOM：`::before` 不产生文本节点 ⇒ `textOf()` 读到的东西不变，
+      //        既有那批「分区标题写了什么」的断言一个字都不用改。
+      '.dshmind-secTitle{display:flex;align-items:center;gap:8px;letter-spacing:.05em}',
+      '.dshmind-secTitle::before{content:"";width:3px;height:13px;border-radius:2px;flex:none;',
+      'background:linear-gradient(180deg,var(--mk-ac),transparent)}',
+      // ── V10 卡片微渐变：设计稿的卡片是 `linear-gradient(180deg,var(--card),#171b24)`，
+      //     面板把两端都取令牌（`--mk-bg`→`--mk-bg2`）⇒ 令牌改名只掉外观，不掉功能。
+      '.dshmind-sec,.dshmind-tile,.dshmind-vizCard,.dshmind-tl,.dshmind-graphWrap,.dshmind-nav{',
+      'background-image:linear-gradient(180deg,var(--mk-bg),var(--mk-bg2))}',
+      // ── V11 阴影强度对齐设计稿（原来偏轻：.10/.55 → 设计稿 .28/.65）
+      '.dshmind-nav,.dshmind-sec,.dshmind-tl,.dshmind-graphWrap,.dshmind-tile,.dshmind-vizCard{',
+      'box-shadow:0 1px 2px rgba(0,0,0,.28),0 10px 28px -18px rgba(0,0,0,.65)}',
+      // ── V12 卡片描边回到 1px（设计稿是 1px；面板早前用 .5px，在高分屏上偏虚）
+      '.dshmind-sec,.dshmind-tile,.dshmind-vizCard,.dshmind-tl,.dshmind-graphWrap,.dshmind-nav{',
+      'border-width:1px}',
+      // ── V13 页面留白：**不动**。设计稿是 `.main{padding:22px 28px 60px}`，但面板这边
+      //     `.dshmind-page` 被一条硬断言钉着——「内容层宽度只有一个出处」（同一件事两个
+      //     出处 ⇒ 迟早漂移）。要改就得改**那一条原本的规则**，而它的 `padding-top:24px`
+      //     又与 `.dshmind-nav` 的 `position:sticky;top:24px` **成对耦合**（改一处不改另一处，
+      //     滚动时侧栏会先跟着走再"啪"地贴住）。为 2px 的观感去动这条耦合不划算 ⇒ 本批不动，
+      //     留作独立决定。
+      // ── V14 页面辉光：设计稿 body 上那两层 radial-gradient 是"有层次"的主要来源。
+      //     取色用**字面 rgba**（同 `.dshmind-attnClear` / `.dshmind-notice` 的既有做法）：
+      //     宿主没有"页面辉光"这种令牌，而它是**纯装饰**——掉了不影响任何读数。
+      '.dshmind-root{background-image:',
+      'radial-gradient(1100px 500px at 18% -8%,rgba(91,141,239,.07),transparent 55%),',
+      'radial-gradient(900px 460px at 100% 0%,rgba(169,123,234,.05),transparent 50%)}',
+
+      // ══ 视觉打磨 v2.4（2026-10-14 · **照设计稿抄版式**）══════════════════════════
+      // 主权者原话：「主要不在那些细节上，在信息整洁度和适配上」＋「先照着他把格式抄过来」。
+      // ⇒ 本层不再调色/调影，而是**把 mockup.html 的版式搬过来**。参照值逐个取自设计稿源码：
+      //    `.topbar`（h1=页名 · 项目 chip · spacer · live · 刷新，**不是卡片**）·
+      //    `.nav`（188px 竖栏 · bg-soft · border-right · 方形）·
+      //    `.readout` 芯片（一枚子弹式小圆角，key 与值**同一行**）·
+      //    `.viz-card`（构成图与节律条同属"可视化"一组，同一张卡的皮）。
+      // ⚠️ 只换皮、**不换骨架**：`dshmind-readoutGroup/Label`（身份|健康 顺序）、
+      //    `dshmind-readout/readoutNote`（失联详情必须贴在那格里）、`dshmind-navBtn` 的
+      //    可点面白名单 —— 这些都被断言钉着，一律保持原样。
+
+      // ── V15 页头：卡片 → 工具行（设计稿 `.topbar`）
+      '.dshmind-hero{border:0;border-radius:0;background:transparent;background-image:none;',
+      'box-shadow:none;overflow:visible;gap:10px}',
+      '.dshmind-heroTop{align-items:center;gap:12px;padding:0;border-bottom:0;flex-wrap:wrap}',
+      // 标题随设计稿：19px + 渐变字（已在 V8 给过），并**取代**原来的「产品名 + 副标题」两块
+      '.dshmind-title{margin:0;flex:none}',
+      '.dshmind-hero .dshmind-projChips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}',
+      '.dshmind-hero .dshmind-actions{margin-left:auto;gap:10px}',
+
+      // ── V16 读数：方格 → 子弹式芯片（设计稿「● 策略引擎闸 在位 · 规则 5」的形态）
+      //     key 与值**并排**（原来是上下两行，一格占出 40px 高）；失联的多行附注
+      //     用 `flex-basis:100%` 落到芯片内的第二行 —— 它仍在那一格的子树里（断言要的就是这个）。
+      // 📌 两组**并成一行流**（2026-10-14）：设计稿里状态就是一条横排、没有分组框。
+      //    断言只钉「标签文本与先后（身份|健康）」，不钉它们各占一行 ⇒ 改成 row 流不影响它。
+      //    这样页头从"三行盒子"收成"一条芯片带"，右侧也不再空一大片。
+      '.dshmind-readoutGroups{flex-direction:row;flex-wrap:wrap;gap:8px 16px;align-items:center}',
+      '.dshmind-readoutGroup{flex-direction:row;flex-wrap:wrap;gap:8px;align-items:center}',
+      '.dshmind-readout{display:inline-flex;flex-wrap:wrap;align-items:baseline;gap:0 6px;',
+      // ⚠️ `flex:0 0 auto` 必须写：旧规则给的是 `flex:1 1 180px`（"每格至少 180px 并等分"），
+      //    那套是**方格**时代的排版假设。改成子弹芯片后，180px 的基宽会让同一组里的两枚
+      //    芯片互相挤到换行（实测：身份组被撑成 298px 宽、两枚 267px 的芯片各自占一行）。
+      //    芯片应当**按内容宽度**排，不参与等分。
+      'flex:0 0 auto;border-radius:999px;padding:4px 12px}',
+      '.dshmind-readoutKey{font-size:11px}',
+      '.dshmind-readoutVal{margin-top:0;font-size:12.5px;font-weight:600}',
+      '.dshmind-readoutNote{flex-basis:100%;margin-top:2px;gap:0 8px;font-size:10.5px}',
+      // 读数区的分组标签（身份/健康）：设计稿里**没有**这两枚标签，但它们是断言钉住的结构
+      // （顺序"身份|健康"必须还在）⇒ 保留文本，压成行内的一枚小标，不再当"栏目名"占宽占高。
+      // （先试过竖排 `writing-mode`：它把两组各自撑高、还把芯片挤到换行 —— 不如行内小标。）
+      '.dshmind-readoutGroupLabel{font-size:10px;letter-spacing:.14em;opacity:.55;flex:none}',
+
+      // ── V17 侧栏：浮起的小圆盒 → 一根竖栏（设计稿 `.nav`：188px · bg-soft · 右侧发丝线 · 方形）
+      //     ⚠️ 仍住在 `.dshmind-page` 里（页面有内边距），所以做不到设计稿那种"贴到窗口左缘"，
+      //     但**形态**（竖栏 / 方形 / 描边 / 宽度 / 行距）按设计稿对齐。
+      '.dshmind-nav{width:188px;padding:16px 10px;border-radius:12px;gap:2px;',
+      'align-self:flex-start;position:sticky;top:24px;max-height:calc(100vh - 48px);overflow:auto}',
+      '.dshmind-navBrand{padding:2px 10px 14px}',
+      '.dshmind-navBrand b{font-size:15px;font-weight:600}',
+      '.dshmind-navBrand span{font-size:11px;margin-top:2px}',
+      '.dshmind-navBtn{padding:8px 10px;border-radius:8px;font-size:13.5px;margin-bottom:2px}',
+      // 当前页：设计稿是「左侧 2.5px 强调条 + 自左向右淡出的底色」（已在 v2.1 给过内嵌条，此处对齐底色方向）
+      '.dshmind-navBtnOn{background:linear-gradient(90deg,var(--mk-bg),transparent 75%)}',
+      '.dshmind-navCount{font-size:11px;margin-left:auto}',
+
+      // ── V18 审计节律条：裸块 → 一张「可视化」卡（设计稿把它与三张构成图并列成一组）
+      '.dshmind-actCard{border:1px solid var(--mk-bd);border-radius:12px;padding:14px 16px;',
+      'background-image:linear-gradient(180deg,var(--mk-bg),var(--mk-bg2));',
+      'box-shadow:0 1px 2px rgba(0,0,0,.28),0 10px 28px -18px rgba(0,0,0,.65)}',
+
+      // ── V19 卡内文本：**预览与记录吃满卡宽，只有"要读的大段"才限行长** ─────────
+      // 依据设计稿：`.tcard .desc` 没有任何行长上限（限宽靠整列，不靠逐元素）。
+      // 单列之后卡宽约 1300px ⇒ 若仍给 78ch（≈550px），右半边又会空一片
+      // ——那正是上一轮"用多列去补"的诱因。这里把因果摆正：
+      //   · **放开**：折叠预览（2-3 行，不存在行长失控）、判据行、答案正文、总线正文、
+      //     图谱说明 —— 这些是**记录**，读者是"扫"不是"读"；
+      //   · **保留 78ch**：`.dshmind-nodeTitleFull` / `.dshmind-nodeTitleOpen` ——
+      //     点开「展开全文」之后才是真正要读的大段正文（也是 ⑦g 那条断言钉住的面）。
+      // ⚠️ 顺序要紧：本条必须排在上方 `.dshmind-nodeTitleFull,.dshmind-nodeTitleClamped,…`
+      //    那条**之后**，否则同权重下先写的赢、折叠态仍被限宽。
+      '.dshmind-nodeTitleClamped,.dshmind-criteria,.dshmind-answerBody,.dshmind-busText,',
+      '.dshmind-graphNote{max-width:none}',
     ].join('');
 
     /**
@@ -1737,17 +1979,51 @@ window.__ModuleLoader__.load({
         ]));
       }
       if (挂待决.length) {
+        // ── 折与不折（2026-10-14 收口）────────────────────────────────────────
+        // 根因：这一块把**每条待决说明全文**铺在注意力区（首屏"3 秒内回答要我做什么"），
+        //      实测 **337px**（HEAD 版，3 条待决）——占掉大半屏，正撞它自己的设计目的。
+        // 改法：走本面板**已有的**「默认折叠 + 展开全文」口径（⑩d / 主人口径「要全文 + 默认折叠」），
+        //      而不是截断——**折叠是 CSS 视觉态，DOM 里仍是全文**（原文照给这条不破；
+        //      harness ⑪f 那条「原因全文照给」照样绿，正是因为它量的是文本、不是显示高度）。
+        //      折叠态住 `界面store.折叠描述`（与任务卡/会审卡同一张覆盖表、同一个折叠钮类名），
+        //      **不挂 useEffect**（设计债⑩）。
+        // ⚠️ 「折叠」要叠**两处**才够：光叠条目，那条 4 行的流程注解仍在占位（实测只降到 310px，
+        //    仅 8%）。说明句与条目一起吃同一张折叠表，才真正把首屏还给数据。
+        var 折叠键 = 'attn:挂待决';
+        var 折 = 描述折叠(折叠键);
+        var 全文字数 = 挂待决.reduce(function (a, n) {
+          return a + String(n.id + '　' + n.待决原因).length;
+        }, 0);
         卡.push(h('div', { key: 'orphan', className: 'dshmind-attnCard' }, [
           h('h4', { key: 'h' }, [
             h('span', { key: 'i' }, '⚠'),
             h('span', { key: 't' }, 挂待决.length + ' 个节点挂有待决说明，但不在待决清单里'),
           ]),
-          h('p', { key: 'p' }, '现行收集口径只收「状态＝待决」的节点，这类会漏出去。它们等你裁决处置'
+          // 说明句也吃折叠：它是**流程口径的注解**，在注意力区占 3-4 行纯属挤占。
+          // 全文逐字仍在 DOM 里，点开即见（同一条纪律：折叠不改文本）。
+          h('p', {
+            key: 'p',
+            className: 折 ? 'dshmind-attnIntroClamped' : null,
+          }, '现行收集口径只收「状态＝待决」的节点，这类会漏出去。它们等你裁决处置'
             + '（作废 / 保留存档）。**原文照给，不截断**——裁决要看的就是那句话。'),
-          h('div', { key: 'n', className: 'dshmind-attnNodes' }, 挂待决.map(function (n, i) {
-            return h('span', { key: 'x' + i, className: 'dshmind-attnNode', title: n.待决原因 },
-              n.id + '　' + n.待决原因);
+          // 条目列表：折叠态**整块收起**（不是逐条钳行——那样会切半句，看着像坏了）。
+          // 文本仍在树里，点开就是全文。
+          h('div', {
+            key: 'n',
+            className: 'dshmind-attnNodes' + (折 ? ' dshmind-attnNodesOff' : ''),
+          }, 挂待决.map(function (n, i) {
+            return h('span', {
+              key: 'x' + i,
+              className: 'dshmind-attnNode',
+              title: n.待决原因,
+            }, n.id + '　' + n.待决原因);
           })),
+          // 折叠钮：复用 `dshmind-descToggle` 类名（harness 的「可点面白名单」逐一枚举它，
+          // 新造一类会算破规）。纯显示切换、**零请求**。
+          h('button', {
+            key: 'tg', type: 'button', className: 'dshmind-descToggle',
+            onClick: function () { 切描述折叠(折叠键); },
+          }, 折 ? '▸ 展开全部（' + 挂待决.length + ' 条 · 共 ' + 全文字数 + ' 字）' : '▾ 收起'),
         ]));
       }
       return h('div', { key: 'attn', className: 'dshmind-attn' }, 卡);
@@ -1949,9 +2225,15 @@ window.__ModuleLoader__.load({
           title: shortTime(r.时间) + ' · ' + (r.动作 || '') + ' · ' + (源主体短(r.主体)) + ' · ' + (r.结果 || ''),
         });
       });
-      return h('div', { key: 'act', style: { marginTop: 8 } }, [
+      return h('div', { key: 'act', className: 'dshmind-actCard', style: { marginTop: 2 } }, [
         h('div', { key: 'h', className: 'dshmind-tileK' }, '审计节律（一格一条，共 ' + 行.length + ' 条；全量 ' + ctx.审计总条数 + ' 条）'),
         h('div', { key: 'bar', className: 'dshmind-actbar' }, 格),
+        // 起止时刻：给这条色带一个**坐标系**。没有它，读者无法把某个红块对到某个时间——
+        // 那一排方块就只是装饰（2026-10-14 收口；数据取自同一批审计行，不新取数）。
+        h('div', { key: 'axis', className: 'dshmind-actbarAxis' }, [
+          h('span', { key: 'a' }, shortTime(行[0] && 行[0].时间)),
+          h('span', { key: 'b' }, shortTime(行[行.length - 1] && 行[行.length - 1].时间)),
+        ]),
         h('div', { key: 'lg', className: 'dshmind-legend', style: { flexDirection: 'row', gap: 12, marginTop: 6 } }, [
           h('span', { key: 'a', className: 'dshmind-legendRow' }, ['状态变更 ' + 计数.状态变更]),
           h('span', { key: 'b', className: 'dshmind-legendRow' }, ['失败 ' + 计数.失败]),
@@ -2042,6 +2324,8 @@ window.__ModuleLoader__.load({
       }
       能力.forEach(function (c) { c.适用岗位.forEach(function (role) { 连('能力:' + c.id, '角色:' + role); }); });
       var 选中 = 图谱选中();
+      // 当前缩放/平移视图（null ＝ 整图）。放这里是为了让 viewBox 与手势共用同一份读数。
+      var 视图 = 图谱视图();
       var 类名 = function (key) {
         if (!选中) return 'dshmind-gNode';
         if (key === 选中) return 'dshmind-gNode dshmind-gNodeOn';
@@ -2055,7 +2339,8 @@ window.__ModuleLoader__.load({
       // ⚠️ 闭包要**按节点绑定**：`var` 是函数作用域，直接在循环里写
       // `onClick: function () { 切图谱选中(r键) }` 会让所有节点共享同一个变量 ⇒
       // 点哪个都选到最后一个（2026-10-13 首跑被 ⑪e 当场抓出）。工厂把键固化进参数。
-      var 点击器 = function (键) { return function () { 切图谱选中(键); }; };
+      // 点节点的处理器：**也吃拖拽尾巴的抑制**（拖完松手不该顺手换选中）。
+      var 点击器 = function (键) { return function () { if (拖拽尾巴()) return; 切图谱选中(键); }; };
       for (i = 0; i < 岗位.length; i += 1) {
         var r = 岗位[i], rp = 坐标.pos['角色:' + r.id], r键 = '角色:' + r.id;
         var 实例 = 实例计数Of(ctx.实例计数, r.id);
@@ -2117,18 +2402,24 @@ window.__ModuleLoader__.load({
             + '（自治卡 ' + 接线.自治接线 + '/' + 接线.自治适用 + '）'),
         ]),
         h('div', { key: 'wrap', className: 'dshmind-graphWrap' }, [
-          h('svg', {
+          // 缩放/平移：`图谱手势()` 返回的 props 直接摊进来（滚轮缩放 / 拖拽平移 / 双击复位）。
+          // 复用 `Object.assign` 而不是写进对象字面量：手势那组是"可选增强"，
+          // 显式摊开更能看出它**不改变** svg 的身份（key/className/viewBox 仍由这里定）。
+          h('svg', Object.assign({
             key: 'svg', className: 'dshmind-graph',
-            viewBox: '0 0 ' + 坐标.宽 + ' ' + 坐标.高,
+            viewBox: (视图
+              ? 视图.x + ' ' + 视图.y + ' ' + (坐标.宽 / 视图.k) + ' ' + (坐标.高 / 视图.k)
+              : '0 0 ' + 坐标.宽 + ' ' + 坐标.高),
             'data-dshmind': 'graph',
             preserveAspectRatio: 'xMidYMid meet',
-          }, [
+          }, 图谱手势(坐标.宽, 坐标.高)), [
             // 空白层：铺满画布、垫在节点下面。点空白 ⇒ 取消选中（见 清图谱选中 的注释）。
             // `fill:'transparent'` 而不是 `none`：`none` 不接收指针事件。
             h('rect', {
               key: 'bg', 'data-graph-bg': '1',
               x: 0, y: 0, width: 坐标.宽, height: 坐标.高, fill: 'transparent',
-              onClick: function () { 清图谱选中(); },
+              // 拖拽尾巴不算点击（见 拖拽尾巴 的注释）
+              onClick: function () { if (!拖拽尾巴()) 清图谱选中(); },
             }),
           ].concat(边, 节点)),
           // 详情抽屉：点节点开（纯显示动作）。不选就不画 —— 不给一壳空抽屉。
@@ -2141,7 +2432,9 @@ window.__ModuleLoader__.load({
         }, [
           h('div', { key: 'note', className: 'dshmind-graphNote', style: { maxWidth: 'none' } },
             '左列＝岗位卡（蓝）· 右列＝能力卡（紫＝自治／绿＝出厂）。绿实线＝岗位卡的 个体L2 真引用了这张卡；'
-            + '红虚线＝能力卡声明「适用这个岗位」但岗位卡里没有 ⇒ **成员实际看不到这张卡**（发卡 ≠ 接线）。'),
+            + '红虚线＝能力卡声明「适用这个岗位」但岗位卡里没有 ⇒ **成员实际看不到这张卡**（发卡 ≠ 接线）。'
+            // 手势提示：**只给文字、不给控件**（只读面板的可点面有白名单，多一类就算破规）。
+            + '　📐 **滚轮缩放 · 拖拽平移 · 双击复位**'),
           h('div', { key: 'mem', className: 'dshmind-graphNote', style: { maxWidth: 'none' } },
             '记忆（按类）：' + (ctx.记忆 && ctx.记忆.按类
               ? '经历 ' + (ctx.记忆.按类.经历 === null ? '—' : ctx.记忆.按类.经历)
@@ -2784,7 +3077,7 @@ window.__ModuleLoader__.load({
      * **不挂 useEffect**（设计债⑩：这个宿主给插件的 effect 可能是空实现，取数如此，UI 状态也如此）。
      * `折叠会审` 是覆盖表（id → 折不折）；没点过的场次走默认（首场展开、其余折叠）。
      */
-    var 界面store = { 快照: { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null, 当前页: null, 图谱选中: null, 审计展开: null }, 订阅者: [] };
+    var 界面store = { 快照: { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null, 当前页: null, 图谱选中: null, 图谱视图: null, 审计展开: null }, 订阅者: [] };
     /** 轮询间隔：2~5 秒量级（人看的板子，又不至于把宿主问烦）。 */
     var POLL_MS = 3000;
     /** 轮询把手：`apply` 起、disposer 清（**不许留定时器**）。 */
@@ -2835,7 +3128,7 @@ window.__ModuleLoader__.load({
     function 清空store() {
       投影store.快照 = EMPTY;
       设置store.快照 = { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' };
-      界面store.快照 = { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null, 当前页: null, 图谱选中: null, 审计展开: null };
+      界面store.快照 = { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null, 当前页: null, 图谱选中: null, 图谱视图: null, 审计展开: null };
     }
 
     /**
@@ -2876,6 +3169,31 @@ window.__ModuleLoader__.load({
     function 当前页() {
       var 值 = 界面store.快照.当前页;
       return 合法页[值] === 1 ? 值 : 'overview';
+    }
+
+    /**
+     * 当前页的中文名（页头 h1 用）。
+     *
+     * 照设计稿 v2.1 的 `.topbar`：页头标题是**当前页名**（"总览"/"图谱"/…），
+     * 不是固定的产品名——产品名留在侧栏品牌位（`导航()` 里那份）。
+     *
+     * ⚠️ **绝不许调 `页清单(ctx)`**（2026-10-14 真机事故，**整块面板空白**）：
+     *   `页清单()` 读的是 `ctx.tasks / ctx.会审 / ctx.总线 / ctx.记忆` —— 那是
+     *   **「页上下文」**，只在 `分页外壳(children, {…})` 那一个调用点现场造出来；
+     *   而页头所在的 `Dashboard` 里 `ctx = activeCtx` 是**宿主 ctx**，两者**不是同一个东西**。
+     *   更致命的是：**宿主 ctx 在真机的某些渲染时机下是 `null`** ⇒ `页清单(null)` 里
+     *   `null.tasks` 抛 TypeError ⇒ React 整棵树卸载 ⇒ 面板全空。
+     *   harness 与本地预览都抓不到这一条，因为那两个环境里 `apply()` 一定先跑、
+     *   `activeCtx` 永不为 null —— **装置绿 ≠ 真机活**（本会话第二次栽在这一条上）。
+     *   ⇒ 页名**只需页 id**，用一张静态表；不碰任何上下文，就不可能因上下文而抛。
+     * @returns {string}
+     */
+    function 当前页名() {
+      var 表 = {
+        overview: '总览', graph: '图谱', tasks: '任务', reviews: '会审',
+        bus: '总线', audit: '审计', memory: '记忆',
+      };
+      return 表[当前页()] || '总览';
     }
 
     /**
@@ -2933,6 +3251,124 @@ window.__ModuleLoader__.load({
     function 清图谱选中() {
       if (!图谱选中()) return;
       发通知(界面store, Object.assign({}, 界面store.快照, { 图谱选中: null }));
+    }
+
+    // ── 图谱缩放/平移（2026-10-14 · 主权者：「能把图谱做成可放大缩小平移的吗」）──────
+    //
+    // 为什么**不加按钮**：面板是 §9 只读投影，可点面有**白名单**（`dshmind-btn` /
+    // `dshmind-toggle` / `dshmind-projChip` / `dshmind-descToggle`），harness 逐类枚举，
+    // **多一类就算破规**。而缩放/平移本来就**不是"控件"**，是**看图的指针手势**——
+    // 用滚轮 / 拖拽 / 双击实现，一个按钮都不新增，白名单原样不动。
+    //
+    // 状态住 `界面store`（与 `图谱选中` 同款：模块级、订阅式、**不挂 useEffect**——
+    // 宿主给插件的 effect 可能是空实现，设计债⑩）。
+    //
+    // 坐标系：`null` = 未动过 ⇒ 用基础 viewBox（`0 0 宽 高`，即"整图刚好装下"）。
+    // 一旦动过就存 `{k, x, y}`：`k` 是缩放倍率，`x/y` 是 viewBox 左上角。
+    // viewBox 写成 `x y 宽/k 高/k` ⇒ 放大 k 倍、平移到 x/y。
+    /** 当前图谱视图；没动过（或值坏）时返回 null（＝基础整图）。 */
+    function 图谱视图() {
+      var v = 界面store.快照.图谱视图;
+      return v && typeof v.k === 'number' && isFinite(v.k) && v.k > 0 ? v : null;
+    }
+    /** 写图谱视图（纯显示、零请求）。传 null ＝复位成整图。 */
+    function 设图谱视图(v) {
+      发通知(界面store, Object.assign({}, 界面store.快照, { 图谱视图: v }));
+    }
+    /** 缩放上下限：太小看不清、太大易迷失。 */
+    var 图谱最小K = 0.5;
+    var 图谱最大K = 8;
+    /** 拖拽会话（模块级瞬时量，**不进 store**：它每帧都变，进 store 会把订阅者吵死）。 */
+    var 拖拽中 = null;
+    /** 上一次拖拽的位移（px）：用来抑制"拖完顺带触发一次 click"的误触。 */
+    var 上次拖拽位移 = 0;
+
+    /**
+     * 把鼠标位置换算成**基础坐标系**里的点（与 viewBox 同单位）。
+     * `rect` 由调用方给（真实 DOM 有 `getBoundingClientRect`；无 DOM 的环境拿不到 ⇒ 返回 null，
+     * 那时所有手势都安静地不生效，绝不抛）。
+     */
+    function 基础坐标(e, 视图, 基础宽, 基础高) {
+      var el = e && e.currentTarget;
+      if (!el || typeof el.getBoundingClientRect !== 'function') return null;
+      var r = el.getBoundingClientRect();
+      if (!r || !r.width || !r.height) return null;
+      var k = 视图 ? 视图.k : 1;
+      var 视角宽 = 基础宽 / k;
+      var 视角高 = 基础高 / k;
+      return {
+        x: (视图 ? 视图.x : 0) + ((e.clientX - r.left) / r.width) * 视角宽,
+        y: (视图 ? 视图.y : 0) + ((e.clientY - r.top) / r.height) * 视角高,
+        fx: (e.clientX - r.left) / r.width,
+        fy: (e.clientY - r.top) / r.height,
+        rect: r,
+      };
+    }
+
+    /**
+     * 图谱的指针手势集（纯显示、零请求）。返回可直接摊进 `h('svg', {...})` 的一组 props。
+     * @param {number} 基础宽 基础 viewBox 宽
+     * @param {number} 基础高 基础 viewBox 高
+     */
+    function 图谱手势(基础宽, 基础高) {
+      return {
+        onWheel: function (e) {
+          // 阻止整页跟着滚：在图上滚就该缩放，而不是把面板滚走。
+          if (e && typeof e.preventDefault === 'function') e.preventDefault();
+          if (!e) return;
+          var 当前 = 图谱视图() || { k: 1, x: 0, y: 0 };
+          var 因子 = (e.deltaY || 0) < 0 ? 1.18 : 1 / 1.18;
+          var 新k = Math.min(图谱最大K, Math.max(图谱最小K, 当前.k * 因子));
+          if (新k === 当前.k) return;
+          var p = 基础坐标(e, 当前, 基础宽, 基础高);
+          if (!p) return;
+          // 让指针底下那个点**留在原地**（否则缩放会"跑偏"，这是缩放体验的关键）。
+          var 新视角宽 = 基础宽 / 新k;
+          var 新视角高 = 基础高 / 新k;
+          设图谱视图({ k: 新k, x: p.x - p.fx * 新视角宽, y: p.y - p.fy * 新视角高 });
+        },
+        onMouseDown: function (e) {
+          if (!e || (e.button !== undefined && e.button !== 0)) return; // 只认左键
+          var 当前 = 图谱视图() || { k: 1, x: 0, y: 0 };
+          var p = 基础坐标(e, 当前, 基础宽, 基础高);
+          if (!p) return;
+          拖拽中 = { 起X: e.clientX, 起Y: e.clientY, 视图: 当前, rect: p.rect, 位移: 0 };
+        },
+        onMouseMove: function (e) {
+          if (!拖拽中 || !e) return;
+          var dx = e.clientX - 拖拽中.起X;
+          var dy = e.clientY - 拖拽中.起Y;
+          拖拽中.位移 = Math.abs(dx) + Math.abs(dy);
+          var 视角宽 = 基础宽 / 拖拽中.视图.k;
+          var 视角高 = 基础高 / 拖拽中.视图.k;
+          设图谱视图({
+            k: 拖拽中.视图.k,
+            x: 拖拽中.视图.x - (dx / 拖拽中.rect.width) * 视角宽,
+            y: 拖拽中.视图.y - (dy / 拖拽中.rect.height) * 视角高,
+          });
+        },
+        onMouseUp: function () {
+          if (拖拽中) 上次拖拽位移 = 拖拽中.位移;
+          拖拽中 = null;
+        },
+        onMouseLeave: function () {
+          // 拖出画布就结束这次拖拽（否则回来时会"粘住"）。
+          if (拖拽中) 上次拖拽位移 = 拖拽中.位移;
+          拖拽中 = null;
+        },
+        onDoubleClick: function () { 设图谱视图(null); }, // 双击复位成整图
+      };
+    }
+
+    /**
+     * 这次 click 是不是"拖拽的尾巴"。
+     * 拖完手一松，浏览器还会照常发一次 click ⇒ 会把刚拖到的位置顺手取消选中/换选中，很恼人。
+     * 判据：本次拖拽位移超过 4px 就吃掉这一次 click（真点击的位移通常是 0）。
+     */
+    function 拖拽尾巴() {
+      if (上次拖拽位移 > 4) { 上次拖拽位移 = 0; return true; }
+      上次拖拽位移 = 0;
+      return false;
     }
 
     /**
@@ -3305,19 +3741,24 @@ window.__ModuleLoader__.load({
             + (snap.stale ? '　—　显示最后一次已知快照（' + shortTime(snap.at) + '）' : '')),
         ]) : null,
 
-        // ① 页头
+        // ① 页头 —— 照设计稿 v2.1 的 `.topbar` 版式：
+        //    一行之内「当前页名 ＋ 项目 chip ＋ 撑开 ＋ 活数据·生成时刻 ＋ 刷新」，
+        //    **不再是一张带边框的卡片**：那张卡把页头做成了"一块内容"，而设计稿里
+        //    它是"一条工具行"。品牌名留在侧栏（设计稿同款，`导航()` 里有）。
+        //    项目 chip 由「身份」读数格提到这里 —— 设计稿就是把"在看哪个项目"与页题并列。
         h('header', { key: 'hero', className: 'dshmind-hero' }, [
           h('div', { key: 'top', className: 'dshmind-heroTop' }, [
-            h('div', { key: 't', style: { minWidth: 0 } }, [
-              h('h2', { key: 'h', className: 'dshmind-title' }, '心智 · 数字组织'),
-              h('p', { key: 's', className: 'dshmind-sub' },
-                '当前状态 · 待你决定 · 反趋同会审 · 只增审计 —— 唯一投影视图（只读）'),
-            ]),
+            h('h2', { key: 'h', className: 'dshmind-title' }, 当前页名()),
+            项目清单 && 项目清单.项.length > 1
+              ? h('div', { key: 'pc', className: 'dshmind-projChips' },
+                  项目清单.项.map(function (p, i) { return 项目导航项(p, i, 当前项目); }))
+              : null,
             h('div', { key: 'a', className: 'dshmind-actions' }, [
               h('span', { key: 'live', className: 'dshmind-dot-line', style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary,#81858c)' } }, [
                 dot(snap.phase === 'live' ? GREEN : snap.phase === 'error' ? RED : GREY),
                 snap.phase === 'live' ? '活数据' : snap.phase === 'error' ? '未连接' : snap.phase === 'nosession' ? '无会话' : '读取中',
-              ]),
+                view && view.生成于 ? h('span', { key: 'g', className: 'dshmind-mono' }, '生成于 ' + shortTime(view.生成于)) : null,
+              ].filter(Boolean)),
               h('button', {
                 key: 'r', type: 'button', className: 'dshmind-btn',
                 onClick: function () { 立即刷新(); },
@@ -3335,14 +3776,8 @@ window.__ModuleLoader__.load({
                   ? h('span', { key: 'h', className: 'dshmind-valueNote' }, '默认项目无账，已按最近活动自动选择')
                   : null,
               ].filter(Boolean))),
-              // 项目切换：一个 chip 一个项目（当前那个不可点）。这是**显示动作**（换一个投影），
-              // 不写任何账——与「刷新」同类，故仍属只读面板；没有别的项目时不画这一格。
-              项目清单 && 项目清单.项.length > 1
-                ? readout('项目', null, h('span', { className: 'dshmind-projChips' },
-                   项目清单.项.map(function (p, i) {
-                      return 项目导航项(p, i, 当前项目);
-                    })))
-                : null,
+              // （项目 chip 已提到页头，此处不再重复）
+              // 2026-10-14：项目 chip 已提到页头（照设计稿"页题与项目并列"）⇒ 此处不再重复一份。
               readout('生成时刻', view ? (shortTime(view.生成于) || '宿主没给') : '未接入'),
             ]),
             readoutGroup('健康', [

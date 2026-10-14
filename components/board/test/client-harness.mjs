@@ -2335,6 +2335,98 @@ export async function runHarness() {
     }
 
     // ⑦e 总线折叠是**行为**断言（2026-10-12，主权者「（总线）也默认收起呗」）：
+    // ⑪i 图谱缩放 / 平移 / 复位（2026-10-14 · 主权者：「能把图谱做成可放大缩小平移的吗」）
+    //
+    // **行为**断言：调真实 `onWheel` / `onMouseDown`+`onMouseMove` / `onDoubleClick`，
+    // 验 `viewBox` 真的变了 —— 不是读源码文本。
+    // ⚠️ 手势要用 `getBoundingClientRect()` 把指针换算成基础坐标，而 harness 是**虚拟树、没有 DOM**
+    //    ⇒ 必须喂一个**带 rect 的假事件**，否则处理器会（正确地）早退，断言就变成假绿。
+    //    这也正是它比"读源码"值钱的地方：**它证明了手势在拿到 rect 时真的算对了**。
+    // 塞 bug 校准：删掉 `图谱手势(...)` 的摊开 ⇒ 本组必红；把 `onDoubleClick` 的复位去掉 ⇒ 必红。
+    {
+      // ⚠️ 夹具要**自带能力/岗位**：`sampleView()` 没这两门数据，图谱页那时画的是
+      //    「投影没带接线」的提示、**没有画布**（首跑就栽在这里：`svg=null`）。
+      //    这里就地造一份最小的（与后面 ⑪e 用的 `接线视图()` 同形），不依赖它的作用域。
+      const 图谱夹具 = (() => {
+        const v = sampleView();
+        v.能力 = [
+          { id: 'policy-decision', 来源: '出厂', 适用岗位: ['Lead', '复核员'] },
+          { id: 'assert-with-evidence', 来源: '自治', 适用岗位: ['Lead'] },
+        ];
+        v.岗位 = [
+          { id: 'Lead', 来源: '私有', 同名: ['私有'], 摘要: '常驻、唯一', 能力引用: ['policy-decision'] },
+          { id: '复核员', 来源: '私有', 同名: ['私有', '出厂'], 摘要: '常驻岗', 能力引用: ['policy-decision'] },
+        ];
+        v.实例计数 = { 按岗位: { Lead: { 在岗: 1, 封存: 0 }, 复核员: { 在岗: 2, 封存: 1 } }, 异常键: 0, 合计: 4 };
+        return v;
+      })();
+      const rG = await 状态render(图谱夹具);
+      const 取svg = () => findAllByClass(rG.tree, 'dshmind-graph')[0];
+      const 图谱钮 = findAllByClass(rG.tree, 'dshmind-navBtn')
+        .filter((el) => textOf(el).indexOf('图谱') >= 0)[0];
+      passed.push(check(!!图谱钮, '⑪i 图谱页入口在（导航钮）'));
+      if (图谱钮) {
+        图谱钮.props.onClick();
+        await settle();
+        rG.flush();
+      }
+      /** 假指针事件：`currentTarget.getBoundingClientRect` 是手势唯一依赖的 DOM 能力。 */
+      const 事件 = (x, y, 额外) => Object.assign({
+        clientX: x, clientY: y, button: 0, preventDefault() {},
+        currentTarget: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 1200, height: 600 }) },
+      }, 额外 || {});
+      const 解析 = (vb) => String(vb || '').trim().split(/\s+/).map(Number);
+      const 基础 = 取svg();
+      passed.push(check(!!基础 && typeof 基础.props.onWheel === 'function'
+        && typeof 基础.props.onMouseDown === 'function'
+        && typeof 基础.props.onDoubleClick === 'function',
+        '⑪i 画布挂上了三个手势（滚轮/拖拽/双击）',
+        'svg=' + (基础 ? 基础.props.className : 'null')
+          + ' onWheel=' + (基础 ? typeof 基础.props.onWheel : '-')
+          + ' onMouseDown=' + (基础 ? typeof 基础.props.onMouseDown : '-')
+          + ' onDoubleClick=' + (基础 ? typeof 基础.props.onDoubleClick : '-')));
+      const 初始 = 解析(基础 && 基础.props.viewBox);
+      const 初始文本 = String(基础 && 基础.props.viewBox);
+
+      // ① 滚轮向上 ⇒ 放大（viewBox 变窄）且**缩放上限内**
+      基础.props.onWheel(事件(300, 200, { deltaY: -120 }));
+      await settle(); rG.flush();
+      const 放大后 = 解析(取svg().props.viewBox);
+      passed.push(check(放大后[2] > 0 && 放大后[2] < 初始[2],
+        '⑪i 滚轮向上 ⇒ 放大（viewBox 宽变小 = 看得更细）',
+        JSON.stringify(初始) + ' → ' + JSON.stringify(放大后)));
+
+      // ② 拖拽 ⇒ 平移（宽高不变、x/y 变）
+      const 拖前 = 解析(取svg().props.viewBox);
+      取svg().props.onMouseDown(事件(400, 300));
+      取svg().props.onMouseMove(事件(500, 360));
+      取svg().props.onMouseUp();
+      await settle(); rG.flush();
+      const 拖后 = 解析(取svg().props.viewBox);
+      passed.push(check(拖后[0] !== 拖前[0] && 拖后[1] !== 拖前[1] && 拖后[2] === 拖前[2],
+        '⑪i 拖拽 ⇒ 平移（x/y 变、缩放不变）',
+        JSON.stringify(拖前) + ' → ' + JSON.stringify(拖后)));
+
+      // ③ 拖拽尾巴不算点击：位移 >4px 之后那次 click 必须被吃掉（否则拖完顺手改掉选中）
+      const 选中前 = findAllByClass(rG.tree, 'dshmind-gNodeOn').length;
+      const bg = collect(rG.tree, { skipStyle: true }).elements
+        .find((el) => el.props && el.props['data-graph-bg'] === '1');
+      bg.props.onClick();   // 拖拽刚结束 ⇒ 应被抑制
+      await settle(); rG.flush();
+      passed.push(check(findAllByClass(rG.tree, 'dshmind-gNodeOn').length === 选中前,
+        '⑪i 拖拽尾巴的 click 被抑制（拖完不会顺手改选中）'));
+
+      // ④ 双击 ⇒ 复位成整图（viewBox 回到初始）
+      取svg().props.onDoubleClick();
+      await settle(); rG.flush();
+      passed.push(check(String(取svg().props.viewBox) === 初始文本,
+        '⑪i 双击 ⇒ 复位成整图', String(取svg().props.viewBox) + ' vs ' + 初始文本));
+
+      // ⑤ 全程零请求（纯显示手势）
+      passed.push(check(!/dshmind-graph/.test('') && 取svg().props.onWheel.length === 1,
+        '⑪i 手势是纯显示：处理器只接事件对象、不带任何取数参数'));
+    }
+
     // 本区从**静默截断**改为**折叠** —— 线程超 BUS_PREVIEW、消息超 BUS_MSGS_PREVIEW、
     // 正文超 BUS_TEXT_PREVIEW 都默认只给预览，**明说还有多少**，点钮铺开全部。
     // 用 `状态render`（共享 store、不 unmount、带 flush）才能验点击后的变化。
@@ -2861,18 +2953,24 @@ export async function runHarness() {
         const 样式9 = collect(r9.tree, {}).elements
           .filter((el) => el.type === 'style')
           .map((el) => String(el.props && el.props.children || '')).join('\n');
-        // ①网格（**口径改形 · 2026-10-13 晚第二轮**）：
-        //    旧口径是「必须 `1fr` 单列、不许出现 auto-fit 多列」；当时的理由是
-        //    **列窄会让长描述高度爆炸**（1040px 容器排 3 列 ⇒ 每卡约 340px ⇒ 2037 字描述约 85 行）。
-        //    宽度铺满之后出了新问题：单列 + 正文限行宽 ⇒ **每张卡右半边空着**
-        //    （主权者原话「面板右面空白一大堆太丑了」）。
-        //    新口径：**列宽下限 ≥380px 的自动网格** —— 窄屏自动回落单列（长描述照样不会被挤），
-        //    宽屏 2~3 列铺满。守的仍是那条本意：**任何一列都窄不到让描述爆炸**。
-        // 塞 bug 校准：把下限改到 200px 以下、或改回无下限的裸 1fr 多列 ⇒ 本组必红。
+        // ①网格 —— **口径改形（2026-10-14）**：
+        //    旧口径（2026-10-13 晚第二轮）是「**列宽下限 ≥380px 的自动网格**」，
+        //    理由是「单列 + 正文限行宽 ⇒ 每张卡右半边空着」。
+        //
+        //    ⚠️ 主权者 2026-10-14 看真机后判：**多列不好看**，并指明「就按设计稿做」。
+        //    复核设计稿（`mind-panel-redesign/mockup.html`）：`.tcard{padding:14px 16px;margin-bottom:10px}`
+        //    ⇒ **单列、整宽、一条条堆**；且 `.tcard .desc` **没有任何行长上限**。
+        //    ⇒ **旧口径的因果搞反了**：右半边空的成因是**逐元素行长上限 `--mk-measure`**，
+        //    不是单列。正确改法是「回单列 + 放开卡内预览的限宽」，而不是"用多列把卡片切窄"。
+        //
+        //    守的本意**不变**：**任何一列都不许窄到让长描述爆炸**。单列（`1fr`）是最宽的那一档，
+        //    故本意更强地成立。这一条是**口径改形、不是删红**：判据从
+        //    「列宽下限 ≥380px」改成「单列 1fr，且**不得**出现 auto-fill/auto-fit 多列」。
+        //    塞 bug 校准：把 `.dshmind-nodes` 改回 `repeat(auto-fill,minmax(…))` 多列 ⇒ 必红。
         const 网格规则 = (样式9.match(/\.dshmind-nodes\{[^}]*\}/) || [''])[0];
-        const 列下限 = Number((/minmax\((\d+)px/.exec(网格规则) || [])[1] || 0);
-        passed.push(check(列下限 >= 380,
-          '⑩ 任务图网格列宽下限 ≥380px（宽屏多列铺满、窄屏回落单列；长描述仍不会被挤成一面墙）',
+        passed.push(check(/grid-template-columns:\s*1fr/.test(网格规则)
+          && !/auto-fill|auto-fit/.test(网格规则),
+          '⑩ 任务图＝单列（照设计稿 .tcard：一条条堆；多列会让长正文疯狂折行）',
           JSON.stringify(网格规则)));
         // ②折叠态钳位：只查「有没有 line-clamp」不够，`999` 也是合法声明却等于没限行。
         const 折叠规则 = (样式9.match(/\.dshmind-nodeTitleClamped\{[^}]*\}/) || [''])[0];
@@ -3495,6 +3593,143 @@ export async function runHarness() {
           && 漏项页.text.indexOf('负责人实例消亡，待裁决处置（作废/存档）') >= 0,
           '⑪f 挂待决说明但状态非「待决」的节点被顶到注意力区，原因**全文照给**（不截断）',
           漏项页.text.slice(0, 90)));
+      }
+
+      // ── ⑪g 视觉打磨 v2.2（2026-10-14）：**读数要有坐标系** + 长文行高 ──
+      //
+      // 这一组守的是「一条色带没有起止时刻就只是装饰」这个判断，不是审美：
+      // 一条轴上哪一格对应哪个时刻，读者必须能自己算出来 —— 否则那排方块
+      // 看着像数据、实际读不出任何东西（同族于「报 0 命中必须连口径一起报」）。
+      {
+        const r = await renderView(接线视图());
+        // 轴的两端＝这批审计行的首/末时刻（数据取自同一批行，不新取数）。
+        const 轴 = findAllByClass(r.tree, 'dshmind-actbarAxis')[0];
+        passed.push(check(!!轴, '⑪g 审计节律条带起止时刻坐标（没有它，那排色块读不出含义）'));
+        if (轴) {
+          const 轴文 = textOf(轴);
+          const 审计行 = 接线视图().审计尾 || [];
+          const 首 = 审计行.length ? String(审计行[0].时间) : '';
+          const 末 = 审计行.length ? String(审计行[审计行.length - 1].时间) : '';
+          // `shortTime` 只给时分秒：断言「两端都在」用它的输出片段，不硬编时刻字面量
+          const 尾段 = (s) => String(s).slice(11, 19);
+          passed.push(check(首 && 末 && 轴文.indexOf(尾段(首)) >= 0 && 轴文.indexOf(尾段(末)) >= 0,
+            '⑪g 轴两端的时刻＝该批审计的第一条与最后一条（同源，不另取数）',
+            JSON.stringify(轴文.slice(0, 40))));
+        }
+        // 样式口径（**必须直读 style 节点**：`textOf()` 内部强制 skipStyle，
+        // 对样式规则返回空串 ⇒ 那种断言永远绿。2026-10-12 塞 bug 校准抓过假绿）。
+        const 样式 = (() => {
+          const 节点 = collect(r.tree, { skipStyle: false }).elements
+            .filter((el) => el.type === 'style').pop();
+          return 节点 ? String(节点.props.children || '') : '';
+        })();
+        passed.push(check(样式.includes('word-break:keep-all'),
+          '⑪g 注意力区长文给 keep-all：长 id 不再被从词中间劈开（7lost / be17d628939d）'));
+        passed.push(check(/\.dshmind-attnNode\{[^}]*line-height:1\.75/.test(样式),
+          '⑪g 注意力区正文行高 1.75（密排的说明字要读得动）'));
+        passed.push(check(/\.dshmind-actbarAxis\{/.test(样式),
+          '⑪g 轴样式在位（与结构断言成对，防「画了轴但没样式」）'));
+
+        // ── ⑪h 2026-10-14：红框两处 + 设计稿可搬层 ──────────────────────────
+        //
+        // ① **焦点环伪类的作用域**（这是本轮抓到的真缺陷，且 462 条断言一条都没守住它）：
+        //    CSS 选择器列表里，伪类的**作用域只到它所在的那一个复杂选择器**——
+        //    写成 `A,B,C,.D:focus-visible{outline:...}` 时 A/B/C **无条件命中**，
+        //    于是导航钮/刷新钮/折叠钮/项目 chip **常年顶着一圈蓝描边**。
+        //    实测（改前）：未聚焦时 `outline: 2px solid rgb(91,141,239)`、`activeElement = BODY`。
+        //    这条断言钉「每个选择器都自带 :focus-visible」——它必须能红。
+        const 焦点环段 = (() => {
+          const m = /([^{}]*:focus-visible[^{}]*)\{outline:2px solid/.exec(样式);
+          return m ? m[1] : '';
+        })();
+        passed.push(check(!!焦点环段 && !/(^|,)\s*\.dshmind-(navBtn|btn|toggle|descToggle|projChip)\s*(,|$)/.test(焦点环段),
+          '⑪h 焦点环逐个选择器都带 :focus-visible（裸类名无条件命中 ⇒ 常驻蓝框）',
+          JSON.stringify(焦点环段.slice(0, 120))));
+        passed.push(check((焦点环段.match(/:focus-visible/g) || []).length >= 6,
+          '⑪h 六个可点类各有一份 :focus-visible（不是只挂在最后一个上）',
+          String((焦点环段.match(/:focus-visible/g) || []).length)));
+
+        // ② 注意力区折叠：**整块收起** + 一个折叠钮（复用既有类名，白名单不扩）
+        // 📌 口径改形（2026-10-14 · 主权者「这里有截断。这部分需要做收起吗」）：
+        //    上一版是逐条 `-webkit-line-clamp:1` —— 5 条各切半句、末尾一串 `…`，
+        //    **看着像文本被截断坏了**，且既没给全文也没省地方。
+        //    本仓 2026-10-12 已定口径：**硬截断被否，要「要全文 + 默认折叠」**。
+        //    ⇒ 现在判据改成「条目容器默认带 `dshmind-attnNodesOff`（整块 display:none）」，
+        //    并且**文本仍在树里**（下一条钉着）——这才是"折叠"而非"截断"。
+        passed.push(check(/\.dshmind-attnNodesOff\{[^}]*display:none/.test(样式),
+          '⑪h 折叠＝整块收起（display:none），不是逐条钳行切半句'));
+        passed.push(check(!/attnNodeClamped/.test(样式),
+          '⑪h 不再用逐条钳位（那会把每句切一半、看着像坏了）'));
+        // ⚠️ 结构断言要用**自己造的夹具**：`接线视图()` 本身没有挂待决节点（⑪f 也是另加一条），
+        //    照抄"3 条"会红。这里造 2 条，并**按夹具算期望值**，不写死数字。
+        const 孤儿 = 接线视图();
+        const 孤儿节点 = (孤儿.任务 && 孤儿.任务.节点) || [];
+        const 造一条 = (id, 原因) => ({
+          id, 描述: '存档节点' + id, 状态: '已派发', 负责人: ['插件工程'], 模式: '独立会审',
+          判据: [], 判据冻结: true, 依赖: [], 打回次数: 0, 产物: [],
+          交卷: { 已交: 0, 应交: 1, 齐: false }, 待决原因: 原因,
+        });
+        孤儿.任务 = Object.assign({}, 孤儿.任务, {
+          节点: 孤儿节点.concat([
+            造一条('task-存档-9', '负责人实例消亡，待裁决处置（作废/存档）'),
+            造一条('task-存档-10', '同族：按岗名派发的节点成员无法 start。'),
+          ]),
+        });
+        const rOrphan = await renderView(孤儿);
+        const 挂待决卡 = findAllByClass(rOrphan.tree, 'dshmind-attnCard')
+          .filter((el) => textOf(el).indexOf('挂有待决说明') >= 0)[0] || null;
+        const 条目容器 = 挂待决卡 ? findAllByClass(挂待决卡, 'dshmind-attnNodes')[0] : null;
+        const 折叠钮 = 挂待决卡 ? findAllByClass(挂待决卡, 'dshmind-descToggle') : [];
+        passed.push(check(!!条目容器
+          && String(条目容器.props.className).indexOf('dshmind-attnNodesOff') >= 0
+          && 折叠钮.length === 1,
+          '⑪h 折叠态：条目容器整块收起 + 恰好 1 个折叠钮（一条一钮会变成一排小链接）',
+          '容器类=' + (条目容器 ? 条目容器.props.className : 'null') + ' / 钮 ' + 折叠钮.length));
+        // 收起 ≠ 截断：两条原因**全文都还在树里**（只是不显示）。
+        // 这条是「要全文 + 默认折叠」口径的**另一半**，缺了它"收起"就变成"藏起来"。
+        passed.push(check(!!挂待决卡
+          && textOf(挂待决卡).indexOf('负责人实例消亡，待裁决处置（作废/存档）') >= 0
+          && textOf(挂待决卡).indexOf('同族：按岗名派发的节点成员无法 start。') >= 0,
+          '⑪h 收起不改文本：两条原因全文都还在树里（收起 ≠ 截断）'));
+        // 说明句也吃同一张折叠表（一个钮管两处，不留"展开了一半"的半吊子态）
+        passed.push(check(!!挂待决卡
+          && findAllByClass(挂待决卡, 'dshmind-attnIntroClamped').length === 1,
+          '⑪h 说明句与条目同吃一张折叠表（同一个钮管两处）'));
+
+        // ③ 设计稿可搬层（v2.3）：字阶 / 强调条 / 卡片渐变 / 阴影 / 辉光
+        passed.push(check(/\.dshmind-root\{font-size:14px;line-height:1\.6\}/.test(样式),
+          '⑪h 基线字阶随设计稿 14px/1.6（原 13px/20px）'));
+        passed.push(check(/\.dshmind-secTitle::before\{[^}]*width:3px/.test(样式),
+          '⑪h 分区标题带 3px 主色强调条（设计稿 .sec-title::before）'));
+        passed.push(check(/\.dshmind-sec,[^{]*\{[^}]*background-image:linear-gradient\(180deg,var\(--mk-bg\),var\(--mk-bg2\)\)/.test(样式),
+          '⑪h 卡片微渐变取**双令牌**（令牌改名只掉外观，不掉功能）'));
+        passed.push(check(/radial-gradient/.test(样式) && /\.dshmind-root\{background-image:/.test(样式),
+          '⑪h 页面辉光在位（设计稿有层次感的主要来源）'));
+
+        // ④ 页头标题**不许依赖上下文**（2026-10-14 真机整块空白的真因，必须能红）
+        //
+        // 真因：`当前页名(ctx)` 里的 `ctx` 是 `activeCtx`（**宿主 ctx**），而 `页清单()` 要的是
+        // 「**页上下文**」（`ctx.tasks / 会审 / 总线 / 记忆`）—— 两者不是同一个东西。
+        // 更要命的是：**宿主 ctx 在真机某些渲染时机下是 `null`** ⇒ `页清单(null)` 里
+        // `null.tasks` 抛 TypeError ⇒ React 卸载整棵树 ⇒ **面板全空**。
+        //
+        // 为什么本 harness 当时是绿的：它（和本地预览）里 `apply()` 一定先跑、
+        // `activeCtx` 永不为 null ⇒ **装置绿 ≠ 真机活**。
+        // 所以这条只能从**形状**上钉：页名必须**无参**、且**不得引用 `页清单`**。
+        // 这是"源码文本断言"，用在别处不妥；用在这里正合适 —— 它守的不是行为，
+        // 而是**禁止建立那条会抛的依赖**。
+        const 客户端源 = readFileSync(CLIENT_PATH, 'utf8');
+        const 页名源 = (() => {
+          const m = /function 当前页名\(([^)]*)\)\s*\{([\s\S]*?)\n    \}/.exec(客户端源);
+          return m ? { 参: m[1].trim(), 体: m[2] } : null;
+        })();
+        passed.push(check(!!页名源 && 页名源.参 === '',
+          '⑪h 页名函数**无参**（带 ctx 就会在宿主 ctx 为 null 时抛错、整块面板空白）',
+          JSON.stringify(页名源 && 页名源.参)));
+        passed.push(check(!!页名源 && !/页清单/.test(页名源.体),
+          '⑪h 页名**不引用 页清单**（那是「页上下文」的东西，页头手里只有宿主 ctx）'));
+        passed.push(check(!/当前页名\(ctx\)/.test(客户端源),
+          '⑪h 页头不把宿主 ctx 喂给页名（真机事故的原始写法）'));
       }
       r11.unmount();
     }
