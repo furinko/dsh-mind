@@ -64,7 +64,9 @@ export class Org {
     const registry = new RoleRegistry({ layout, policy, audit, clock });
     const upgrade = new UpgradeManager({ layout, policy, audit, clock });
     const probes = new ProbeRunner({ layout, policy, audit, clock, capability });
-    const review = new ReviewProtocol({ layout, policy, audit, clock, tasks, bus, random: spec.random });
+    // registry 注入 review（2026-10-14 · 池化排班）：提名路由（池内派单/池外待决）要按
+    // 「在册在岗复核员」分池——身份档案是唯一事实源，与 debate 候选池同一条接线纪律。
+    const review = new ReviewProtocol({ layout, policy, audit, clock, tasks, bus, registry, random: spec.random });
     // registry 也注入 debate（⑮ 强制反对者·2026-10-10）：开启讨论时要按「身份档案成员」
     // 算候选池，而「在岗/封存」的唯一事实源就是角色注册表——不许在 debate 里再读一遍身份档案。
     const debate = new DebateService({ layout, policy, audit, clock, tasks, bus, review, registry });

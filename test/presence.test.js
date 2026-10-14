@@ -56,6 +56,15 @@ const 冻结动作表 = [
   // task_settle（W3 批3）：结账——环路最后一步，仅 Lead（policy 的 settle 动作守着）。
   // 它是**工具面可达**的：收尾必须是 Lead 显式拍板的一步，藏进 review 内部就没有独立动作记录了。
   'task_settle',
+  // review_nominate（G1 · 交接件《复核员任命闭环缺口》2026-10-14）：提名复核者进任务图。
+  // 过这一关时回答「是不是改设置的动作」：不是——它只往任务图落 review_nominated 事件
+  // （节点转待决·复核提名），仅 Lead、仅 已交卷/未验/已打回，候选不得是交卷人（§3.4）；
+  // 提名 ≠ 任命：不触碰 registry_assign（任命仍由主权者授权引用驱动）。事件流与审计都留痕。
+  'review_nominate',
+  // review_exempt（G4 · 同交接件）：复核豁免登记（主权者决定不复核时留可查询的账）。
+  // 过这一关时回答「是不是改设置的动作」：不是——它往任务图落 review_exempted 标记事件，
+  // 仅 Lead/主权者 + 授权引用必填（空授权默认拒，防 Lead 自豁免拆掉独立复核线）。
+  'review_exempt',
   'memory_write',
   'memory_query',
   'memory_lineage',

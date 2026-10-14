@@ -131,6 +131,7 @@ $DSH_HOME/mind-data/mind-private/       ← 私有区（首次启动自动引导
 ```
 status · workbench · policy_check
 task_create · task_reassign · task_dispatch · task_start · task_submit · task_review · task_pending · task_resolve · task_settle
+review_nominate · review_exempt
 memory_write · memory_query · memory_lineage · memory_lifecycle
 capability_list · capability_resolve · capability_read · capability_publish
 bus_send · bus_read · audit_tail · audit_verify

@@ -32,6 +32,12 @@ const TERMINAL = new Set(['已采纳', '已结账']);
  *  - review：已交卷初核；未验/已打回后再核。
  *  - markPending：任何非终态、非待决；resolvePending：只在待决。
  *  - attach：任何非终态。
+ *  - nominateReview（G1 · 交接件 2026-10-14）：复核窗口内提名复核者，节点转待决
+ *    （待决类型=复核提名）等主权者任命——「主权者不批就一直挂着」。
+ *  - exemptReview（G4 · 同交接件）：复核豁免登记，只标记不转移（与 attach 同格，
+ *    任何非终态可挂，待决中也可——裁决=不复核本身就是一种决定）。
+ *  - assignReview（2026-10-14 · 池化排班）：池内派单（候选=在册在岗复核员），
+ *    只挂指派记录不转状态——排班不是任命，不过主权者。
  */
 const TRANSITIONS = {
   start: ['已派发', '已打回', '未验'],
@@ -47,6 +53,17 @@ const TRANSITIONS = {
   // 只许在「待派发 / 已派发」改——执行中改派会让「谁在干活」与已交的作业归属脱钩，
   // 交卷后改派会洗掉「谁交的卷」。负责人实例消亡 ⇒ 只能重建节点的死路由此打通。
   reassign: ['待派发', '已派发'],
+  // nominateReview（G1 · 交接件《复核员任命闭环缺口》2026-10-14）：提名复核者。
+  // 只在复核窗口（已交卷 / 未验 / 已打回）——提名是把「该复核了」变成待决项，
+  // 节点挂起等主权者任命（复核员任命须主权者授权：registry.assign 特判守着那道闸）。
+  nominateReview: ['已交卷', '未验', '已打回'],
+  // assignReview（2026-10-14 · 主权者批准池化排班）：池内派单。候选是**在册在岗复核员**
+  // 时，任命早已完成（就座那一刻），派单是排班不是任命——不进待决，节点留在复核窗口，
+  // 复核员可直接 review。窗口与 nominateReview 同格。
+  assignReview: ['已交卷', '未验', '已打回'],
+  // exemptReview（G4 · 同交接件）：复核豁免登记。豁免是**标记**不是状态转移，
+  // 任何非终态可挂（与 attach 同格）——待决中的提名也可就地豁免（裁决 = 不复核）。
+  exemptReview: ['待派发', '已派发', '执行中', '已交卷', '未验', '已打回', '待决'],
 };
 
 /**
@@ -342,6 +359,159 @@ export class TaskGraph {
     if (spec.三态 === '不过') await this.reject(id, { subject: spec.subject, 项目: spec.项目, 理由: `复核不过：${(spec.分歧清单 ?? []).join('；') || '未给分歧清单'}` });
     // 打回路径下 reject 又写了一条事件：返回它折出来的最新节点才是真读数。
     return spec.三态 === '不过' ? this.get(id, { 项目: spec.项目 }) : reviewed;
+  }
+
+  /**
+   * 提名复核者（G1 · 交接件《复核员任命闭环缺口》2026-10-14）。
+   *
+   * 缺口：Lead 的提名此前只能靠一条总线消息——消息不是动作：不进任务图、不产生待决项、
+   * 没有状态机、没有任何东西保证它被看见（本机实测 seq 478 那条提名连收件人都是空的）。
+   * 服务层 review.nominate() 虽有半成品，但从未接进动作面，等于不存在。
+   *
+   * 本方法把提名变成**任务图里的待决项**：节点转「待决（复核提名）」，进主权者决策队列
+   * （workbench 待决面），主权者不批就一直挂着。
+   *
+   * 三条边界（编制.md 岗位总则「任命由主权者确认，Lead 可提名」+ 4yuxq 独立复核定案）：
+   *  - **仅 Lead**：提名是 Lead 的入口（成员/复核者不得提名——§3.5 提案禁令同向）；
+   *  - **候选 ≠ 交卷人**：§3.4 提审分离的前置面——交卷人不得复核自己的卷，
+   *    提名交卷人就是把「不得自审」的口子留在提名这一步；
+   *  - **提名 ≠ 任命**：本方法不触碰 registry_assign。任命仍由主权者的授权引用驱动
+   *    （registry.assign 的复核员特判：空授权默认拒）——本节点 id 就是落实时的授权依据。
+   *
+   * @param {string} id
+   * @param {{ subject: object, 项目: string, 候选: string, 原因?: string }} spec
+   */
+  async nominateReview(id, spec) {
+    if (spec.subject?.kind !== 'Lead') {
+      throw new Denied('任务图 · 复核提名仅 Lead', `提名复核者是 Lead 的入口（编制：任命由主权者确认，Lead 可提名）：${spec.subject?.kind ?? '未知'} 没有这只手。`, {
+        requireAuthority: 'Lead',
+        howToChange: '由 Lead 执行 review_nominate（提名事实进任务图与审计）；主权者确认后经 registry_assign 带授权引用任命。',
+      });
+    }
+    const 候选 = String(spec.候选 ?? '').trim();
+    if (!候选) throw new InvalidBody('复核提名需要「候选」（被提名的复核者实例 id）。', { missing: ['候选'] });
+    const node = await this.#require(id, spec.项目);
+    this.#requireTransition(node, 'nominateReview');
+    // §3.4 提审分离的前置面：交卷人不得复核自己的卷 ⇒ 也不得被提名为本节点的复核者。
+    const 交了卷 = (node.独立答案 ?? []).some((a) => String(a.成员) === 候选);
+    if (交了卷) {
+      throw new Denied('任务图 · 交卷人不得复核自己的卷（§3.4 提审分离）', `候选 ${候选} 在本节点的独立答案里：提名交卷人复核自己 = 把「给自己发合格证」的口子留在提名这一步。`, {
+        howToChange: '提名一个未参与交卷的主体；交卷人有异议走返工环路（review 不过 → task_start 重做）。',
+      });
+    }
+    await this.#checkWrite(id, node, spec);
+    const { 节点 } = await this.#append(
+      spec.项目,
+      {
+        kind: 'review_nominated',
+        id,
+        候选,
+        提名原因: spec.原因 ?? '',
+        状态: '待决',
+        待决类型: '复核提名',
+        待决原因: `提名 ${候选} 复核本节点，待主权者任命`,
+      },
+      spec.subject,
+      '状态变更',
+      null,
+      this.#transitionGuard(id, 'nominateReview'),
+    );
+    return 节点;
+  }
+
+  /**
+   * 池内派单（2026-10-14 · 主权者批准池化排班）。
+   *
+   * 与 nominateReview 的分界（同一件事不许有两个口径——由编排层 review.nominate 按
+   * 「候选是否在册在岗复核员」路由，本方法只接池内的）：
+   *  - **池内**（在册在岗复核员）：任命在他就座那一刻已完成，派单是**排班**——
+   *    不进待决、不转状态，节点留在复核窗口，复核员可直接 review；
+   *  - **池外**（其他候选）：那是新任命 ⇒ 走 nominateReview 挂待决等主权者。
+   *
+   * 保留的闸：仅 Lead（排班由 Lead 执行）、复核窗口（与提名同格）、
+   * 候选 ≠ 本节点交卷人（§3.4 提审分离——池内身份不豁免这条）。
+   * 指派事实进事件流（复核指派记录逐次留痕，fold 可重建）。
+   *
+   * @param {string} id
+   * @param {{ subject: object, 项目: string, 候选: string, 原因?: string }} spec
+   */
+  async assignReview(id, spec) {
+    if (spec.subject?.kind !== 'Lead') {
+      throw new Denied('任务图 · 复核派单仅 Lead', `排班由 Lead 执行（任命才归主权者，派单不是任命）：${spec.subject?.kind ?? '未知'} 没有这只手。`, {
+        requireAuthority: 'Lead',
+        howToChange: '由 Lead 执行 review_nominate（池内候选自动走派单，不进待决）。',
+      });
+    }
+    const 候选 = String(spec.候选 ?? '').trim();
+    if (!候选) throw new InvalidBody('复核派单需要「候选」（在册在岗的复核者实例 id）。', { missing: ['候选'] });
+    const node = await this.#require(id, spec.项目);
+    this.#requireTransition(node, 'assignReview');
+    const 交了卷 = (node.独立答案 ?? []).some((a) => String(a.成员) === 候选);
+    if (交了卷) {
+      throw new Denied('任务图 · 交卷人不得复核自己的卷（§3.4 提审分离）', `候选 ${候选} 在本节点的独立答案里：池内身份不豁免提审分离——交卷人不得复核自己。`, {
+        howToChange: '派单给另一位在册复核员（编排层省略候选即按账上活动轮派）；交卷人有异议走返工环路。',
+      });
+    }
+    await this.#checkWrite(id, node, spec);
+    const { 节点 } = await this.#append(
+      spec.项目,
+      { kind: 'review_assigned', id, 候选, 指派原因: spec.原因 ?? '', 排班: '池内' },
+      spec.subject,
+      '状态变更',
+      null,
+      this.#transitionGuard(id, 'assignReview'),
+    );
+    return 节点;
+  }
+
+  /**
+   * 复核豁免登记（G4 · 交接件《复核员任命闭环缺口》2026-10-14）。
+   *
+   * 缺口：主权者选择不复核时，「未经独立复核」只能写在交卷正文里——不可查询、
+   * 不可统计，进不了「谁没被复核」的账。本方法给豁免一个**可查询的节点字段**，
+   * 使「哪些产出没被复核」成为兜底统计面（产出者不得自己回答交付得好不好）。
+   *
+   * 三条边界（与 registry.assign 复核员特判 / audit_correct 同族）：
+   *  - **仅 Lead / 主权者**：豁免免除的是独立复核本身，门槛取最高；
+   *  - **授权引用必填**：空授权 = 默认拒绝。豁免是主权者的决定，Lead 只代为登记——
+   *    授权依据（决议 / 任务节点 id）原样进事件流与审计接受复核，防「Lead 自豁免」
+   *    把整条复核线静默拆掉；
+   *  - **只标记、不转移**：不动状态机（与 attach 同格，任何非终态可挂）。
+   *    待决中的提名可就地豁免（裁决 = 不复核）；待决项本身仍走 task_resolve 清账。
+   *
+   * @param {string} id
+   * @param {{ subject: object, 项目: string, 授权引用: string, 原因?: string }} spec
+   */
+  async exemptReview(id, spec) {
+    if (!['Lead', '主权者'].includes(spec.subject?.kind)) {
+      throw new Denied('任务图 · 复核豁免仅 Lead / 主权者', `豁免免除的是独立复核本身：${spec.subject?.kind ?? '未知'} 没有这个入口。`, {
+        requireAuthority: '主权者',
+        howToChange: '由主权者明示不复核后，Lead/主权者携带授权依据执行 review_exempt（授权引用原样进链接受复核）。',
+      });
+    }
+    const 授权引用 = typeof spec.授权引用 === 'string' ? spec.授权引用.trim() : '';
+    if (!授权引用) {
+      throw new Denied(
+        '任务图 · 复核豁免须主权者授权',
+        '豁免复核 = 放弃「组织不给自己发合格证」这道防线：必须携带主权者授权依据（授权引用 = 决议 / 任务节点 id），空授权 = 默认拒绝。',
+        {
+          requireAuthority: '主权者',
+          howToChange: '把主权者的授权依据 id 作为「授权引用」传入 review_exempt（它原样进事件流与审计接受复核）。',
+        },
+      );
+    }
+    const node = await this.#require(id, spec.项目);
+    this.#requireTransition(node, 'exemptReview');
+    await this.#checkWrite(id, node, spec);
+    const { 节点 } = await this.#append(
+      spec.项目,
+      { kind: 'review_exempted', id, 授权引用, 豁免原因: spec.原因 ?? '' },
+      spec.subject,
+      '状态变更',
+      null,
+      this.#transitionGuard(id, 'exemptReview'),
+    );
+    return 节点;
   }
 
   /**
@@ -840,6 +1010,26 @@ export function fold(rows) {
         node.状态 = row.状态;
         node.最近三态 = row.三态;
         node.复核经过 = [...(node.复核经过 ?? []), { 三态: row.三态, 分歧清单: row.分歧清单, 反例面: row.反例面, 复核者: row.复核者, 于: row.at }];
+        break;
+      // 复核提名（G1 · 2026-10-14）：节点挂起等主权者任命。待决前的状态记下来，
+      // resolvePending（case resolved）靠它把节点放回原状态——与 pending 事件同款。
+      case 'review_nominated':
+        node.待决前的状态 = node.状态;
+        node.状态 = row.状态 ?? '待决';
+        node.待决原因 = row.待决原因;
+        node.待决类型 = row.待决类型 ?? '复核提名';
+        node.复核提名记录 = [...(node.复核提名记录 ?? []), { 候选: row.候选, 提名原因: row.提名原因 ?? '', 提名人: row.by?.id ?? null, 于: row.at }];
+        break;
+      // 池内派单（2026-10-14 · 池化排班）：只挂指派记录，不动状态——节点留在复核窗口，
+      // 复核员可直接 review。逐次留痕，当前值取最后一条。
+      case 'review_assigned':
+        node.复核指派 = { 候选: row.候选, 指派原因: row.指派原因 ?? '', 排班: row.排班 ?? '池内', 由: row.by?.id ?? null, 于: row.at };
+        node.复核指派记录 = [...(node.复核指派记录 ?? []), { ...node.复核指派 }];
+        break;
+      // 复核豁免（G4 · 2026-10-14）：只标记不转移；逐次留痕，当前值取最后一条。
+      case 'review_exempted':
+        node.复核豁免 = { 授权引用: row.授权引用, 豁免原因: row.豁免原因 ?? '', 由: row.by?.id ?? null, 于: row.at };
+        node.复核豁免记录 = [...(node.复核豁免记录 ?? []), { ...node.复核豁免 }];
         break;
       case 'rejected':
         node.打回次数 = row.打回次数 ?? (node.打回次数 ?? 0) + 1;
