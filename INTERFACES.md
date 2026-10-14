@@ -85,9 +85,10 @@ export class TaskGraph {
    * @returns {Promise<object>} 更新后的节点 */
   async dispatch(id, { subject })
   async start(id, { subject })
-  async submit(id, { subject, 产出物引用, 结论 })
-  /** 复核结论：三态 过/不过/未验。结论不经 Lead 修改。 */
-  async review(id, { subject, 结论, 分歧清单, 反例面, 复核者 })
+  /** 交卷：结论 + 结论层（§10 零分歧判据的结构化标签，2026-10-14 起贯通 schema→fold→工作台）+ 反例面。 */
+  async submit(id, { subject, 产出物引用, 结论, 结论层, 分歧清单, 反例面 })
+  /** 复核结论：三态 过/不过/未验。结论不经 Lead 修改。提审分离（§3.4）锁内复检。 */
+  async review(id, { subject, 三态, 结论, 分歧清单, 反例面, 复核者 })
   /** 打回：同一节点打回 ≥2 次 ⇒ 升级主权者（节点上出现 升级={原因:'打回≥2'}）。 */
   async reject(id, { subject, 理由 })
   /** 结账（W3 批3）：环路最后一步。前置=已采纳；仅 Lead（policy 的 `settle` 动作守着）；
@@ -117,12 +118,16 @@ export class TaskGraph {
 ```js
 export class MessageBus {
   constructor({layout, policy, audit, clock})
-  /** {线程, 发件, 收件, 类型, 内容, 项目, 暂不投递} -> {id, 状态:'已投递'|'暂不投递', 追加于} */
+  /** {线程, 发件, 收件, 类型, 内容, 项目, 暂不投递, 锁内闸?} -> {id, 状态:'已投递'|'暂不投递', 追加于}
+   *  锁内闸（2026-10-14 P2-11）：可选回调，在持有线程锁、落线之前执行（讨论预算闸的权威一检走它）。 */
   async send(message)
   /** 只返回本线程消息（线程隔离）。契约B（2026-10-09）：subject 必带并过 policy.check
-   *  （action 'read'），放行记一条「只读服务调用」审计（档位=记汇总，一次调用一条）。 */
+   *  （action 'read'），放行记一条「只读服务调用」审计（档位=记汇总，一次调用一条）。
+   *  收件过滤同时认单值与数组（2026-10-14 P1-5，修前数组恒 false 静默返空）。 */
   async read({ subject, 项目, 线程, 读者, 收件 })
-  async deliver(id)
+  /** 暂不投递 → 已投递：同 id 追加一条新记录（只增），重复投递幂等；动作面 = `bus_deliver`（2026-10-14 接线）。 */
+  async deliver({ subject, 项目, 线程, id })
+  async threads({ 项目 })
   /** 会审解锁：任务图报「全员已交」→ 解锁并广播（§9 边界写死）。 */
   async unlock({ 项目, 线程, 全员已交 })
 
@@ -134,7 +139,7 @@ export class MessageBus {
 //  - `bus_read` 动作面有盲评遮罩：独立会审节点未交齐且无讨论段时，成员读者只看到
 //    自己的消息，他人的 发件→匿名席次、内容→占位（Lead/复核者/主权者不受影响）。
 //  - `task_submit`：讨论段开启后（节点有 讨论 且 状态=已交卷）不许改卷；返工环路
-//    （已打回/执行中）不受影响。  async threads({ 项目 })
+//    （已打回/执行中）不受影响。
 }
 ```
 存储：`layout.busThread(project, thread)`；消息 `authority:'只增'`；**历史不入上下文**（本模块只负责存与取，不注入）。
@@ -164,7 +169,9 @@ export class MemoryService {
   async purge(id, { subject, 理由, 敏感 })
   /** 契约C（2026-10-09）：晋升 = 跨项目发布面变宽，先对 标题+内容+标签 过披露机械检查
    *  （清单见 §2.13）；命中即拒（Denied 指向豁免面），Lead 带 披露豁免:true 放行并记
-   *  「披露豁免」审计（全记，详情含命中模式名，不含敏感原文）。 */
+   *  「披露豁免」审计（全记，详情含命中模式名，不含敏感原文）。
+   *  幂等闸（2026-10-14 P1-8）：条目已带岗位 ⇒ 拒——二次晋升在账上落永不生效的副本行，
+   *  审计却照记（假留痕），修前。 */
   async promoteCrossProject(id, { subject, 岗位, 理由, 披露豁免 })
   /** 作答归档 + 归档后可读性矩阵（§7）。 */
   async archiveAnswers({ 项目, 任务 })
@@ -301,8 +308,10 @@ export class ReviewProtocol {
   async declareMode({ subject, 节点, 模式 })
   async openBlind({ 项目, 线程, 参与者 })   // 提交后解锁：全员交卷后才亮出彼此答案
   async reveal({ 项目, 线程 })
-  /** 零分歧报警：判据 = 结论层一致且无人给出反例面。 */
-  async checkZeroDivergence({ 节点, 结论集 })
+  /** 零分歧报警：判据 = 结论层一致且无人给出反例面。
+   *  结论集**从任务图独立答案按负责人重算**（2026-10-14 P1-2），不收自报——
+   *  非负责人垫的卷不进判定池。 */
+  async checkZeroDivergence({ subject, 项目, 节点 })
 }
 ```
 零分歧命中时：`audit.append({动作:'零分歧异常', ...})` 且触发人工抽检标记。
@@ -682,8 +691,8 @@ await runAction({ org, 项目, subject, 主体, args: { action, ...args }, 面: 
    不解转义）；数组切分改 `splitArrayItems`——**逗号只在引号外才算分隔符**（否则 `["a,b", c]` 会被切成
    `"a` / `b"` / `c`，半截引号进 meta 而 errors 仍为空）。
 3. **事实边界（复核问的）**：`ObjectStore.write` 与 `capability.publish` 都走 `formatFrontMatter` ⇒ 同一处修好；
-   但 `store.write` **生产零调用点**（只测试调；它的唯一内部调用者 `store.rollback` 也没有运行时入口，
-   动作面/路由面都没有承载它）。所以这一批的真实现网是 `capability.publish`（`名` 这类自由文本）。
+   `store.rollback` 于 2026-10-14 接上动作面（`store_rollback`，仅主权者过闸，回滚本身也是一次新版本写入——
+   谁也不能抹掉「回过滚」），`store.write` 因此有生产路径（回滚的内部写 + capability.publish 的自由文本面）。
 4. **空串元素的折中**（W3 批5 复核反例：`['']` → `[""]` → 读回 `[]`）：读侧只丢**不带引号**的空元素
    —— legacy 手写 `[a, , b]` 照旧丢空段（老行为不变），而写侧对空串的表示 `""` 保留成空串 ⇒ 往返闭合。
 
@@ -701,6 +710,31 @@ await runAction({ org, 项目, subject, 主体, args: { action, ...args }, 面: 
    字节比对判据失效）。若将来出现新的读侧规则（例如新的注释/分隔语法），这张表要跟着补。
 3. **`formatFrontMatter` 的键顺序**：固定表（`order` + 其余按字典序）——**不保留调用方给的顺序**。
    所以「拿一份文件 parse 再 format」只有在原文件本来就按这张表排时才字节一致（出厂件满足，有断言）。
+
+### 2.20 2026-10-14 全面审查修复批 · 对外语义差（读的人必须知道的）
+
+> 完整清单与分级见 `docs/design/代码审查报告-dsh-mind与DSHOME-2026-10-14.md`；这里只留会改变调用方/读者预期的差异。
+
+1. **新动作两个**（冻结清单同步登记，`test/presence.test.js`）：`bus_deliver`（暂不投递 → 已投递，幂等）
+   与 `store_rollback`（文本版本回滚，**仅主权者**；回滚落新版本，旧版仍在历史里）。
+2. **`task_submit` 收 `结论层`**（§10 判据的结构化标签）：贯通 工具 schema → fold → 工作台会审行
+   （揭名后投影带 `结论层`）。不交则零分歧判据退化为全文逐字比对——旧的退化口径没变，只是现在能喂真判据。
+3. **工具 schema 摘掉死参数「结论集」**：`review_zero` 的结论集恒由任务图重算；动作面再递「结论集」会响亮拒
+   （normalizeArgs 的解析块保留，`test/trace-floor.test.js` 钉着这个拒）。
+4. **policy 缺章目标按最严档判**：`authority` 缺省从「自治」翻成「宪章」（写仅主权者可过）——所有生产
+   调用方本就显式盖章；没盖的从现在起被看见。
+5. **能力库读数剥本机路径**：`capability_list/resolve/read` 返回不带 `path`（与 workbench 同口径）；
+   `capability_publish` 正文必填。
+6. **路径片段拒 Windows 保留名与尾部点/空格**（`assertPathSegment`：CON/PRN/AUX/NUL/COM1-9/LPT1-9、
+   尾点、尾空格）——NTFS 别名面，项目键 `'foo.'` 不再与 `'foo'` 共目录。
+7. **复核员任命授权引用必须真实存在**（`audit.授权依据存在()` 唯一实现）；`review.appoint` 带上
+   `proposerId`（任命自己 = 自批拒）——此前 appoint 逻辑上必败，现在可用。
+8. **审计失败方向**：`tasks.#append` 落事件后审计失败 ⇒ 包 `Fault('AUDIT_APPEND_FAILED_AFTER_EVENT')`
+   响亮抛出（不许重试洗卷）；升级比对告警按签名去重（同结果不重复刷链）。
+9. **看板**：「人改过」防轮询覆盖复活；图谱滚轮改原生 `passive:false` 监听；轮询数据没变不重渲染；
+   审计展开钮报真实总条数；图谱画布高取两列较大者。
+10. **债⑳（subject.js 档2 fail-open）维持挂账不修**：主权者裁决见 `docs/design/取证-债⑳-2026-10-13.md`
+    （宿主升级时必须复验身份链）。
 
 ## 3 · 验收
 

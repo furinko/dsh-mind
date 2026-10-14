@@ -136,4 +136,24 @@
 
 ---
 
+## 修复追踪（2026-10-15 收口，主人指令「全修了」）
+
+全部 P1/P2 与可安全修的 P3 已修完，按批提交、每批带测试与塞 bug 校准：
+
+| 批次 | 范围 | 提交 | 测试证据 |
+|---|---|---|---|
+| A+B | dsh-mind 宿主侧 P1-1~9 + P2-1~20 + 顺修 P3 | `20f9f2b`（24 文件，+989/−127） | `test/fix-batch-2026-10-14.test.js` 20 条新测试；P2-1 / P1-8 / P1-3 三处塞 bug 校准通过 |
+| C | 看板客户端 P1-10 / P1-11 / P2-21~24 + P3 | `abd4cd6`（2 文件，+137/−54） | harness ③ 表单覆盖对照臂 + ⑪i 滚轮 passive:false 原生监听断言（塞 bug 校准通过）；486 条断言全绿 |
+| D | DSHOME 客户端 P1-12 / P2-25~30 / locale 漂移 / dt.log | `889e560`（DSHOME-Plugin 仓，5 文件，+296/−32） | selftest 67/67（新增 7 条钉）；domtest 96/96（rail 用例改写为几何闸 + teardown 还原 + 宽 nav 对照臂） |
+| E | 文档对齐：INTERFACES.md（deliver/提交签名、checkZeroDivergence 重算口径、结论层贯通、§2.20 语义差）、README（动作清单补 bus_deliver/audit_correct/store_rollback）、locale | 随本批提交 | 终验：513 tests 全绿 + harness 486 + DSHOME 67+96 |
+
+**明确不修（在案裁决）**：
+- 债⑳（subject.js 档2 fail-open）：主权者裁决不修，宿主升级时必须复验身份链——`docs/design/取证-债⑳-2026-10-13.md`。
+- board 页脚 `/mind dashboard` 字样：复核过——命令通道仍活（`test/host.test.js` ⑫ 钉着 `/mind dashboard` 路由），措辞保留。
+- `normalizeArgs` 的「结论集」解析块：由拒参数改为响亮拒绝保留（`test/trace-floor.test.js` 钉）。
+
+**基线**：dsh-mind 513 tests（preflight + node --test）；看板 harness 486 断言；DSHOME selftest 67 + domtest 96。
+
+---
+
 *分组底稿（每组的完整问题表 + 原文摘录）在本轮会话记录中，可追溯。审查人：Lead 主会话 + 6 并行审查子代理；核验方式：P0/P1 全部经主会话 read 原文确认。*

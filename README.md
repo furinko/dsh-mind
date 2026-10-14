@@ -134,7 +134,8 @@ task_create · task_reassign · task_dispatch · task_start · task_submit · ta
 review_nominate · review_exempt
 memory_write · memory_query · memory_lineage · memory_lifecycle
 capability_list · capability_resolve · capability_read · capability_publish
-bus_send · bus_read · audit_tail · audit_verify
+bus_send · bus_read · bus_deliver · audit_tail · audit_verify · audit_correct
+store_rollback
 registry_list · registry_can · registry_assign · registry_seal · registry_revoke
 upgrade_pending · review_zero · bus_unlock
 debate_open · debate_say · debate_round · debate_converge
