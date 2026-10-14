@@ -419,9 +419,9 @@ window.__ModuleLoader__.load({
       var statusBag = obj(firstOf(v, ['状态条', '状态'])) || {};
       var gateBag = obj(firstOf(statusBag, ['闸', 'policy'])) || {};
       var probeBag = obj(firstOf(statusBag, ['探针', 'probes'])) || {};
-    var 失联详情袋 = firstOf(statusBag, ['失联详情']);
-    var 失联原值 = firstOf(statusBag, ['失联', 'lost', 'presenceLost']);
-    if (失联原值 === undefined) 失联原值 = firstOf(obj(失联详情袋) || {}, ['读数']);
+      var 失联详情袋 = firstOf(statusBag, ['失联详情']);
+      var 失联原值 = firstOf(statusBag, ['失联', 'lost', 'presenceLost']);
+      if (失联原值 === undefined) 失联原值 = firstOf(obj(失联详情袋) || {}, ['读数']);
       return {
         原始: v,
         项目: line(firstOf(v, ['项目', '项目键', 'project', 'projectKey']), '（未指定）'),
@@ -1954,7 +1954,9 @@ window.__ModuleLoader__.load({
           h('span', { key: 't' }, '现在没有需要你拍板的事'),
         ]));
       } else {
-        var 计数 = {};
+        // 数据键字典用 null 原型（2026-10-14 审查 P2-24）：类型字符串来自服务端数据，
+        // `__proto__` 当键会把计数写到原型 setter 上被静默吞掉——与自家 `安全合并` 同口径。
+        var 计数 = Object.create(null);
         待你决定.forEach(function (x) { 计数[x.类型] = (计数[x.类型] || 0) + 1; });
         卡.push(h('div', { key: 'decide', className: 'dshmind-attnCard dshmind-attnCardBad' }, [
           h('h4', { key: 'h' }, [h('span', { key: 'i' }, '⚑'), h('span', { key: 't' }, 待你决定.length + ' 件事等你拍板')]),
@@ -2263,9 +2265,9 @@ window.__ModuleLoader__.load({
         ]);
       }));
     }
-    /** 主体短名：`session-<uuid>` 长达 38 字符，列表里只留前 12 位（全名在 title 上）。 */
+    /** 主体短名：先走 `短主体` 的 session- 收成（单一事实源），再按时间线 12 字预算截。 */
     function 源主体短(主体) {
-      var s = line(主体, '');
+      var s = 短主体(line(主体, ''));
       if (!s) return '';
       return s.length > 12 ? s.slice(0, 12) : s;
     }
@@ -2280,7 +2282,9 @@ window.__ModuleLoader__.load({
       // 两列拉开到画布两侧（2026-10-13 晚第二轮）：原来 120/540 挤在左边，
       // 宽屏上卡片右 1/3 全空（主权者：「面板右面空白一大堆」）。现在 150/760，标签向右吃到边。
       var 宽 = 1240;
-      var 高 = Math.max(240, 能力.length * 34 + 48);
+      // 高按两列里**多的一边**算（2026-10-14 审查 P2-22）：修前只看能力数——岗位 > 能力时
+      // 岗位节点被压进 240px 里纵向重叠。
+      var 高 = Math.max(240, Math.max(能力.length, 岗位.length) * 34 + 48);
       var pos = {};
       var i;
       for (i = 0; i < 岗位.length; i += 1) {
@@ -2542,7 +2546,7 @@ window.__ModuleLoader__.load({
                 : (引用表[邻居id] || []).indexOf(键.slice(3)) >= 0;
               return h('span', { key: 'l' + i, className: 'dshmind-gLink' }, [
                 h('span', { key: 'd', className: 'dshmind-swatch', style: { background: 已接 ? '#3fb27f' : '#e5534b' } }),
-                h('span', { key: 'n', className: 'dshmind-mono' }, (邻居是岗位 ? '' : '') + 邻居id),
+                h('span', { key: 'n', className: 'dshmind-mono' }, 邻居id),
                 h('span', { key: 'w' }, 已接 ? '已接线' : '未接线'),
               ]);
             })
@@ -3109,6 +3113,30 @@ window.__ModuleLoader__.load({
     }
     var 投影序号 = 序号器();
     var 设置序号 = 序号器();
+    /**
+     * 投影变更签名（2026-10-14 审查 P2-23）：轮询 3s 一拍，**数据没变就不重渲染**——
+     * 修前每拍都全量 发通知（7 页 reconcile）+ writeCache 大 JSON.stringify，投影变大后
+     * 可感知卡顿。签名 = 原始投影的一次序列化（这串本来 writeCache 也要算，只算一次两用）。
+     * 序列化失败（环形等）⇒ 退回旧行为（每次都通知），绝不因优化丢画面。
+     */
+    var 投影签名 = { 值: null };
+    /**
+     * 写缓存 + 发通知的统一落点（三个 live 分支共用）：返回是否真的通知了。
+     * @returns {boolean}
+     */
+    function 布投影(view, session, 选择, 自动) {
+      var 串 = null;
+      try { 串 = JSON.stringify(view && view.原始); } catch (error) { 串 = null; }
+      if (串 !== null && 串 === 投影签名.值) return false; // 数据没变：整轮重渲染跳过
+      if (串 !== null) 投影签名.值 = 串;
+      writeCache(view.原始);
+      发通知(投影store, {
+        phase: 'live', view: view, at: new Date().toISOString(),
+        error: '', sessionId: session.id, source: session.source, stale: false,
+        项目选择: 选择, 自动选择: 自动,
+      });
+      return true;
+    }
     /** 订阅：**立刻回放当前值**（这样"数据先到、组件后挂载"也能直接显示），返回退订。 */
     function 订阅(store, fn) {
       store.订阅者.push(fn);
@@ -3311,21 +3339,31 @@ window.__ModuleLoader__.load({
      * @param {number} 基础高 基础 viewBox 高
      */
     function 图谱手势(基础宽, 基础高) {
+      // 滚轮缩放本体（2026-10-14 审查 P1-11）：React 17+ 把 wheel 注册成根节点 passive
+      // 监听——写在 onWheel 里的 preventDefault 是 no-op（缩放与整页滚动**同时**发生，
+      // 注释宣称的行为与实际相反）。改走 ref 回调对 svg 原生节点挂 {passive:false} 监听；
+      // harness 无 DOM 环境 ref 不会被调，安静不生效。
+      function 缩放(e) {
+        // 阻止整页跟着滚：在图上滚就该缩放，而不是把面板滚走。
+        if (e && typeof e.preventDefault === 'function') e.preventDefault();
+        if (!e) return;
+        var 当前 = 图谱视图() || { k: 1, x: 0, y: 0 };
+        var 因子 = (e.deltaY || 0) < 0 ? 1.18 : 1 / 1.18;
+        var 新k = Math.min(图谱最大K, Math.max(图谱最小K, 当前.k * 因子));
+        if (新k === 当前.k) return;
+        var p = 基础坐标(e, 当前, 基础宽, 基础高);
+        if (!p) return;
+        // 让指针底下那个点**留在原地**（否则缩放会"跑偏"，这是缩放体验的关键）。
+        var 新视角宽 = 基础宽 / 新k;
+        var 新视角高 = 基础高 / 新k;
+        设图谱视图({ k: 新k, x: p.x - p.fx * 新视角宽, y: p.y - p.fy * 新视角高 });
+      }
       return {
-        onWheel: function (e) {
-          // 阻止整页跟着滚：在图上滚就该缩放，而不是把面板滚走。
-          if (e && typeof e.preventDefault === 'function') e.preventDefault();
-          if (!e) return;
-          var 当前 = 图谱视图() || { k: 1, x: 0, y: 0 };
-          var 因子 = (e.deltaY || 0) < 0 ? 1.18 : 1 / 1.18;
-          var 新k = Math.min(图谱最大K, Math.max(图谱最小K, 当前.k * 因子));
-          if (新k === 当前.k) return;
-          var p = 基础坐标(e, 当前, 基础宽, 基础高);
-          if (!p) return;
-          // 让指针底下那个点**留在原地**（否则缩放会"跑偏"，这是缩放体验的关键）。
-          var 新视角宽 = 基础宽 / 新k;
-          var 新视角高 = 基础高 / 新k;
-          设图谱视图({ k: 新k, x: p.x - p.fx * 新视角宽, y: p.y - p.fy * 新视角高 });
+        ref: function (el) {
+          if (!el || typeof el.addEventListener !== 'function') return; // 卸载（null）与无 DOM 都安静跳过
+          if (el.__dshmindWheel) el.removeEventListener('wheel', el.__dshmindWheel); // 重渲染先摘旧（ref 每次渲染换新闭包）
+          el.__dshmindWheel = 缩放;
+          el.addEventListener('wheel', 缩放, { passive: false });
         },
         onMouseDown: function (e) {
           if (!e || (e.button !== undefined && e.button !== 0)) return; // 只认左键
@@ -3506,6 +3544,7 @@ window.__ModuleLoader__.load({
         try { session = resolveSessionId(ctx); } catch (error) { session = { id: '', source: '' }; }
         if (!session.id) {
           var cached = readCache();
+          投影签名.值 = null; // 会话丢失后复位签名：会话回来时数据没变也要把 nosession 翻回 live
           if (投影序号.该用(号)) {
             发通知(投影store, {
               phase: 'nosession', view: cached ? normalizeView(cached.view) : null, at: cached ? cached.at : '',
@@ -3526,25 +3565,16 @@ window.__ModuleLoader__.load({
               fetchView(ctx, session.id, 自动).then(function (二次) {
                 if (!投影序号.该用(号)) { resolve(); return; }
                 if (二次.ok) {
-                  writeCache(二次.view.原始);
-                  发通知(投影store, {
-                    phase: 'live', view: 二次.view, at: new Date().toISOString(),
-                    error: '', sessionId: session.id, source: session.source, stale: false,
-                    项目选择: 选择, 自动选择: 自动,
-                  });
+                  布投影(二次.view, session, 选择, 自动);
                   resolve();
                   return;
                 }
                 // 自动那一次失败：回落到默认项目的读数（宁可显示"确认过的空账"，不显示一张坏快照）。
-                writeCache(out.view.原始);
-                发通知(投影store, {
-                  phase: 'live', view: out.view, at: new Date().toISOString(),
-                  error: '', sessionId: session.id, source: session.source, stale: false,
-                  项目选择: 选择, 自动选择: null,
-                });
+                布投影(out.view, session, 选择, null);
                 resolve();
               }, function () {
                 if (!投影序号.该用(号)) { resolve(); return; }
+                投影签名.值 = null; // 出错后复位签名：恢复时哪怕数据没变也必须通知（把 error 态翻回 live）
                 发通知(投影store, Object.assign({}, 投影store.快照, {
                   phase: 'error', error: '切项目取数失败：' + 自动,
                 }));
@@ -3552,23 +3582,20 @@ window.__ModuleLoader__.load({
               });
               return;
             }
-            writeCache(out.view.原始);
-            发通知(投影store, {
-              phase: 'live', view: out.view, at: new Date().toISOString(),
-              error: '', sessionId: session.id, source: session.source, stale: false,
-              项目选择: 选择, 自动选择: null,
-            });
+            布投影(out.view, session, 选择, null);
             resolve();
             return;
           }
           var last = readCache();
+          投影签名.值 = null; // 出错复位签名（同上）：恢复后不许因「数据没变」跳过通知
           发通知(投影store, {
-            phase: 'error', view: last ? normalizeView(last.view) : null, at: last ? last.at : '',
+            phase: 'error', view: last ? normalizeView(last.view) : null, at: last ? last.at: '',
             error: out.error, sessionId: session.id, source: session.source, stale: !!last,
           });
           resolve();
         }, function (error) {
           if (!投影序号.该用(号)) { resolve(); return; }
+          投影签名.值 = null; // 出错复位签名（同上）
           发通知(投影store, Object.assign({}, 投影store.快照, {
             phase: 'error', error: '工作台投影不可用：' + line(error && error.message, String(error)),
           }));
@@ -4133,7 +4160,7 @@ window.__ModuleLoader__.load({
                         key: 'b', type: 'button', className: 'dshmind-toggle',
                         onClick: function () { 切审计展开(); },
                         title: 审计展开() ? '只列最近的一批' : '把投影里的审计全铺开',
-                      }, 审计展开() ? '▾ 收起（只列最近 ' + AUDIT_LIMIT + ' 条）' : '▸ 展开全部（共 ' + audit.length + ' 条待铺开）')
+                      }, 审计展开() ? '▾ 收起（只列最近 ' + AUDIT_LIMIT + ' 条）' : '▸ 展开全部（共 ' + 审计总条数 + ' 条待铺开）')
                     : null,
                 ].filter(Boolean)),
               ]
@@ -4541,6 +4568,7 @@ window.__ModuleLoader__.load({
             value: form.开关,
             onChange: function (event) {
               var next = event && event.target ? String(event.target.value) : '是';
+              set人改过(true); // 2026-10-14 审查 P1-10：人碰过 ⇒ 轮询回读不许再刷掉表单
               setForm({ 开关: next === '否' ? '否' : '是', 小时: form.小时 });
             },
           }, [
@@ -4556,6 +4584,7 @@ window.__ModuleLoader__.load({
             placeholder: '1 ~ 876000',
             value: form.小时,
             onChange: function (event) {
+              set人改过(true); // 2026-10-14 审查 P1-10：同上，人碰过就不再被回读覆盖
               setForm({ 开关: form.开关, 小时: event && event.target ? String(event.target.value) : '' });
             },
             onKeyDown: function (event) {

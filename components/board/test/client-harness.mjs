@@ -2337,8 +2337,10 @@ export async function runHarness() {
     // ⑦e 总线折叠是**行为**断言（2026-10-12，主权者「（总线）也默认收起呗」）：
     // ⑪i 图谱缩放 / 平移 / 复位（2026-10-14 · 主权者：「能把图谱做成可放大缩小平移的吗」）
     //
-    // **行为**断言：调真实 `onWheel` / `onMouseDown`+`onMouseMove` / `onDoubleClick`，
-    // 验 `viewBox` 真的变了 —— 不是读源码文本。
+    // **行为**断言：滚轮走 ref 原生监听（2026-10-14 审查 P1-11：React 17+ 的 onWheel 是
+    // passive 监听，preventDefault 是 no-op ⇒ 改 ref 回调挂 {passive:false} 原生监听），
+    // harness 用假 DOM 节点（记 addEventListener 的参数与监听器）把 ref 真调一遍；
+    // 拖拽/双击仍走 props。验 `viewBox` 真的变了 —— 不是读源码文本。
     // ⚠️ 手势要用 `getBoundingClientRect()` 把指针换算成基础坐标，而 harness 是**虚拟树、没有 DOM**
     //    ⇒ 必须喂一个**带 rect 的假事件**，否则处理器会（正确地）早退，断言就变成假绿。
     //    这也正是它比"读源码"值钱的地方：**它证明了手势在拿到 rect 时真的算对了**。
@@ -2372,29 +2374,46 @@ export async function runHarness() {
       }
       /** 假指针事件：`currentTarget.getBoundingClientRect` 是手势唯一依赖的 DOM 能力。 */
       const 事件 = (x, y, 额外) => Object.assign({
-        clientX: x, clientY: y, button: 0, preventDefault() {},
+        clientX: x, clientY: y, button: 0, preventDefault() { this._拦了 = true; },
         currentTarget: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 1200, height: 600 }) },
       }, 额外 || {});
       const 解析 = (vb) => String(vb || '').trim().split(/\s+/).map(Number);
       const 基础 = 取svg();
-      passed.push(check(!!基础 && typeof 基础.props.onWheel === 'function'
+      // 假 svg 原生节点：记下 addEventListener 的类型/监听器/选项（passive:false 是修复的核心）。
+      const 假节点 = {
+        监听: null, 选项: null, 摘了: 0,
+        addEventListener(type, fn, opts) { this.监听 = { type, fn }; this.选项 = opts; },
+        removeEventListener() { this.摘了 += 1; },
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 1200, height: 600 }),
+      };
+      if (基础 && typeof 基础.props.ref === 'function') 基础.props.ref(假节点);
+      passed.push(check(!!基础 && typeof 基础.props.ref === 'function'
+        && 假节点.监听 && 假节点.监听.type === 'wheel'
+        && !!假节点.选项 && 假节点.选项.passive === false
         && typeof 基础.props.onMouseDown === 'function'
         && typeof 基础.props.onDoubleClick === 'function',
-        '⑪i 画布挂上了三个手势（滚轮/拖拽/双击）',
+        '⑪i 画布挂上了三个手势（滚轮=ref 原生 passive:false / 拖拽 / 双击）',
         'svg=' + (基础 ? 基础.props.className : 'null')
-          + ' onWheel=' + (基础 ? typeof 基础.props.onWheel : '-')
+          + ' ref=' + (基础 ? typeof 基础.props.ref : '-')
+          + ' wheel=' + (假节点.监听 ? 假节点.监听.type + ' passive=' + (假节点.选项 && 假节点.选项.passive) : '-')
           + ' onMouseDown=' + (基础 ? typeof 基础.props.onMouseDown : '-')
           + ' onDoubleClick=' + (基础 ? typeof 基础.props.onDoubleClick : '-')));
+      const 滚轮 = (x, y, deltaY) => {
+        const e = 事件(x, y, { deltaY });
+        e.currentTarget = 假节点; // 原生监听器里 currentTarget = 挂载节点
+        假节点.监听.fn(e);
+        return e;
+      };
       const 初始 = 解析(基础 && 基础.props.viewBox);
       const 初始文本 = String(基础 && 基础.props.viewBox);
 
-      // ① 滚轮向上 ⇒ 放大（viewBox 变窄）且**缩放上限内**
-      基础.props.onWheel(事件(300, 200, { deltaY: -120 }));
+      // ① 滚轮向上 ⇒ 放大（viewBox 变窄）且**缩放上限内**；preventDefault 必须真的被调
+      const 轮事件 = 滚轮(300, 200, -120);
       await settle(); rG.flush();
       const 放大后 = 解析(取svg().props.viewBox);
-      passed.push(check(放大后[2] > 0 && 放大后[2] < 初始[2],
-        '⑪i 滚轮向上 ⇒ 放大（viewBox 宽变小 = 看得更细）',
-        JSON.stringify(初始) + ' → ' + JSON.stringify(放大后)));
+      passed.push(check(放大后[2] > 0 && 放大后[2] < 初始[2] && 轮事件._拦了 === true,
+        '⑪i 滚轮向上 ⇒ 放大且拦住整页滚动（preventDefault 真被调）',
+        JSON.stringify(初始) + ' → ' + JSON.stringify(放大后) + ' 拦=' + 轮事件._拦了));
 
       // ② 拖拽 ⇒ 平移（宽高不变、x/y 变）
       const 拖前 = 解析(取svg().props.viewBox);
@@ -2423,7 +2442,7 @@ export async function runHarness() {
         '⑪i 双击 ⇒ 复位成整图', String(取svg().props.viewBox) + ' vs ' + 初始文本));
 
       // ⑤ 全程零请求（纯显示手势）
-      passed.push(check(!/dshmind-graph/.test('') && 取svg().props.onWheel.length === 1,
+      passed.push(check(!/dshmind-graph/.test('') && 假节点.监听.fn.length === 1,
         '⑪i 手势是纯显示：处理器只接事件对象、不带任何取数参数'));
     }
 
@@ -2767,6 +2786,41 @@ export async function runHarness() {
     passed.push(check(面板文本.includes('活数据'),
       '② 面板页头显示「活数据」（不是永远「读取中」）', 面板文本.slice(0, 120)));
     面板渲染.unmount();
+  }
+
+  // ③ 「人改过」防覆盖（2026-10-14 审查 P1-10）：修前 `set人改过(true)` 全文 0 调用——
+  //    注释承诺「人正在填的字不被轮询吃掉」，代码里保护是死的，3 秒回读会静默冲掉表单。
+  //    对照臂（没碰过 ⇒ 回读照刷）与修复臂（碰过 ⇒ 不许刷）同组件先后验。
+  {
+    let 当前读数 = 读数袋(); // 开 / 72h
+    const 宿主 = Object.assign(session(), {
+      fetch: makeFetch((url) => (String(url).indexOf('workbench') >= 0
+        ? jsonResponse(sampleView())
+        : jsonResponse({ 读数: 当前读数, 设置文件: SETTINGS_FILE, 说明: '读…' }))).fetch,
+    });
+    const b = boot({ store: new Map(), services: 宿主 });
+    const r = mountSettings(b);
+    r.flush(); await settle(); r.flush();
+    const 输入框 = () => findAllByClass(r.tree, 'dshmind-set__number')[0];
+    const 打一拍 = async () => {
+      b.timers.intervals.forEach((t) => { try { t.fn(); } catch (e) { /* 轮询自身异常不挡断言 */ } });
+      await settle(); r.flush();
+    };
+    passed.push(check(!!输入框() && String(输入框().props.value) === '72',
+      '③ 表单初值跟读数（72h）', 输入框() ? String(输入框().props.value) : '没有输入框'));
+    // 对照臂：人没碰过，服务端读数变成 24h ⇒ 下一拍回读把表单刷成 24
+    当前读数 = 读数袋({ 生效响应期限小时: 24 });
+    await 打一拍();
+    passed.push(check(String(输入框().props.value) === '24',
+      '③ 对照：人没碰过 ⇒ 回读照刷（24h）', String(输入框().props.value)));
+    // 修复臂：人改成 100 ⇒ 读数再变（48h）也不许吃掉人填的字
+    输入框().props.onChange({ target: { value: '100' } });
+    r.flush();
+    当前读数 = 读数袋({ 生效响应期限小时: 48 });
+    await 打一拍();
+    passed.push(check(String(输入框().props.value) === '100',
+      '③ 人改过 ⇒ 轮询回读不许吃掉表单（仍是 100）', String(输入框().props.value)));
+    r.unmount();
   }
 
   // ═══ Batch 7 · 拿不到计时器 ⇒ **响亮**（不许静默"不设超时 / 不轮询"）═══
