@@ -141,6 +141,15 @@ export class RoleRegistry {
       const text = await readTextOrNull(path);
       if (text === null) continue;
       const parsed = parseDocument(text);
+      // 解析错误响亮抛（2026-10-14 审查 P2-3）：与 #scanZone / 规则件同口径，
+      // 修前 errors 静默丢弃——读得出一张坏卡 = 身份档案带病运行。
+      if (parsed.errors?.length) {
+        throw new Denied(
+          '角色注册表 · 岗位卡无法解析（fail-closed）',
+          `岗位卡文件「${zone}区/${id}.md」解析失败：${parsed.errors.join('；')}。`,
+          { howToChange: `修好 ${id}.md 的 front matter（${parsed.errors[0]}）后重试。` },
+        );
+      }
       return {
         id: parsed.meta.id ?? spec.id,
         来源: label,
@@ -244,6 +253,18 @@ export class RoleRegistry {
         {
           requireAuthority: '主权者',
           howToChange: '由主权者授权后，把授权依据 id 作为「授权引用」传入 registry_assign（它会原样进链接受复核）。',
+        },
+      );
+    }
+    // 授权引用存在性校验（2026-10-14 审查 P2-2）：与 audit_correct 同一把尺
+    // （audit.授权依据存在 是唯一实现）——修前只验非空，任意字符串都能当授权。
+    if (spec.岗位 === '复核员' && !(await this.audit.授权依据存在(授权引用))) {
+      throw new Denied(
+        '角色注册表 · 复核员任命的授权引用必须真实存在',
+        `授权引用「${授权引用}」在任务图事件流里找不到：复核员任命是独立复核线的入口，授权依据必须指向真实的决议/任务节点（fail-closed，与 audit_correct 同口径）。`,
+        {
+          requireAuthority: '主权者',
+          howToChange: '把主权者授权所依据的决议/任务节点 id 原样传入（review_nominate 挂的待决节点 id 就是现成依据）。',
         },
       );
     }
@@ -432,6 +453,16 @@ export class RoleRegistry {
       const text = await readTextOrNull(`${dir}/${rel}`);
       if (text === null) continue;
       const parsed = parseDocument(text);
+      // 解析错误响亮抛（2026-10-14 审查 P2-3）：与规则件（policy.js #loadRules）同口径——
+      // 修前 errors 被静默丢弃，一张坏卡照样注册/发卡，§3.6「装不齐就是 fail-closed」
+      // 在身份面破例。
+      if (parsed.errors?.length) {
+        throw new Denied(
+          '角色注册表 · 岗位卡无法解析（fail-closed）',
+          `岗位卡文件「${zone}区/${rel}」解析失败：${parsed.errors.join('；')}。坏卡照样入库 = 身份档案带病运行，按 fail-closed 拒绝。`,
+          { howToChange: `修好 ${rel} 的 front matter（${parsed.errors[0]}）后重试。` },
+        );
+      }
       // meta.id 与文件名一致性（2026-10-13 裁决第二批 M6）：文件 `x.md` 在 front matter 里
       // 自称 `id: Lead` ⇒ 索引以「Lead」岗出现而 `get('Lead')` 按文件名读不到它——「列得出的
       // 岗位」与「取得到的岗位」是两个世界，卡文件可冒名。fail-closed：不一致即响亮拒。

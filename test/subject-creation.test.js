@@ -110,11 +110,18 @@ describe('复核员任命特判（裁决②·同族机制兜底）', () => {
       '空授权必须默认拒（任命权与岗位锁是两件事）',
     );
     assert.equal(await 创建条数(org, 'reviewer-cand-1'), 0, '被拒的任命不许留下「主体创建」');
-    const ok = await org.registry.assign({ subject: LEAD, 岗位: '复核员', 实例: 'reviewer-cand-1', 代: 1, 授权引用: '决议-2026-10-13-复核员任命' });
+    // 授权引用存在性校验（2026-10-14 审查 P2-2）：任意字符串不能当授权——先落真决议节点。
+    await assert.rejects(
+      () => org.registry.assign({ subject: LEAD, 岗位: '复核员', 实例: 'reviewer-cand-1', 代: 1, 授权引用: '决议-不存在-悬空授权' }),
+      (e) => e instanceof Denied && /授权引用必须真实存在/.test(e.rule),
+      '悬空授权引用必须拒（与 audit_correct 同口径）',
+    );
+    const { id: 决议节点 } = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '决议-2026-10-13-复核员任命', 负责人: 'lead', 判据: ['决议在案'] });
+    const ok = await org.registry.assign({ subject: LEAD, 岗位: '复核员', 实例: 'reviewer-cand-1', 代: 1, 授权引用: 决议节点 });
     assert.equal(ok.状态, '在岗');
     const row = (await org.audit.read({})).find((r) => r.动作 === '主体创建' && r.对象?.id === 'reviewer-cand-1');
     assert.ok(row, '带授权的首登有「主体创建」');
-    assert.equal(row.详情.授权引用, '决议-2026-10-13-复核员任命', '授权依据原样进链接受复核');
+    assert.equal(row.详情.授权引用, 决议节点, '授权依据原样进链接受复核');
   });
 });
 

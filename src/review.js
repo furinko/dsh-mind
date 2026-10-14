@@ -116,11 +116,14 @@ export class ReviewProtocol {
    * @param {{ subject: object, 实例: string, 项目?: string }} spec
    */
   async appoint(spec) {
+    // proposerId = 被任命的实例（2026-10-14 审查 P1-9）：approve 的宪章不变式要求提案人
+    // 可知，修前 context 缺 proposerId ⇒ 任命必然被「提案人必须可知」恒拒（登记的 API
+    // 实际不可用）。任命里受益者就是「提案人」——自己任命自己 = 提案者自批，照拒。
     await this.policy.check({
       subject: spec.subject,
       action: 'approve',
       target: { id: spec.实例, kind: '身份', authority: '法律', zone: '私有', domain: '个体', project: spec.项目 ?? null },
-      context: { 任命复核者: true },
+      context: { 任命复核者: true, proposerId: spec.实例 },
     });
     await this.audit.append({
       动作: '状态变更',
@@ -188,6 +191,21 @@ export class ReviewProtocol {
    * @param {{ subject: object, 项目: string, 节点: string, 理由: string }} spec
    */
   async recordDisagreement(spec) {
+    // 服务层授权闸（2026-10-14 审查 P2-5）：修前零闸——不验身份、不过策略引擎，
+    // audit 主体采信自报。当前无生产接线不发作，接线即洞；闸先装上。
+    // §8：记录不同意是 Lead 的手（成员无此入口），且过唯一判定点。
+    if (spec.subject?.kind !== 'Lead') {
+      throw new Denied('复核协议 · 记录不同意仅 Lead（§8）', `记录「不同意」是 Lead 的入口：${spec.subject?.kind ?? '未知'} 没有这只手。`, {
+        requireAuthority: 'Lead',
+        howToChange: '由 Lead 执行；成员有异议走分歧清单/总线。',
+      });
+    }
+    await this.policy.check({
+      subject: spec.subject,
+      action: 'write',
+      target: { id: spec.节点, kind: '任务', authority: '自治', zone: '私有', project: spec.项目 ?? null },
+      context: {},
+    });
     await this.audit.append({
       动作: '状态变更',
       主体: spec.subject,
@@ -249,6 +267,14 @@ export class ReviewProtocol {
     if (!MULTI_MODES.includes(spec.模式)) {
       throw new InvalidBody(`一岗多人必须显式声明模式：${MULTI_MODES.join(' / ')}。`, { missing: ['模式'] });
     }
+    // 服务层授权闸（2026-10-14 审查 P2-5）：声明模式决定共享面与产出面，是写动作，
+    // 必须过唯一判定点——修前零闸（当前未接线，接线即洞）。
+    await this.policy.check({
+      subject: spec.subject,
+      action: 'write',
+      target: { id: spec.节点, kind: '任务', authority: '自治', zone: '私有', project: spec.项目 ?? null },
+      context: {},
+    });
     const 独立 = spec.模式 === '独立会审';
     await this.audit.append({
       动作: '状态变更',
@@ -332,8 +358,14 @@ export class ReviewProtocol {
     if (this.tasks && spec.节点) {
       const node = await this.tasks.get(spec.节点, { 项目: spec.项目 });
       if (!node) throw new InvalidBody(`没有这个任务节点：${spec.节点}（项目 ${spec.项目}）——零分歧检查要从任务图独立答案重算，节点不存在就没有权威源。`);
-      结论集 = (node.独立答案 ?? []).map((a) => ({ 成员: a.成员, 结论: a.结论, 反例面: a.反例面 ?? [], 结论层: a.结论层 }));
-      结论集来源 = `任务图独立答案重算（${结论集.length} 份）`;
+      // 结论集只收**负责人**交的那份（2026-10-14 审查 P1-2）：fold 按交卷人留答案，不拦
+      // 非负责人——Lead/外人垫一份带反例面或不同结论层的卷，就能把报警永久压掉。
+      // 与 tasks.js `全员已交` 同口径（按负责人名单逐人核对，不是计数）。
+      const 负责人 = node.负责人 ?? [];
+      结论集 = (node.独立答案 ?? [])
+        .filter((a) => 负责人.includes(a.成员))
+        .map((a) => ({ 成员: a.成员, 结论: a.结论, 反例面: a.反例面 ?? [], 结论层: a.结论层 }));
+      结论集来源 = `任务图独立答案重算（负责人 ${结论集.length} 份）`;
     }
     const 判定 = judgeZeroDivergence(结论集);
     if (判定.零分歧) {

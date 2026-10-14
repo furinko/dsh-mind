@@ -161,29 +161,46 @@ export class TaskGraph {
     // 节点 id 要**短**到能在命令行里念出来（§14.4-1「稳定、短、kebab」）：
     // 描述里取 16 字做前缀便于认人，后缀取时间戳末 5 位 base36 保证同一毫秒内不撞。
     // 描述本身由面板整条显示，不需要挤在 id 里。
-    const id = `task-${slugOf(input.描述, 'x')}-${this.clock.ms().toString(36).slice(-5)}`;
+    const 初始id = `task-${slugOf(input.描述, 'x')}-${this.clock.ms().toString(36).slice(-5)}`;
     await this.policy.check({
       subject: input.subject,
       action: 'create',
-      target: { id, kind: '任务', authority: '自治', zone: '私有', domain: '集体', project: input.项目 },
+      target: { id: 初始id, kind: '任务', authority: '自治', zone: '私有', domain: '集体', project: input.项目 },
       context: {},
     });
     const 事件 = {
       kind: 'created',
-      id,
+      id: 初始id,
       描述: input.描述,
       负责人,
       判据,
       依赖,
-      模式: input.模式 ?? (负责人.length > 1 ? null : '独立会审'),
+      // 单人节点默认无模式（2026-10-14 审查 P2-13）：修前 solo 节点被默认标成
+      // 「独立会审」，debate_open / bus_unlock / 盲评遮罩对它全部敞开——语义错配。
+      // 多人模式仍由上面的「一岗多人必标」闸强制显式声明。
+      模式: input.模式 ?? null,
       状态: '待派发',
     };
     // 校验挂在 eventBuilder 上，是为了**在锁内**跑（锁外预读会与并发 create 打架：
     // 刚建好的依赖读不到 ⇒ 误拒一个完全合法的节点）。builder 只校验、原样返回事件。
-    const { 节点 } = await this.#append(input.项目, 事件, input.subject, '状态变更', (_node, rows) => {
-      this.#assertDependencies(依赖, id, fold(rows));
-      return 事件;
-    });
+    // id 撞车自动换号重试（2026-10-14 审查 P3）：id = 描述16字 + 毫秒末5位 base36，
+    // 同毫秒同描述必撞——锁内查重命中就换一个新号再来（最多 3 次，仍撞则响亮拒）。
+    let 节点 = null;
+    for (let 尝试 = 0; 尝试 < 3 && !节点; 尝试 += 1) {
+      const id = 尝试 === 0 ? 初始id : `task-${slugOf(input.描述, 'x')}-${(this.clock.ms() + 尝试).toString(36).slice(-5)}${尝试}`;
+      try {
+        ({ 节点 } = await this.#append(input.项目, { ...事件, id }, input.subject, '状态变更', (_node, rows) => {
+          if (fold(rows).has(id)) {
+            throw new InvalidBody(`节点 id 撞车：${id} 已存在（同毫秒同描述）。`, { detail: { id } });
+          }
+          this.#assertDependencies(依赖, id, fold(rows));
+          return { ...事件, id };
+        }));
+      } catch (error) {
+        if (error instanceof InvalidBody && /id 撞车/.test(error.message) && 尝试 < 2) continue;
+        throw error;
+      }
+    }
     return 节点;
   }
 
@@ -294,6 +311,11 @@ export class TaskGraph {
       状态: '已交卷',
       产出物引用: spec.产出物引用 ?? [],
       结论: spec.结论 ?? null,
+      // 结论层是 §10 零分歧判据的**主键**（2026-10-14 审查 P1-1）：修前全链路不采集它，
+      // judgeZeroDivergence 恒退化为「结论全文逐字相等」——独立写的两份答案几乎不会逐字
+      // 相同 ⇒ 「全票一致=异常」报警事实上永不触发。结论层由交卷人自标（结构化短语，
+      // 如「方案A/可修/不可修」），措辞漂不了的判据才成立。
+      结论层: spec.结论层 ?? null,
       // 反例面由交卷人自己给：§10 的零分歧判据是「结论层一致**且无人给出反例面**」，
       // 而反例面必须来自各自的独立产出，不能事后由 Lead 补。
       反例面: spec.反例面 ?? [],
@@ -331,10 +353,13 @@ export class TaskGraph {
     // 提审分离（§3.4 · 2026-10-13 裁决第二批 M1）：交卷人不得复核自己的卷——
     // 「组织不给自己发合格证」在任务面的可执行形态。判据看**独立答案按人留**的事实，
     // 不看自报。单人节点的交卷人同样不许自复（复核另请人）。
+    // 判的是**归属复核者**这一位（2026-10-14 校准复核）：操作者（常是 Lead 会话代执行）
+    // 不在判据里——能交卷又能复核的复合身份只有 Lead，而 Lead 代执行 + 复核者署名是
+    // 合规形态（host.test.js 全链路用例钉着它）；真主体与署名复核者双双入账，谎可见。
     const 复核者id = String(spec.复核者 ?? spec.subject?.id ?? '');
-    const 交了卷 = (node.独立答案 ?? []).some((a) => String(a.成员) === 复核者id);
-    if (交了卷) {
-      throw new Denied('任务图 · 交卷人不得复核自己的卷（§3.4 提审分离）', `复核者 ${复核者id} 在本节点的独立答案里：交卷人复核自己的卷 = 给自己发合格证。`, {
+    const 撞人 = (node.独立答案 ?? []).some((a) => String(a.成员) === 复核者id) ? 复核者id : null;
+    if (撞人) {
+      throw new Denied('任务图 · 交卷人不得复核自己的卷（§3.4 提审分离）', `复核者 ${撞人} 在本节点的独立答案里：交卷人复核自己的卷 = 给自己发合格证。`, {
         howToChange: '由未参与交卷的主体执行 task_review（复核者或 Lead/主权者）；交卷人有异议走返工环路（review 不过 → task_start 重做）。',
       });
     }
@@ -355,7 +380,7 @@ export class TaskGraph {
       复核者: spec.复核者 ?? spec.subject?.id,
       算通过: spec.三态 === '过',
       计打回: spec.三态 === '不过',
-    }, spec.subject, '状态变更', null, this.#transitionGuard(id, 'review'));
+    }, spec.subject, '状态变更', null, this.#提审分离Guard(id, 'review', 复核者id));
     if (spec.三态 === '不过') await this.reject(id, { subject: spec.subject, 项目: spec.项目, 理由: `复核不过：${(spec.分歧清单 ?? []).join('；') || '未给分歧清单'}` });
     // 打回路径下 reject 又写了一条事件：返回它折出来的最新节点才是真读数。
     return spec.三态 === '不过' ? this.get(id, { 项目: spec.项目 }) : reviewed;
@@ -414,7 +439,7 @@ export class TaskGraph {
       spec.subject,
       '状态变更',
       null,
-      this.#transitionGuard(id, 'nominateReview'),
+      this.#提审分离Guard(id, 'nominateReview', 候选),
     );
     return 节点;
   }
@@ -459,7 +484,7 @@ export class TaskGraph {
       spec.subject,
       '状态变更',
       null,
-      this.#transitionGuard(id, 'assignReview'),
+      this.#提审分离Guard(id, 'assignReview', 候选),
     );
     return 节点;
   }
@@ -541,16 +566,13 @@ export class TaskGraph {
         throw new Denied('任务图 · 状态机', `节点 ${id} 已到终态 ${nodeInLock.状态}（锁内复检），不能再打回。`, { howToChange: '终态节点只能追加更正，不能回到环路里。' });
       }
     });
-    if ((rejected.事件.打回次数 ?? 0) >= 2) {
-      // 去重（2026-10-13 裁决第二批 P3）：只在「恰好第 2 次」时升级一次——修前每次再打回
-      // 都追加 escalated，审计里同一条升级反复出现（告警疲劳）。
-      // 判据走缓存读（第三批）：这里不写盘，缓存签名仍有效，读的是同一份盘上事实。
-      const rows = await this.#rowsOf(spec.项目);
-      const 已升过 = rows.some((r) => r.kind === 'escalated' && r.id === id);
-      if (!已升过) {
-        const { 节点: 升级后 } = await this.#append(spec.项目, { kind: 'escalated', id, 升级: { 原因: '打回≥2', 至: '主权者' } }, { id: 'system', kind: '系统' });
-        return 升级后;
-      }
+    if ((rejected.事件.打回次数 ?? 0) === 2) {
+      // 去重判据就是「恰好第 2 次」本身（2026-10-14 审查 P2-8）：打回次数在锁内单调
+      // 递增算出，全事件流里只有一条 rejected 携带次数==2 ⇒ 并发两个 reject 也只有
+      // 一个满足条件。修前用 `>=2` + 锁外查「已升过」，两个并发 reject 都在对方
+      // escalated 落线前读缓存 ⇒ 双 escalated（告警疲劳正是这条要防的）。
+      const { 节点: 升级后 } = await this.#append(spec.项目, { kind: 'escalated', id, 升级: { 原因: '打回≥2', 至: '主权者' } }, { id: 'system', kind: '系统' });
+      return 升级后;
     }
     return rejected.节点;
   }
@@ -795,14 +817,16 @@ export class TaskGraph {
       const rows = await readJsonl(file);
       const node = fold(rows).get(event.id);
       if (inLockGuard) inLockGuard(node, rows);
+      if (eventBuilder) finalEvent = eventBuilder(node, rows);
       // 判据冻结：派发之后任何想动判据的事件都被拒绝。这是 §7 那一条的可执行形态。
-      if (node?.判据冻结 && Object.hasOwn(event, '判据')) {
+      // 查 builder **之后**的 finalEvent（2026-10-14 审查 P3）：builder 有权改写事件，
+      // 只查入参会漏掉 builder 产出里夹带的判据。
+      if (node?.判据冻结 && Object.hasOwn(finalEvent, '判据')) {
         throw new Denied('任务图 · 派发后判据冻结', `节点 ${event.id} 已派发，判据不能在事后改动。`, {
           requireAuthority: '主权者',
           howToChange: '判据要变就新开一个节点；改判据等于让验收标准追着结果跑。',
         });
       }
-      if (eventBuilder) finalEvent = eventBuilder(node, rows);
       const at = this.clock.iso();
       const by = subject && typeof subject === 'object' ? { id: String(subject.id), kind: String(subject.kind ?? '未知') } : { id: String(subject), kind: '未知' };
       const 落线行 = { seq: rows.length + 1, at, by, ...finalEvent };
@@ -811,15 +835,24 @@ export class TaskGraph {
       this.#bumpWrite(项目);
       新节点 = fold([...rows, 落线行]).get(event.id) ?? null;
     });
-    await this.audit.append({
-      动作: 审计动作,
-      主体: subject,
-      对象: { id: finalEvent.id, kind: '任务' },
-      依据: '任务图事件流',
-      结果: finalEvent.kind,
-      项目,
-      详情: { 事件: finalEvent.kind, 状态: finalEvent.状态 ?? null },
-    });
+    // 事件已落线、审计是第二笔（2026-10-14 审查 P2-9）：审计追加失败时状态已变、链上
+    // 缺条——调用方若只收到裸错误可能误判「没写成」而重试（submit 重试 = 洗自己答案的
+    // 合法窗口）。错误必须明示「事件已落线、仅审计缺失」，并把事件 id 带上供人工补账。
+    try {
+      await this.audit.append({
+        动作: 审计动作,
+        主体: subject,
+        对象: { id: finalEvent.id, kind: '任务' },
+        依据: '任务图事件流',
+        结果: finalEvent.kind,
+        项目,
+        详情: { 事件: finalEvent.kind, 状态: finalEvent.状态 ?? null },
+      });
+    } catch (error) {
+      throw new Fault('AUDIT_APPEND_FAILED_AFTER_EVENT', `任务事件 ${finalEvent.kind}（${finalEvent.id}）已落线，但审计追加失败：${error instanceof Error ? error.message : String(error)}。不要重试本操作——重试会在任务图上再落一条同效事件；请人工核对账本并补记。`, {
+        detail: { 事件: finalEvent.kind, id: finalEvent.id, 项目 },
+      });
+    }
     return { 事件: finalEvent, 节点: 新节点 };
   }
 
@@ -932,6 +965,30 @@ export class TaskGraph {
   }
 
   /**
+   * 状态机复检 + §3.4 提审分离的**锁内合闸**（2026-10-14 审查 P1-3）。
+   *
+   * 修前 review / nominateReview / assignReview 的「交卷人不得复核自己」只在锁外判：
+   * 并发 submit 可以在锁外过闸之后、落笔之前把答案交进来，交卷人就此当上本节点的
+   * 复核者——与已修的 P1-6（状态机锁内复检）同族的漏网面。锁外那次照留（快速失败 +
+   * 可读理由），锁内这次才是权威。
+   *
+   * @param {string} id @param {keyof TRANSITIONS} op @param {string|string[]} 复核者id 候选/复核者（可传多个：归属复核者 + 操作者）
+   */
+  #提审分离Guard(id, op, 复核者id) {
+    const ids = (Array.isArray(复核者id) ? 复核者id : [复核者id]).filter(Boolean).map(String);
+    const 状态闸 = this.#transitionGuard(id, op);
+    return (nodeInLock) => {
+      状态闸(nodeInLock);
+      const 撞人 = ids.find((谁) => (nodeInLock.独立答案 ?? []).some((a) => String(a.成员) === 谁));
+      if (撞人) {
+        throw new Denied('任务图 · 交卷人不得复核自己的卷（§3.4 提审分离，锁内复检）', `复核者/候选/操作者 ${撞人} 在本节点的独立答案里（锁内最新折叠视图）：交卷人复核自己的卷 = 给自己发合格证。`, {
+          howToChange: '由未参与交卷的主体执行复核；交卷人有异议走返工环路（review 不过 → task_start 重做）。',
+        });
+      }
+    };
+  }
+
+  /**
    * 写动作的闸（§9：写操作先过策略引擎，无旁路）。
    * context 带上节点本体：成员的「任务内全权，任务外无」靠 scopeOf 读它判定。
    * @param {string} id @param {object} node @param {{ subject: object, 项目: string }} spec
@@ -1000,6 +1057,8 @@ export function fold(rows) {
         node.独立答案 = [...他人, {
           成员: 交卷人,
           结论: row.结论 ?? null,
+          // 结论层随行落账（2026-10-14 审查 P1-1）：缺它，零分歧判据退化全文逐字比对。
+          结论层: row.结论层 ?? null,
           反例面: row.反例面 ?? [],
           产出物引用: row.产出物引用 ?? [],
           于: row.at,
@@ -1043,7 +1102,10 @@ export function fold(rows) {
         node.待决类型 = row.待决类型;
         break;
       case 'resolved':
-        node.状态 = row.状态 ?? '已交卷';
+        // 缺状态的旧数据兜底取「待决前的状态」（2026-10-14 审查 P3）：修前恒兜「已交卷」，
+        // 执行中挂的待决被错误恢复成已交卷。pending/review_nominated 事件都会记
+        // 待决前的状态；连它也没有（更老的账）才退回已交卷。
+        node.状态 = row.状态 ?? node.待决前的状态 ?? '已交卷';
         node.待决 = false;
         node.已决 = { 决定: row.决定, 于: row.已决于 };
         node.待决记录 = [...(node.待决记录 ?? []), { 原因: node.待决原因, 决定: row.决定, 于: row.已决于 }];

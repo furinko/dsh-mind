@@ -13,7 +13,7 @@
  * 对 review 是**软约束**（设计取舍已定）：讨论中仍可 review，工作台会审行标注
  * 「讨论未收敛」——不许把「Lead 不收敛」变成组织死锁。
  */
-import { Denied, InvalidBody } from './kernel/errors.js';
+import { Denied, Fault, InvalidBody } from './kernel/errors.js';
 import { DEFAULT_DEBATE_BUDGET } from './policy.js';
 import { subjectForRole } from './registry.js';
 import { 全员已交 } from './tasks.js';
@@ -123,13 +123,14 @@ export class DebateService {
       }
       if (可写) 可指定.push(id);
     }
-    // 揭名：盲评到此为止，讨论阶段亮出彼此身份（§10）。
-    const 揭名 = await this.review.reveal({ subject: spec.subject, 项目: spec.项目, 线程: spec.节点, 参与者 });
     // 只选不记（2026-10-13 审查 P1-12）：修前 pickDissenter 先落审计、debateOpened 后落事件——
     // 开启失败（如并发双 open 被锁内复检拒）时审计已记，该候选被 #usedDissenters 永久烧掉。
     // 现在先拿人、等 debate_opened 成功落线再补记：失败路径不耗反趋同资源。
     const 指定 = await this.review.pickDissenter({ subject: spec.subject, 项目: spec.项目, 节点: spec.节点, 参与者, 候选: 可指定, 只选不记: true });
     const 预算快照 = { 每轮消息上限: 预算.每轮消息上限, 每人每轮字符上限: 预算.每人每轮字符上限 };
+    // 揭名挪到开启成功之后（2026-10-14 审查 P2-10 同族）：修前 reveal 在 debateOpened
+    // 落线**之前**——并发双 open 被锁内复检拒时，审计已记「已揭名」（P1-12 修了
+    // pickDissenter 的同款顺序，这处漏了）。先拿事件落线，再揭名补账。
     const 节点投影 = await this.tasks.debateOpened(spec.节点, {
       subject: spec.subject,
       项目: spec.项目,
@@ -139,6 +140,8 @@ export class DebateService {
       反对者: 指定.反对者,
       反对者依据: 指定.依据,
     });
+    // 揭名：盲评到此为止，讨论阶段亮出彼此身份（§10）。
+    const 揭名 = await this.review.reveal({ subject: spec.subject, 项目: spec.项目, 线程: spec.节点, 参与者 });
     // 开启成功 ⇒ 补记指定审计（与 pickDissenter 默认路径同一条形状，「已用过」从此处起算）。
     if (指定.反对者) {
       await this.audit.append({
@@ -200,31 +203,38 @@ export class DebateService {
     // 预算闸（现算）：本轮 = 最后一条轮边界消息之后、**名单内**发件的发言。
     // ①乙（2026-10-10）：名单 = 参与者 ∪ 反对者 —— 名单外的消息（外人经服务面
     // `bus.send` 直灌、机制消息、旁听者的任何落线）**不占预算**，占不死参与者的闸。
-    const 消息 = await this.bus.readRaw({ 项目: spec.项目, 线程: spec.节点 });
-    const 本轮 = 本轮发言(消息, 预算名单(讨论));
+    // 抽成闭包跑两遍（2026-10-14 审查 P2-11）：锁外一次是快速失败（可读理由）；
+    // 锁内一次（经 bus.send 的 锁内闸）是权威复检——修前读-判-写不原子，并发发言
+    // 可双双过闸超限（TOCTOU）。
     const 上限 = 讨论.预算快照?.每轮消息上限 ?? DEFAULT_DEBATE_BUDGET.每轮消息上限;
-    if (本轮.length >= 上限) {
-      throw new Denied(
-        '会审讨论段 · 每轮消息上限',
-        `本轮发言已 ${本轮.length}/${上限} 条，预算用尽。`,
-        {
-          howToChange: '换轮（debate_round，Lead）或收敛（debate_converge，Lead）；上限可在私有 部署.json 的 会审讨论.每轮消息上限 调整（只影响之后开启的讨论）。',
-          detail: { 本轮消息数: 本轮.length, 每轮消息上限: 上限, 轮次: 讨论.轮次 },
-        },
-      );
-    }
     const 字上限 = 讨论.预算快照?.每人每轮字符上限 ?? DEFAULT_DEBATE_BUDGET.每人每轮字符上限;
-    const 已用 = 本轮.filter((m) => m.发件 === spec.subject?.id).reduce((n, m) => n + String(m.内容 ?? '').length, 0);
-    if (已用 + 内容.length > 字上限) {
-      throw new Denied(
-        '会审讨论段 · 每人每轮字符上限',
-        `${spec.subject?.id} 本轮已用 ${已用}/${字上限} 字符，再发 ${内容.length} 字超限。`,
-        {
-          howToChange: '把要说的话压缩后再发，或等换轮（debate_round）后预算重置；上限调整走私有 部署.json 的 会审讨论.每人每轮字符上限。',
-          detail: { 本轮已用字符: 已用, 本次字符: 内容.length, 每人每轮字符上限: 字上限, 轮次: 讨论.轮次 },
-        },
-      );
-    }
+    const 预算闸 = async () => {
+      const 消息 = await this.bus.readRaw({ 项目: spec.项目, 线程: spec.节点 });
+      const 本轮 = 本轮发言(消息, 预算名单(讨论));
+      if (本轮.length >= 上限) {
+        throw new Denied(
+          '会审讨论段 · 每轮消息上限',
+          `本轮发言已 ${本轮.length}/${上限} 条，预算用尽。`,
+          {
+            howToChange: '换轮（debate_round，Lead）或收敛（debate_converge，Lead）；上限可在私有 部署.json 的 会审讨论.每轮消息上限 调整（只影响之后开启的讨论）。',
+            detail: { 本轮消息数: 本轮.length, 每轮消息上限: 上限, 轮次: 讨论.轮次 },
+          },
+        );
+      }
+      const 已用 = 本轮.filter((m) => m.发件 === spec.subject?.id).reduce((n, m) => n + String(m.内容 ?? '').length, 0);
+      if (已用 + 内容.length > 字上限) {
+        throw new Denied(
+          '会审讨论段 · 每人每轮字符上限',
+          `${spec.subject?.id} 本轮已用 ${已用}/${字上限} 字符，再发 ${内容.length} 字超限。`,
+          {
+            howToChange: '把要说的话压缩后再发，或等换轮（debate_round）后预算重置；上限调整走私有 部署.json 的 会审讨论.每人每轮字符上限。',
+            detail: { 本轮已用字符: 已用, 本次字符: 内容.length, 每人每轮字符上限: 字上限, 轮次: 讨论.轮次 },
+          },
+        );
+      }
+      return 本轮;
+    };
+    const 本轮 = await 预算闸();
 
     const sent = await this.bus.send({
       subject: spec.subject,
@@ -234,6 +244,7 @@ export class DebateService {
       收件: 讨论.参与者,
       类型: spec.类型,
       内容,
+      锁内闸: 预算闸,
     });
     return { 消息: sent, 轮次: 讨论.轮次, 本轮消息数: 本轮.length + 1, 每轮消息上限: 上限 };
   }
@@ -270,15 +281,24 @@ export class DebateService {
     // 边界消息：之后的所有参与者发言都属于新轮。经 bus.send 落线（走它的闸与审计），
     // 发件是系统——预算过滤只认名单内发件（名单 = 参与者 ∪ 反对者），
     // 系统既不是参与者、默认也不是反对者 ⇒ 边界不会被算进任何人头上（①乙）。
-    await this.bus.send({
-      subject: { id: 'system', kind: '系统' },
-      项目: spec.项目,
-      线程: spec.节点,
-      发件: 'system',
-      收件: 讨论.参与者,
-      类型: '系统',
-      内容: `${ROUND_BOUNDARY_MARK} ${讨论.轮次 + 1}`,
-    });
+    // 失败必须响亮且不许重试（2026-10-14 审查 P2-10）：轮次事件已先落线，这里失败
+    // 意味着「轮次推进了但预算切轮边界缺失」——重试 round 会被状态机拒或再推一轮，
+    // 两个事实源越漂越远。明示现场，让人工补边界。
+    try {
+      await this.bus.send({
+        subject: { id: 'system', kind: '系统' },
+        项目: spec.项目,
+        线程: spec.节点,
+        发件: 'system',
+        收件: 讨论.参与者,
+        类型: '系统',
+        内容: `${ROUND_BOUNDARY_MARK} ${讨论.轮次 + 1}`,
+      });
+    } catch (error) {
+      throw new Fault('DEBATE_BOUNDARY_MISSING', `节点 ${spec.节点} 轮次已推进到 ${讨论.轮次 + 1}（事件已落线），但轮边界消息落线失败：${error instanceof Error ? error.message : String(error)}。不要重试 debate_round——请人工核对该线程并用 bus_send（系统边界由机制补记入口补）修复预算切轮边界。`, {
+        detail: { 节点: spec.节点, 轮次: 讨论.轮次 + 1 },
+      });
+    }
     return {
       节点: 节点投影,
       轮次: 讨论.轮次 + 1,

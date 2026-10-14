@@ -120,8 +120,11 @@ function guardTool({ org }) {
       schema: { type: 'string' },
       render: (_args, value) => [{ type: 'text', text: value }],
     },
-    // 探针与比对是只读或幂等的；裁决会改挂起项状态，不与别的调用并发。
-    isConcurrencySafe: (args) => ['probe_run', 'probe_health', 'upgrade_compare'].includes(args?.action),
+    // 并发安全白名单只放真只读（2026-10-14 审查 P1-6）：probe_run 落快照 + 两条审计、
+    // upgrade_compare 每次调用也 append 审计——它们是写动作，标「并发安全」会与内核侧
+    // 「写动作排成一队」的口径打架（并发巡检还会撞快照文件名，见 probes.js 毫秒后缀）。
+    // probe_health 才是真只读（读账本与快照，不落盘）。
+    isConcurrencySafe: (args) => ['probe_health'].includes(args?.action),
     async execute(args, exec) {
       try {
         // 主体来自会话事实（2026-10-10 · guard 残留面收口）：修前硬编码 subjectFor({ 根会话: true })
@@ -185,7 +188,8 @@ async function runGuardAction(org, args, subject) {
       return { 回滚: await org.probes.autoRollback() };
     case 'upgrade_compare':
       if (!args.对象) throw new InvalidBody('upgrade_compare 需要 对象');
-      return { 比对: await org.upgrade.compare({ 对象: args.对象, 安全类: args.安全类 === true }) };
+      // 主体透传（2026-10-14 审查 P2-15）：比对告警要记真实调用者，不再记 system/factory。
+      return { 比对: await org.upgrade.compare({ 对象: args.对象, 安全类: args.安全类 === true, subject }) };
     case 'upgrade_resolve':
       return { 裁决: await org.upgrade.resolve({ subject, id: args.id, 选择: args.选择, 理由: args.原因 ?? '未说明' }) };
     case 'upgrade_withdraw':

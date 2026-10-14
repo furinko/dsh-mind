@@ -597,7 +597,9 @@ describe('A 落地（2026-10-10 · 主人拍板：Lead 显式登记 + 会话派�
         assert.equal(登记前.成功, false, `登记前必须仍拒（fail-closed）；实际 ${JSON.stringify(登记前)}`);
 
         // ── ① Lead **显式登记**（工具面，根会话执行）：实例 = **该子会话的会话 id**。
-        const 登记 = JSON.parse(await 工具.execute({ action: 'registry_assign', 岗位: '复核员', 实例: 子id, 代: 1, 授权引用: 'test-决议-复核员任命-a1' }, 根会话exec));
+        // 授权引用须真实存在（2026-10-14 审查 P2-2）：先落决议节点，拿它的 id 当依据。
+        const { id: 决议节点 } = await org.tasks.create({ subject: LEAD, 项目: org.project, 描述: '主权者决议：复核员任命 a1', 负责人: 'lead', 判据: ['决议在案'] });
+        const 登记 = JSON.parse(await 工具.execute({ action: 'registry_assign', 岗位: '复核员', 实例: 子id, 代: 1, 授权引用: 决议节点 }, 根会话exec));
         assert.equal(登记.成功, true, `Lead 登记该实例要成功（岗位有卡 + 根会话过得了 create）；实际 ${JSON.stringify(登记)}`);
         assert.equal(登记.实例.岗位, '复核员');
         assert.equal(登记.实例.状态, '在岗');
@@ -644,7 +646,9 @@ describe('A 落地（2026-10-10 · 主人拍板：Lead 显式登记 + 会话派�
         assert.match(String(未登记.理由), /没有登记/, `机制是「档案里没有这个实例键」；实际 ${未登记.理由}`);
 
         // ── ② 登记**后**再封存 ⇒ 也拒：判据是「在册**且在岗**」，不是在册就算数。
-        await org.registry.assign({ subject: LEAD, 岗位: '复核员', 实例: 子id, 代: 1, 授权引用: 'test-决议-复核员任命-a2' });
+        // 授权引用须真实存在（2026-10-14 审查 P2-2）：先落决议节点。
+        const { id: 决议节点 } = await org.tasks.create({ subject: LEAD, 项目: org.project, 描述: '主权者决议：复核员任命 a2', 负责人: 'lead', 判据: ['决议在案'] });
+        await org.registry.assign({ subject: LEAD, 岗位: '复核员', 实例: 子id, 代: 1, 授权引用: 决议节点 });
         assert.equal((await 主体读数(工具, 子会话)).成功, true, '前提：登记后在岗的这一刻是放行的（与 A-1 同款读数）');
         await org.registry.seal({ subject: LEAD, 实例: 子id, 理由: 'A-2 正对照：在册不在岗' });
         const 封存后 = await 主体读数(工具, 子会话);
@@ -685,7 +689,9 @@ describe('A 落地（2026-10-10 · 主人拍板：Lead 显式登记 + 会话派�
       const { 工具, org, host } = await 起宿主(g);
       try {
         await g.writePrivate('集体L3-成员角色卡/复核员.md', 岗位卡('复核员'));
-        await org.registry.assign({ subject: LEAD, 岗位: '复核员', 实例: 子id, 代: 1, 授权引用: 'test-决议-复核员任命-a3' });
+        // 授权引用须真实存在（2026-10-14 审查 P2-2）：先落决议节点。
+        const { id: 决议节点 } = await org.tasks.create({ subject: LEAD, 项目: org.project, 描述: '主权者决议：复核员任命 a3', 负责人: 'lead', 判据: ['决议在案'] });
+        await org.registry.assign({ subject: LEAD, 岗位: '复核员', 实例: 子id, 代: 1, 授权引用: 决议节点 });
 
         // ── ① **主体自陈的岗位**（`主体.roleId` 是字符串）与档案不符 ⇒ 拒。
         //    这一格是门① 的成果，一个字都不许放宽。

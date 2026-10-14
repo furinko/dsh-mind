@@ -239,7 +239,7 @@ export class AuditLog {
     // 授权引用存在性校验（2026-10-13 裁决第二批 · P2-18）：对齐 memory 来源引用的
     // fail-closed 口径——空字符串之外的「任意字符串」不能当授权：授权依据必须是任务图里
     // 真实出现过的节点 id（决议/任务都落任务图），悬空授权 = 漂白哈希差异的口子，拒。
-    if (!(await this.#授权存在(授权引用))) {
+    if (!(await this.授权依据存在(授权引用))) {
       throw new Denied(
         '审计链 · 授权引用必须真实存在',
         `授权引用「${授权引用}」在任务图事件流里找不到：更正声明是把哈希差异转「已确认瑕疵」的闭环入口，授权依据必须指向真实的决议/任务节点（fail-closed，与记忆来源引用同口径）。`,
@@ -260,9 +260,20 @@ export class AuditLog {
     });
   }
 
-  /** 授权引用是否指向任务图里真实出现过的节点（跨全部项目，与 memory.#taskExists 同口径）。 */
-  async #授权存在(id) {
-    const { listFiles } = await import('./kernel/fsx.js');
+  /**
+   * 授权引用是否指向任务图里真实出现过的节点（跨全部项目，与 memory.#taskExists 同口径）。
+   *
+   * 语义边界（2026-10-14 审查 P2-7，如实标注）：这里验的是**存在性**，不是「主权者亲签」——
+   * 主权者在本体系里不直接跑会话，授权artifact 就是 Lead 落进任务图的决议/任务节点，
+   * 其效力来自那条链本身接受复核，而不是创建者字段。「存在 ≠ 授权」的残余风险由
+   * 更正声明/任命两道入口的复核面兜底（声明与任命都告警入账，复核者可见）。
+   *
+   * 公共方法（原 #授权存在，2026-10-14 提为公共）：registry.assign 的复核员任命特判
+   * 用同一把尺——授权引用的存在性校验只有这一份实现，不许两处各写。
+   * @param {string} id
+   */
+  async 授权依据存在(id) {
+    // listFiles 顶部已静态导入（2026-10-14 审查 P3：修前这里又动态 import 一次，冗余）。
     const root = this.layout.private(DIR.基础设施, DIR.任务图);
     for (const rel of await listFiles(root, { recursive: true, filter: (n) => n.endsWith('tasks.jsonl') })) {
       const rows = await readJsonl(`${root}/${rel}`);
@@ -313,8 +324,15 @@ export class AuditLog {
       if (坏行 > 0) {
         broken.push({ month, seq: null, 类型: '撕裂行', expected: null, actual: null, 坏行数: 坏行 });
       }
-      if (!末行完整) {
+      // 尾部撕裂并入「撕裂行」报（2026-10-14 审查 P3）：修前同一条尾部撕裂报两次
+      // （撕裂行 + 尾部撕裂各一条），broken 计数虚高、读的人以为两处伤。
+      // 「末行无换行」本身就是坏行（readJsonlHealth 的 坏行 已含它），这里只在
+      // 撕裂行条目的说明里点出尾部撕裂，不再单列。
+      if (!末行完整 && 坏行 === 0) {
+        // 兜底：末行不完整但坏行计数为 0 的形状理论上不该出现（体检器口径），仍响亮报。
         broken.push({ month, seq: rows[rows.length - 1]?.seq ?? null, 类型: '尾部撕裂（末行无换行）', expected: null, actual: null });
+      } else if (!末行完整) {
+        broken[broken.length - 1].说明 = '其中包含尾部撕裂（末行无换行）——通常是写入进程被杀的断面。';
       }
       for (const row of rows) {
         if (row.动作 !== '更正声明') continue;

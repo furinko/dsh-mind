@@ -216,7 +216,9 @@ describe('G1.5 · 池内派单与轮派（assignReview / review.nominate 路由�
 
   it('⑪ 轮派：候选省略 ⇒ 池内账上活动最旧优先；池空 ⇒ 响亮拒', async () => {
     // 就座第二名复核员（复核员任命特判：带授权引用）。
-    await org.registry.assign({ subject: LEAD, 岗位: '复核员', 实例: 'reviewer-2', 代: 1, 授权引用: '决议-test-常任授权' });
+    // 授权引用必须真实存在（2026-10-14 审查 P2-2）：先落一个决议节点，拿它的 id 当依据。
+    const { id: 授权节点 } = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '主权者决议：常任复核员授权（测试）', 负责人: 'lead', 判据: ['决议在案'] });
+    await org.registry.assign({ subject: LEAD, 岗位: '复核员', 实例: 'reviewer-2', 代: 1, 授权引用: 授权节点 });
     // reviewer 已在账上有活动（⑨⑩ 的指派/审计），reviewer-2 刚就座零活动 ⇒ 轮派应选 reviewer-2。
     const 节点 = await 交卷节点(org, '节点L-轮派');
     const 派 = await org.review.nominate({ subject: LEAD, 项目: P, 节点 });

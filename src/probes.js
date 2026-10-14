@@ -374,7 +374,11 @@ export class ProbeRunner {
   async #snapshot(ran) {
     const dir = this.layout.probeSnapshotDir();
     await ensureDirPath(dir);
-    const name = `${ran.于.replace(/[:.]/g, '-')}-${shortHash(ran.机制版本, 6)}.json`;
+    // 文件名补毫秒与随机段（2026-10-14 审查 P1-7）：ran.于 是秒级 ISO（toIso 剥了毫秒），
+    // 机制版本不变时同秒两次巡检同名 ⇒ atomicWrite 静默覆盖 ⇒ 审计里两行「探针巡检」
+    // 同名不同哈希 ⇒ 快照完整性校验见红 ⇒ autoRollback 拒绝定位——回滚机制会被自己的
+    // 命名碰撞毒化。
+    const name = `${ran.于.replace(/[:.]/g, '-')}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}-${shortHash(ran.机制版本, 6)}.json`;
     const text = `${JSON.stringify(ran, null, 2)}\n`;
     await atomicWrite(`${dir}/${name}`, text);
     // 内容哈希（裁决3）：按盘上字节算——校验侧对同一文件复算，两边同源。

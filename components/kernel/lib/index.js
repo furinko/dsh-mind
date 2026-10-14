@@ -178,13 +178,15 @@ function mindTool({ org, 项目, 项目键 }) {
         分歧清单: { type: 'string' },
         反例面: { type: 'string' },
         结论: { type: 'string', description: '交卷结论（task_submit）；会审按人留，谁交卷记谁那份' },
+        结论层: { type: 'string', description: '结论的结构化标签（task_submit，会审时必填）：一句话给结论定性归类，如「方案A」「可修」「不采纳」。§10 零分歧判据比的是它而不是结论全文——措辞漂不了的判据才成立；不写则退化为全文逐字比对（两份独立答案几乎不会逐字同，报警永不触发）' },
         决定: { type: 'string', description: '待决项的裁决内容（task_resolve）' },
         复核者: { type: 'string', description: '复核结论归属的复核者 id（task_review）；省略取主体' },
         候选: { type: 'string', description: '复核者实例 id（review_nominate）。在册在岗 ⇒ 池内派单（不进待决）；池外 ⇒ 新任命提名（挂待决等主权者）；省略 ⇒ 从在册复核员按账上活动轮派。提名≠任命：池外任命仍由主权者经 registry_assign 带授权引用执行' },
         待决类型: { type: 'string', description: '待决类型（task_pending）；省略取「升级差异」' },
-        结论集: { type: 'string', description: 'JSON 数组：[{成员,结论,反例面}]，用于零分歧检查' },
         产出物引用: { type: 'string' },
         类: { type: 'string', enum: ['知识', '经历', '偏好', '作答'] },
+        对象类: { type: 'string', description: '对象库的种类（store_rollback 用：能力/规则/身份/产物…；与记忆类的「类」不是一个字段）' },
+        version: { type: 'number', description: 'store_rollback 的回滚目标版本号（正整数）' },
         内容: { type: 'string', description: '正文内容（bus_send 的消息正文 / memory_write 的条目内容）' },
         来源: { type: 'string', description: '怎么知道的；记忆写入必填（谁记的默认取主体）' },
         来源引用: { type: 'string', description: '证据/来源对象 id，多个用逗号分隔（契约A 血缘）；know-/exp-/pref-/answ- 查账本、task- 查任务图、artifact- 本批不校验，悬空拒写' },
@@ -502,7 +504,10 @@ function 挂审计(ctx, org, logger) {
         bucket.成功 += 1;
         bucket.工具.set(工具, (bucket.工具.get(工具) ?? 0) + 1);
       }
-      轮.set(key, bucket);
+      // 只记有内容的桶（2026-10-14 审查 P2-14）：修前 `轮.set` 无条件执行，只跑只读工具
+      // 的会话也会留下零计数桶——turn/end 里「空桶直接 return」又不删它，Map 只增不减。
+      // 现在只读结果根本不进 Map，空桶 delete 兜底留在 turn/end（双保险）。
+      if (bucket.成功 > 0 || bucket.失败 > 0) 轮.set(key, bucket);
     } catch (error) {
       logger.warn?.(`[dsh-mind] 工具结果记账异常：${error instanceof Error ? error.message : String(error)}`);
     }
@@ -513,7 +518,12 @@ function 挂审计(ctx, org, logger) {
     try {
       const key = 轮键(payload);
       const bucket = 轮.get(key);
-      if (!bucket || (bucket.成功 === 0 && bucket.失败 === 0)) return;
+      // 空桶也要删掉（2026-10-14 审查 P2-14 的双保险）：历史版本/异常路径留下的零计数
+      // 桶不许在 Map 里永久残留。
+      if (!bucket || (bucket.成功 === 0 && bucket.失败 === 0)) {
+        轮.delete(key);
+        return;
+      }
       轮.delete(key);
       org.audit
         .append({
@@ -610,6 +620,9 @@ function normalizeArgs(args) {
       out.target = { id: out.target, kind: '未知' };
     }
   }
+  // 「结论集」已从工具 schema 撤掉（2026-10-14 审查 P3：review_zero 自 2026-10-13 起从任务图
+  // 独立答案重算，不收自报）。解析块保留给 /mind 命令路径与直达 execute 的调用：坏串仍响亮拒，
+  // 不静默落成空集（trace-floor.test.js 批次4·P2-2 门禁守着这条）。
   if (typeof out.结论集 === 'string') {
     try {
       out.结论集 = JSON.parse(out.结论集);

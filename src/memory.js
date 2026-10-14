@@ -10,7 +10,7 @@
  * 四类的归属（§7 表）：知识 = 岗位 + 项目双标签（跨项目/本项目）；经历 = 组织账本（只增）；
  * 偏好 = 部署（永不外流）；作答 = 实例（私有区内部，任务结束归档）。
  */
-import { appendLines, exists, listDirs, readJsonl, readTextOrNull, atomicWrite, withLock } from './kernel/fsx.js';
+import { appendLines, exists, listDirs, readJsonl, readJsonlHealth, readTextOrNull, atomicWrite, withLock } from './kernel/fsx.js';
 import { stat } from 'node:fs/promises';
 import { InvalidBody, Denied, Fault } from './kernel/errors.js';
 import { objectId } from './kernel/ids.js';
@@ -142,9 +142,15 @@ export class MemoryService {
     const 签名 = await this.#签名(file);
     const hit = this.#rowsCache.get(file);
     if (hit?.签名 === 签名) return hit.rows;
-    const rows = await readJsonl(file);
-    this.#rowsCache.set(file, { 签名, rows });
-    return rows;
+    // 坏行要出声（2026-10-14 审查 P2）：修前走 readJsonl 静默跳坏行——记忆召回的
+    // 坏行没有审计链自检兜底（那是审计链的机制），「召回少了几条」会静默发生。
+    // 读面不中断（坏行不等于整本账作废），但必须留告警痕迹（stats 面同口径报得出）。
+    const health = await readJsonlHealth(file);
+    if (health.坏行 > 0) {
+      console.warn(`[dsh-mind] 记忆账本 ${file} 有 ${health.坏行} 行解析失败（已跳过，不中断读面）；可用 mind status 的账本体检复核。`);
+    }
+    this.#rowsCache.set(file, { 签名, rows: health.rows });
+    return health.rows;
   }
 
   /** 记一次本进程写入：让该文件的缓存签名失效。 */
@@ -289,6 +295,17 @@ export class MemoryService {
       target: memoryTarget('知识', DIR.跨项目, entry.项目),
       context: { id },
     });
+
+    // 幂等闸（2026-10-14 审查 P1-8）：同 id 只能晋升一次。修前二次晋升（换岗位）照样
+    // 往跨项目账追一条副本行，而 mergeEntryRows 在两行都带岗位时保留先读到的那份——
+    // 第二次晋升静默无效，审计却照记「追加岗位标签 B」：审计与账本脱节 = 假留痕。
+    if (entry.岗位) {
+      throw new Denied(
+        '记忆处置表 · 不许重复晋升（幂等闸）',
+        `条目 ${id} 已带岗位标签「${entry.岗位}」：同一条知识只能晋升到跨项目面一次。重复晋升会在账上落一条永远不生效的副本行，而审计照记——账本与审计脱节。`,
+        { howToChange: '要换岗位标签：先推翻/失效跨项目副本再以新条目晋升；要扩散的是内容本身，就新开一条带正确岗位的条目。' },
+      );
+    }
 
     // ── 契约C 披露机械检查：标题 + 内容 + 标签 三个面一起过 ──────────────────
     // 顺序在 policy.check 之后：先由唯一判定点确认「这个主体有权晋升」，
@@ -507,7 +524,14 @@ export class MemoryService {
     const 索引键 = `${await this.#签名们(账本文件)}|${JSON.stringify([wanted, query.项目 ?? null, query.岗位 ?? null, query.含失效 === true, query.显式 === true, query.读者?.kind ?? null])}`;
     let index = this.#indexCache.get(索引键);
     if (!index) {
-      index = buildIndex(可召回.map((entry) => ({ id: entry.id, 正文: entry.内容, 标签: [entry.类, entry.岗位 ?? ''], 来源: entry.归属 })));
+      // 用户标签进检索索引（2026-10-14 审查 P2-19）：修前 标签 只塞 [类, 岗位]——
+      // 写入时收的 标签（用户打的检索词）不进索引，按标签搜永远搜不到（静默落空）。
+      index = buildIndex(可召回.map((entry) => ({
+        id: entry.id,
+        正文: entry.内容,
+        标签: [entry.类, entry.岗位 ?? '', ...(Array.isArray(entry.标签) ? entry.标签 : [])],
+        来源: entry.归属,
+      })));
       if (this.#indexCache.size >= 索引缓存上限) this.#indexCache.delete(this.#indexCache.keys().next().value);
       this.#indexCache.set(索引键, index);
     }
@@ -864,7 +888,6 @@ export class MemoryService {
     // 坏行可见（2026-10-13 裁决第二批·裁决4）：记忆账本无哈希链，撕裂/手改的坏行此前被
     // readJsonl 静默跳过。最底线=不静默：计数走带体检的读取器，坏行进读数（§3.6）。
     let 坏行 = 0;
-    const { readJsonlHealth } = await import('./kernel/fsx.js');
     for (const kind of MEMORY_KINDS) {
       const rows = [];
       for (const scope of await this.#scopesFor(kind, query.项目)) {

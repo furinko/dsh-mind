@@ -153,6 +153,14 @@ export class CapabilityLibrary {
     if (适用岗位.length === 0) {
       throw new InvalidBody('能力卡必须声明适用岗位：没有岗位就无从维持单源。', { missing: ['适用岗位'] });
     }
+    // 正文必填（2026-10-14 审查 P2）：修前不校验，undefined 插进模板 ⇒ 发出正文为
+    // "undefined" 的能力卡并进版本史——坏内容不许进库（响亮拒，不静默兜底）。
+    if (!String(input.正文 ?? '').trim()) {
+      throw new InvalidBody('能力卡正文必填：空正文（或缺失）的卡是死内容，不许进库。', { missing: ['正文'] });
+    }
+    if (!String(input.名 ?? '').trim()) {
+      throw new InvalidBody('能力卡必须有名：名是引用与检索的入口。', { missing: ['名'] });
+    }
     const id = assertPathSegment(input.id ?? slug(input.名, { maxLength: 40 }), '能力id');
     const meta = {
       id,

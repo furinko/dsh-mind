@@ -19,17 +19,25 @@ import { InvalidBody } from './kernel/errors.js';
 /**
  * 路径片段校验：项目键 / 线程 / 对象 id / 岗位 这类**入口可控**的字符串，
  * 进 `join` 之前必须过这一关——`project="../../x"` 一行就能让账本与审计追加落到私有区外面。
- * 拒绝：空串、`.` / `..`、路径分隔符、冒号（盘符/ADS）、控制字符。
+ * 拒绝：空串、`.` / `..`、路径分隔符、冒号（盘符/ADS）、控制字符，
+ * 以及 Windows 等价类：保留设备名（CON/NUL/COM1-9/LPT1-9…）与尾部点/空格（NTFS 别名）。
  * 正常片段（中文、点号如 `my.proj`、连字符）原样放行。
  *
  * @param {unknown} value
  * @param {string} 名 出错时指给调用方看的字段名
  * @returns {string} 通过校验的片段
  */
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+
 export function assertPathSegment(value, 名) {
   const s = String(value ?? '');
   if (!s || s === '.' || s === '..' || /[/\\:]/.test(s) || /[\u0000-\u001f]/.test(s)) {
     throw new InvalidBody(`路径片段不合法（${名}）：不许为空、不许是 . 或 ..、不许含路径分隔符 / 冒号 / 控制字符。`, { detail: { 字段: 名, 值: s } });
+  }
+  // Windows 等价类（2026-10-14 审查 P2-18）：保留设备名与尾部点/空格会触发 NTFS 别名
+  // （'foo.' 与 'foo' 共目录），与 线程等价键 管的大小写折叠同族——入口侧必须拒。
+  if (WINDOWS_RESERVED.test(s) || /[. ]$/.test(s)) {
+    throw new InvalidBody(`路径片段不合法（${名}）：Windows 保留设备名（CON/NUL/COM1-9/LPT1-9…）与尾部点/空格会触发 NTFS 别名——两个不同的键落成同一个目录。`, { detail: { 字段: 名, 值: s } });
   }
   return s;
 }

@@ -75,12 +75,20 @@ const 冻结动作表 = [
   'capability_publish',
   'bus_send',
   'bus_read',
+  // bus_deliver（2026-10-14 审查 P1-4）：「暂不投递」的放行口（修前是断头路）。
+  // 过这一关时回答「是不是改设置的动作」：不是——它只往线程账追加一条同 id 的
+  // 「已投递」记录（只增语义），过与 send 同一道闸（create + 写入目标）。
+  'bus_deliver',
   'audit_tail',
   'audit_verify',
   // audit_correct（缺口2a · 主权者裁决 2026-10-12）：追加审计链「更正声明」。
   // 过这一关时回答「是不是改设置的动作」：不是——它不改任何设置/规则件，
   // 只往审计链追加一条声明；入口默认拒绝（仅 Lead/主权者 + 授权引用必填）。
   'audit_correct',
+  // store_rollback（2026-10-14 审查 P2-20）：对象库文本版本回滚接线（修前承诺无入口）。
+  // 过这一关时回答「是不是改设置的动作」：不是——它是一次「以历史正文为输入的新写入」
+  // （旧版仍在历史里，回滚本身也留版），且写入面策略闸仅放行主权者 kind（§4 不变式）。
+  'store_rollback',
   'registry_list',
   'registry_can',
   'registry_assign',

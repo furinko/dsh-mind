@@ -58,10 +58,18 @@ export async function readTextOrNull(file) {
  */
 export async function atomicWrite(file, content) {
   await ensureDir(file);
-  const tmp = `${file}.tmp-${process.pid}-${Date.now().toString(36)}`;
-  await writeFile(tmp, content, 'utf8');
-  // Node 在 Windows 上用 MOVEFILE_REPLACE_EXISTING，覆盖已存在目标是原子的。
-  await rename(tmp, file);
+  // tmp 名加随机段（2026-10-14 审查 P2-16）：修前 `tmp-${pid}-${ms}` 同毫秒同文件
+  // 两次写会撞名（writeFile 互截 + rename 竞态）；随机段让碰撞概率可忽略。
+  // 失败路径清孤儿 tmp：写半截留下的 tmp 不该在目录里越积越多。
+  const tmp = `${file}.tmp-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    await writeFile(tmp, content, 'utf8');
+    // Node 在 Windows 上用 MOVEFILE_REPLACE_EXISTING，覆盖已存在目标是原子的。
+    await rename(tmp, file);
+  } catch (error) {
+    await rm(tmp, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 /**
@@ -208,7 +216,14 @@ export async function withLock(lockPath, fn, options = {}) {
       // 持有令牌：pid+at 双字段。验后删靠它比对——同进程并发抢同一路径时 pid 相同，
       // at（毫秒级时刻）区分两次持有。
       const token = { pid: process.pid, at: new Date().toISOString() };
-      await handle.writeFile(JSON.stringify(token));
+      // writeFile 抛错也要关句柄（2026-10-14 审查 P3）：修前只有 fn() 的 finally 里
+      // close——令牌写不进去时句柄泄漏，Windows 上还会顶住后续 rm。
+      try {
+        await handle.writeFile(JSON.stringify(token));
+      } catch (error) {
+        await handle.close().catch(() => {});
+        throw error;
+      }
       try {
         return await fn();
       } finally {
@@ -286,7 +301,13 @@ export function sleep(ms) {
 export function serializeByKey(key, fn) {
   const tail = (serializeByKey._queue.get(key) ?? Promise.resolve()).catch(() => {});
   const run = tail.then(fn);
-  serializeByKey._queue.set(key, run.catch(() => {}));
+  const stored = run.catch(() => {});
+  serializeByKey._queue.set(key, stored);
+  // 队列只增不减收口（2026-10-14 审查 P3）：链尾 settle 后若自己仍是最新一项就摘除——
+  // 长跑会话里 key 只增不减是缓慢泄漏。
+  stored.finally(() => {
+    if (serializeByKey._queue.get(key) === stored) serializeByKey._queue.delete(key);
+  });
   return run;
 }
 /** @type {Map<string, Promise<void>>} */

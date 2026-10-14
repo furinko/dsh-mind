@@ -1,7 +1,7 @@
 /**
  * 消息总线（§7「结构化通信」）。
  *
- * 四条「必须保证」：
+ * 五条「必须保证」：
  *  1. **支持暂不投递** —— 消息可以先落账、后投递；状态写在消息上。
  *  2. **线程隔离** —— 读取只按线程取，跨线程只能靠显式遍历。
  *  3. **历史不入上下文** —— 本模块只负责存与取。它**不向任何模型上下文注入内容**，
@@ -13,7 +13,7 @@
  *
  * 消息 `authority = 只增`（§6）：总线里没有修改与删除。
  */
-import { appendLines, readJsonl, withLock } from './kernel/fsx.js';
+import { appendLines, listFiles, readJsonl, withLock } from './kernel/fsx.js';
 import { InvalidBody, Denied } from './kernel/errors.js';
 import { objectId } from './kernel/ids.js';
 import { 全员已交 } from './tasks.js';
@@ -48,7 +48,10 @@ export class MessageBus {
   /**
    * 投递一条消息（可能暂不投递、可能延后表态）。
    *
-   * @param {{ subject: object, 项目: string, 线程: string, 发件: string, 收件: string|string[], 类型: string, 内容: string, 暂不投递?: boolean, 延后?: boolean, 引用?: string }} message
+   * @param {{ subject: object, 项目: string, 线程: string, 发件: string, 收件: string|string[], 类型: string, 内容: string, 暂不投递?: boolean, 延后?: boolean, 引用?: string, 锁内闸?: () => Promise<void> }} message
+   *   `锁内闸`（2026-10-14 审查 P2-11）：在线程写锁内、appendLines 之前跑的复检回调——
+   *   「读-判-写」类判定（讨论预算闸）的权威一检。抛错即拒写。withLock 是文件锁不可
+   *   重入，调用方不能自己先拿锁再调 send，闸只能以回调形式进来。
    * @returns {Promise<{ id: string, 状态: string, 线程: string, 追加于: string }>}
    */
   async send(message) {
@@ -87,12 +90,17 @@ export class MessageBus {
     });
     const 状态 = message.暂不投递 === true ? '暂不投递' : '已投递';
     await withLock(`${this.layout.busThread(message.项目, message.线程)}.lock`, async () => {
+      // 锁内闸（2026-10-14 审查 P2-11）：预算这类「读-判-写」判定的权威一检在这里——
+      // 锁外那次是快速失败，并发发言双双过闸的窗口由这一检关掉。
+      if (typeof message.锁内闸 === 'function') await message.锁内闸();
       await appendLines(this.layout.busThread(message.项目, message.线程), [
         {
           id,
           线程: message.线程,
           发件,
-          收件: Array.isArray(message.收件) ? message.收件 : [message.收件],
+          // 收件缺席落 [] 而不是 [undefined]（2026-10-14 审查 P3）：修前 `[undefined]`
+          // 经 JSON 序列化变 `[null]`，污染账本行、也让「这条消息发给谁」读出假值。
+          收件: message.收件 == null ? [] : (Array.isArray(message.收件) ? message.收件 : [message.收件]),
           类型,
           内容,
           状态,
@@ -218,7 +226,12 @@ export class MessageBus {
       if (!prev || String(row.追加于 ?? '') >= String(prev.追加于 ?? '')) folded.set(row.id, row);
     }
     let out = [...folded.values()];
-    if (query.收件) out = out.filter((row) => row.收件?.includes(query.收件));
+    // 收件过滤同时认单值与数组（2026-10-14 审查 P1-5）：normalizeArgs 会把逗号串拆成
+    // 数组，修前这里只按标量 `includes`——数组查数组恒 false，带收件的读取静默返空。
+    if (query.收件) {
+      const 收件集 = Array.isArray(query.收件) ? query.收件 : [query.收件];
+      out = out.filter((row) => 收件集.some((人) => (row.收件 ?? []).includes(人)));
+    }
     if (query.未投递 === true) out = out.filter((row) => row.状态 === '暂不投递');
     if (query.未投递 === false) out = out.filter((row) => row.状态 === '已投递');
     return query.limit ? out.slice(-query.limit) : out;
@@ -285,6 +298,12 @@ export class MessageBus {
     if (!齐) {
       return { 解锁: false, 广播: null, 原因: `任务图未报「全员已交」（${口径}），会审保持锁定（提交后解锁）。` };
     }
+    // 幂等下沉服务层（2026-10-14 审查 P3）：修前幂等只在动作层（actions.js bus_unlock），
+    // 任何直调服务层的新调用者都会重复广播。判据与动作层同源：线程里已有 system 的「广播」。
+    const 既有 = await this.readRaw({ 项目: spec.项目, 线程: spec.线程 });
+    if ((既有 ?? []).some((m) => m.类型 === '广播' && m.发件 === 'system')) {
+      return { 解锁: true, 广播: null, 原因: '该线程已解锁过（幂等）：解锁广播一个节点只发一次，不重复落线。' };
+    }
     const broadcast = await this.send({
       subject: { id: 'system', kind: '系统' },
       项目: spec.项目,
@@ -311,7 +330,7 @@ export class MessageBus {
    * @returns {Promise<string[]>}
    */
   async threads(spec) {
-    const { listFiles } = await import('./kernel/fsx.js');
+    // listFiles 顶部静态导入（2026-10-14 审查 P3：修前此处动态 import，每次调用重付一次模块解析）。
     const files = await listFiles(this.layout.busDir(spec.项目), { recursive: false, filter: (n) => n.endsWith('.jsonl') });
     return files.map((f) => f.replace(/\.jsonl$/, '')).sort();
   }

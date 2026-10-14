@@ -14,7 +14,7 @@
 import { readJsonOrNull, readTextOrNull, atomicWrite, listFiles } from './kernel/fsx.js';
 import { InvalidBody } from './kernel/errors.js';
 import { splitClauses } from './kernel/text.js';
-import { RULE_FILES } from './paths.js';
+import { RULE_FILES, DIR } from './paths.js';
 
 /** 处置三态（「挂起」按主权者 2026-10-08 裁决并入「保留用户的」；删除意图墓碑经 2026-10-13 裁决第二批修正为甲′——叠加层是部分副本模型，条款缺席与删除不可区分，维持「缺席=未定制」）。 */
 export const DISPOSITIONS = ['直接替换', '保留用户的', '强制替换'];
@@ -112,11 +112,18 @@ export class UpgradeManager {
     });
 
     // 冲突私有优先：不挂起、不阻塞，但必须有一条告警让 Lead 能向主权者提示（裁决 2026-10-08）。
+    // 告警去重（2026-10-14 审查 P2-15）：compare 是只读比对，修前每次调用都刷两条审计
+    // （同一份冲突告警可被反复灌水）。签名 = 对象 + 处置全集；与上一次比对相同就跳过入账。
+    // 主体记真实调用者（spec.subject），缺省才落 system——谁刷的告警，账上就得是谁。
+    const 主体 = spec.subject ?? { id: 'system', kind: '系统' };
+    const 签名 = JSON.stringify({ 对象: spec.对象, 行: 结果.map((r) => `${r.条款}=${r.处置}${r.冲突 ? '⚡' : ''}`) });
+    const 签名文件 = this.layout.private(DIR.升级, '比对签名.json');
+    const 上次 = await readJsonOrNull(签名文件);
     const 冲突行 = 结果.filter((r) => r.冲突);
-    if (冲突行.length) {
+    if (冲突行.length && 上次?.签名 !== 签名) {
       await this.audit.append({
         动作: '状态变更',
-        主体: { id: 'system', kind: '系统' },
+        主体,
         对象: { id: spec.对象, kind: '规则' },
         依据: '§5 升级冲突私有优先（主权者裁决 2026-10-08）',
         结果: `私有优先：${冲突行.length} 条出厂/私有冲突保留私有版，待 Lead 提示主权者`,
@@ -124,14 +131,17 @@ export class UpgradeManager {
         详情: { 条款: 冲突行.map((r) => r.条款) },
       });
     }
-    if (结果.some((r) => r.处置 !== '保留用户的')) {
+    if (结果.some((r) => r.处置 !== '保留用户的') && 上次?.签名 !== 签名) {
       await this.audit.append({
         动作: spec.安全类 === true ? '强制更新' : '状态变更',
-        主体: { id: 'factory', kind: '出厂作者' },
+        主体: spec.subject ?? { id: 'factory', kind: '出厂作者' },
         对象: { id: spec.对象, kind: '规则' },
         依据: spec.安全类 === true ? '§5 安全类：强制替换，不可协商' : '§5 升级：条款级合并',
         结果: 结果.map((r) => `${r.条款}=${r.处置}`).join(' · '),
       });
+    }
+    if (上次?.签名 !== 签名) {
+      await atomicWrite(签名文件, `${JSON.stringify({ 签名, 于: new Date().toISOString() }, null, 2)}\n`);
     }
     return 结果;
   }

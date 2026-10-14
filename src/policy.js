@@ -458,7 +458,10 @@ export class PolicyEngine {
     const target = input.target ?? {};
     const action = input.action;
     const context = input.context ?? {};
-    const authority = target.authority ?? '自治';
+    // 缺标签按最严档判（2026-10-14 审查 P2-1，与 #invariants 同口径）：修前缺省落「自治」
+    // （最松）——忘盖章的目标被静默放宽，与引擎 fail-closed 方向相反。生产调用方都显式
+    // 盖章；没盖的一律按宪章档（写仅主权者可过），逼调用方补章而不是悄悄放行。
+    const authority = target.authority ?? '宪章';
 
     if (!SUBJECT_KINDS.includes(subject.kind)) {
       return deny('宪章 主体定义（§2）', `未知主体种类：${String(subject.kind)}。查不到身份不等于放行（§12.2）。`, {
@@ -562,7 +565,8 @@ export class PolicyEngine {
    */
   #invariants(subject, action, target, context) {
     const write = action !== 'read';
-    const authority = target.authority ?? '自治';
+    // 缺省取最严档（2026-10-14 审查 P2-1，与 #evaluate 同口径）：缺标签 ≠ 低授权。
+    const authority = target.authority ?? '宪章';
 
     if (action === 'approve') {
       // 提案人必须可知（2026-10-13 审查 P1-2）：缺席不是「没有提案人」，而是「证据不足」——
@@ -1141,6 +1145,14 @@ function collectGrants(rules) {
       const verdict = grant.verdict ?? 'allow';
       if (!['allow', 'deny', 'confirm'].includes(verdict)) {
         throw new Error(`规则件 ${rule.id}（${rule.zone}区）grant#${index + 1} 的 verdict 非法：${JSON.stringify(verdict)}（只认 allow / deny / confirm）。修好该文件后重载即恢复（当前按引擎不健康处理：全部写动作被拒）。`);
+      }
+      // subject / action 也必须是**写得对的**非空字符串（2026-10-14 审查 P2-4）：修前只验
+      // verdict——subject 拼错或 action 缺失的 grant 静默永不命中，配置烂了引擎还报 healthy。
+      // 与 verdict 同口径：坏条目 = 响亮抛错（引擎不健康，写动作全拒），不许静默跳过。
+      for (const field of ['subject', 'action']) {
+        if (typeof grant[field] !== 'string' || !grant[field].trim()) {
+          throw new Error(`规则件 ${rule.id}（${rule.zone}区）grant#${index + 1} 缺 ${field} 或不是非空字符串：${JSON.stringify(grant[field])}。缺字段的授权条目等于不存在，但不许静默——修好该文件后重载即恢复。`);
+        }
       }
       out.push({
         ...grant,

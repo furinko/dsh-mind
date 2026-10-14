@@ -110,8 +110,12 @@ export function parseSimpleYaml(raw) {
     const value = rest.trim();
     if (value.startsWith('[') && value.endsWith(']')) {
       data[key] = splitArrayItems(value.slice(1, -1));
+    } else if (value === 'null') {
+      // 与写侧对称（2026-10-14 审查 P3）：formatFrontMatter 把 null 写成 `null` 字面量，
+      // 读回来必须还是 null——修前 null 落成空值、读回 []，往返漂移。
+      data[key] = null;
     } else if (value === '') {
-      data[key] = [];
+      data[key] = []; // legacy：老账里空值行的原义（写侧现已只对 undefined 落空值）
     } else {
       data[key] = unquote(value);
     }
@@ -246,7 +250,10 @@ export function formatFrontMatter(data) {
         })
         .join(', ')}]`;
     }
-    if (value === null || value === undefined) return `${key}:`;
+    if (value === undefined) return `${key}:`;
+    // null 显式落成 `null` 字面量（2026-10-14 审查 P3）：修前 null 与 undefined 同写成
+    // 空值，读回来变 []（parseSimpleYaml 空值 ⇒ []）——null → [] 往返漂移。
+    if (value === null) return `${key}: null`;
     const s = String(value);
     return `${key}: ${needsQuote(s) ? quoteValue(s) : s}`;
   });
