@@ -560,6 +560,8 @@ export function sampleView() {
           id: 't-1', 描述: '把工作台投影接上客户端', 状态: '执行中', 负责人: ['role-α'], 模式: null,
           判据: ['刷新后可见实时状态'], 判据冻结: true, 依赖: [], 打回次数: 0,
           产物: ['artifact-1', { id: 'artifact-2', kind: '产物' }], 交卷: { 已交: 0, 应交: 1, 齐: false },
+          // 派活闭环（2026-10-15）：执行中窗口内、审计链零行的负责人 ⇒ 徽章点名。
+          负责人无活动: ['role-α'],
         },
         {
           id: 't-2', 描述: '校准策略引擎的拒绝理由', 状态: '已打回', 负责人: ['role-β'], 模式: null,
@@ -1044,6 +1046,7 @@ export async function runHarness() {
   passed.push(check(c1.text.includes('零分歧异常'), '活数据里出现审计动作'));
   passed.push(check(c1.text.includes('打回 2 次 · 升级主权者'), '打回 ≥2 高亮为升级主权者'));
   passed.push(check(c1.text.includes('判据冻结'), '派发后判据打冻结徽章'));
+  passed.push(check(c1.text.includes('1 位负责人未见活动'), '派活闭环：执行中节点亮「负责人未见活动」徽章'));
   passed.push(check(c1.text.includes('artifact-1') && c1.text.includes('artifact-2'), '产物引用显示为 chip'));
   passed.push(check(c1.text.includes('活数据'), '页头显示活数据状态'));
   passed.push(check(c1.text.includes('事后抽检'), '介入度档位可见'));
@@ -3472,6 +3475,11 @@ export async function runHarness() {
           { id: '复核员', 来源: '私有', 同名: ['私有', '出厂'], 摘要: '常驻岗', 能力引用: ['policy-decision'] },
         ];
         v.实例计数 = { 按岗位: { Lead: { 在岗: 1, 封存: 0 }, 复核员: { 在岗: 2, 封存: 1 } }, 异常键: 0, 合计: 4 };
+        // 派活闭环（2026-10-15）：Lead 有派发日期、复核员从未被派过 ⇒ 只有后者亮「未见派发」。
+        v.岗位闲置 = {
+          Lead: { 在岗实例: 1, 封存实例: 0, 最近派发于: '2026-10-14T09:00:00Z' },
+          复核员: { 在岗实例: 2, 封存实例: 1, 最近派发于: null },
+        };
         v.记忆 = { 存量: 44, 窗口天: 7, 新增: 44, 晋升: 0, 按类: { 经历: 31, 知识: 10, 偏好: 3 } };
         return v;
       };
@@ -3514,6 +3522,21 @@ export async function runHarness() {
       const 文本11 = collect(r11.tree, { skipStyle: true }).text;
       passed.push(check(文本11.indexOf('岗位接线 2/3（67%）') >= 0,
         '⑪b 统计砖读出接线率（2/3 = 67%，口径＝适用边 ∩ 岗位能力引用）', 文本11.slice(0, 120)));
+      // ── 派活闭环（2026-10-15）：岗位闲置的「亮灯」判据 ──
+      // ⚠️ 岗名（gLabelStrong）与读数行（gLabel）是**两个独立 text 元素**——
+      //    判据落在读数行的内容上（封存 1 = 复核员行、无封存 = Lead 行），不跨元素找名字。
+      const 在岗行们 = collect(r11.tree, { skipStyle: true }).elements
+        .filter((el) => el.type === 'text' && textOf(el).indexOf('在岗') >= 0);
+      const 未见派发行 = 在岗行们.filter((el) => textOf(el).indexOf('未见派发') >= 0);
+      passed.push(check(在岗行们.length === 2 && 未见派发行.length === 1 && textOf(未见派发行[0] || {}).indexOf('封存 1') >= 0,
+        '⑪b 岗位闲置：从未派发的岗（复核员行）亮「未见派发」（无需阈值的信号）',
+        在岗行们.map(textOf).join(' | ')));
+      const lead行 = 在岗行们.find((el) => textOf(el).indexOf('封存') < 0);
+      passed.push(check(!!lead行 && textOf(lead行).indexOf('未见派发') < 0,
+        '⑪b 有派发日期的岗（Lead 行）不亮「未见派发」（阈值主权者未定，界面不替谁拍板）',
+        lead行 ? textOf(lead行) : '(没找到 Lead 行)'));
+      passed.push(check(文本11.indexOf('最近派发 未见') >= 0 && 文本11.indexOf('最近派发 2026-10-14T09:00:00Z') >= 0,
+        '⑪b 岗位节点 <title> 给完整闲置读数（在岗/封存/最近派发）'));
       const 无接线 = await renderView(sampleView());
       // ⚠️ 判据要落在**没画**上，不能拿「文本里有没有『岗位接线』四个字」当判据：
       //    图谱页在没数据时的空态说明里**明说**了「没带能力/岗位接线」，那句话本身就含这四个字

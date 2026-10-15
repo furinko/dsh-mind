@@ -475,6 +475,8 @@ window.__ModuleLoader__.load({
         能力: 能力行们(firstOf(v, ['能力', 'capabilities'])),
         岗位: 岗位行们(firstOf(v, ['岗位', 'roles'])),
         实例计数: obj(firstOf(v, ['实例计数', 'instances'])),
+        // 岗位闲置（派活闭环 2026-10-15）：宿主没给 ⇒ null（不装懂），与实例计数同族。
+        岗位闲置: obj(firstOf(v, ['岗位闲置', 'roleIdle'])),
         任务: taskBag,
         // 投影把节点放在 `任务.节点` 下；`节点` 只是同一件事的直白叫法。
         任务节点: arr(taskBag.节点 || firstOf(v, ['任务节点', '节点', 'tasks'])),
@@ -2359,6 +2361,10 @@ window.__ModuleLoader__.load({
       for (i = 0; i < 岗位.length; i += 1) {
         var r = 岗位[i], rp = 坐标.pos['角色:' + r.id], r键 = '角色:' + r.id;
         var 实例 = 实例计数Of(ctx.实例计数, r.id);
+        // 闲置完整读数挂 <title>（悬停可见）；标签位只亮「未见派发」——它是**无需阈值**
+        // 就能动手的信号（派给过谁一目了然）；有日期的不加：过期与否的阈值主权者未定，
+        // 界面不替谁拍板（与「投影报读数不报结论」同一条纪律）。
+        var 闲置 = 岗位闲置Of(ctx.岗位闲置, r.id);
         节点.push(h('g', {
           key: 'r' + i, className: 类名(r键), 'data-node': r键,
           onClick: 点击器(r键),
@@ -2366,8 +2372,16 @@ window.__ModuleLoader__.load({
           h('circle', { key: 'c', cx: rp.x, cy: rp.y, r: 12, fill: '#5b8def', fillOpacity: 0.9 }),
           h('text', { key: 't', x: rp.x + 17, y: rp.y + 4, className: 'dshmind-gLabelStrong' }, r.id),
           h('text', { key: 's', x: rp.x + 17, y: rp.y + 17, className: 'dshmind-gLabel' },
-            '在岗 ' + 实例.在岗 + (实例.封存 ? ' · 封存 ' + 实例.封存 : '') + ' · 接线 ' + (r.能力引用 ? r.能力引用.length : 0)),
-        ]));
+            '在岗 ' + 实例.在岗 + (实例.封存 ? ' · 封存 ' + 实例.封存 : '') + ' · 接线 ' + (r.能力引用 ? r.能力引用.length : 0)
+            + (闲置.已知 && !闲置.最近派发于 ? ' · 未见派发' : '')),
+          // 完整闲置读数挂 <title>（悬停可见）；宿主没给这块读数 ⇒ 连 title 都不画（不装懂）。
+          闲置.已知
+            ? h('title', { key: 'i' },
+                r.id + '：在岗实例 ' + (闲置.在岗实例 === null ? '—' : 闲置.在岗实例)
+                + ' · 封存 ' + (闲置.封存实例 === null ? '—' : 闲置.封存实例)
+                + ' · 最近派发 ' + (闲置.最近派发于 || '未见'))
+            : null,
+        ].filter(Boolean)));
       }
       for (i = 0; i < 能力.length; i += 1) {
         var c = 能力[i], cp = 坐标.pos['能力:' + c.id], c键 = '能力:' + c.id;
@@ -2573,6 +2587,22 @@ window.__ModuleLoader__.load({
       return {
         在岗: 行 && typeof 行.在岗 === 'number' ? 行.在岗 : null,
         封存: 行 && typeof 行.封存 === 'number' ? 行.封存 : null,
+        已知: !!行,
+      };
+    }
+
+    /**
+     * 岗位闲置读数（派活闭环 2026-10-15；宿主没给 ⇒ 全 null，不装懂）。
+     * 投影给的是「跨全部项目现算」的原始读数；「闲置与否」的阈值判断主权者未定，
+     * 界面只搬运标量 + 在标签位亮「未见派发」这个**无需阈值**即可动手的信号。
+     */
+    function 岗位闲置Of(袋, 岗位名) {
+      var b = obj(袋);
+      var 行 = b ? obj(b[岗位名]) : null;
+      return {
+        在岗实例: 行 && typeof 行.在岗实例 === 'number' ? 行.在岗实例 : null,
+        封存实例: 行 && typeof 行.封存实例 === 'number' ? 行.封存实例 : null,
+        最近派发于: 行 ? line(行.最近派发于, '') : null,
         已知: !!行,
       };
     }
@@ -4049,6 +4079,9 @@ window.__ModuleLoader__.load({
                   var owners = arr(task.负责人).map(refText).filter(Boolean);
                   var criteria = arr(task.判据).map(refText).filter(Boolean);
                   var outputs = arr(task.产物 || task.产出物引用).map(refText).filter(Boolean);
+                  // 判活（派活闭环 2026-10-15）：投影在「已派发/执行中」窗口给的未见活动名单。
+                  // 有名单才画徽章（空数组 = 查过且没有，不是缺陷，不画）；字段缺席 = 宿主没给，同样不画。
+                  var 无活动 = arr(task.负责人无活动).filter(Boolean);
                   var cls = 'dshmind-node' + (pending ? ' dshmind-nodePending' : '') + (rejects >= 2 ? ' dshmind-nodeEscalated' : '');
                   // hasOwnProperty 挡原型链键（'constructor'/'toString' 等字面量查表会返回 truthy 函数，
                   // 绕过「查表 miss ⇒ 保灰」）——坏值不许因为继承属性画出彩色（失联「值不合法」同族口径）。
@@ -4113,6 +4146,7 @@ window.__ModuleLoader__.load({
                     h('div', { key: 'b', className: 'dshmind-chips' }, [
                       frozen ? badge('判据冻结') : badge('判据可改', 'warn'),
                       pending ? badge('待决项', 'warn') : null,
+                      无活动.length ? badge(无活动.length + ' 位负责人未见活动', 'warn') : null,
                       rejects >= 2 ? badge('打回 ' + rejects + ' 次 · 升级主权者', 'red') : null,
                       task.升级 ? badge('升级：' + line(task.升级), 'red') : null,
                       outputs.length ? h('span', { key: 'a', className: 'dshmind-meta' }, '产物 ' + outputs.length + ' 项') : null,
@@ -4321,6 +4355,7 @@ window.__ModuleLoader__.load({
         能力: view ? view.能力 : null,
         岗位: view ? view.岗位 : null,
         实例计数: view ? view.实例计数 : null,
+        岗位闲置: view ? view.岗位闲置 : null,
       });
       return h('div', { className: 'dshmind-root', 'data-dshmind': 'root' }, [
         h('div', { key: 'page', className: 'dshmind-page', 'data-dshmind': 'page' }, 页),
