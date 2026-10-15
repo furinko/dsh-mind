@@ -19,6 +19,7 @@ import { subjectFor, DEFAULT_PROJECT } from '../../../src/org.js';
 import { kernelFactoryRoot } from '../../../src/paths.js';
 import { agentSubject } from '../../../src/subject.js';
 import { describeFailure, InvalidBody } from '../../../src/kernel/errors.js';
+import { stripBom } from '../../../src/kernel/fsx.js';
 import { ACTIONS, runAction } from '../../../lib/actions.js';
 // 单源（2026-10-11 schema 口径修缮）：类型 参数描述里的消息类型枚举从 bus.js 的
 // 唯一清单拼出来——手抄一份必漂（src/bus.js 的 MESSAGE_TYPES 是闸的同一真源）。
@@ -414,7 +415,10 @@ function 刷新工具总范围(org, logger) {
       continue;
     }
     try {
-      const parsed = JSON.parse(text);
+      // BOM 先剥（2026-10-15 事故收口·第二批）：闸层是**独立于策略引擎的读文件路径**——
+      // 第一批修了引擎侧（fsx/policy），这里漏修导致重启后闸仍被 BOM 打趴（全工具 fail-closed）。
+      // 经 stripBom 单源，与引擎侧同一把尺；真坏的 JSON 仍按「故障」fail-closed。
+      const parsed = JSON.parse(stripBom(text));
       ENVELOPE_STATE.状态 = '已配置';
       ENVELOPE_STATE.允许 = Array.isArray(parsed.允许) ? parsed.允许 : [];
       ENVELOPE_STATE.拒绝 = Array.isArray(parsed.拒绝) ? parsed.拒绝 : [];
