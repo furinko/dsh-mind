@@ -87,6 +87,21 @@ export async function appendLines(file, lines) {
 }
 
 /**
+ * 剥 UTF-8 BOM（首字符 U+FEFF）——**编码层的字节序标记不是内容**（2026-10-15 主权者裁决）。
+ *
+ * 事故背景：Windows 工具（PowerShell `Out-File -Encoding utf8`、编辑器自动保存）默认写
+ * BOM，而 `JSON.parse` 不容忍它 ⇒ 部署.json 一被这类手碰过，引擎就按「文件坏了」处理
+ * ⇒ §12.1 fail-closed 拒绝全部工具调用（含修复者自己的手）。一天两次。
+ * 修法是**归一化**不是放水：剥完剩下的仍按原规则响亮校验（真坏的 JSON 照样抛）。
+ * 单源在这里，所有从盘读 JSON 的位置一律先过它——各抄一份就会漂。
+ * @param {string} text
+ * @returns {string}
+ */
+export function stripBom(text) {
+  return typeof text === 'string' && text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
+/**
  * 读取行式文件，跳过空行与解析失败的行（坏行不等于整本账作废）。
  * @param {string} file
  * @returns {Promise<Array<any>>}
@@ -96,7 +111,7 @@ export async function readJsonl(file) {
   if (text === null) return [];
   const out = [];
   for (const line of text.split('\n')) {
-    const t = line.trim();
+    const t = stripBom(line.trim());
     if (!t) continue;
     try {
       out.push(JSON.parse(t));
@@ -122,7 +137,7 @@ export async function readJsonlHealth(file) {
   let 坏行 = 0;
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
-    const t = lines[i].trim();
+    const t = stripBom(lines[i].trim());
     if (!t) continue;
     try {
       rows.push(JSON.parse(t));
@@ -341,7 +356,8 @@ export async function readJsonOrNull(file) {
   const text = await readTextOrNull(file);
   if (text === null) return null;
   try {
-    return JSON.parse(text);
+    // BOM 先剥（stripBom 单源）：编码装饰不是内容；剩下的解析失败仍按「文件坏了」响亮抛。
+    return JSON.parse(stripBom(text));
   } catch (error) {
     throw new InvalidBody(`JSON 解析失败：${file}（文件存在但内容坏了；「坏了」不许伪装成「没有」）。`, {
       detail: { file, 解析错误: error instanceof Error ? error.message : String(error) },

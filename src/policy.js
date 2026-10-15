@@ -16,7 +16,7 @@
  *  兜底   · 无匹配 ⇒ 拒绝
  */
 import { stat } from 'node:fs/promises';
-import { readTextOrNull } from './kernel/fsx.js';
+import { readTextOrNull, stripBom } from './kernel/fsx.js';
 import { digest } from './kernel/text.js';
 import { Denied, Fault, NeedsApproval } from './kernel/errors.js';
 import { resolveResponseDeadline, evaluateSovereignPresence, BUILTIN_RESPONSE_DEADLINE_HOURS } from './kernel/time.js';
@@ -858,7 +858,9 @@ export class PolicyEngine {
       if (text === null) return; // 缺失 ⇒ 保留上一层（全新部署合理）
       let parsed;
       try {
-        parsed = JSON.parse(text);
+        // BOM 先剥（2026-10-15 事故裁决）：Windows 手碰过的部署/默认值文件常带 BOM，
+        // 它是编码装饰不是内容；真坏的 JSON 仍在下一行响亮抛（fail-closed 不弱化）。
+        parsed = JSON.parse(stripBom(text));
       } catch (error) {
         throw new Error(`${标注}无法解析：${error instanceof Error ? error.message : String(error)}`);
       }
@@ -883,7 +885,7 @@ export class PolicyEngine {
     if (probeText !== null) {
       let 声明;
       try {
-        声明 = JSON.parse(probeText);
+        声明 = JSON.parse(stripBom(probeText));
       } catch (error) {
         throw new Error(`出厂安全类探针声明无法解析：${error instanceof Error ? error.message : String(error)}`);
       }
@@ -933,7 +935,7 @@ export class PolicyEngine {
       return { members: {}, sovereign: { lastInteraction: null }, denylist: [] };
     }
     try {
-      const parsed = JSON.parse(text);
+      const parsed = JSON.parse(stripBom(text));
       return {
         members: parsed.members ?? {},
         sovereign: parsed.sovereign ?? { lastInteraction: null },
