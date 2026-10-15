@@ -3784,6 +3784,39 @@ export async function runHarness() {
           '⑪h 页名**不引用 页清单**（那是「页上下文」的东西，页头手里只有宿主 ctx）'));
         passed.push(check(!/当前页名\(ctx\)/.test(客户端源),
           '⑪h 页头不把宿主 ctx 喂给页名（真机事故的原始写法）'));
+
+        // ── ⑪i 可视化组的纵向缝（2026-10-15 · 主权者：「这部分块之间的间隔有点小了，
+        //    和其他部分的一致就行」）────────────────────────────────────────────
+        //
+        // 这是真缺陷：`.dshmind-viz` 是一只**没有任何规则的裸 div** —— 它**不给 gap**，
+        // 于是这一组三块（统计砖 / 构成图 / 节律条）之间只剩两处写死的 2px
+        // （`.dshmind-tiles{margin-bottom:2px}` ＋ 节律条根节点的行内 `marginTop:2`），
+        // 而同屏页内块间距 14px、组内横向格间距 10px。
+        // 实测（主权者截图，按像素量的）：砖底边 y=168、构成图顶边 y=171 ⇒ **缝 2px**。
+        // 这一组钉的是「**缝只有一个出处，且与页面节奏同源**」，不是某个审美值 ——
+        // 所以它按**两个值的相等**判，不硬编 14。（旧值 2px 是照"容器会给 10px"的
+        // 假设补出来的，而那个容器从来不给 ⇒ 这类"一对值"必然漂移，必须能红。）
+        const viz组 = findAllByClass(r.tree, 'dshmind-viz');
+        passed.push(check(viz组.length === 1,
+          '⑪i 可视化组恰好一处（组间距要有一个明确的落点）', String(viz组.length)));
+        const 子块 = viz组.length ? collect(viz组[0], { skipStyle: true }).elements
+          .filter((el) => /(^|\s)(dshmind-tiles|dshmind-vizGrid|dshmind-actCard)(\s|$)/.test(String(el.props && el.props.className))) : [];
+        passed.push(check(子块.length >= 3,
+          '⑪i 统计砖 / 构成图 / 节律条三块同属这一组（"缝"就是它们之间的缝）', String(子块.length)));
+        passed.push(check(子块.length > 0 && 子块.every((el) => {
+          const s = el.props && el.props.style;
+          return !s || (s.marginTop === undefined && s.marginBottom === undefined);
+        }), '⑪i 三块都不自带纵向边距（一半写容器、一半写自己 ⇒ 迟早对不上）',
+          JSON.stringify(子块.map((el) => (el.props && el.props.style) || null))));
+        const 节奏 = (sel) => {
+          const m = new RegExp('\\.' + sel + '\\{[^}]*gap:(\\d+)px').exec(样式);
+          return m ? Number(m[1]) : null;
+        };
+        passed.push(check(节奏('dshmind-viz') !== null && 节奏('dshmind-viz') === 节奏('dshmind-pageBox'),
+          '⑪i 可视化组的纵向缝＝页面节奏（同一个值，不许各写各的）',
+          'viz=' + 节奏('dshmind-viz') + ' / pageBox=' + 节奏('dshmind-pageBox')));
+        passed.push(check(!/\.dshmind-tiles\{[^}]*margin-bottom/.test(样式),
+          '⑪i 统计砖不再自带 margin-bottom（旧值按"容器会给 10px"补的，那容器不给）'));
       }
       r11.unmount();
     }

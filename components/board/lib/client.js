@@ -1481,11 +1481,20 @@ window.__ModuleLoader__.load({
       // 统计砖里的"说明行"与数值贴紧一点（数值大、说明小，原本被 line-height 撑开）
       '.dshmind-tileD{margin-top:1px}',
 
-      // ── V3 统计区与分布卡之间的空带 ──────────────────────────────────────────
-      // 根因：统计砖网格与构成图网格是两个独立块，各自带 gap，叠起来在两者之间形成
-      //      比"块内"明显更大的缝（视觉上像是少画了一张卡）。
-      // 改法：把这一段的行间距交给统一的节奏值（12px），块内 10px、块间 12px。
-      '.dshmind-tiles{gap:10px;margin-bottom:2px}',
+      // ── V3 统计区与分布卡之间的空带（2026-10-15 修：缝 2px → 14px）───────────
+      // 根因：统计砖网格与构成图网格是两个独立块，叠起来在两者之间形成比"块内"明显
+      //      更大的缝（视觉上像是少画了一张卡）。上一版按「容器会给 10px」给
+      //      `.dshmind-tiles` 挂了 `margin-bottom:2px`，但 `.dshmind-viz` 只是一只
+      //      **没有任何规则的裸 div**（它不给 gap）—— 于是那 2px ＋ 节律条的行内
+      //      `marginTop:2` 成了这一组**全部的纵向缝**。实机量得（2026-10-15 截图）：
+      //      砖底边 y=168 / 构成图顶边 y=171 ⇒ **缝 2px**，而同屏页内块间距 14px、
+      //      组内横向格间距 10px —— 这一组因此被压得像两排糊在一起。
+      // 改法：把这一段的行间距交给**页面自己的节奏值 14px**（`.dshmind-pageBox` 用的
+      //      就是它），并删掉那两处写死的 2px。块间距从此只有**一个出处**（容器 gap），
+      //      不再有「假设的容器 gap ＋ 补救边距」这种一改就漂的一对值。
+      //      横向 `gap:10px` 不动：统计砖/构成图两排的横向缝保持一致。
+      '.dshmind-viz{display:flex;flex-direction:column;gap:14px}',
+      '.dshmind-tiles{gap:10px}',
       '.dshmind-vizGrid{gap:10px}',
 
       // ── V5 页头读数区：6 格挤成两行、高度参差 ────────────────────────────────
@@ -2227,7 +2236,9 @@ window.__ModuleLoader__.load({
           title: shortTime(r.时间) + ' · ' + (r.动作 || '') + ' · ' + (源主体短(r.主体)) + ' · ' + (r.结果 || ''),
         });
       });
-      return h('div', { key: 'act', className: 'dshmind-actCard', style: { marginTop: 2 } }, [
+      // 与上方统计砖、构成图之间的缝**交给 `.dshmind-viz` 的容器 gap（14px）**：
+      // 这里不再自带 `marginTop` —— 一半写在容器、一半写在自己身上，迟早对不上。
+      return h('div', { key: 'act', className: 'dshmind-actCard' }, [
         h('div', { key: 'h', className: 'dshmind-tileK' }, '审计节律（一格一条，共 ' + 行.length + ' 条；全量 ' + ctx.审计总条数 + ' 条）'),
         h('div', { key: 'bar', className: 'dshmind-actbar' }, 格),
         // 起止时刻：给这条色带一个**坐标系**。没有它，读者无法把某个红块对到某个时间——
