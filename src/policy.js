@@ -58,7 +58,7 @@ export const INTERVENTION = ['零参与', '事后抽检', '变更预审', '逐�
  * 序列化出去 —— 读的人分不清「这是文档」还是「这是一条生效的设置」；
  * 而黑名单永远漏一个（写个 `备注` / `note` / 中文的新叫法就绕过去了）。
  */
-const RUNTIME_DEFAULT_KEYS = ['介入度', '失联限制', '响应期限小时', '工具总范围', '安全类', '披露敏感模式', '会审讨论'];
+const RUNTIME_DEFAULT_KEYS = ['介入度', '失联限制', '响应期限小时', '工具总范围', '安全类', '披露敏感模式', '会审讨论', '岗位闲置天数'];
 
 /**
  * 会审讨论段的预算默认值（W2 规格 2026-10-09）。
@@ -66,6 +66,13 @@ const RUNTIME_DEFAULT_KEYS = ['介入度', '失联限制', '响应期限小时',
  * 坏值（非对象 / 键非 ≥1 整数）⇒ 响亮抛错 ⇒ 引擎不健康（fail-closed，§3.6）。
  */
 export const DEFAULT_DEBATE_BUDGET = { 轮次上限: 2, 人数上限: 8, 每轮消息上限: 24, 每人每轮字符上限: 4000 };
+
+/**
+ * 岗位闲置判定的天数阈值（派活闭环 · 2026-10-15 主权者拍板：14 天）。
+ * 私有 `部署.json` 的 `岗位闲置天数` 键覆盖；**0 = 不判闲置**（只报原始读数：
+ * 在岗实例数 / 最近派发于，由读者自己下结论）。加载期校验 ≥0 整数，坏值 fail-closed。
+ */
+export const DEFAULT_ROLE_IDLE_DAYS = 14;
 
 const ALWAYS_INVARIANTS = '宪章 不可违背原则（§3 永不 + §12 约束清单）';
 
@@ -836,7 +843,7 @@ export class PolicyEngine {
    */
   async #loadDefaults() {
     // 兜底 72 只写一份：引用 `src/kernel/time.js` 的常量（两处字面量迟早会漂）。
-    const merged = { 介入度: '零参与', 失联限制: true, 响应期限小时: BUILTIN_RESPONSE_DEADLINE_HOURS, 工具总范围: '全部', 安全类: [], 会审讨论: { ...DEFAULT_DEBATE_BUDGET } };
+    const merged = { 介入度: '零参与', 失联限制: true, 响应期限小时: BUILTIN_RESPONSE_DEADLINE_HOURS, 工具总范围: '全部', 安全类: [], 会审讨论: { ...DEFAULT_DEBATE_BUDGET }, 岗位闲置天数: DEFAULT_ROLE_IDLE_DAYS };
     /** 生效值来自哪一层（'出厂' | '私有' | '内置兜底'）—— 「改了不生效」要能一眼看出源。 */
     const 来源 = Object.fromEntries(Object.keys(merged).map((键) => [键, '内置兜底']));
     /** 被剔除的文档键（只留名字，不留正文：正文正是它不该进运行态的原因）。 */
@@ -908,6 +915,12 @@ export class PolicyEngine {
     // 坏值响亮抛错（§3.6）：静默退回默认等于把主权者写下的收紧/放宽无视掉。
     validateDebateBudget(merged.会审讨论, 来源.会审讨论);
     merged.会审讨论 = { ...DEFAULT_DEBATE_BUDGET, ...(merged.会审讨论 ?? {}) };
+
+    // 岗位闲置天数（派活闭环 · 2026-10-15 主权者拍板 14 天）：≥0 整数，0 = 只报原始读数不判闲置。
+    // 坏值响亮抛错（与会审预算同款 §3.6 纪律）：静默退回默认等于把主权者写的阈值无视掉。
+    if (!Number.isInteger(merged.岗位闲置天数) || merged.岗位闲置天数 < 0) {
+      throw new Error(`岗位闲置天数 非法：${JSON.stringify(merged.岗位闲置天数)}（来源：${来源.岗位闲置天数}）。要 ≥0 的整数（天数；0 = 不判闲置）。修好对应文件后重载即恢复。`);
+    }
 
     return { defaults: merged, defaults来源: 来源, 忽略的默认值键: [...忽略键].sort() };
   }

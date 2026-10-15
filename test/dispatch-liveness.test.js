@@ -131,12 +131,30 @@ describe('判活读数：工作台投影', () => {
     assert.equal(无输入.任务.节点[0].负责人无活动, undefined);
   });
 
-  it('岗位闲置：原样投影，宿主没给 ⇒ null；成员切片不给（治理面）', () => {
-    const 闲置 = { 插件工程: { 在岗实例: 2, 封存实例: 1, 最近派发于: '2026-10-15T01:00:00Z' } };
+  it('岗位闲置：{阈值, 岗位} 原样投影，宿主没给 ⇒ null；成员切片不给（治理面）', () => {
+    const 闲置 = { 阈值: 14, 岗位: { 插件工程: { 在岗实例: 2, 封存实例: 1, 最近派发于: '2026-10-15T01:00:00Z', 闲置: false } } };
     const view = projectWorkbench({ 项目: P, 节点: [], 岗位闲置: 闲置 });
     assert.deepEqual(view.岗位闲置, 闲置);
     assert.equal(projectWorkbench({ 项目: P, 节点: [] }).岗位闲置, null);
     assert.equal(sliceForViewer(view, { id: 'member-a', kind: '成员' }).岗位闲置, null);
+  });
+
+  it('部署键 岗位闲置天数：合法值生效、坏值 fail-closed（引擎不健康）、修好即恢复', async () => {
+    const f = await makeFixture({ privateFiles: { '集体L2-共享基础设施/defaults/部署.json': '{"岗位闲置天数": 5}' } });
+    try {
+      assert.equal(f.policy.state.defaults.岗位闲置天数, 5, '私有部署键覆盖内置默认（14）');
+      await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', '{"岗位闲置天数": "一周"}');
+      // reload 的契约是把错误落 state.error 而不是抛（§2.17-3：健康面见红，写动作全拒）。
+      await f.policy.reload();
+      assert.equal(f.policy.healthy, false, '坏值 ⇒ 引擎不健康 ⇒ 写动作全拒（§3.6）');
+      assert.match(String(f.policy.state.error), /岗位闲置天数/, '错误要能指认到这个键');
+      await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', '{"岗位闲置天数": 0}');
+      await f.policy.reload();
+      assert.equal(f.policy.state.defaults.岗位闲置天数, 0, '0 = 不判闲置（只报原始读数）');
+      assert.equal(f.policy.healthy, true);
+    } finally {
+      await f.cleanup();
+    }
   });
 
   it('端到端：org.workbench 现算两块读数（成员开工前亮灯，开工后熄灯）', async () => {
@@ -149,9 +167,12 @@ describe('判活读数：工作台投影', () => {
       let view = await org.workbench({ 项目: P });
       const row = view.任务.节点.find((n) => n.id === node.id);
       assert.deepEqual(row.负责人无活动, ['member-a'], 'member-a 还没以主体身份敲过任何门');
-      assert.ok(view.岗位闲置?.插件工程, '岗位闲置要有插件工程这一行');
-      assert.equal(view.岗位闲置.插件工程.在岗实例, 2);
-      assert.equal(view.岗位闲置.插件工程.最近派发于, row.派发于 ?? node.派发于 ?? view.岗位闲置.插件工程.最近派发于);
+      assert.ok(view.岗位闲置?.岗位?.插件工程, '岗位闲置要有插件工程这一行');
+      assert.equal(view.岗位闲置.阈值, 14, '未写部署键 ⇒ 内置默认 14 天');
+      assert.equal(view.岗位闲置.岗位.插件工程.在岗实例, 2);
+      assert.equal(view.岗位闲置.岗位.插件工程.闲置, false, '刚派发过 ⇒ 未超期');
+      assert.equal(view.岗位闲置.岗位.复核员.闲置, true, '复核员在册但从未被派 ⇒ 闲置（机械读数：超期含未见）');
+      assert.equal(view.岗位闲置.岗位.插件工程.最近派发于, (await org.tasks.get(node.id, { 项目: P })).派发于, '最近派发于取自该岗实例名下已派发节点');
 
       // member-a 以主体身份动一次（start 本身就落审计）⇒ 灯熄。
       await runAction({ org, 项目: P, 主体: { id: 'member-a', kind: '成员' }, args: { action: 'task_start', id: node.id } });

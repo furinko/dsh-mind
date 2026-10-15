@@ -12,7 +12,7 @@ import { dirname } from 'node:path';
 import { Clock } from './kernel/time.js';
 import { defaultLayout, DIR } from './paths.js';
 import { AuditLog } from './audit.js';
-import { PolicyEngine } from './policy.js';
+import { PolicyEngine, DEFAULT_ROLE_IDLE_DAYS } from './policy.js';
 import { ObjectStore } from './store.js';
 import { TaskGraph } from './tasks.js';
 import { MessageBus } from './bus.js';
@@ -288,12 +288,17 @@ export class Org {
    * 「最近派发于」= 该岗在册实例名下**已派发节点**的最大派发时刻，**跨全部项目**枚举
    * （目录名即项目键，与 projectList 同一口径）——岗位与身份不按项目隔离（§7），
    * 只看当前项目会把「活在别的项目」误判成闲置。快照走 TaskGraph 的读缓存，
-   * 轮询不放大 IO。纯投影零新账：退役与否由读者按读数判，机制不替谁拍板。
+   * 轮询不放大 IO。纯投影零新账。返回 `{阈值, 岗位}`：阈值来自部署键
+   * `岗位闲置天数`（0 = 不判，行不带 闲置 位）；判闲置是**机械读数**（超 N 天无派发），
+   * 退役与否的决定仍由读者下——机制报读数不拍板。
    *
    * @param {{ members?: Record<string, {岗位?: string, status?: string}> }} identity 已读好的身份档案
-   * @returns {Promise<Record<string, {在岗实例: number, 封存实例: number, 最近派发于: string|null}>>}
+   * @returns {Promise<{阈值: number, 岗位: Record<string, {在岗实例: number, 封存实例: number, 最近派发于: string|null, 闲置?: boolean}>}>}
    */
   async 计岗位闲置(identity) {
+    const 阈值 = Number.isInteger(this.policy.state?.defaults?.岗位闲置天数)
+      ? this.policy.state.defaults.岗位闲置天数
+      : DEFAULT_ROLE_IDLE_DAYS;
     const 闲置 = {};
     const 实例岗位 = new Map();
     for (const [id, m] of Object.entries(identity?.members ?? {})) {
@@ -316,7 +321,17 @@ export class Org {
         }
       }
     }
-    return 闲置;
+    // 阈值判定（2026-10-15 主权者拍板：默认 14 天，部署键 `岗位闲置天数` 覆盖）：
+    // 超过 N 天无派发（含从未派发）⇒ `闲置: true`。**0 = 不判**（行不带 闲置 位，
+    // 读者按原始读数自己下结论）。日期解析不了也判闲置——读数坏 ⇒ 亮灯让人来看，不静默当健康。
+    if (阈值 > 0) {
+      const 下限 = this.clock.ms() - 阈值 * 86400000;
+      for (const 桶 of Object.values(闲置)) {
+        const ms = 桶.最近派发于 == null ? NaN : Date.parse(桶.最近派发于);
+        桶.闲置 = !(Number.isFinite(ms) && ms > 下限);
+      }
+    }
+    return { 阈值, 岗位: 闲置 };
   }
 
   /**
