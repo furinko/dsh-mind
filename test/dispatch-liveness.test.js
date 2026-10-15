@@ -185,6 +185,83 @@ describe('判活读数：工作台投影', () => {
   });
 });
 
+describe('拉取审查回归：负责人寻址与封存历史', () => {
+  it('R1 按岗派发：在岗成员真实开工后，岗位负责人不再报无活动', async () => {
+    const f = await makeFixture();
+    try {
+      const org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
+      const node = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '按岗判活', 负责人: '插件工程', 判据: ['x'] });
+      await org.tasks.dispatch(node.id, { subject: LEAD, 项目: P });
+      let view = await org.workbench({ 项目: P });
+      assert.deepEqual(view.任务.节点.find((n) => n.id === node.id).负责人无活动, ['插件工程']);
+      await runAction({ org, 项目: P, 主体: { id: 'member-a', kind: '成员' }, args: { action: 'task_start', id: node.id } });
+      view = await org.workbench({ 项目: P });
+      assert.deepEqual(view.任务.节点.find((n) => n.id === node.id).负责人无活动, [], '岗名负责人要消费该岗在岗实例的真实活动');
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+  it('R1 按岗派发：跨项目最近派发时刻不丢，刚派发的岗位不判闲置', async () => {
+    const f = await makeFixture();
+    try {
+      const org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
+      const 另一项目 = `${P}-other`;
+      const node = await org.tasks.create({ subject: LEAD, 项目: 另一项目, 描述: '跨项目按岗派发', 负责人: '插件工程', 判据: ['x'] });
+      const dispatched = await org.tasks.dispatch(node.id, { subject: LEAD, 项目: 另一项目 });
+      const view = await org.workbench({ 项目: P });
+      assert.equal(view.岗位闲置.岗位.插件工程.最近派发于, dispatched.派发于, '岗位名与实例名派发必须使用同一统计口径');
+      assert.equal(view.岗位闲置.岗位.插件工程.闲置, false);
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+  it('R1 反例：同岗乙的活动不能替实例直配的甲消灯，封存乙后也不能替岗位消灯', async () => {
+    const f = await makeFixture();
+    try {
+      const org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
+      const b = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '乙的活动', 负责人: 'member-b', 判据: ['x'] });
+      await org.tasks.dispatch(b.id, { subject: LEAD, 项目: P });
+      await runAction({ org, 项目: P, 主体: { id: 'member-b', kind: '成员' }, args: { action: 'task_start', id: b.id } });
+      const a = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '甲未活动', 负责人: 'member-a', 判据: ['x'] });
+      await org.tasks.dispatch(a.id, { subject: LEAD, 项目: P });
+      const role = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '岗位活动', 负责人: '插件工程', 判据: ['x'] });
+      await org.tasks.dispatch(role.id, { subject: LEAD, 项目: P });
+      let view = await org.workbench({ 项目: P });
+      assert.deepEqual(view.任务.节点.find((n) => n.id === a.id).负责人无活动, ['member-a'], '实例直配不能借同岗其他人的活动');
+      assert.deepEqual(view.任务.节点.find((n) => n.id === role.id).负责人无活动, [], '乙在岗时可以证明岗位有活动');
+      await org.registry.seal({ subject: LEAD, 实例: 'member-b', 理由: '回归夹具退场' });
+      view = await org.workbench({ 项目: P });
+      assert.deepEqual(view.任务.节点.find((n) => n.id === role.id).负责人无活动, ['插件工程'], '封存实例的旧活动不能证明当前在岗成员活着');
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+  it('R2 实例全封存：保留派发历史，只有真正超过阈值才判闲置', async () => {
+    const f = await makeFixture();
+    try {
+      const org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
+      const node = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '封存不抹历史', 负责人: 'member-a', 判据: ['x'] });
+      const dispatched = await org.tasks.dispatch(node.id, { subject: LEAD, 项目: P });
+      await org.registry.seal({ subject: LEAD, 实例: 'member-a', 理由: '回归夹具退场' });
+      await org.registry.seal({ subject: LEAD, 实例: 'member-b', 理由: '回归夹具退场' });
+      let view = await org.workbench({ 项目: P });
+      assert.equal(view.岗位闲置.岗位.插件工程.在岗实例, 0);
+      assert.equal(view.岗位闲置.岗位.插件工程.封存实例, 2);
+      assert.equal(view.岗位闲置.岗位.插件工程.最近派发于, dispatched.派发于, '封存不许删除历史派发的统计归属');
+      assert.equal(view.岗位闲置.岗位.插件工程.闲置, false, '正常退场不等于已超14天');
+      org.clock._source = () => new Date(Date.parse(dispatched.派发于) + 15 * 86400000);
+      view = await org.workbench({ 项目: P });
+      assert.equal(view.岗位闲置.岗位.插件工程.最近派发于, dispatched.派发于);
+      assert.equal(view.岗位闲置.岗位.插件工程.闲置, true, '历史保留不能让闲置灯恒绿');
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
 describe('提示段：组织说明含派活流程', () => {
   it('内核系统提示段把「拉起后须登记」写明（治「忘记可以拉人」的常驻提醒缺位）', async () => {
     const text = await readFile(join(here, '..', 'components', 'kernel', 'lib', 'index.js'), 'utf8');

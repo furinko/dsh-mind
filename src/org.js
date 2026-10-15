@@ -295,7 +295,7 @@ export class Org {
   /**
    * 岗位闲置读数（派活闭环 2026-10-15）：岗位 → {在岗实例, 封存实例, 最近派发于}。
    *
-   * 「最近派发于」= 该岗在册实例名下**已派发节点**的最大派发时刻，**跨全部项目**枚举
+   * 「最近派发于」= 该岗实例（含封存）或岗位名名下**已派发节点**的最大派发时刻，**跨全部项目**枚举
    * （目录名即项目键，与 projectList 同一口径）——岗位与身份不按项目隔离（§7），
    * 只看当前项目会把「活在别的项目」误判成闲置。快照走 TaskGraph 的读缓存，
    * 轮询不放大 IO。纯投影零新账。返回 `{阈值, 岗位}`：阈值来自部署键
@@ -316,7 +316,8 @@ export class Org {
       const 桶 = (闲置[m.岗位] ??= { 在岗实例: 0, 封存实例: 0, 最近派发于: null });
       if (m.status === '封存') 桶.封存实例 += 1;
       else 桶.在岗实例 += 1;
-      if (m.status === '在岗') 实例岗位.set(id, m.岗位);
+      // 封存只改变当前实例数，不能让已经发生的派发失去岗位归属。
+      实例岗位.set(id, m.岗位);
     }
     const 项目键 = new Set([this.project]);
     for (const name of await listDirs(this.layout.private(DIR.基础设施, DIR.任务图))) 项目键.add(name);
@@ -324,7 +325,7 @@ export class Org {
       for (const n of (await this.tasks.snapshot({ 项目: 键 })).节点) {
         if (typeof n.派发于 !== 'string' || n.派发于 === '') continue;
         for (const id of n.负责人 ?? []) {
-          const 岗 = 实例岗位.get(id);
+          const 岗 = 实例岗位.get(id) ?? (Object.hasOwn(闲置, id) ? id : null);
           if (!岗) continue;
           const 桶 = (闲置[岗] ??= { 在岗实例: 0, 封存实例: 0, 最近派发于: null });
           if (String(n.派发于) > String(桶.最近派发于 ?? '')) 桶.最近派发于 = n.派发于;
@@ -429,26 +430,41 @@ export function 计实例计数(identity) {
  * （任何动作、任何项目都算，**含被拒**——拒绝恰恰证明活着，死物不会敲门）。
  * 种子面 = 身份档案成员 ∪ 当前项目节点负责人：后者让「未登记却挂着负责人名」的
  * 历史节点也能如实报「未见活动」，而不是因为查无此人而漏报。
+ * 岗名负责人按该岗在岗实例聚合；实例直配仍只认本人，封存实例的旧活动不能替当前岗位消灯。
  *
  * @param {{ read(query?: object): Promise<object[]> }} audit
  * @param {{ members?: Record<string, object> }} identity
  * @param {object[]} 节点 当前项目的任务节点（负责人并进种子面）
- * @returns {Promise<Record<string, {最近活动于: string|null, 活动条数: number}>>}
+ * @returns {Promise<Record<string, {最近活动于: string|null, 活动条数: number}>>} 实例及节点所用岗位名的活动索引
  */
 export async function 计实例活动(audit, identity, 节点 = []) {
-  const 索引 = {};
+  const 索引 = Object.create(null);
+  const members = identity?.members ?? {};
+  const 岗位活动 = new Map();
   const 播种 = (id) => {
-    if (typeof id === 'string' && id !== '' && !(id in 索引)) 索引[id] = { 最近活动于: null, 活动条数: 0 };
+    if (typeof id === 'string' && id !== '' && !Object.hasOwn(索引, id)) 索引[id] = { 最近活动于: null, 活动条数: 0 };
   };
-  for (const id of Object.keys(identity?.members ?? {})) 播种(id);
+  for (const [id, m] of Object.entries(members)) {
+    播种(id);
+    if (m?.status === '在岗' && typeof m.岗位 === 'string' && m.岗位 !== '' && !岗位活动.has(m.岗位)) {
+      岗位活动.set(m.岗位, { 最近活动于: null, 活动条数: 0 });
+    }
+  }
   for (const n of 节点) for (const id of n.负责人 ?? []) 播种(id);
   if (audit?.read) {
     for (const row of await audit.read({})) {
       const id = String(row.主体?.id ?? '').trim();
-      const 桶 = 索引[id];
-      if (!桶) continue;
-      桶.活动条数 += 1;
-      if (String(row.时间) > String(桶.最近活动于 ?? '')) 桶.最近活动于 = String(row.时间);
+      const 岗位 = members[id]?.status === '在岗' ? members[id].岗位 : null;
+      for (const 桶 of [索引[id], 岗位活动.get(岗位)]) {
+        if (!桶) continue;
+        桶.活动条数 += 1;
+        if (String(row.时间) > String(桶.最近活动于 ?? '')) 桶.最近活动于 = String(row.时间);
+      }
+    }
+  }
+  for (const n of 节点) {
+    for (const id of n.负责人 ?? []) {
+      if (members[id]?.status !== '在岗' && 岗位活动.has(id)) 索引[id] = 岗位活动.get(id);
     }
   }
   return 索引;

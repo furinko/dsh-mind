@@ -1057,8 +1057,8 @@ export class TaskGraph {
    * 「已结账但归档永久缺失」——结账事件落线后重试 settle 会被状态机以「已结账非已采纳」
    * 拒掉，归档没有重试路；而归档先行失败后重试 settle 可以收敛（archiveAnswers 按
    * fold 出的「未归档」现算候选集，已归档的不会重复归档，幂等）。代价是存在「已归档、
-   * 事件未落线」的失败窗口——本批不再让它静默：#append 抛错（含锁内 guard 拒）时，
-   * 重抛前追加一条 告警:true 的补偿审计（动作「结账未落线」），把窗口变响亮。
+   * 事件未落线」的失败窗口——仅在事件落线前失败（含锁内 guard 拒）时追加告警补偿。
+   * 若事件已落线、仅审计失败，则保留 #append 的不可重试 Fault，不制造相反的审计事实。
    *
    * @param {string} id
    * @param {{ subject: object, 项目: string }} spec
@@ -1081,6 +1081,8 @@ export class TaskGraph {
       const { 节点 } = await this.#append(spec.项目, { kind: 'settled', id, 状态: '已结账', 归档条数: 归档.归档条数 }, spec.subject, '结账', null, this.#transitionGuard(id, 'settle'));
       return 节点;
     } catch (error) {
+      // #append 已确认事件落线时，补偿“未落线”会留下反向事实和不可执行的重试指引。
+      if (error instanceof Fault && error.code === 'AUDIT_APPEND_FAILED_AFTER_EVENT') throw error;
       // #14（设计评审 2026-10-15）· 补偿审计：作答已归档、终态事件未落线。这不是回滚
       // （归档先行是有意设计，见上），是把失败窗口从静默变成响亮——重试 settle 可收敛。
       try {

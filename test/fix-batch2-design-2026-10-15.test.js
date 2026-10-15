@@ -352,6 +352,57 @@ describe('设计评审 2026-10-15 · #14：settle 补偿审计 与 事件后审�
     }
   });
 
+  it('R3 settle：事件已落线仅审计失败，不得记未落线或建议重试', async () => {
+    const g = await makeFixture();
+    try {
+      const memory = new MemoryService({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock });
+      let 注入次数 = 0;
+      const 坏审计 = {
+        append: async (entry) => {
+          if (entry.动作 === '结账') {
+            注入次数 += 1;
+            throw new Error('回归夹具：结账事件后的审计暂时失败');
+          }
+          return g.audit.append(entry);
+        },
+        read: (query) => g.audit.read(query),
+      };
+      const { tasks } = 装配(g, { memory, audit: 坏审计 });
+      const id = await 交齐节点(tasks, '独立会审', 'R3 结账第二笔失败');
+      await tasks.review(id, { subject: REVIEWER, 项目: P, 三态: '过' });
+      await memory.remember({ subject: MEMBER, 类: '作答', 内容: 'R3 的独立答案', 来源: '测试', 项目: P, 任务: await tasks.get(id, { 项目: P }) });
+      await assert.rejects(
+        () => tasks.settle(id, { subject: LEAD, 项目: P }),
+        (e) => e instanceof Fault && e.code === 'AUDIT_APPEND_FAILED_AFTER_EVENT' && /已落线/.test(e.message) && /不要重试/.test(e.message),
+      );
+      assert.equal(注入次数, 1, '故障必须命中结账审计，不是前置路径失败');
+      assert.equal((await tasks.get(id, { 项目: P })).状态, '已结账');
+      assert.equal((await tasks.events({ 项目: P })).filter((r) => r.id === id && r.kind === 'settled').length, 1);
+      assert.ok((await readJsonl(g.layout.memoryLog(P, '作答'))).some((r) => r.追加 === '归档'));
+      const 补偿 = (await g.audit.read({})).filter((r) => r.动作 === '结账未落线');
+      assert.equal(补偿.length, 0, '真实事件已落线，不能制造反向审计事实或重试建议');
+      await assert.rejects(() => tasks.settle(id, { subject: LEAD, 项目: P }), (e) => e instanceof Denied && /已结账/.test(e.message));
+    } finally {
+      await g.cleanup();
+    }
+  });
+
+  it('R3 正对照：正常结账保留完整审计且不生成失败补偿', async () => {
+    const g = await makeFixture();
+    try {
+      const memory = new MemoryService({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock });
+      const { tasks } = 装配(g, { memory });
+      const id = await 交齐节点(tasks, '独立会审', 'R3 正常结账');
+      await tasks.review(id, { subject: REVIEWER, 项目: P, 三态: '过' });
+      assert.equal((await tasks.settle(id, { subject: LEAD, 项目: P })).状态, '已结账');
+      const rows = await g.audit.read({});
+      assert.equal(rows.filter((r) => r.动作 === '结账' && r.对象.id === id).length, 1);
+      assert.equal(rows.filter((r) => r.动作 === '结账未落线').length, 0);
+    } finally {
+      await g.cleanup();
+    }
+  });
+
   it('#14.2 bus.send：消息已落线、审计追加失败 ⇒ Fault（不可重试语义），消息本体在账上', async () => {
     const g = await makeFixture();
     try {
