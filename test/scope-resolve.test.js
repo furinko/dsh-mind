@@ -45,6 +45,9 @@ describe('scopeOf 经身份档案解析岗位（缺口4）', () => {
         'member-b': { id: 'member-b', 岗位: '插件工程', 代: 1, status: '在岗' },
         // member-c：在册但**封存**——②的「在册不在岗」探针。
         'member-c': { id: 'member-c', 岗位: '插件工程', 代: 1, status: '封存' },
+        // member-d：文档整理岗的在岗实例——②c 要往「文档整理」岗名上派节点，
+        // 派发闸（派活闭环 2026-10-15）要求岗名背后至少一名在岗实例。
+        'member-d': { id: 'member-d', 岗位: '文档整理', 代: 1, status: '在岗' },
         lead: { id: 'lead', 岗位: 'Lead', 代: 1, status: '在岗' },
         reviewer: { id: 'reviewer', 岗位: '复核员', 代: 1, status: '在岗' },
       },

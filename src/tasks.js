@@ -84,8 +84,10 @@ export function 全员已交(node) {
 
 export class TaskGraph {
   /**
-   * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock, memory?: import('./memory.js').MemoryService }} spec
-   *   `memory` 只被 `settle`（结账归档作答）用；装配点（org.js）负责接上。
+   * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock, memory?: import('./memory.js').MemoryService, registry?: import('./registry.js').RoleRegistry }} spec
+   *   `memory` 只被 `settle`（结账归档作答）用；`registry` 只被派发闸（`#assertOwnersSeated`）用。
+   *   两者都由装配点（org.js）负责接上；**直接构造不接它们 = 夹具口径**（对应机制自动退位，
+   *   不是旁路——装配面 org.js 恒注入，见 test/dispatch-liveness.test.js 的夹具口径用例）。
    */
   constructor(spec) {
     this.layout = spec.layout;
@@ -93,6 +95,7 @@ export class TaskGraph {
     this.audit = spec.audit;
     this.clock = spec.clock;
     this.memory = spec.memory ?? null;
+    this.registry = spec.registry ?? null;
     /**
      * 事件流读缓存（2026-10-13 第三批性能收口）：键 = 账本路径，值 = {签名, rows}。
      * 为什么安全：**真源仍是文件**，签名（mtimeMs+size+本进程写计数）一变即重读。
@@ -205,6 +208,46 @@ export class TaskGraph {
   }
 
   /**
+   * 派发闸（派活闭环 2026-10-15·主权者裁决）：派活派的是**身份**，不是名字。
+   *
+   * 每个负责人必须「就位」，三条正路任一即可：
+   *  ① **在册在岗实例 id** —— 身份档案 members[id].status === '在岗'（拉起子会话后
+   *     先 `registry_assign` 登记再派，这是主干顺序）；
+   *  ② **岗位名且有在岗实例** —— scopeOf 既有的岗位寻址语义（债㉔ 只登记不改）：
+   *     该岗至少一名在册在岗实例，派岗位名 = 派给「这个岗上活着的人」；
+   *     该岗零在岗实例的岗位名 = 派给空气的另一种写法，照拒。
+   *  ③ **Lead/主权者自领** —— 负责人就是本次主体自己（一次性、判据清楚的活，
+   *     Lead 顺手干；自领不查档案——Lead 的身份来自会话事实，不来自 members）。
+   *
+   * `registry` 缺席（直接构造的夹具）时跳过本闸——装配点 org.js 恒注入。
+   * @param {string[]} 负责人
+   * @param {object} subject
+   * @param {string} 动作 'dispatch' | 'reassign'（排兵动作共用一把闸）
+   */
+  async #assertOwnersSeated(负责人, subject, 动作) {
+    if (!this.registry) return;
+    const identity = await this.registry.identity();
+    const members = identity?.members ?? {};
+    const 在岗岗位 = new Set(Object.values(members).filter((m) => m?.status === '在岗').map((m) => m.岗位));
+    const 未就位 = (负责人 ?? []).filter((id) => {
+      if (members[id]?.status === '在岗') return false;
+      if (在岗岗位.has(id)) return false;
+      if (id === subject?.id && (subject?.kind === 'Lead' || subject?.kind === '主权者')) return false;
+      return true;
+    });
+    if (未就位.length > 0) {
+      throw new Denied(
+        '任务图 · 派发闸（派活闭环 2026-10-15）',
+        `${动作}的负责人未就位：${未就位.join('、')} 既不是在册在岗的实例，也不是有在岗实例的岗位。派活派的是身份，不是名字——「拉起了会话却没登记」与「压根没拉」在这里同一个下场。`,
+        {
+          detail: { 未就位, 身份档案里的在岗实例: Object.keys(members).filter((id) => members[id]?.status === '在岗') },
+          howToChange: `三条正路任一：① 宿主侧拉起成员会话后先 registry_assign（实例=<会话id>，岗位=<有卡的岗位>）再${动作}；② 按岗位名${动作}，且该岗至少留一名在岗实例；③ Lead 自领（负责人写本次主体自己）。`,
+        },
+      );
+    }
+  }
+
+  /**
    * 派发。判据在此刻冻结——本方法之后没有任何接口能改它。
    * @param {string} id
    * @param {{ subject: object, 项目: string }} spec
@@ -219,6 +262,7 @@ export class TaskGraph {
       target: { id, kind: '任务', authority: '自治', zone: '私有', project: spec.项目 },
       context: { task: node },
     });
+    await this.#assertOwnersSeated(node.负责人, spec.subject, '派发');
     const { 节点 } = await this.#append(
       spec.项目,
       { kind: 'dispatched', id, 判据冻结: true },
@@ -273,6 +317,8 @@ export class TaskGraph {
       throw new InvalidBody(`改成多人负责必须节点已声明多人模式：${MULTI_MODES.join(' / ')}（本节点模式：${node.模式 ?? '未声明'}）。`, { missing: ['模式'] });
     }
     await this.#checkWrite(id, node, spec);
+    // 派发闸同款（排兵动作共用一把尺）：改派给「未就位」的负责人 = 把活挪给空气。
+    await this.#assertOwnersSeated(负责人, spec.subject, '改派');
     const 旧负责人 = node.负责人 ?? [];
     const { 节点: after } = await this.#append(
       spec.项目,

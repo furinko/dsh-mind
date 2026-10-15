@@ -50,6 +50,8 @@ const 进行中 = new Set(['已派发', '执行中']);
  *   能力?: object[],
  *   岗位?: object[],
  *   实例计数?: object,
+ *   岗位闲置?: Record<string, {在岗实例: number, 封存实例: number, 最近派发于: string|null}>,
+ *   实例活动?: Record<string, {最近活动于: string|null, 活动条数: number}>,
  *   生成于?: string,
  * }} input
  * @returns {object} 视图；调用方不得把它写回磁盘。
@@ -119,7 +121,7 @@ export function projectWorkbench(input) {
         已结账: 节点.filter((n) => n.状态 === '已结账').length,
         待决: 待决.length,
       },
-      节点: 节点.map(任务行),
+      节点: 节点.map((n) => 任务行(n, input.实例活动)),
     },
 
     会审: 节点.filter((n) => (n.负责人 ?? []).length > 1 || (n.独立答案 ?? []).length > 0).map((n) => 会审行(n, 讨论消息[n.id] ?? [])),
@@ -171,6 +173,11 @@ export function projectWorkbench(input) {
     // 实例计数：岗位 → {在岗, 封存}。只给计数，**不给实例 id**（图谱上岗位是节点，
     // 实例是它的规模，不是可点对象）。宿主没给 ⇒ null。
     实例计数: input.实例计数 && typeof input.实例计数 === 'object' ? input.实例计数 : null,
+
+    // 岗位闲置（派活闭环 2026-10-15）：岗位 → {在岗实例, 封存实例, 最近派发于}。
+    // 原样投影（组装层 org.js 跨项目现算），「闲置与否」的判定留给读者——投影报读数不报结论。
+    // 宿主没给 ⇒ null（不装懂）。治理面：成员切片不给（与 实例计数 同族）。
+    岗位闲置: input.岗位闲置 && typeof input.岗位闲置 === 'object' ? input.岗位闲置 : null,
 
     审计尾: (input.审计尾 ?? []).map((row) => ({
       时间: row.时间,
@@ -240,6 +247,7 @@ export function sliceForViewer(view, 读者) {
     能力: null,
     岗位: null,
     实例计数: null,
+    岗位闲置: null,
     // ⑦：成员切片不给总线正文与发件（「只读自己那片」——他人发言不是自己那片）；
     // 规模行保留，让成员看得见「有线程在说话」而不看见内容。
     消息总线: (view.消息总线 ?? []).map((t) => ({
@@ -398,8 +406,8 @@ function 收集待你决定(parts) {
   return 清单;
 }
 
-/** 一个任务节点 → 一行（判据、冻结、打回、产出物、交卷进度）。 */
-function 任务行(node) {
+/** 一个任务节点 → 一行（判据、冻结、打回、产出物、交卷进度、判活标注）。 */
+function 任务行(node, 实例活动) {
   return {
     id: node.id,
     描述: node.描述,
@@ -412,6 +420,12 @@ function 任务行(node) {
     打回次数: node.打回次数 ?? 0,
     产物: node.产出物引用 ?? [],
     交卷: 交卷进度(node),
+    // 判活标注（派活闭环 2026-10-15）：只在「已派发/执行中」窗口报——复核窗口之后
+    // 「没人干活」已由打回/待决那些状态自己说话。口径 = 审计链零行（被拒也算活动——
+    // 死物不会敲门）；索引里没有的负责人（未登记）同样报「未见活动」，与派发闸同向。
+    ...(实例活动 && 进行中.has(node.状态)
+      ? { 负责人无活动: (node.负责人 ?? []).filter((id) => !实例活动[id] || 实例活动[id].最近活动于 == null) }
+      : {}),
     ...(node.升级 ? { 升级: node.升级 } : {}),
     ...(node.待决原因 ? { 待决原因: node.待决原因 } : {}),
   };

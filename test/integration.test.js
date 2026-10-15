@@ -97,6 +97,11 @@ describe('装载后的真实调用链', () => {
     const tool = host.工具.get('mind');
     const exec = fakeExec({ name: 'mind', sessionId: 'session-e2e' });
     const P = 'e2e';
+    // 成员先经注册表在册在岗（派发闸 · 派活闭环 2026-10-15）：登记在派发之前，这也是主干的正顺序。
+    const org = await shareOrg({ home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') });
+    const LEAD_SUB = { id: 'lead', kind: 'Lead' };
+    await runAction({ org, 项目: P, subject: LEAD_SUB, 主体: LEAD_SUB, args: { action: 'registry_assign', 岗位: '插件工程', 实例: 'member-a' } });
+    await runAction({ org, 项目: P, subject: LEAD_SUB, 主体: LEAD_SUB, args: { action: 'registry_assign', 岗位: '插件工程', 实例: 'member-b' } });
 
     const created = JSON.parse(await tool.execute({ action: 'task_create', 描述: '端到端节点', 负责人: 'member-a,member-b', 模式: '独立会审', 判据: '可建,可派', project: P }, exec));
     assert.equal(created.成功, true);
@@ -105,11 +110,7 @@ describe('装载后的真实调用链', () => {
     assert.equal(JSON.parse(await tool.execute({ action: 'task_dispatch', id, project: P }, exec)).节点.判据冻结, true);
     assert.equal(JSON.parse(await tool.execute({ action: 'task_start', id, project: P }, exec)).节点.状态, '执行中');
     // 两份独立答案经动作表以成员主体落卷（工具面的 主体 恒由会话事实派生——根会话=Lead，
-    // 这里直接走 runAction 注入成员主体，与生产口径同一张动作表）。成员先经注册表在册在岗。
-    const org = await shareOrg({ home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') });
-    const LEAD_SUB = { id: 'lead', kind: 'Lead' };
-    await runAction({ org, 项目: P, subject: LEAD_SUB, 主体: LEAD_SUB, args: { action: 'registry_assign', 岗位: '插件工程', 实例: 'member-a' } });
-    await runAction({ org, 项目: P, subject: LEAD_SUB, 主体: LEAD_SUB, args: { action: 'registry_assign', 岗位: '插件工程', 实例: 'member-b' } });
+    // 这里直接走 runAction 注入成员主体，与生产口径同一张动作表）。
     const MEMBER_A = { id: 'member-a', kind: '成员', roleId: '插件工程' };
     const MEMBER_B = { id: 'member-b', kind: '成员', roleId: '插件工程' };
     await runAction({ org, 项目: P, subject: MEMBER_A, 主体: MEMBER_A, args: { action: 'task_submit', id, project: P, 结论: '可以' } });

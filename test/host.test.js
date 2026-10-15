@@ -95,6 +95,9 @@ describe('dsh-mind 宿主半区', () => {
   it('任务全链路可走通：建 → 派 → 交 → 复核', async () => {
     const tool = host.工具.get('mind');
     const exec = fakeExec({ name: 'mind' });
+    // 派发闸（派活闭环 2026-10-15）：负责人先就位再派——全链路演示的就是「登记→派」的正顺序。
+    const reg = JSON.parse(await tool.execute({ action: 'registry_assign', 岗位: '插件工程', 实例: 'member-a', project: 'boot' }, exec));
+    assert.equal(reg.成功, true);
     const created = JSON.parse(await tool.execute({ action: 'task_create', 描述: '宿主链路验证', 负责人: 'member-a', 判据: '能建,能派', project: 'boot' }, exec));
     assert.equal(created.成功, true);
     const id = created.节点.id;

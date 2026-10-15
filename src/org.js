@@ -55,13 +55,16 @@ export class Org {
     await policy.reload();
 
     const store = new ObjectStore({ layout, policy, audit, clock });
+    // registry 先建、再交给 tasks（派活闭环 2026-10-15）：dispatch/reassign 的派发闸要按
+    // 「在册在岗实例」核负责人——与 review 池化排班、debate 候选池同一条接线纪律：
+    // 身份档案是唯一事实源，不许在任务图里再读一遍。
+    const registry = new RoleRegistry({ layout, policy, audit, clock });
     // memory 先建、再交给 tasks（W3 批3）：结账（tasks.settle）要归档该项目的作答，
     // 而归档逻辑只有一处（MemoryService.archiveAnswers）——不在任务图里再写一份。
     const memory = new MemoryService({ layout, policy, audit, clock });
-    const tasks = new TaskGraph({ layout, policy, audit, clock, memory });
+    const tasks = new TaskGraph({ layout, policy, audit, clock, memory, registry });
     const bus = new MessageBus({ layout, policy, audit, clock, tasks });
     const capability = new CapabilityLibrary({ layout, policy, audit, clock, store });
-    const registry = new RoleRegistry({ layout, policy, audit, clock });
     const upgrade = new UpgradeManager({ layout, policy, audit, clock });
     const probes = new ProbeRunner({ layout, policy, audit, clock, capability });
     // registry 注入 review（2026-10-14 · 池化排班）：提名路由（池内派单/池外待决）要按
@@ -162,6 +165,8 @@ export class Org {
     // ⑦（2026-10-11）：消息总线投影——全部线程的规模 + 最新消息 + 未投递数。
     // summary 内部走 readRaw（免审计，设计债③）：与 讨论消息 同一条投影取数口径。
     const 线程汇总 = await this.bus.summary({ 项目 });
+    // 判活读数（派活闭环 2026-10-15）：身份档案只读一次，喂 实例计数 / 岗位闲置 / 实例活动 三块。
+    const identity = await this.registry.identity();
     const view = projectWorkbench({
       项目,
       节点: snapshot.节点,
@@ -186,7 +191,16 @@ export class Org {
       // 工作台是轮询的投影，取数一旦入账就会把审计链灌成流水。
       能力: await this.capability.list(),
       岗位: await this.registry.list(),
-      实例计数: 计实例计数(await this.registry.identity()),
+      实例计数: 计实例计数(identity),
+      // 岗位闲置（派活闭环 2026-10-15）：岗位 → {在岗实例, 封存实例, 最近派发于}。
+      // **跨项目现算**（岗位与身份不按项目隔离，闲置与否要看全账——只看当前项目会把
+      // 「活在别的项目」误判成闲置）；来源是任务图快照（有读缓存，轮询不放大 IO）+ 身份档案，
+      // 纯投影零新账。退役判据（无在岗实例且超期无派发）由读者按这份读数下，机制不替谁拍板。
+      岗位闲置: await this.计岗位闲置(identity),
+      // 实例活动（派活闭环 2026-10-15）：实例 → {最近活动于, 活动条数}，审计链现算
+      // （含被拒——拒绝恰恰证明活着，死物不会敲门）；与复核员池「已任命 · 未见活动」同一口径。
+      // 任务行据此标 `负责人无活动`：已派发/执行中的节点若负责人在账上零行，「派了没人干」亮灯。
+      实例活动: await 计实例活动(this.audit, identity, snapshot.节点),
       生成于: this.clock.iso(),
     });
     return spec.读者 ? sliceForViewer(view, spec.读者) : view;
@@ -269,6 +283,43 @@ export class Org {
   }
 
   /**
+   * 岗位闲置读数（派活闭环 2026-10-15）：岗位 → {在岗实例, 封存实例, 最近派发于}。
+   *
+   * 「最近派发于」= 该岗在册实例名下**已派发节点**的最大派发时刻，**跨全部项目**枚举
+   * （目录名即项目键，与 projectList 同一口径）——岗位与身份不按项目隔离（§7），
+   * 只看当前项目会把「活在别的项目」误判成闲置。快照走 TaskGraph 的读缓存，
+   * 轮询不放大 IO。纯投影零新账：退役与否由读者按读数判，机制不替谁拍板。
+   *
+   * @param {{ members?: Record<string, {岗位?: string, status?: string}> }} identity 已读好的身份档案
+   * @returns {Promise<Record<string, {在岗实例: number, 封存实例: number, 最近派发于: string|null}>>}
+   */
+  async 计岗位闲置(identity) {
+    const 闲置 = {};
+    const 实例岗位 = new Map();
+    for (const [id, m] of Object.entries(identity?.members ?? {})) {
+      if (id === 'undefined' || typeof m?.岗位 !== 'string' || m.岗位 === '') continue;
+      const 桶 = (闲置[m.岗位] ??= { 在岗实例: 0, 封存实例: 0, 最近派发于: null });
+      if (m.status === '封存') 桶.封存实例 += 1;
+      else 桶.在岗实例 += 1;
+      if (m.status === '在岗') 实例岗位.set(id, m.岗位);
+    }
+    const 项目键 = new Set([this.project]);
+    for (const name of await listDirs(this.layout.private(DIR.基础设施, DIR.任务图))) 项目键.add(name);
+    for (const 键 of 项目键) {
+      for (const n of (await this.tasks.snapshot({ 项目: 键 })).节点) {
+        if (typeof n.派发于 !== 'string' || n.派发于 === '') continue;
+        for (const id of n.负责人 ?? []) {
+          const 岗 = 实例岗位.get(id);
+          if (!岗) continue;
+          const 桶 = (闲置[岗] ??= { 在岗实例: 0, 封存实例: 0, 最近派发于: null });
+          if (String(n.派发于) > String(桶.最近派发于 ?? '')) 桶.最近派发于 = n.派发于;
+        }
+      }
+    }
+    return 闲置;
+  }
+
+  /**
    * 私有区里已经有哪些记忆分片（探针与工作台用它显示"跑出来的东西"）。
    * @returns {Promise<string[]>}
    */
@@ -344,4 +395,36 @@ export function 计实例计数(identity) {
     else 桶.在岗 += 1;
   }
   return { 按岗位, 异常键, 合计: Object.keys(members).length };
+}
+
+/**
+ * 实例活动索引（派活闭环 2026-10-15）——工作台侧的判活数据源。
+ *
+ * 与 `lib/actions.js` 的复核员池读数同一口径：审计链现算，只数「主体 = 该实例」的行
+ * （任何动作、任何项目都算，**含被拒**——拒绝恰恰证明活着，死物不会敲门）。
+ * 种子面 = 身份档案成员 ∪ 当前项目节点负责人：后者让「未登记却挂着负责人名」的
+ * 历史节点也能如实报「未见活动」，而不是因为查无此人而漏报。
+ *
+ * @param {{ read(query?: object): Promise<object[]> }} audit
+ * @param {{ members?: Record<string, object> }} identity
+ * @param {object[]} 节点 当前项目的任务节点（负责人并进种子面）
+ * @returns {Promise<Record<string, {最近活动于: string|null, 活动条数: number}>>}
+ */
+export async function 计实例活动(audit, identity, 节点 = []) {
+  const 索引 = {};
+  const 播种 = (id) => {
+    if (typeof id === 'string' && id !== '' && !(id in 索引)) 索引[id] = { 最近活动于: null, 活动条数: 0 };
+  };
+  for (const id of Object.keys(identity?.members ?? {})) 播种(id);
+  for (const n of 节点) for (const id of n.负责人 ?? []) 播种(id);
+  if (audit?.read) {
+    for (const row of await audit.read({})) {
+      const id = String(row.主体?.id ?? '').trim();
+      const 桶 = 索引[id];
+      if (!桶) continue;
+      桶.活动条数 += 1;
+      if (String(row.时间) > String(桶.最近活动于 ?? '')) 桶.最近活动于 = String(row.时间);
+    }
+  }
+  return 索引;
 }
