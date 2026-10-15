@@ -1191,8 +1191,18 @@ export function identityStatus(engine, id) {
   if (!member) {
     return { known: false, status: '未登记', reason: `身份档案里没有 ${id}：查不到不等于放行，按最严处理。` };
   }
-  if (member.status && member.status !== '在岗') {
-    return { known: true, status: member.status, reason: `身份 ${id} 当前状态为 ${member.status}，按最严处理。` };
+  // 缺 status 也按非在岗处理（设计评审 #15 · 2026-10-15）：修前 `member.status && member.status !== '在岗'`
+  // 把「status 字段缺席」放行成在岗——手改档案删掉该字段就绕过停用判定；而 #档案岗位Of（:369）
+  // 要求严格 ==='在岗'，同一条档案两种口径。与它对齐：「查不到 = 最严」。
+  if (member.status !== '在岗') {
+    const status = member.status ?? '状态缺失';
+    return {
+      known: true,
+      status,
+      reason: member.status
+        ? `身份 ${id} 当前状态为 ${member.status}，按最严处理。`
+        : `身份 ${id} 的档案行缺 status 字段（读到 ${status}）：缺状态不等于在岗，按最严处理。`,
+    };
   }
   return { known: true, status: '在岗', reason: '' };
 }

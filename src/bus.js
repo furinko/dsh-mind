@@ -13,8 +13,8 @@
  *
  * 消息 `authority = 只增`（§6）：总线里没有修改与删除。
  */
-import { appendLines, listFiles, readJsonl, withLock } from './kernel/fsx.js';
-import { InvalidBody, Denied } from './kernel/errors.js';
+import { appendLines, listFiles, readJsonl, serializeByKey, withLock } from './kernel/fsx.js';
+import { InvalidBody, Denied, Fault } from './kernel/errors.js';
 import { objectId } from './kernel/ids.js';
 import { 全员已交 } from './tasks.js';
 
@@ -89,36 +89,53 @@ export class MessageBus {
       context: {},
     });
     const 状态 = message.暂不投递 === true ? '暂不投递' : '已投递';
-    await withLock(`${this.layout.busThread(message.项目, message.线程)}.lock`, async () => {
-      // 锁内闸（2026-10-14 审查 P2-11）：预算这类「读-判-写」判定的权威一检在这里——
-      // 锁外那次是快速失败，并发发言双双过闸的窗口由这一检关掉。
-      if (typeof message.锁内闸 === 'function') await message.锁内闸();
-      await appendLines(this.layout.busThread(message.项目, message.线程), [
-        {
-          id,
-          线程: message.线程,
-          发件,
-          // 收件缺席落 [] 而不是 [undefined]（2026-10-14 审查 P3）：修前 `[undefined]`
-          // 经 JSON 序列化变 `[null]`，污染账本行、也让「这条消息发给谁」读出假值。
-          收件: message.收件 == null ? [] : (Array.isArray(message.收件) ? message.收件 : [message.收件]),
-          类型,
-          内容,
-          状态,
-          延后: message.延后 === true,
-          引用: message.引用 ?? null,
-          追加于: this.clock.iso(),
-        },
-      ]);
-    });
-    await this.audit.append({
-      动作: '状态变更',
-      主体: message.subject,
-      对象: { id, kind: '消息' },
-      依据: `消息总线投递 · ${类型}`,
-      结果: 状态,
-      项目: message.项目,
-      详情: { 线程: message.线程, 收件: message.收件 },
-    });
+    // F4（设计评审 2026-10-15）：在 withLock 外套 serializeByKey（同 key = 线程账本文件）。
+    // 与 audit.js append 的双层范例同款：Windows 名字式文件锁有 rm/create 竞态
+    // （fsx.js:302-309 自认，审计链曾因此 fork——identity-chain E3），进程内这条
+    // await 链保证同线程的写绝不重叠。withLock 不可重入（fsx.js 头注释）：
+    // serializeByKey 的 fn 里不得再拿同一把锁（锁内闸回调只读不锁，安全）。
+    const 线程账本 = this.layout.busThread(message.项目, message.线程);
+    await serializeByKey(线程账本, () =>
+      withLock(`${线程账本}.lock`, async () => {
+        // 锁内闸（2026-10-14 审查 P2-11）：预算这类「读-判-写」判定的权威一检在这里——
+        // 锁外那次是快速失败，并发发言双双过闸的窗口由这一检关掉。
+        if (typeof message.锁内闸 === 'function') await message.锁内闸();
+        await appendLines(线程账本, [
+          {
+            id,
+            线程: message.线程,
+            发件,
+            // 收件缺席落 [] 而不是 [undefined]（2026-10-14 审查 P3）：修前 `[undefined]`
+            // 经 JSON 序列化变 `[null]`，污染账本行、也让「这条消息发给谁」读出假值。
+            收件: message.收件 == null ? [] : (Array.isArray(message.收件) ? message.收件 : [message.收件]),
+            类型,
+            内容,
+            状态,
+            延后: message.延后 === true,
+            引用: message.引用 ?? null,
+            追加于: this.clock.iso(),
+          },
+        ]);
+      }),
+    );
+    // #14（设计评审 2026-10-15）：消息已落线、审计是第二笔——追加失败时状态已变、链上缺条。
+    // 与 tasks.js #append 的 AUDIT_APPEND_FAILED_AFTER_EVENT 包裹同族：错误必须明示
+    // 「消息已落线、仅审计缺失」，且不可重试（重试 send = 再落一条同内容消息）。
+    try {
+      await this.audit.append({
+        动作: '状态变更',
+        主体: message.subject,
+        对象: { id, kind: '消息' },
+        依据: `消息总线投递 · ${类型}`,
+        结果: 状态,
+        项目: message.项目,
+        详情: { 线程: message.线程, 收件: message.收件 },
+      });
+    } catch (error) {
+      throw new Fault('AUDIT_APPEND_FAILED_AFTER_EVENT', `消息 ${id}（线程 ${message.线程}）已落线，但审计追加失败：${error instanceof Error ? error.message : String(error)}。不要重试本操作——重试会往线程里再落一条同内容消息；请人工核对审计账本并补记。`, {
+        detail: { 消息: id, 线程: message.线程, 项目: message.项目 },
+      });
+    }
     return { id, 状态, 线程: message.线程, 追加于: this.clock.iso() };
   }
 
@@ -257,26 +274,42 @@ export class MessageBus {
     });
     // 只增：投递动作也是一条新记录（同 id 的最新状态生效），历史那条「暂不投递」不动。
     // 写入与 send 同一把线程锁：不锁的话并发投递会在 send 的写窗口外落行。
-    await withLock(`${this.layout.busThread(spec.项目, spec.线程)}.lock`, async () => {
-      await appendLines(this.layout.busThread(spec.项目, spec.线程), [
-        { ...target, 状态: '已投递', 投递于: this.clock.iso(), 记录: '投递动作' },
-      ]);
-    });
-    await this.audit.append({
-      动作: '状态变更',
-      主体: spec.subject,
-      对象: { id: spec.id, kind: '消息' },
-      依据: '消息总线：暂不投递 → 已投递',
-      结果: '已投递',
-      项目: spec.项目,
-      详情: { 线程: spec.线程 },
-    });
+    // F4（设计评审 2026-10-15）：外面再套 serializeByKey（同 key = 线程账本文件）——
+    // 与 send / audit.js append 同款双层；理由见 send 处注释（Windows 名字锁 rm/create 竞态）。
+    const 线程账本 = this.layout.busThread(spec.项目, spec.线程);
+    await serializeByKey(线程账本, () =>
+      withLock(`${线程账本}.lock`, async () => {
+        await appendLines(线程账本, [
+          { ...target, 状态: '已投递', 投递于: this.clock.iso(), 记录: '投递动作' },
+        ]);
+      }),
+    );
+    // #14（设计评审 2026-10-15）：投递行已落线、审计是第二笔——同 send 的包裹理由：
+    // 失败必须明示「已落线、仅审计缺失」且不可重试语义（重投同 id 是幂等的，但审计
+    // 缺口要人工补，不能让调用方误判「没投成」反复触发）。
+    try {
+      await this.audit.append({
+        动作: '状态变更',
+        主体: spec.subject,
+        对象: { id: spec.id, kind: '消息' },
+        依据: '消息总线：暂不投递 → 已投递',
+        结果: '已投递',
+        项目: spec.项目,
+        详情: { 线程: spec.线程 },
+      });
+    } catch (error) {
+      throw new Fault('AUDIT_APPEND_FAILED_AFTER_EVENT', `消息 ${spec.id}（线程 ${spec.线程}）的投递记录已落线，但审计追加失败：${error instanceof Error ? error.message : String(error)}。不要重试本操作——投递已生效；请人工核对审计账本并补记。`, {
+        detail: { 消息: spec.id, 线程: spec.线程, 项目: spec.项目 },
+      });
+    }
     return { id: spec.id, 状态: '已投递' };
   }
 
   /**
    * 会审解锁（§9 两处边界写死之一）。
    * 任务图报「全员已交」才解锁并广播；没交齐就只能等——这条边界不允许被绕过。
+   * #9（设计评审 2026-10-15）：注入了任务图时还要求 节点.模式 === '独立会审'（与
+   * debate_open 同口径）——并行分担节点交齐不触发「会审解锁」广播。
    *
    * @param {{ subject: object, 项目: string, 线程: string, 全员已交: boolean, 参与者?: string[], 内容?: string }} spec
    * @returns {Promise<{ 解锁: boolean, 广播: string|null, 原因: string }>}
@@ -287,11 +320,27 @@ export class MessageBus {
     // （全员已交() 是齐卷判据的唯一源，与遮罩/讨论开启同一把尺）；未注入 tasks 的独立用法
     // 才退回自报布尔，并在原因里如实标注口径。
     let 齐 = spec.全员已交 === true;
-    let 口径 = '调用方自报（未注入任务图，无法重算）';
+    // 未注入 tasks 的独立用法：模式无从验起，口径如实标注（#9 的诚实边界——
+    // 动作面 bus_unlock 恒注入 tasks，真实部署不走这条兜底）。
+    let 口径 = '调用方自报（未注入任务图，无法重算；模式亦未验）';
     if (this.tasks) {
       if (!spec.节点) throw new InvalidBody('unlock 需要 节点（任务节点 id）：齐卷判定从任务图独立答案重算，不收自报布尔。', { missing: ['节点'] });
       const node = await this.tasks.get(spec.节点, { 项目: spec.项目 });
       if (!node) throw new InvalidBody(`没有这个任务节点：${spec.节点}（项目 ${spec.项目}）`);
+      // #9（设计评审 2026-10-15）· 模式闸：会审解锁只属独立会审（与 debate_open 同口径）。
+      // 修前只判 全员已交 不查模式 ⇒ 并行分担节点交齐也触发「会审解锁」广播——并行分担
+      // 没有盲评环节，「全员已交，现在可以亮出彼此的答案」对它是语义错配的系统消息
+      // （单人节点默认无模式的 P2-13 修后，这类节点同样不该吃到会审广播）。
+      if (node.模式 !== '独立会审') {
+        throw new Denied(
+          '会审解锁 · 只属独立会审（§10）',
+          `节点 ${spec.节点} 的模式是「${node.模式 ?? '未声明'}」：会审解锁广播（全员已交后亮出彼此答案）只属独立会审；并行分担/单人节点没有盲评环节，交齐即复核，不需要「解锁」。`,
+          {
+            howToChange: '独立会审节点交齐后自动满足本判据；并行分担节点直接走复核（review），不要调 bus_unlock。',
+            detail: { 节点: spec.节点, 模式: node.模式 ?? null },
+          },
+        );
+      }
       齐 = 全员已交(node);
       口径 = `任务图重算（状态=${node.状态}，答案 ${(node.独立答案 ?? []).length}/${(node.负责人 ?? []).length}）`;
     }

@@ -321,7 +321,8 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
     const 未齐 = projectWorkbench({ 项目: 'p', 节点: [节点], 探针: { 结果: [] }, 策略: { healthy: true, rules: [] } }).会审[0];
     assert.deepEqual(未齐.交卷, { 已交: 2, 应交: 3, 齐: false });
     assert.equal(未齐.揭名, false, '未交齐 ⇒ 不揭名');
-    assert.deepEqual(未齐.独立答案.map((a) => a.盲标), ['成员 A', '成员 B'], 'N 份答案都留下来了');
+    // 盲标单源（设计评审 #8 · 2026-10-15）：n9 种子下 member-a→B、member-b→A（确定性置换）。
+    assert.deepEqual(未齐.独立答案.map((a) => a.盲标), ['成员 B', '成员 A'], 'N 份答案都留下来了');
     // W3 批3：未交齐时**零分歧也不投影**（「这两份一致」本身就是内容级信息，盲评要互不可见）。
     assert.equal(未齐.零分歧, undefined, '未交齐 ⇒ 零分歧/依据都不出');
     assert.equal(未齐.零分歧依据, undefined);

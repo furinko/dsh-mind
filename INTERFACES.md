@@ -56,9 +56,11 @@ assertStructure(kind, doc)  // 不合规抛 InvalidBody；写入侧唯一校验�
 authorityOfSegment(doc, heading)
 
 // src/audit.js
-GRADE, AuditLog, RoundRecorder, entryFingerprint(row)
-// AuditLog: .append(entry) .read(query) .verify() .months() .clearQueue(spec) .gradeOf(action)
+GRADE, AuditLog, 审计尾默认条数(=20), 看板审计尾条数(=40)   // 后两个：审计尾长单源（设计评审 #17 · 2026-10-15）
+// AuditLog: .append(entry) .read(query) .verify() .months() .clearQueue(spec) .gradeOf(action) .授权依据存在(id)
 // verify() 除链内自洽外还读 anchor 查「尾部截断」（W3 批2，见 §2.16）；read() 排序键 =(月, seq)
+// 轮桶不在本文件：轮 = 一次任务实例执行段，轮桶在 components/kernel/lib/index.js 的内存 Map
+// （2026-10-15 核；历史上此处登记过的 RoundRecorder/entryFingerprint 从未在 src 里实现）
 
 // src/policy.js
 ACTIONS, SUBJECT_KINDS, INTERVENTION, PolicyEngine, normalizeSubject, extractPolicyBlock
@@ -128,8 +130,11 @@ export class MessageBus {
   /** 暂不投递 → 已投递：同 id 追加一条新记录（只增），重复投递幂等；动作面 = `bus_deliver`（2026-10-14 接线）。 */
   async deliver({ subject, 项目, 线程, id })
   async threads({ 项目 })
-  /** 会审解锁：任务图报「全员已交」→ 解锁并广播（§9 边界写死）。 */
-  async unlock({ 项目, 线程, 全员已交 })
+  /** 会审解锁：任务图报「全员已交」→ 解锁并广播（§9 边界写死）。
+   *  实况签名（设计评审 #16 · 2026-10-15 核对）：注入任务图时 `节点` 必带（齐卷从任务图
+   *  独立答案重算，自报布尔不承重）且要求 节点.模式==='独立会审'（#9 模式闸）；
+   *  未注入任务图的独立用法才退回自报 `全员已交` 并在原因里如实标注口径。 */
+  async unlock({ subject, 项目, 节点, 线程, 全员已交, 参与者, 内容 })
 
 // 动作面补充（2026-10-12 评审批次 1/2）：
 //  - `bus_unlock` 动作带绑定闸（线程必须等价于被验齐卷的节点 id，NTFS 大小写折叠同口径）
@@ -234,6 +239,9 @@ export class RoleRegistry {
   async assign({ subject, 岗位, 实例, 代 })
   /** 封存 ≠ 删除。 */
   async seal({ subject, 实例, 理由 })
+  /** 恢复封存（主权者任何一次交互即解除失联之外的还原路径）。
+   *  【有实现、无动作/命令入口（设计评审 #16 · 2026-10-15 核对）】：服务层与测试可达，
+   *  `lib/actions.js` 没有对应动作——人对人的还原走 registry_seal 后的再 assign 或此服务面。 */
   async restore({ subject, 实例 })
   /** 撤回 = 写拒绝名单，不删卡。 */
   async revoke({ subject, 对象id, 理由 })
@@ -294,10 +302,14 @@ export class ProbeRunner {
 ### 2.9 `src/review.js` — 复核流程 + 反趋同
 ```js
 export class ReviewProtocol {
-  constructor({layout, policy, audit, clock, tasks, bus})
-  /** 复核者由主权者确认（Lead 可提名）。 */
-  async nominate({ subject, 实例 })
-  async appoint({ subject, 实例 })
+  constructor({layout, policy, audit, clock, tasks, bus, registry, random})
+  /** 提名/派单复核者（2026-10-14 池化排班起是**路由器**，实况签名 · 设计评审 #16 · 2026-10-15 核对）：
+   *  池内（在册在岗复核员）⇒ tasks.assignReview 派单；池外 ⇒ tasks.nominateReview 挂待决
+   *  等主权者；候选缺席 ⇒ 从池内按账上活动轮派（排除本节点交卷人）。 */
+  async nominate({ subject, 项目, 节点, 实例?, 理由? })
+  /** 任命复核者：服务层方法仍在（带 proposerId，任命自己=自批拒），但**动作面无入口**
+   *  ——见 §2.20-7（任命走 registry_assign + 主权者授权引用）。 */
+  async appoint({ subject, 实例, 项目? })
   /** 复核输出的三态 + 分歧清单 + 反例面。结论不经 Lead 修改。 */
   async record({ subject, 节点, 三态, 分歧清单, 反例面, 复核者 })
   /** Lead 只能「记录不同意」。 */
@@ -727,14 +739,27 @@ await runAction({ org, 项目, subject, 主体, args: { action, ...args }, 面: 
    `capability_publish` 正文必填。
 6. **路径片段拒 Windows 保留名与尾部点/空格**（`assertPathSegment`：CON/PRN/AUX/NUL/COM1-9/LPT1-9、
    尾点、尾空格）——NTFS 别名面，项目键 `'foo.'` 不再与 `'foo'` 共目录。
-7. **复核员任命授权引用必须真实存在**（`audit.授权依据存在()` 唯一实现）；`review.appoint` 带上
-   `proposerId`（任命自己 = 自批拒）——此前 appoint 逻辑上必败，现在可用。
+7. **复核员任命的实际入口是 `registry_assign` + 主权者授权引用**（`audit.授权依据存在()` 唯一
+   实现验存在性；目标岗位=复核员时授权引用必填，空授权默认拒）。`review.appoint` 仍是服务层方法
+   （带 `proposerId`，任命自己 = 自批拒），**但动作面没有它的入口**——此前登记的
+   「review.appoint 现在可用」只对服务层/测试成立，人对人的任命走 `review_nominate`（池外提名
+   挂待决）或 `registry_assign`（设计评审 #16 · 2026-10-15 核对改写）。
 8. **审计失败方向**：`tasks.#append` 落事件后审计失败 ⇒ 包 `Fault('AUDIT_APPEND_FAILED_AFTER_EVENT')`
    响亮抛出（不许重试洗卷）；升级比对告警按签名去重（同结果不重复刷链）。
 9. **看板**：「人改过」防轮询覆盖复活；图谱滚轮改原生 `passive:false` 监听；轮询数据没变不重渲染；
    审计展开钮报真实总条数；图谱画布高取两列较大者。
 10. **债⑳（subject.js 档2 fail-open）维持挂账不修**：主权者裁决见 `docs/design/取证-债⑳-2026-10-13.md`
     （宿主升级时必须复验身份链）。
+
+### 2.21 同源路由面（kernel 组件，`components/kernel/lib/routes.js`）
+
+浏览器侧（工作台页面 / 设置页）不走 `/mind` 命令，走宿主自注册的三条**明确端点**（设计评审 #16 ·
+2026-10-15 补记；端点表 `端点表` 冻结）：`GET/POST /plugins/dsh-mind/presence`（读/写设置）、
+`GET /plugins/dsh-mind/workbench`（等价 `/mind dashboard` 的同一份投影 JSON）、
+`GET /plugins/dsh-mind/ping`（自检）。栅栏要点：**只有这三条，没有通用代理**（浏览器能碰到的
+不许比命令面宽）；写路径复用命令面 `runAction({ 面: 'command' })` 的全部门闸与入账，主体记
+`{ id: '设置页', kind: 'Lead' }`（不冒充主权者）；读面有同源栅栏（非本机页面拒）。
+详见 `components/kernel/lib/routes.js` 头注（四条纪律的完整表述）。
 
 ## 3 · 验收
 

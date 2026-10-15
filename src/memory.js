@@ -132,16 +132,17 @@ export class MemoryService {
   }
 
   /**
-   * 账本行（带读缓存）：签名 = 盘上 mtime+size + 本进程对该文件的写次数。
-   * 供读面（query/stats/血缘/folded）复用——修前每个读面各自全量读+解析所有账本，
-   * 检索一次查询要扫「类 × 范围」遍。
+   * 账本行 + 体检读数（带读缓存）：签名 = 盘上 mtime+size + 本进程对该文件的写次数。
+   * `#rows` 的底层实现——缓存条目在 rows 之外**同时保留每文件的坏行计数**
+   * （P3-a · 设计评审 2026-10-15）：stats 的「坏行可见」裁决（2026-10-13 第二批 P2-5：
+   * stats 要报坏行数、坏行>0 告警）不许因为走缓存而丢——坏行数与 rows 同源同失效。
    * @param {string} file
-   * @returns {Promise<object[]>}
+   * @returns {Promise<{签名: string, rows: object[], 坏行: number}>}
    */
-  async #rows(file) {
+  async #rowsHealth(file) {
     const 签名 = await this.#签名(file);
     const hit = this.#rowsCache.get(file);
-    if (hit?.签名 === 签名) return hit.rows;
+    if (hit?.签名 === 签名) return hit;
     // 坏行要出声（2026-10-14 审查 P2）：修前走 readJsonl 静默跳坏行——记忆召回的
     // 坏行没有审计链自检兜底（那是审计链的机制），「召回少了几条」会静默发生。
     // 读面不中断（坏行不等于整本账作废），但必须留告警痕迹（stats 面同口径报得出）。
@@ -149,8 +150,18 @@ export class MemoryService {
     if (health.坏行 > 0) {
       console.warn(`[dsh-mind] 记忆账本 ${file} 有 ${health.坏行} 行解析失败（已跳过，不中断读面）；可用 mind status 的账本体检复核。`);
     }
-    this.#rowsCache.set(file, { 签名, rows: health.rows });
-    return health.rows;
+    const entry = { 签名, rows: health.rows, 坏行: health.坏行 };
+    this.#rowsCache.set(file, entry);
+    return entry;
+  }
+
+  /**
+   * 账本行（带读缓存）：`#rowsHealth` 的 rows 投影，既有调用方（query/血缘/folded）不变。
+   * @param {string} file
+   * @returns {Promise<object[]>}
+   */
+  async #rows(file) {
+    return (await this.#rowsHealth(file)).rows;
   }
 
   /** 记一次本进程写入：让该文件的缓存签名失效。 */
@@ -435,7 +446,11 @@ export class MemoryService {
       项目: query.项目 ?? null,
       详情: { 服务: 'memory.query', 类: query.类 ?? null, 带查询词: Boolean(query.文本) },
     });
-    const wanted = query.类 ?? MEMORY_KINDS;
+    // 类 参数归一（设计评审 F1 · 2026-10-15）：工具 schema 的 `类` 是**单选字符串**（enum），
+    // 服务面另允许数组（内部编排一次查多类）。修前这里原样透传 ⇒ 字符串被当数组迭代，
+    // `wanted.join('/')` 直接 TypeError——schema 合法参数打崩动作。归一只在这一处做
+    // （服务层防御）：字符串包成数组、数组原样、缺席用 MEMORY_KINDS（动作层不用改）。
+    const wanted = typeof query.类 === 'string' ? [query.类] : (Array.isArray(query.类) ? query.类 : MEMORY_KINDS);
     const rows = [];
     /** @type {string[]} 本次口径读过的账本（合成签名用；索引缓存按它失效）。 */
     const 账本文件 = [];
@@ -490,7 +505,10 @@ export class MemoryService {
     };
 
     // `条目` 的回传预算：全量 visible 可能把整个账本塞进一次回复
-    // （空 query 分支曾无条件回传全部），于是默认只回最新的 N 条并如实标注。
+    // （空 query 分支曾无条件回传全部），于是默认只回账本序最后 N 条并如实标注。
+    // 措辞（P3-c · 设计评审 2026-10-15）：修前写「只回传最新 N 条」——实际取的是
+    // `slice(-N)`（账本顺序的尾部），不是按 `记于` 时间排序的前 N 新。跨类查询时两者
+    // 会分道（不同账本按文件序拼接），说明文字必须与实际语义一致。
     // 命中（`命中`）与口径（`口径`）不受影响：预算只管 `条目` 这一栏。
     const 条数上限 = Number.isFinite(query.条数上限) && query.条数上限 > 0 ? Math.floor(query.条数上限) : 50;
     const 条目截断 = visible.length > 条数上限;
@@ -504,7 +522,7 @@ export class MemoryService {
         ? `另有 ${撤回.length} 条已失效/被推翻/待删除/已隔离的条目按「当前有效视图」未进召回${口径数.隔离条目数 > 0 ? `（其中 ${口径数.隔离条目数} 条因源对象物理删除被血缘隔离）` : ''}；要看它们请带 含失效: true。`
         : '';
       const 说明 = [
-        ...(条目截断 ? [`条目 共 ${visible.length} 条，超出上限 ${条数上限}，只回传最新 ${条数上限} 条；带 条数上限 可调。`] : []),
+        ...(条目截断 ? [`条目 共 ${visible.length} 条，超出上限 ${条数上限}，只回传账本序最后 ${条数上限} 条（按账本顺序，非按记于时间排序）；带 条数上限 可调。`] : []),
         ...(视图说明 ? [视图说明] : []),
         ...(query.显式 === true ? ['已显式包含归档作答。'] : []),
       ].join(' ');
@@ -554,7 +572,7 @@ export class MemoryService {
     result.条数上限 = 条数上限;
     result.口径 = { ...result.口径, ...条目口径 };
     if (条目截断) {
-      result.说明 = [result.说明, `条目 共 ${visible.length} 条，超出上限 ${条数上限}，只回传最新 ${条数上限} 条；带 条数上限 可调。`]
+      result.说明 = [result.说明, `条目 共 ${visible.length} 条，超出上限 ${条数上限}，只回传账本序最后 ${条数上限} 条（按账本顺序，非按记于时间排序）；带 条数上限 可调。`]
         .filter(Boolean)
         .join(' ');
     }
@@ -886,12 +904,16 @@ export class MemoryService {
     /** @type {Record<string, number>} */
     const 计数 = {};
     // 坏行可见（2026-10-13 裁决第二批·裁决4）：记忆账本无哈希链，撕裂/手改的坏行此前被
-    // readJsonl 静默跳过。最底线=不静默：计数走带体检的读取器，坏行进读数（§3.6）。
+    // readJsonl 静默跳过。最底线=不静默：坏行进读数（§3.6）。
+    // P3-a（设计评审 2026-10-15）：修前 stats 对每个文件全量 `readJsonlHealth` 重读——
+    // 绕开 `#rows` 行缓存，activity/检索都命中缓存时它还在扫全库。现改走 `#rowsHealth`
+    // （缓存命中 ⇒ 零全量重读，只剩签名校验的每文件一次 stat，与 #rows 同口径），
+    // 坏行计数随缓存条目同源携带——「坏行可见」的裁决不因走缓存而丢。
     let 坏行 = 0;
     for (const kind of MEMORY_KINDS) {
       const rows = [];
       for (const scope of await this.#scopesFor(kind, query.项目)) {
-        const health = await readJsonlHealth(this.layout.memoryLog(scope, kind));
+        const health = await this.#rowsHealth(this.layout.memoryLog(scope, kind));
         rows.push(...health.rows);
         坏行 += health.坏行;
       }

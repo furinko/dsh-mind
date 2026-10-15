@@ -9,6 +9,7 @@
  * 而复核结论本身是只增的。
  */
 import { Denied, Fault, InvalidBody } from './kernel/errors.js';
+import { 全员已交 } from './tasks.js';
 
 /** 复核三态（§8）。 */
 export const VERDICTS = ['过', '不过', '未验'];
@@ -296,16 +297,50 @@ export class ReviewProtocol {
 
   /**
    * 提交后解锁（§10）：全员交卷后才亮出彼此答案。
-   * @param {{ subject: object, 项目: string, 线程: string, 参与者: string[], 已交: string[] }} spec
+   *
+   * #9（设计评审 2026-10-15）· 齐卷从任务图重算（与 bus.unlock 修法同路）：
+   * 修前完全按调用方自报的 `已交` 名单判定——自报 `['x']` 而任务图未齐照样放行，
+   * 盲评提前揭开（bus.unlock 修前同病）。现在：
+   *  - 注入了 tasks（org.js 装配恒注入）⇒ 必须给 `节点`，从任务图独立答案重算
+   *    （复用 tasks.js 的 全员已交 单源函数——与遮罩/讨论开启同一把尺），自报名单不承重；
+   *  - 未注入 tasks 的独立用法（纯函数式夹具）⇒ 保持旧行为（自报名单），但返回的
+   *    说明响亮标注口径。选「保留 + 标注」而不是「直接拒」：既有独立用法（flow 夹具
+   *    之外的服务级测试）拿它当纯函数用，拒掉会把「没接任务图」升级成「API 不可用」；
+   *    真实部署不走这条兜底（org.js 恒注入）。
+   *
+   * @param {{ subject: object, 项目: string, 线程: string, 节点?: string, 参与者: string[], 已交: string[] }} spec
    */
   async openBlind(spec) {
-    const 已交 = new Set(spec.已交 ?? []);
-    const 未交 = (spec.参与者 ?? []).filter((p) => !已交.has(p));
-    if (未交.length > 0) {
-      throw new Denied('§10 提交后解锁', `还有 ${未交.length} 人未交卷，第一轮保持盲评：${未交.join('、')}`, {
-        requireAuthority: 'Lead',
-        howToChange: '等全员交卷；本协议不提供「先看一眼」的口子，否则反趋同失效。',
-      });
+    let 已交名单;
+    let 口径;
+    if (this.tasks) {
+      if (!spec.节点) {
+        throw new InvalidBody('openBlind 需要 节点（任务节点 id）：已注入任务图时齐卷判定从独立答案重算，不收自报名单。', { missing: ['节点'] });
+      }
+      const node = await this.tasks.get(spec.节点, { 项目: spec.项目 });
+      if (!node) throw new InvalidBody(`没有这个任务节点：${spec.节点}（项目 ${spec.项目}）——盲评解锁要从任务图独立答案重算，节点不存在就没有权威源。`);
+      // 齐卷判据的单源函数（tasks.js 全员已交）：与 bus_unlock / debate_open / 遮罩同一把尺
+      // （按人核对——计数口径会被「非负责人垫一份」骗开），这里不自己再写一遍。
+      已交名单 = (node.独立答案 ?? []).map((a) => a.成员).filter((m) => (node.负责人 ?? []).includes(m));
+      口径 = `任务图重算（状态=${node.状态}，答案 ${已交名单.length}/${(node.负责人 ?? []).length}；自报的 已交 名单不承重）`;
+      if (!全员已交(node)) {
+        throw new Denied('§10 提交后解锁', `还有 ${(node.负责人 ?? []).length - 已交名单.length} 人未交卷（${口径}），第一轮保持盲评：${(node.负责人 ?? []).filter((p) => !已交名单.includes(p)).join('、')}`, {
+          requireAuthority: 'Lead',
+          howToChange: '等全员交卷；本协议不提供「先看一眼」的口子，否则反趋同失效。',
+          detail: { 节点: spec.节点, 负责人: node.负责人 ?? [], 已交: 已交名单, 自报已交: spec.已交 ?? [] },
+        });
+      }
+    } else {
+      已交名单 = spec.已交 ?? [];
+      口径 = '调用方自报名单（未注入任务图，无法重算）';
+      const 已交 = new Set(已交名单);
+      const 未交 = (spec.参与者 ?? []).filter((p) => !已交.has(p));
+      if (未交.length > 0) {
+        throw new Denied('§10 提交后解锁', `还有 ${未交.length} 人未交卷，第一轮保持盲评：${未交.join('、')}`, {
+          requireAuthority: 'Lead',
+          howToChange: '等全员交卷；本协议不提供「先看一眼」的口子，否则反趋同失效。',
+        });
+      }
     }
     // 盲评：第一轮只显示「成员 A / B / C」，揭名在讨论阶段。
     // 盲标映射去顺序化（2026-10-13 裁决第二批 P2-13）：修前按参与者数组顺序分配——
@@ -319,8 +354,9 @@ export class ReviewProtocol {
       依据: '§10 提交后解锁 · 盲评',
       结果: '已解锁（盲标阶段）',
       项目: spec.项目,
+      详情: { 节点: spec.节点 ?? null, 口径 },
     });
-    return { 解锁: true, 盲标, 说明: '第一轮只显示成员 A/B/C；揭名在讨论阶段。' };
+    return { 解锁: true, 盲标, 说明: `第一轮只显示成员 A/B/C；揭名在讨论阶段。齐卷口径：${口径}。` };
   }
 
   /**
@@ -377,7 +413,7 @@ export class ReviewProtocol {
         结果: '会审零分歧异常',
         项目: spec.项目,
         告警: true,
-        详情: { 参与人数: 判定.参与人数, 结论层: 判定.结论层, 触发人工抽检: true, 结论集来源 },
+        详情: { 参与人数: 判定.参与人数, 结论层: 判定.结论层, 触发人工抽检: true, 结论集来源, 空卷数: 判定.空卷数 },
       });
     }
     return {
@@ -386,6 +422,9 @@ export class ReviewProtocol {
       依据: 判定.依据,
       参与人数: 判定.参与人数,
       结论集来源,
+      // 空卷数（设计评审 F5 · 2026-10-15）：两份全空卷不再被折成「全票一致」——
+      // 读者要看得出「为什么不判」，而不是猜。
+      空卷数: 判定.空卷数,
     };
   }
 
@@ -397,12 +436,33 @@ export class ReviewProtocol {
    * ⇒ 等于给复核者一条**不经判定**的写副作用通道，与「只读数，不改」的契约冲突。
    * 需要落盘的实验走沙箱区（`sandboxExperiment`）：单独授权、任务结束即清、全程入账。
    *
+   * 危险形态闸（设计评审 F6 · 2026-10-15）：白名单是**命令名**级判定，不是 shell 语义判定——
+   * 复核实测 `find / -exec rm -rf x`、`git diff --output=<文件>`、`git -c <注入> log` 都靠前缀命中放行。
+   * 于是先过一道危险形态闸：能写盘 / 能起子进程的形态一律拒（含 shell 元字符）。
+   * 这是第一道，不是语义判定器：真接线（复核者命令面）时必须连执行沙箱一起设计。
+   *
    * @param {string} command
    * @returns {{ 允许: boolean, 依据: string, howToChange?: string }}
    */
   static readonlyCommand(command) {
     const allowed = ['read', 'list', 'stat', 'search', 'grep', 'find', 'glob', 'cat', 'head', 'tail', 'wc', 'git status', 'git log', 'git diff'];
     const head = String(command).trim();
+    // 危险形态表：每条只挡「无论怎么解释都不可能是只读」的形态——
+    // `-i`/`-c`/`-o` 这类歧义旗标不在此列（`grep -i` 只读、`wc -c` 只读），避免误伤；
+    // 只在 `git` 的子命令位置出现的 `-c` / `--exec-path` 是配置注入面，单列一条。
+    const 危险 = [
+      [/[><|;&`]|\$\(|\r|\n/, '含重定向 / 管道 / 命令替换 / 控制符'],
+      [/(^|\s)(-exec|-execdir|-ok|-okdir|-delete|-fprint|-fprint0|-fprintf|-fls)(\s|=|$)/, '含执行或写盘的 find 类旗标'],
+      [/(^|\s)(--output|--out)(\s|=|$)/, '含输出到文件的旗标'],
+      [/^git\s+(-c|--exec-path)(\s|=)/, '含可注入执行配置的 git 旗标'],
+    ].find(([正则]) => 正则.test(head));
+    if (危险) {
+      return {
+        允许: false,
+        依据: `危险形态：${危险[1]}——只读白名单是命令名级判定，不做 shell 语义解析，凡能写盘或起子进程的形态一律拒`,
+        howToChange: '需要落盘的实验走沙箱区（§2 单独授权）：任务结束即清、全程入账，不进持久状态。',
+      };
+    }
     const 允许 = allowed.some((a) => head === a || head.startsWith(`${a} `));
     return {
       允许,
@@ -473,28 +533,37 @@ export function 盲标分配(线程, 参与者) {
 }
 
 /**
- * 零分歧的**唯一判据**（§10）：结论层一致，且无人给出反例面。
+ * 零分歧的**唯一判据**（§10）：结论层一致，且无人给出反例面，且**没有空卷**。
  *
  * 抽成纯函数是因为它有两个调用方——复核时（判定 + 入账）与工作台投影（只读重算）。
  * 两处各写一遍迟早会漂，而这条规则一旦漂了，「全票一致 = 异常信号」这个机制就废了。
  *
+ * 空卷（设计评审 F5 · 2026-10-15）：结论层与结论**都**为空串的答案。修前空串照样进
+ * 结论层集合——两份全空卷折成「集合里只剩一个空串」⇒ 长度 1 ⇒ 被判「全票一致」
+ * 触发人工抽检。全票一致的前提是**人人给了结论层**：存在任何空卷 ⇒ 不构成零分歧，
+ * `空卷数` 字段让读者看得见「为什么不判」。集合构造时空串不入集。
+ *
  * @param {Array<{成员?: string, 结论?: string, 结论层?: string, 反例面?: string[]}>} 结论集
- * @returns {{零分歧: boolean, 依据: string, 参与人数: number, 结论层: string[]}}
+ * @returns {{零分歧: boolean, 依据: string, 参与人数: number, 结论层: string[], 空卷数: number}}
  */
 export function judgeZeroDivergence(结论集) {
   const 集 = 结论集 ?? [];
   if (集.length < 2) {
-    return { 零分歧: false, 依据: '少于两份结论，不构成会审。', 参与人数: 集.length, 结论层: [] };
+    return { 零分歧: false, 依据: '少于两份结论，不构成会审。', 参与人数: 集.length, 结论层: [], 空卷数: 0 };
   }
-  const 结论层 = [...new Set(集.map((c) => String(c.结论层 ?? c.结论 ?? '').trim()))];
+  const 空卷 = (c) => String(c.结论层 ?? c.结论 ?? '').trim() === '';
+  const 空卷数 = 集.filter(空卷).length;
+  // 空串不入集：集合只回答「有几种非空结论层」，空卷由 `空卷数` 单独报。
+  const 结论层 = [...new Set(集.filter((c) => !空卷(c)).map((c) => String(c.结论层 ?? c.结论 ?? '').trim()))];
   const 有反例 = 集.some((c) => (c.反例面 ?? []).length > 0);
-  const 零分歧 = 结论层.length === 1 && !有反例;
+  const 零分歧 = 结论层.length === 1 && !有反例 && 空卷数 === 0;
   return {
     零分歧,
     依据: 零分歧
       ? '结论层一致且无人给出反例面：全票一致 = 异常信号，应记一笔并触发人工抽检。'
-      : `结论层分歧数 ${结论层.length}，反例面 ${有反例 ? '存在' : '不存在'}。`,
+      : `结论层分歧数 ${结论层.length}，反例面 ${有反例 ? '存在' : '不存在'}，空卷 ${空卷数} 份${空卷数 > 0 ? '（结论层与结论都为空：全票一致的前提是人人给了结论层，空卷在场不判）' : ''}。`,
     参与人数: 集.length,
     结论层,
+    空卷数,
   };
 }

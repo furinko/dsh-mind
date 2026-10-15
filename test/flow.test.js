@@ -552,11 +552,25 @@ describe('主干环路', () => {
     const second = await review.pickDissenter({ 项目: P, 节点: 'n-1', 参与者: ['member-a'], 候选: ['member-a', 'member-b', 'member-c'] });
     assert.notEqual(second.反对者, first.反对者, '同一节点不得重复指定');
 
+    // 夹具改形（#9 · 设计评审 2026-10-15）：openBlind 在注入了任务图时必须给 节点 并从
+    // 独立答案重算（与 bus.unlock 修法同路）——修前按自报 已交 名单判定，任务图未齐也放行。
+    // 本夹具的 review 恒注入 tasks（before 块），所以这里用真实节点而不是自报名单。
+    const MEMBER_B = { id: 'member-b', kind: '成员', roleId: '插件工程' };
+    const 未交齐节点 = await tasks.create({ subject: LEAD, 项目: P, 描述: '盲评未交齐', 负责人: ['member-a', 'member-b'], 模式: '独立会审', 判据: ['x'] });
+    await tasks.dispatch(未交齐节点.id, { subject: LEAD, 项目: P });
+    await tasks.start(未交齐节点.id, { subject: MEMBER, 项目: P });
+    await tasks.submit(未交齐节点.id, { subject: MEMBER, 项目: P, 结论: 'A 案' });
     await assert.rejects(
-      () => review.openBlind({ subject: LEAD, 项目: P, 线程: 't-1', 参与者: ['member-a', 'member-b'], 已交: ['member-a'] }),
-      (e) => e instanceof Denied,
+      () => review.openBlind({ subject: LEAD, 项目: P, 线程: 't-1', 节点: 未交齐节点.id, 参与者: ['member-a', 'member-b'], 已交: ['member-a', 'member-b'] }),
+      (e) => e instanceof Denied && /未交卷|保持盲评/.test(e.message),
+      '自报 已交 全员但任务图只有一份 ⇒ 重算拒（修前放行）',
     );
-    const blind = await review.openBlind({ subject: LEAD, 项目: P, 线程: 't-1', 参与者: ['member-a', 'member-b'], 已交: ['member-a', 'member-b'] });
+    const 交齐节点 = await tasks.create({ subject: LEAD, 项目: P, 描述: '盲评交齐', 负责人: ['member-a', 'member-b'], 模式: '独立会审', 判据: ['x'] });
+    await tasks.dispatch(交齐节点.id, { subject: LEAD, 项目: P });
+    await tasks.start(交齐节点.id, { subject: MEMBER, 项目: P });
+    await tasks.submit(交齐节点.id, { subject: MEMBER, 项目: P, 结论: 'A 案' });
+    await tasks.submit(交齐节点.id, { subject: MEMBER_B, 项目: P, 结论: 'B 案' });
+    const blind = await review.openBlind({ subject: LEAD, 项目: P, 线程: 't-1', 节点: 交齐节点.id, 参与者: ['member-a', 'member-b'], 已交: [] });
     assert.equal(blind.解锁, true);
     // 盲标映射已随机化（2026-10-13 裁决第二批 P2-13）：映射顺序不可预测 ⇒ 只断「集合覆盖」
     // 与「盲标唯一」，不断言谁拿 A（那正是修前的去匿名面）。

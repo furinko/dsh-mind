@@ -112,8 +112,10 @@ export class UpgradeManager {
     });
 
     // 冲突私有优先：不挂起、不阻塞，但必须有一条告警让 Lead 能向主权者提示（裁决 2026-10-08）。
-    // 告警去重（2026-10-14 审查 P2-15）：compare 是只读比对，修前每次调用都刷两条审计
-    // （同一份冲突告警可被反复灌水）。签名 = 对象 + 处置全集；与上一次比对相同就跳过入账。
+    // 入账口径如实（设计评审 #10 · 2026-10-15 改写——修前注释自称「只读比对」）：compare
+    // 并非纯只读——它做**比对 + 签名去重记账 + 审计**：结果与上一次的签名（对象+处置全集）
+    // 不同才入账/落签名文件（2026-10-14 审查 P2-15 的去重），签名时间取**注入时钟**
+    // （`this.clock.iso()`，修前 `new Date()` 绕开了可注入源——测试与回放里控不住它）。
     // 主体记真实调用者（spec.subject），缺省才落 system——谁刷的告警，账上就得是谁。
     const 主体 = spec.subject ?? { id: 'system', kind: '系统' };
     const 签名 = JSON.stringify({ 对象: spec.对象, 行: 结果.map((r) => `${r.条款}=${r.处置}${r.冲突 ? '⚡' : ''}`) });
@@ -141,7 +143,9 @@ export class UpgradeManager {
       });
     }
     if (上次?.签名 !== 签名) {
-      await atomicWrite(签名文件, `${JSON.stringify({ 签名, 于: new Date().toISOString() }, null, 2)}\n`);
+      // 注入时钟（设计评审 #10 · 2026-10-15）：签名落盘时刻与审计条目同源——
+      // 本类构造器已注入 clock，修前这里 `new Date().toISOString()` 绕开了它。
+      await atomicWrite(签名文件, `${JSON.stringify({ 签名, 于: this.clock.iso() }, null, 2)}\n`);
     }
     return 结果;
   }
@@ -243,21 +247,42 @@ export class UpgradeManager {
   /**
    * 对象 id → 该区里的实际文件。规则件、岗位卡、能力卡住在三处不同目录，
    * 由这一个函数统一解析，别处不再猜路径。
+   * 候选集的实现已抽为模块级导出 `按id找卡`（设计评审 #11 · 2026-10-15）：
+   * 安全类探针的「撤回名单一致」与这里**共用同一份**——修前两处各写一份，
+   * 探针那份漏了能力卡，撤回能力卡会被误报成「撤回变成删除」。
    * @param {string} 对象
    * @param {'出厂'|'私有'} zone
    * @returns {Promise<string|null>}
    */
   async #resolve(对象, zone) {
-    const candidates = [
-      this.layout.rulePath(对象, zone),
-      `${this.layout.roleCardDir(zone)}/${对象}.md`,
-      `${this.layout.capabilityDir(zone === '出厂' ? '出厂' : '自治')}/${对象}.md`,
-    ].filter(Boolean);
-    for (const path of candidates) {
-      if ((await readTextOrNull(path)) !== null) return path;
-    }
-    return null;
+    return 按id找卡(this.layout, 对象, zone);
   }
+}
+
+/**
+ * 按 id 在指定区找卡（三类对象候选集：规则件 + 角色卡 + 能力卡）——升级比对
+ * （`UpgradeManager.#resolve`）与安全类探针（probes.js 的 `findCard`）的**同一份**实现
+ * （设计评审 #11 · 2026-10-15）。两处此前各写一份候选集，探针那份漏了能力卡 ⇒
+ * 撤回一张能力卡会让「撤回名单一致」探针误报红。落点在这里导出：probes 只 import
+ * kernel，新增对 upgrade 的依赖不构成环（upgrade 只 import kernel/paths）。
+ *
+ * zone 词汇说明：`rulePath` 认 '出厂'|'私有'；`roleCardDir`/`capabilityDir` 是二值
+ * （非'出厂'即私有区），'私有' 经 else 分支落私有区目录——与既有 #resolve 行为逐字节一致。
+ * @param {import('./paths.js').Layout} layout
+ * @param {string} id
+ * @param {'出厂'|'私有'} zone
+ * @returns {Promise<string|null>} 命中的文件路径；三处都没有 ⇒ null
+ */
+export async function 按id找卡(layout, id, zone) {
+  const candidates = [
+    layout.rulePath(id, zone),
+    `${layout.roleCardDir(zone)}/${id}.md`,
+    `${layout.capabilityDir(zone)}/${id}.md`,
+  ].filter(Boolean);
+  for (const path of candidates) {
+    if ((await readTextOrNull(path)) !== null) return path;
+  }
+  return null;
 }
 
 /**

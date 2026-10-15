@@ -17,6 +17,7 @@ import { parseDocument } from './tags.js';
 import { section } from './capability.js';
 import { assertPathSegment } from './paths.js';
 import { ACTIONS, identityStatus } from './policy.js';
+import { evaluateSovereignPresence } from './kernel/time.js';
 
 /** 卡上的四段，顺序即个体域的层级（§14：个体域才有 L0~L3）。 */
 const SEGMENTS = ['个体L0', '个体L1', '个体L2', '个体L3'];
@@ -33,6 +34,15 @@ const ZONES = [
   ['自治', '私有'],
   ['出厂', '出厂'],
 ];
+
+/**
+ * 主权者交互的来源白名单（设计评审 #7 · 2026-10-15）：`markInteraction` 只认这三个入口。
+ * 名单是封闭的——新增调用方必须在这里显式登记，否则 fail-closed 被拒。
+ *  - 「宿主事件」：内核的 user/message 挂钩（components/kernel/lib/index.js 挂主权者交互）；
+ *  - 「presence命令」：/mind sovereign_interaction（命令面专属，模型没有这只手）；
+ *  - 「部署引导」：org.bootstrap() 在身份档案缺失时落的第一次交互（主权者「启动了这个部署」）。
+ */
+const 交互来源白名单 = ['宿主事件', 'presence命令', '部署引导'];
 
 /**
  * 岗位 + 实例 → 策略判定用的主体（岗位决定主体种类）。
@@ -216,7 +226,17 @@ export class RoleRegistry {
   /**
    * 登记一个实例。岗位必须存在——实例权限只来自岗位。
    *
-   * 三条守卫，都在**锁内**判（锁外预读会与并发 assign 打架）。这张表就是「assign 能做什么」的全部：
+   * 守卫的实际落点（设计评审 #12 · 2026-10-15 如实改写——修前注释自称「三条守卫都在锁内」，
+   * 实际岗位卡读取在锁外）：**在锁内**的是岗位卡存在性复检（`#mutateIdentity` 回调第一件事）
+   * 与下面这张状态表（现存实例的分派判定）；**在锁外**的是复核员任命的授权引用校验
+   * （`audit.授权依据存在` 要扫任务图事件流，IO 量级大，搬进锁 = 身份档案锁被长 IO 扩占）
+   * 与 `policy.check`（引擎判定自己另有读锁纪律）。锁外两道的剩余窗口如实标注：它们通过
+   * 之后、写入之前，**授权依据节点被删**或**策略规则被热改**会让本次登记带着过期的检查结果
+   * 落盘——前者由授权引用原样进链接受复核兜底，后者由写后 `policy.reload()` 使后续判定
+   * 立即回到新规则。岗位卡那道修前也有同款窗口（check 与写入之间卡被删 ⇒ 不存在的岗位
+   * 进档案），现已搬入锁内关门。
+   *
+   * 这张表就是「assign 能做什么」的全部：
    *  | 实例现状 | 目标岗位 | 结果 |
    *  |---|---|---|
    *  | 没登记 | 任意（岗位卡存在） | 登记（在岗，第 `代` 代） |
@@ -235,16 +255,11 @@ export class RoleRegistry {
    *   `授权引用`：目标岗位＝复核员时必填（主权者授权依据，原样进链接受复核）。
    */
   async assign(spec) {
-    const card = await this.get({ id: spec.岗位 });
-    if (!card) {
-      throw new Denied('角色注册表 · 实例权限只来自岗位（§7）', `岗位「${spec.岗位}」不存在：不能给一个不存在的岗位发实例权限。`, {
-        requireAuthority: 'Lead',
-        howToChange: '先在 集体L3-成员角色卡/ 建岗位卡，再派实例。',
-      });
-    }
     // 复核员任命特判（task-机制缺口-10th0 · 裁决② · 2026-10-13）：岗位锁只保证「在岗后」
     // 不能写，不约束「谁能把我放进复核员岗」——任命权与岗位锁是两件事（独立复核 4yuxq 定案）。
     // 与 audit_correct 的授权闸同族：空授权 = 默认拒绝，授权依据原样进链接受复核。
+    // 【锁外·设计评审 #12】授权存在性校验要扫任务图事件流（重 IO），搬进身份档案锁会把
+    // 锁扩占成长 IO 临界区——留在锁外，剩余窗口见方法头注释的如实标注。
     const 授权引用 = typeof spec.授权引用 === 'string' ? spec.授权引用.trim() : '';
     if (spec.岗位 === '复核员' && !授权引用) {
       throw new Denied(
@@ -258,6 +273,7 @@ export class RoleRegistry {
     }
     // 授权引用存在性校验（2026-10-14 审查 P2-2）：与 audit_correct 同一把尺
     // （audit.授权依据存在 是唯一实现）——修前只验非空，任意字符串都能当授权。
+    // 【锁外·设计评审 #12】同上：重 IO 留锁外，窗口与兜底见方法头注释。
     if (spec.岗位 === '复核员' && !(await this.audit.授权依据存在(授权引用))) {
       throw new Denied(
         '角色注册表 · 复核员任命的授权引用必须真实存在',
@@ -268,6 +284,7 @@ export class RoleRegistry {
         },
       );
     }
+    // 【锁外·设计评审 #12】引擎判定不占身份档案锁（policy 自己有读锁纪律），留在锁外。
     await this.policy.check({
       subject: spec.subject,
       action: 'create',
@@ -278,7 +295,19 @@ export class RoleRegistry {
     let 幂等现状 = null;
     /** 首次登记 = 这个实例第一次进身份档案（「创建」在账上的锚点，见方法头注释）。 */
     let 首登 = false;
-    const updated = await this.#mutateIdentity((current) => {
+    const updated = await this.#mutateIdentity(async (current) => {
+      // 岗位卡存在性【锁内复检·设计评审 #12 · 2026-10-15】：修前在锁外预读（assign 一进来
+      // 就 `this.get`）——check 与写入之间岗位卡被删/改名的话，一个「不存在的岗位」会被登记
+      // 进档案（实例权限只来自岗位就成了空话）。搬进锁内：读的是持锁时刻的盘上事实，
+      // 「卡在校验后被删」的窗口随锁关闭。幂等路径同样先过这道（与修前顺序一致：
+      // 卡不存在就先拒，不进分派表）。
+      const card = await this.get({ id: spec.岗位 });
+      if (!card) {
+        throw new Denied('角色注册表 · 实例权限只来自岗位（§7）', `岗位「${spec.岗位}」不存在：不能给一个不存在的岗位发实例权限。`, {
+          requireAuthority: 'Lead',
+          howToChange: '先在 集体L3-成员角色卡/ 建岗位卡，再派实例。',
+        });
+      }
       const 现存 = current.members[spec.实例];
       首登 = !现存;
       if (现存?.status === '封存' && 现存.岗位 === spec.岗位) {
@@ -419,14 +448,55 @@ export class RoleRegistry {
 
   /**
    * 记录主权者的一次交互。失联判定以它为起点（§4）。
-   * @param {{ 于?: string }} [spec]
+   *
+   * 来源闸（设计评审 #7 · 2026-10-15）：修前无闸无痕——任何持有 Org 引用的代码路径都能
+   * 重置失联时钟，解冻完全依赖调用方纪律。现在 `来源` 必填且只认白名单（fail-closed：
+   * 缺席/名单外 ⇒ InvalidBody 响亮拒），并在 `sovereign` 上与 `lastInteraction` 并列落
+   * `交互来源`（**不动 `lastInteraction` 的形状**——policy/time 的失联判定在读它，
+   * `evaluateSovereignPresence` 只认那一个键）。
+   *
+   * 入账口径（防刷屏）：**只在「失联→在线」迁移那一刻**落一条「主权者交互」审计
+   * （详情注明来源与解除时刻）；常规心跳（每次 user/message 都走到这里）不逐条入账
+   * ——与 §7「普通调用不逐次记」纪律一致。迁移判定放在 `#mutateIdentity` 的**锁内**、
+   * 写之前：读的是刚从盘上拿到的 `current.sovereign.lastInteraction`（引擎快照可能落后于
+   * 手改的档案），期限用 `presence()` 已解析的生效值（与 /mind status 同一把尺）——
+   * 两个合法调用方各自在调用前后判定会在并发交互下双记，单源 + 锁内正好一次。
+   * 白名单多一个「部署引导」：`org.bootstrap()` 在身份档案缺失时以「主权者启动了这个部署」
+   * 落第一次交互（org.js:130，任务清单外的第三个合法调用方——不加会砸掉全部新部署引导）。
+   *
+   * @param {{ 来源: '宿主事件'|'presence命令'|'部署引导', 于?: string }} [spec]
    */
   async markInteraction(spec = {}) {
-    const updated = await this.#mutateIdentity((current) => ({
-      ...current,
-      sovereign: { ...current.sovereign, lastInteraction: spec.于 ?? this.clock.iso() },
-    }));
-    return { lastInteraction: updated.sovereign.lastInteraction };
+    if (!交互来源白名单.includes(spec.来源)) {
+      throw new InvalidBody(
+        `主权者交互必须声明来源（fail-closed）：只认 ${交互来源白名单.map((s) => `「${s}」`).join('、')}，收到 ${JSON.stringify(spec.来源 ?? null)}。失联时钟的解冻不能依赖调用方纪律（设计评审 #7 · 2026-10-15）。`,
+        { missing: ['来源'], detail: { 合法来源: 交互来源白名单 } },
+      );
+    }
+    const 读数 = this.policy.presence(); // 永不抛；已关闭/在线都如实
+    let 迁移 = false;
+    const updated = await this.#mutateIdentity((current) => {
+      迁移 = 读数.失联限制 !== false && !读数.已关闭 && evaluateSovereignPresence({
+        lastInteraction: current.sovereign?.lastInteraction ?? null,
+        responseDeadlineHours: 读数.生效响应期限小时,
+        now: this.clock.now(),
+      }).lost;
+      return {
+        ...current,
+        sovereign: { ...current.sovereign, lastInteraction: spec.于 ?? this.clock.iso(), 交互来源: spec.来源 },
+      };
+    });
+    if (迁移) {
+      await this.audit.append({
+        动作: '主权者交互',
+        主体: { id: 'sovereign', kind: '主权者' },
+        对象: { id: 'sovereign', kind: '失联' },
+        依据: '§4 失联：主权者任何一次交互即解除——只在失联→在线迁移那一刻入账，常规心跳不逐条记',
+        结果: '失联解除（在线）',
+        详情: { 来源: spec.来源, 解除时刻: updated.sovereign.lastInteraction },
+      });
+    }
+    return { lastInteraction: updated.sovereign.lastInteraction, 交互来源: spec.来源 };
   }
 
   /** @returns {Promise<object>} 身份档案原文 */
@@ -510,13 +580,17 @@ export class RoleRegistry {
   }
 
   /**
-   * @param {(current: object) => object} apply
+   * @param {(current: object) => object|Promise<object>} apply
    * 写完身份档案后立即 `policy.reload()`：判定读的是加载时的快照，
    * 不重载的话「封存实例照常全权 / 失联冻得住解不开」都会发生（B2）。
    *
    * **apply 原样返回 current ⇒ 不写盘、不重载**（W3 批2·2026-10-09）：这是「幂等操作」
    * 的落点——重复登记不该产生一次无变化的原子写，更不该让判定快照无谓重载。
    * 其余调用方都返回新对象，行为不变。
+   *
+   * apply 允许是**异步**的（设计评审 #12 · 2026-10-15）：assign 把岗位卡读取搬进了锁内
+   * （`this.get` 是 IO），回调里 await 不改变「原样返回 current ⇒ 不写盘」的语义——
+   * `await` 一个非 Promise 值原样透传，既有同步回调全部照旧。
    */
   async #mutateIdentity(apply) {
     const file = this.layout.identityFile();
@@ -524,7 +598,7 @@ export class RoleRegistry {
     let 已写 = false;
     await withLock(this.layout.identityLock(), async () => {
       const current = await this.#identity();
-      result = apply(current);
+      result = await apply(current);
       if (result !== current) {
         await atomicWrite(file, `${JSON.stringify(result, null, 2)}\n`);
         已写 = true;

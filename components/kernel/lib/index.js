@@ -21,6 +21,8 @@ import { agentSubject } from '../../../src/subject.js';
 import { describeFailure, InvalidBody } from '../../../src/kernel/errors.js';
 import { stripBom } from '../../../src/kernel/fsx.js';
 import { ACTIONS, runAction } from '../../../lib/actions.js';
+// 看板尾长单源（设计评审 #17 · 2026-10-15）：装配期喂给看板包的「40」改引常量（值不变）。
+import { 看板审计尾条数 } from '../../../src/audit.js';
 // 单源（2026-10-11 schema 口径修缮）：类型 参数描述里的消息类型枚举从 bus.js 的
 // 唯一清单拼出来——手抄一份必漂（src/bus.js 的 MESSAGE_TYPES 是闸的同一真源）。
 import { MESSAGE_TYPES } from '../../../src/bus.js';
@@ -170,7 +172,10 @@ function mindTool({ org, 项目, 项目键 }) {
         role: { type: 'string', description: '以哪个岗位身份执行（Lead / 复核员 / 成员岗位名）' },
         实例: { type: 'string', description: '岗位实例 id；省略则按岗位推断' },
         id: { type: 'string', description: '对象 id（任务节点 / 记忆条目 / 挂起项 / 能力名——capability_read 按 id 读，不读 名）' },
-        描述: { type: 'string', description: '任务/挂起项的描述（task_create / task_pending）' },
+        // 描述/原因 的分工按动作实际消费面写（设计评审 F2b 普查 · 2026-10-15）：task_pending
+        // 的 handler 读的是 原因（服务层 markPending 的 待决原因），不读 描述——修前 描述
+        // 的说明写着「task_create / task_pending」两用，照它传参会静默落空。
+        描述: { type: 'string', description: '任务的描述（task_create）' },
         负责人: { type: 'string', description: '负责人 id 或多个用逗号分隔（task_create 建 / task_reassign 改派——改派仅 Lead、仅待派发/已派发）' },
         判据: { type: 'string', description: '验收标准；多个用逗号分隔。任务必填，派发后冻结' },
         依赖: { type: 'string' },
@@ -203,7 +208,7 @@ function mindTool({ org, 项目, 项目键 }) {
         敏感: { type: 'boolean', description: 'op=purge 时显式声明「这是敏感数据」；声明会进审计，不声明只有主权者能物理删除' },
         披露豁免: { type: 'boolean', description: 'op=promote 时 Lead 显式豁免披露机械检查（仅 Lead 可用）；豁免与命中的敏感模式名会一起进审计' },
         新条目: { type: 'string' },
-        原因: { type: 'string', description: '原因/理由（registry_seal / registry_revoke / review_nominate 提名理由 / review_exempt 豁免原因）' },
+        原因: { type: 'string', description: '原因/理由（task_pending 待决原因 / registry_seal / registry_revoke / review_nominate 提名理由 / review_exempt 豁免原因）' },
         名: { type: 'string', description: '能力名（capability_resolve 检索 / capability_publish 发布；capability_read 不读名、只读 id）' },
         正文: { type: 'string', description: '能力卡正文（capability_publish）' },
         适用岗位: { type: 'string' },
@@ -275,7 +280,7 @@ function mindCommand(spec) {
         if (line === '' || line === 'dashboard' || line === 'workbench') {
           // 看板走的也是「按身份切片」的同一条路：Lead 看全量，成员只读自己那片。
           // 投影本体与同源路由**共用**（`看板包`）：同一份 JSON，客户端只换传输层。
-          const 包 = await 看板包({ org: spec.org, 项目: 本次项目, 读者: agentSubject({ agent }), 审计条数: 40 });
+          const 包 = await 看板包({ org: spec.org, 项目: 本次项目, 读者: agentSubject({ agent }), 审计条数: 看板审计尾条数 });
           return { kind: 'success', text: JSON.stringify(包, null, 1) };
         }
         const [head, ...rest] = line.split(/\s+/);
@@ -557,7 +562,9 @@ function 挂主权者交互(ctx, org, logger) {
     try {
       const type = event?.type ?? event?.event?.type;
       if (type !== 'user/message') return;
-      org.registry.markInteraction({}).catch((error) => logger.warn?.(`[dsh-mind] 记录主权者交互失败：${error.message}`));
+      // 来源必带（设计评审 #7 · 2026-10-15）：markInteraction 的来源白名单闸——「宿主事件」
+      // 就是本挂钩（宿主的用户消息），缺席/名单外会被服务层 fail-closed 拒。
+      org.registry.markInteraction({ 来源: '宿主事件' }).catch((error) => logger.warn?.(`[dsh-mind] 记录主权者交互失败：${error.message}`));
     } catch {
       // 事件形状变了不该影响会话；失联判定还有 `/mind sovereign_interaction`（命令面专属）兜底。
     }
@@ -574,7 +581,10 @@ function 挂主权者交互(ctx, org, logger) {
 function 组织说明(org) {
   return [
     '本会话处于一个数字组织中，你可以用 `mind` 工具与组织交互。',
-    `项目键：${org.project}。`,
+    // 项目键不点名（设计评审 F2 · 2026-10-15）：修前这里钉 `${org.project}`（装配期项目，
+    // 恒 default），而工具面每次调用都按工作区目录重新解析项目键——提示词说一个、
+    // 实际操作另一个。静态句子只教解析规则，不替会话猜项目。
+    '项目键：省略 project 参数时取会话工作区目录名（§14.4-5 目录名即项目键）。',
     '身份约定：根会话执行者 = Lead（可派活、可建卡、可汇总验收）；复核者只读数、不改、不提案；成员任务内全权、任务外无。',
     '派活流程：接需求→定判据（写不出判据就不开工）→查岗位（有需要即建卡/改卡）→宿主侧拉起子会话→registry_assign 登记实例→task_create/task_dispatch（负责人须在册在岗，派给空气会被拒）→复核→采纳/打回→落记忆→结账。',
     '纪律：写操作一律先过策略引擎；被拒绝时结果里会带「哪条规则 + 改它要什么授权」，照着改，不要绕。',

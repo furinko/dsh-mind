@@ -105,7 +105,7 @@ describe('审查修复 · 批次3+5（身份链 / 一致性）', () => {
     try {
       const reg3 = new RoleRegistry({ layout: g3.layout, policy: g3.policy, audit: g3.audit, clock: g3.clock });
       assert.equal(g3.policy.presence().lost, true, '夹具应处于失联');
-      await reg3.markInteraction({});
+      await reg3.markInteraction({ 来源: '宿主事件' });
       assert.equal(g3.policy.presence().lost, false, '主权者一次交互即解除（判定读新档案）');
     } finally {
       await g3.cleanup();

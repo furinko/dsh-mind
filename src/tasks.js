@@ -12,7 +12,7 @@
  * 内存里的节点只是它的投影，因此重启后一切都能重算（§12.4）。
  */
 import { stat } from 'node:fs/promises';
-import { appendLines, readJsonl, withLock } from './kernel/fsx.js';
+import { appendLines, readJsonl, serializeByKey, withLock } from './kernel/fsx.js';
 import { Denied, Fault, InvalidBody } from './kernel/errors.js';
 
 /** 一岗多人的两种模式（§10）。 */
@@ -64,6 +64,18 @@ const TRANSITIONS = {
   // exemptReview（G4 · 同交接件）：复核豁免登记。豁免是**标记**不是状态转移，
   // 任何非终态可挂（与 attach 同格）——待决中的提名也可就地豁免（裁决 = 不复核）。
   exemptReview: ['待派发', '已派发', '执行中', '已交卷', '未验', '已打回', '待决'],
+  // ── 会审讨论段三事件（设计评审 F3 · 2026-10-15）────────────────────────────
+  // 修前三键全缺：debate_opened 与 review(过) 并发时，锁外读过闸的 open 可以在
+  // **已采纳**节点上落一条活跃讨论（齐卷判定只在编排层锁外做过一次）。
+  //  - debate_opened：合法前驱 = 已交卷（齐卷判据 全员已交 本身含这一条，锁内再验）。
+  //  - debate_round / debate_converged：前驱 = **带讨论段的**已交卷态——「讨论是节点的
+  //    子状态，不动主状态」的既有表达（fold 后 状态=已交卷 且 node.讨论 存在），
+  //    不发明新状态：主状态用这一列守，讨论段子状态由各方法既有的锁内讨论守卫守
+  //    （存在且未收敛）。软约束「讨论中仍可 review」保留：review(过) 之后主状态离开
+  //    已交卷，讨论段换轮/收敛随之冻结——这正是本批要堵的「已采纳节点上活跃讨论」。
+  debate_opened: ['已交卷'],
+  debate_round: ['已交卷'],
+  debate_converged: ['已交卷'],
 };
 
 /**
@@ -682,6 +694,9 @@ export class TaskGraph {
    */
   async debateOpened(id, spec) {
     const node = await this.#require(id, spec.项目);
+    // 状态机前置（设计评审 F3 · 2026-10-15）：开讨论只从「已交卷」出发。锁外这次是
+    // 快速失败（可读理由），锁内那次（下方 inLockGuard）才是权威。
+    this.#requireTransition(node, 'debate_opened');
     if (node.模式 !== '独立会审') {
       throw new Denied('会审讨论段 · 只属于独立会审（§10）', `节点 ${id} 的模式是「${node.模式 ?? '未声明'}」：并行分担没有盲评与讨论环节。`, {
         howToChange: '讨论段只对独立会审节点开放；并行分担节点直接交卷、复核。',
@@ -723,6 +738,34 @@ export class TaskGraph {
             howToChange: nodeInLock.讨论.状态 === '已收敛' ? '讨论已收敛：走复核（review）。' : '讨论进行中：发言用 debate_say，换轮 debate_round，收敛 debate_converge。',
           });
         }
+        // ── F3（设计评审 2026-10-15）· TOCTOU 复检 ────────────────────────────
+        // ① 主状态复检：锁外读到的「已交卷」与落笔时刻可能不同——并发 review(过) 可以在
+        //    编排层锁外齐卷判定（debate.js 的 快速失败检查）通过之后、本事件落线之前把
+        //    节点推进到「已采纳」。不复检 ⇒ 已采纳节点上开出活跃讨论段。
+        if (nodeInLock.状态 !== '已交卷') {
+          throw new Denied(
+            '会审讨论段 · 状态机（锁内复检）',
+            `节点 ${id} 的状态已在锁内推进为「${nodeInLock.状态}」（并发复核/裁决推进了状态）：开讨论只从「已交卷」出发。`,
+            {
+              howToChange: nodeInLock.状态 === '已采纳' || nodeInLock.状态 === '已结账'
+                ? '节点已被采纳/结账：讨论段随之冻结，不再开启。'
+                : `等节点回到「已交卷」（当前 ${nodeInLock.状态}）再执行 debate_open。`,
+              detail: { 锁内状态: nodeInLock.状态 },
+            },
+          );
+        }
+        // ② 齐卷复检：用锁内最新折叠视图重算（复用 全员已交 单源函数——与 bus_unlock /
+        //    盲评遮罩同一把尺）。编排层锁外那次只是快速失败，不是权威。
+        if (!全员已交(nodeInLock)) {
+          throw new Denied(
+            '会审讨论段 · 全员已交才开启（锁内复检，与 bus_unlock 同判据）',
+            `节点 ${id} 在锁内最新视图未全员交卷：状态 ${nodeInLock.状态}，已交 ${(nodeInLock.独立答案 ?? []).filter((a) => (nodeInLock.负责人 ?? []).includes(a.成员)).length}/${(nodeInLock.负责人 ?? []).length}。`,
+            {
+              howToChange: '等每个负责人都 task_submit 交过自己那份（结论按人留），再执行 debate_open。',
+              detail: { 锁内状态: nodeInLock.状态, 负责人: nodeInLock.负责人 ?? [], 已交: (nodeInLock.独立答案 ?? []).map((a) => a.成员) },
+            },
+          );
+        }
       },
     );
     return 节点;
@@ -735,6 +778,9 @@ export class TaskGraph {
    */
   async debateRounded(id, spec) {
     const node = await this.#require(id, spec.项目);
+    // 状态机前置（设计评审 F3 · 2026-10-15）：换轮的前驱 = 带讨论段的「已交卷」——
+    // 主状态这一列在 TRANSITIONS 里守，讨论段子状态（存在且讨论中）由下方既有守卫守。
+    this.#requireTransition(node, 'debate_round');
     if (!node.讨论 || node.讨论.状态 !== '讨论中') {
       throw new Denied('会审讨论段 · 状态机', `节点 ${id} 没有「讨论中」的讨论段（未开启或已收敛）。`, {
         howToChange: '先 debate_open 开启讨论；已收敛的讨论不能再换轮。',
@@ -765,6 +811,20 @@ export class TaskGraph {
           howToChange: '由 Lead 执行 debate_converge 收敛讨论。',
         });
       }
+      // F3（设计评审 2026-10-15）· 主状态锁内复检：并发 review(过) 把节点推进到已采纳后，
+      // 讨论段不许再换轮——「已采纳节点上的活跃讨论」从这里关死。
+      if (nodeInLock.状态 !== '已交卷') {
+        throw new Denied(
+          '会审讨论段 · 状态机（锁内复检）',
+          `节点 ${id} 的状态已在锁内推进为「${nodeInLock.状态}」（并发复核/裁决推进了状态）：讨论段随之冻结，不能换轮。`,
+          {
+            howToChange: nodeInLock.状态 === '已采纳' || nodeInLock.状态 === '已结账'
+              ? '节点已被采纳/结账：讨论段冻结，走结账（settle）或终态更正。'
+              : `等节点回到「已交卷」（当前 ${nodeInLock.状态}）再换轮。`,
+            detail: { 锁内状态: nodeInLock.状态 },
+          },
+        );
+      }
     });
     return 节点;
   }
@@ -776,6 +836,8 @@ export class TaskGraph {
    */
   async debateConverged(id, spec) {
     const node = await this.#require(id, spec.项目);
+    // 状态机前置（设计评审 F3 · 2026-10-15）：收敛的前驱 = 带讨论段的「已交卷」。
+    this.#requireTransition(node, 'debate_converged');
     if (!node.讨论 || node.讨论.状态 !== '讨论中') {
       throw new Denied('会审讨论段 · 状态机', `节点 ${id} 没有「讨论中」的讨论段（未开启或已收敛）。`, {
         howToChange: '先 debate_open 开启讨论。',
@@ -788,6 +850,20 @@ export class TaskGraph {
         throw new Denied('会审讨论段 · 状态机', `节点 ${id} 没有「讨论中」的讨论段（未开启或已收敛，锁内复检）。`, {
           howToChange: '先 debate_open 开启讨论。',
         });
+      }
+      // F3（设计评审 2026-10-15）· 主状态锁内复检：与 debate_round 同款——并发 review(过)
+      // 推进到已采纳后，收敛动作在锁内被拒，末位表态事件不会落在非已交卷态上。
+      if (nodeInLock.状态 !== '已交卷') {
+        throw new Denied(
+          '会审讨论段 · 状态机（锁内复检）',
+          `节点 ${id} 的状态已在锁内推进为「${nodeInLock.状态}」（并发复核/裁决推进了状态）：讨论段随之冻结，不能收敛。`,
+          {
+            howToChange: nodeInLock.状态 === '已采纳' || nodeInLock.状态 === '已结账'
+              ? '节点已被采纳/结账：讨论段冻结（收敛事件的表态消息 id 请人工核对总线补账）。'
+              : `等节点回到「已交卷」（当前 ${nodeInLock.状态}）再收敛。`,
+            detail: { 锁内状态: nodeInLock.状态 },
+          },
+        );
       }
     });
     return 节点;
@@ -857,30 +933,40 @@ export class TaskGraph {
     const file = this.layout.taskLog(项目);
     let finalEvent = event;
     let 新节点 = null;
-    await withLock(this.layout.taskLock(项目), async () => {
-      // 锁内必须重读真源（fresh）：缓存可能落后于别的进程刚写下的行，
-      // 状态机复检/依赖校验都建立在锁内折叠视图上，读旧表就是判错。
-      const rows = await readJsonl(file);
-      const node = fold(rows).get(event.id);
-      if (inLockGuard) inLockGuard(node, rows);
-      if (eventBuilder) finalEvent = eventBuilder(node, rows);
-      // 判据冻结：派发之后任何想动判据的事件都被拒绝。这是 §7 那一条的可执行形态。
-      // 查 builder **之后**的 finalEvent（2026-10-14 审查 P3）：builder 有权改写事件，
-      // 只查入参会漏掉 builder 产出里夹带的判据。
-      if (node?.判据冻结 && Object.hasOwn(finalEvent, '判据')) {
-        throw new Denied('任务图 · 派发后判据冻结', `节点 ${event.id} 已派发，判据不能在事后改动。`, {
-          requireAuthority: '主权者',
-          howToChange: '判据要变就新开一个节点；改判据等于让验收标准追着结果跑。',
-        });
-      }
-      const at = this.clock.iso();
-      const by = subject && typeof subject === 'object' ? { id: String(subject.id), kind: String(subject.kind ?? '未知') } : { id: String(subject), kind: '未知' };
-      const 落线行 = { seq: rows.length + 1, at, by, ...finalEvent };
-      await appendLines(file, [落线行]);
-      // 本进程写过了：让读缓存签名失效（下一次读必重读），并把新行折进来的投影直接给出。
-      this.#bumpWrite(项目);
-      新节点 = fold([...rows, 落线行]).get(event.id) ?? null;
-    });
+    // F4（设计评审 2026-10-15）：在 withLock 外套 serializeByKey（同 key = 本账本文件）。
+    // 为什么有了 withLock 还要它：Windows 上「名字式」文件锁存在 rm/create 竞态——持有者的
+    // rm 与等待者的 open('wx') 在删除挂起窗口内交错时，两个等待者可以先后各自建出锁文件
+    // 并都进入临界区（fsx.js:302-309 自认；审计链曾因此 fork，见 identity-chain E3）。
+    // 审计账本已补这层（audit.js append 的双层范例：serializeByKey(file, () => withLock(...))），
+    // 任务图与总线此前没有——同一竞态对 tasks.jsonl 意味着可能的双行事件，且任务图没有
+    // 审计链那样的自检兜底。进程内这条 await 链保证同 key 的写绝不重叠。
+    // 注意 withLock 不可重入（fsx.js 头注释）：serializeByKey 的 fn 里不得再拿同一把锁。
+    await serializeByKey(file, () =>
+      withLock(this.layout.taskLock(项目), async () => {
+        // 锁内必须重读真源（fresh）：缓存可能落后于别的进程刚写下的行，
+        // 状态机复检/依赖校验都建立在锁内折叠视图上，读旧表就是判错。
+        const rows = await readJsonl(file);
+        const node = fold(rows).get(event.id);
+        if (inLockGuard) inLockGuard(node, rows);
+        if (eventBuilder) finalEvent = eventBuilder(node, rows);
+        // 判据冻结：派发之后任何想动判据的事件都被拒绝。这是 §7 那一条的可执行形态。
+        // 查 builder **之后**的 finalEvent（2026-10-14 审查 P3）：builder 有权改写事件，
+        // 只查入参会漏掉 builder 产出里夹带的判据。
+        if (node?.判据冻结 && Object.hasOwn(finalEvent, '判据')) {
+          throw new Denied('任务图 · 派发后判据冻结', `节点 ${event.id} 已派发，判据不能在事后改动。`, {
+            requireAuthority: '主权者',
+            howToChange: '判据要变就新开一个节点；改判据等于让验收标准追着结果跑。',
+          });
+        }
+        const at = this.clock.iso();
+        const by = subject && typeof subject === 'object' ? { id: String(subject.id), kind: String(subject.kind ?? '未知') } : { id: String(subject), kind: '未知' };
+        const 落线行 = { seq: rows.length + 1, at, by, ...finalEvent };
+        await appendLines(file, [落线行]);
+        // 本进程写过了：让读缓存签名失效（下一次读必重读），并把新行折进来的投影直接给出。
+        this.#bumpWrite(项目);
+        新节点 = fold([...rows, 落线行]).get(event.id) ?? null;
+      }),
+    );
     // 事件已落线、审计是第二笔（2026-10-14 审查 P2-9）：审计追加失败时状态已变、链上
     // 缺条——调用方若只收到裸错误可能误判「没写成」而重试（submit 重试 = 洗自己答案的
     // 合法窗口）。错误必须明示「事件已落线、仅审计缺失」，并把事件 id 带上供人工补账。
@@ -967,6 +1053,13 @@ export class TaskGraph {
    * 归档先于落终态：若归档被拒（策略/权限），节点**不许**显示成已结账（否则账上写着结账、
    * 作答却还敞着）。
    *
+   * 为什么**不翻转**这个顺序（#14 · 设计评审 2026-10-15，勿「顺手优化」）：事件先行会造成
+   * 「已结账但归档永久缺失」——结账事件落线后重试 settle 会被状态机以「已结账非已采纳」
+   * 拒掉，归档没有重试路；而归档先行失败后重试 settle 可以收敛（archiveAnswers 按
+   * fold 出的「未归档」现算候选集，已归档的不会重复归档，幂等）。代价是存在「已归档、
+   * 事件未落线」的失败窗口——本批不再让它静默：#append 抛错（含锁内 guard 拒）时，
+   * 重抛前追加一条 告警:true 的补偿审计（动作「结账未落线」），把窗口变响亮。
+   *
    * @param {string} id
    * @param {{ subject: object, 项目: string }} spec
    * @returns {Promise<object>}
@@ -984,8 +1077,30 @@ export class TaskGraph {
       throw new Fault('SETTLE_NO_MEMORY', '结账要归档作答，但装配时没把记忆服务接进任务图（org.js 的接线问题，不是调用问题）。');
     }
     const 归档 = await this.memory.archiveAnswers({ 项目: spec.项目, 任务: id, subject: spec.subject });
-    const { 节点 } = await this.#append(spec.项目, { kind: 'settled', id, 状态: '已结账', 归档条数: 归档.归档条数 }, spec.subject, '结账', null, this.#transitionGuard(id, 'settle'));
-    return 节点;
+    try {
+      const { 节点 } = await this.#append(spec.项目, { kind: 'settled', id, 状态: '已结账', 归档条数: 归档.归档条数 }, spec.subject, '结账', null, this.#transitionGuard(id, 'settle'));
+      return 节点;
+    } catch (error) {
+      // #14（设计评审 2026-10-15）· 补偿审计：作答已归档、终态事件未落线。这不是回滚
+      // （归档先行是有意设计，见上），是把失败窗口从静默变成响亮——重试 settle 可收敛。
+      try {
+        await this.audit.append({
+          动作: '结账未落线',
+          主体: spec.subject,
+          对象: { id, kind: '任务' },
+          依据: '#14 · 归档先行、事件未落线的补偿留痕（设计评审 2026-10-15）',
+          结果: `作答已归档（${归档.归档条数} 条），结账事件未落线：${error instanceof Error ? error.message : String(error)}`,
+          项目: spec.项目,
+          告警: true,
+          详情: { 节点: id, 归档条数: 归档.归档条数, 失败原因: error instanceof Error ? error.message : String(error), 收敛路径: '作答已归档、事件未落线，重试 settle 可收敛（archiveAnswers 幂等：已归档条目不再重复归档）' },
+        });
+      } catch (补偿失败) {
+        // 连补偿审计都写不进去（审计账本本身坏了）：console 是这里最后的出口（§3.6 不吞声），
+        // 原始错误照抛——绝不能用补偿失败覆盖掉真因。
+        console.warn(`[dsh-mind] settle(${id})：结账未落线的补偿审计也失败了（${补偿失败 instanceof Error ? 补偿失败.message : String(补偿失败)}）——人工核对任务图与审计账本。`);
+      }
+      throw error;
+    }
   }
 
   /** @param {object} node @param {keyof TRANSITIONS} op */

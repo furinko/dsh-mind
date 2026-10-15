@@ -14,6 +14,10 @@
 import { listFiles, readJsonOrNull, readTextOrNull, atomicWrite, ensureDirPath } from './kernel/fsx.js';
 import { shortHash } from './kernel/ids.js';
 import { Denied } from './kernel/errors.js';
+// 「按 id 找卡」的共享实现（设计评审 #11 · 2026-10-15）：撤回名单探针与升级比对此前
+// 各有一份候选集（探针版漏了能力卡 ⇒ 撤回一张能力卡会被误报成「撤回变成删除」）。
+// import 图无环：upgrade 只 import kernel/paths，不依赖本文件。
+import { 按id找卡 } from './upgrade.js';
 
 /** 封闭清单。新增一项要改这里 + 出厂声明，二者不一致就是故障。 */
 export const CLOSED_LIST = ['审计链', '闸在位', '出厂件洁净', '撤回名单一致'];
@@ -122,7 +126,11 @@ export class ProbeRunner {
       // 动作名按结果分流：全绿是「巡检」（系统的机制内置动作，见权限矩阵主体表），
       // 见红才是「异常」。全绿也记异常会让动作名与结果语义不符，审计全是噪音。
       动作: 全绿 ? '探针巡检' : '探针异常',
-      主体: { id: 'system', kind: '系统' },
+      // 主体记真实触发者（设计评审 #10 · 2026-10-15）：修前恒 {id:'system',kind:'系统'}——
+      // 手动 Lead 巡检与机制自动巡检在账上不可分辨。`spec.subject` 已过上方白名单闸
+      // （kind ∈ Lead/主权者/系统），机制自动路径传 system 主体，行为不变；手动巡检
+      // 从此在账上可分辨。
+      主体: spec.subject,
       对象: { id: '红线索兵', kind: '账目' },
       依据: '§4 五道配套：红线索兵 + 留痕 + 可申诉',
       结果: 全绿 ? '全绿' : `见红 ${见红.length} 项：${见红.map((r) => r.探针).join('、')}`,
@@ -135,7 +143,9 @@ export class ProbeRunner {
     if (健康.恒红 || 健康.恒绿) {
       await this.audit.append({
         动作: '探针健康异常',
-        主体: { id: 'system', kind: '系统' },
+        // 同一次 run 触发的告警，主体同记真实触发者（设计评审 #10）：谁触发的巡检，
+        // 谁对这批快照的恒态负责。
+        主体: spec.subject,
         对象: { id: '红线索兵', kind: '账目' },
         依据: '§4 恒红/恒绿都要报警：连续同态 = 检测能力存疑，不是"安全"',
         结果: 健康.状态,
@@ -449,16 +459,14 @@ function mask(text) {
   return `${text.slice(0, 4)}***${text.slice(-2)}`;
 }
 
-/** @param {import('./paths.js').Layout} layout @param {string} id */
+/**
+ * 按 id 找「撤回名单一致」探针要核对的卡：两区（私有/出厂）× 三类对象（规则件+角色卡+能力卡）。
+ * 候选集与升级比对（upgrade.#resolve）**同一份实现**（设计评审 #11 · 2026-10-15）：
+ * 修前这里漏了能力卡——撤回一张能力卡后 `registry.revoke` 照实写了拒绝名单（撤回不删卡），
+ * 探针却按「规则件+角色卡」找，找不到 ⇒ 把一次合法撤回误报成「撤回变成删除」（见红）。
+ * 落点选在 upgrade.js 导出 `按id找卡`：两处共用一份候选集，谁的清单多一类对象都是同一处改。
+ * @param {import('./paths.js').Layout} layout @param {string} id
+ */
 async function findCard(layout, id) {
-  const candidates = [
-    layout.rulePath(id, '私有'),
-    layout.rulePath(id, '出厂'),
-    `${layout.roleCardDir('自治')}/${id}.md`,
-    `${layout.roleCardDir('出厂')}/${id}.md`,
-  ].filter(Boolean);
-  for (const path of candidates) {
-    if ((await readTextOrNull(path)) !== null) return path;
-  }
-  return null;
+  return (await 按id找卡(layout, id, '私有')) ?? (await 按id找卡(layout, id, '出厂'));
 }

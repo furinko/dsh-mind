@@ -26,6 +26,9 @@
  */
 import { describeFailure } from '../../../src/kernel/errors.js';
 import { runAction } from '../../../lib/actions.js';
+// 看板尾长单源（设计评审 #17 · 2026-10-15）：本文件与 kernel/lib/index.js 的「40」
+// 都引 src/audit.js 的常量，值不变、出处归一。
+import { 看板审计尾条数 } from '../../../src/audit.js';
 
 /** 路由前缀（面板与设置页都按它取数据）。 */
 export const 路由前缀 = '/plugins/dsh-mind';
@@ -55,7 +58,7 @@ const 体上限字节 = 64 * 1024;
  * 等价 `/mind dashboard`：与命令面**同一个投影实现**（`org.workbench` + 同一套切片）。
  * @param {{ org: object, 项目: string, 读者?: object, 审计条数?: number }} spec
  */
-export async function 看板包({ org, 项目, 读者, 审计条数 = 40 }) {
+export async function 看板包({ org, 项目, 读者, 审计条数 = 看板审计尾条数 }) {
   const view = await org.workbench({ 项目, 审计条数, 读者 });
   return { 成功: true, action: 'workbench', 项目, 数据: view };
 }
@@ -367,7 +370,7 @@ export function workbench路由({ org, 项目 }) {
     }
     try {
       // 读者固定是「设置页」这个 Lead 身份：命令面上根会话（Lead）看到的就是全量投影。
-      回JSON(res, 200, await 看板包({ org, 项目: 取项目(req, 项目), 读者: 设置页主体(), 审计条数: 40 }));
+      回JSON(res, 200, await 看板包({ org, 项目: 取项目(req, 项目), 读者: 设置页主体(), 审计条数: 看板审计尾条数 }));
     } catch (error) {
       回失败(res, error);
     }

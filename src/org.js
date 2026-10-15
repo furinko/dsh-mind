@@ -11,7 +11,7 @@ import { ensureDirPath, exists, listDirs, listFiles } from './kernel/fsx.js';
 import { dirname } from 'node:path';
 import { Clock } from './kernel/time.js';
 import { defaultLayout, DIR } from './paths.js';
-import { AuditLog } from './audit.js';
+import { AuditLog, 审计尾默认条数 } from './audit.js';
 import { PolicyEngine, DEFAULT_ROLE_IDLE_DAYS } from './policy.js';
 import { ObjectStore } from './store.js';
 import { TaskGraph } from './tasks.js';
@@ -126,8 +126,10 @@ export class Org {
 
     // 身份档案缺失时补一份：主权者「启动了这个部署」就是它的第一次交互，
     // 否则失联会从第一天起把自治档全部冻住。
+    // 来源声明（设计评审 #7 · 2026-10-15）：bootstrap 是 markInteraction 白名单里的
+    // 第三个合法入口（「部署引导」）——任务清单只列了两处调用方，这里是既有第三处。
     if (!(await exists(this.layout.identityFile()))) {
-      await this.registry.markInteraction({});
+      await this.registry.markInteraction({ 来源: '部署引导' });
     }
     await this.registry.sync();
 
@@ -152,7 +154,7 @@ export class Org {
   async workbench(spec = {}) {
     const 项目 = spec.项目 ?? this.project;
     const snapshot = await this.tasks.snapshot({ 项目 });
-    const views = await this.#views(项目, spec.审计条数 ?? 20);
+    const views = await this.#views(项目, spec.审计条数 ?? 审计尾默认条数);
     const 健康 = await this.probes.evaluateHealth();
     const 最近一次 = await this.probes.latest();
     // 会审讨论段（W2）：有「讨论」子状态的节点，把它线程（=节点id）的当前消息
@@ -254,20 +256,28 @@ export class Org {
 
   /**
    * 一行自述：工具与命令的第一屏。
+   *
+   * 项目口径（设计评审 F2 · 2026-10-15）：任务行与记忆行按**本次调用的项目键**取数
+   * （`spec.项目 ?? this.project`，与 workbench 同款）——修前恒用装配期 `this.project`，
+   * 于是 status 拿 default 项目的组织回答 repos 项目的调用（任务 0 vs 31 的假空白）。
+   * 其余字段（策略/失联/探针/能力/岗位/引导）本来就跨项目，保持原样。
+   *
+   * @param {{ 项目?: string }} [spec]
    * @returns {Promise<object>}
    */
-  async status() {
+  async status(spec = {}) {
+    const 项目 = spec.项目 ?? this.project;
     const 探针 = await this.probes.evaluateHealth();
     return {
-      项目: this.project,
+      项目,
       于: this.clock.iso(),
       策略: { healthy: this.policy.healthy, 错误: this.policy.state.error, 规则数: this.policy.state.rules.length, 介入度: this.policy.intervention() },
       失联: this.policy.presence(),
       探针,
-      任务: (await this.tasks.snapshot({ 项目: this.project })).节点.length,
+      任务: (await this.tasks.snapshot({ 项目 })).节点.length,
       能力: await this.capability.stats(),
       // 验账读数：人不翻账本，扫一眼「存量 + 近段新增/晋升」就知道记账在正常发生。
-      记忆: await this.memory.activity({ 项目: this.project }),
+      记忆: await this.memory.activity({ 项目 }),
       岗位: (await this.registry.list()).length,
       引导: this.boot,
     };

@@ -315,7 +315,10 @@ export class Layout {
   }
 
   historyFile(objectId, version) {
-    return join(this.historyDir(objectId), `${version}.md`);
+    // version 也过路径段校验（设计评审 #13 · 2026-10-15）：这是全文件唯一没校验的
+    // 入口可控片段——store_rollback 的 version 从动作面进来，`'../../x'` 一行就能把
+    // 版本历史写出私有区外。与 objectId 同一道闸（本文件 :32 assertPathSegment）。
+    return join(this.historyDir(objectId), `${assertPathSegment(version, '版本号')}.md`);
   }
 
   /** 版本历史的索引（记录每个对象当前版本指针；审计只记指针）。 */

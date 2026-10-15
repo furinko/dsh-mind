@@ -59,6 +59,9 @@ export class DebateService {
     const 负责人 = node.负责人 ?? [];
     const 已交 = (node.独立答案 ?? []).map((a) => a.成员);
     // 齐卷判据只有一处实现（tasks.js 的 全员已交）：与 bus_unlock / 盲评遮罩同一把尺。
+    // ⚠️ 这一次是**锁外快速失败**（设计评审 F3 · 2026-10-15）：它通过之后、debateOpened
+    // 落线之前，并发 review(过) 仍可能把节点推进到已采纳——权威判定在 tasks.debateOpened
+    // 的**锁内**复检（同一把 全员已交 尺 + 主状态复检），这里只负责给出可读的早拒绝。
     const 齐 = 全员已交(node);
     if (!齐) {
       throw new Denied(
@@ -143,16 +146,26 @@ export class DebateService {
     // 揭名：盲评到此为止，讨论阶段亮出彼此身份（§10）。
     const 揭名 = await this.review.reveal({ subject: spec.subject, 项目: spec.项目, 线程: spec.节点, 参与者 });
     // 开启成功 ⇒ 补记指定审计（与 pickDissenter 默认路径同一条形状，「已用过」从此处起算）。
+    // #14（设计评审 2026-10-15）：补记是**事件落线之后**的第二笔——失败必须响亮且不可重试
+    // （照 tasks.js #append 的 AUDIT_APPEND_FAILED_AFTER_EVENT 模式）。修前裸抛会把
+    // 「讨论已开、反对者指定的已用过标记没入账」留给调用方猜：不重试 ⇒ 该候选日后可能
+    // 被重复指定；重试 debate_open ⇒ 被「讨论已开启」拒。明示现场，让人工补记。
     if (指定.反对者) {
-      await this.audit.append({
-        动作: '状态变更',
-        主体: { id: 'system', kind: '系统' },
-        对象: { id: spec.节点, kind: '会审' },
-        依据: '§10 反趋同 · 强制反对者',
-        结果: `指定 ${指定.反对者}`,
-        项目: spec.项目,
-        详情: { 强制反对者: 指定.反对者, 节点: spec.节点, 不用过: 指定.已用过 },
-      });
+      try {
+        await this.audit.append({
+          动作: '状态变更',
+          主体: { id: 'system', kind: '系统' },
+          对象: { id: spec.节点, kind: '会审' },
+          依据: '§10 反趋同 · 强制反对者',
+          结果: `指定 ${指定.反对者}`,
+          项目: spec.项目,
+          详情: { 强制反对者: 指定.反对者, 节点: spec.节点, 不用过: 指定.已用过 },
+        });
+      } catch (error) {
+        throw new Fault('AUDIT_APPEND_FAILED_AFTER_EVENT', `节点 ${spec.节点} 的讨论已开启（事件已落线），但强制反对者 ${指定.反对者} 的指定补记审计失败：${error instanceof Error ? error.message : String(error)}。不要重试 debate_open——讨论已开启会被拒；该候选的「已用过」标记缺失可能使其被重复指定，请人工核对审计账本并补记。`, {
+          detail: { 节点: spec.节点, 强制反对者: 指定.反对者, 项目: spec.项目 },
+        });
+      }
     }
     return {
       节点: 节点投影,

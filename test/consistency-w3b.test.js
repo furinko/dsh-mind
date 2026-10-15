@@ -268,7 +268,10 @@ describe('W3 批2 · 口径与静默失效', () => {
     ];
     const 未齐 = projectWorkbench({ 项目: 'p', 节点: [造节点(两份)], 探针: { 结果: [] }, 策略: { healthy: true, rules: [] } }).会审[0];
     assert.equal(未齐.揭名, false);
-    assert.deepEqual(未齐.独立答案, [{ 盲标: '成员 A' }, { 盲标: '成员 B' }], '未交齐只给盲标：真名与结论都不许出');
+    // 盲标单源（设计评审 #8 · 2026-10-15）：会审行盲标改用 review.盲标分配 的确定性置换
+    // （线程=节点 id + 排序名册）——n-w3b 这组种子里 member-a→B、member-b→A。
+    // 断言钉「行只有盲标」与具体标位（标位由同源算法决定，可复算）。
+    assert.deepEqual(未齐.独立答案, [{ 盲标: '成员 B' }, { 盲标: '成员 A' }], '未交齐只给盲标：真名与结论都不许出');
     assert.doesNotMatch(JSON.stringify(未齐), /member-a|用会话命令|无会话首屏|方案-a/, '整个会审块里不许出现任何人的答案（修前 揭名 只是个提示字段）');
     assert.deepEqual(未齐.交卷, { 已交: 2, 应交: 3, 齐: false });
 

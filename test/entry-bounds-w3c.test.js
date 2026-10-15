@@ -247,7 +247,9 @@ describe('W3 批3 · 入口与边界', () => {
     ];
     const 未齐 = projectWorkbench({ 项目: 'p', 节点: [造节点(两份一致)], 探针: { 结果: [] }, 策略: { healthy: true, rules: [] } }).会审[0];
     assert.equal(未齐.揭名, false);
-    assert.deepEqual(未齐.独立答案, [{ 盲标: '成员 A' }, { 盲标: '成员 B' }]);
+    // 盲标单源（设计评审 #8 · 2026-10-15）：n-w3c 种子下 member-a→B、member-b→A
+    // （review.盲标分配 的确定性置换，可复算）。
+    assert.deepEqual(未齐.独立答案, [{ 盲标: '成员 B' }, { 盲标: '成员 A' }]);
     assert.equal(未齐.零分歧, undefined, '未交齐时「这两份一致」本身也是内容级信息 ⇒ 不投影');
     assert.equal(未齐.零分歧依据, undefined);
     assert.doesNotMatch(JSON.stringify(未齐), /全票一致/, '依据文本也不许漏出去');
