@@ -232,12 +232,13 @@ describe('批次6 · P3 后端', () => {
       await writeUnder(join(home, 'mind-private'), '集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 允许: ['read'] }));
       await kernel.apply(host.ctx, { home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') });
       await new Promise((r) => setTimeout(r, 30)); // 刷新工具总范围是异步的，等它落定
-      const 闸 = host.闸[0];
-      assert.ok(typeof 闸 === 'function', '前提：工具闸已注册');
-      assert.ok(typeof 闸({ name: 'mindEvil' }) === 'string', 'mindEvil 不在白名单 ⇒ 拒（修前 startsWith 放行）');
-      assert.equal(闸({ name: 'mind' }), undefined, '自家 mind 放行');
-      assert.equal(闸({ name: 'mind_guard' }), undefined, '自家 mind_guard 放行');
-      assert.ok(typeof 闸({ name: 'bash' }) === 'string', '白名单外的普通工具照样拒');
+      // 2026-10-15 起内核有两道单调闸（工具总范围 + Lead 调度创建闸）——按“任一闸给理由即拒”判定。
+      const 首个理由 = (exec) => host.闸.map((g) => g(exec)).find(Boolean);
+      assert.equal(host.闸.length, 2, '前提：两道闸都已注册');
+      assert.ok(typeof 首个理由({ name: 'mindEvil' }) === 'string', 'mindEvil 不在白名单 ⇒ 拒（修前 startsWith 放行）');
+      assert.equal(首个理由({ name: 'mind' }), undefined, '自家 mind 放行');
+      assert.equal(首个理由({ name: 'mind_guard' }), undefined, '自家 mind_guard 放行');
+      assert.ok(typeof 首个理由({ name: 'bash' }) === 'string', '白名单外的普通工具照样拒');
     } finally {
       host.清理();
       forgetSharedOrg();

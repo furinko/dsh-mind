@@ -27,6 +27,8 @@ import { 看板审计尾条数 } from '../../../src/audit.js';
 // 唯一清单拼出来——手抄一份必漂（src/bus.js 的 MESSAGE_TYPES 是闸的同一真源）。
 import { MESSAGE_TYPES } from '../../../src/bus.js';
 import { 挂同源路由, 看板包 } from './routes.js';
+// Lead 自主调度（2026-10-15 主权者授权）：提示词、创建闸与成员入口共用同一份授权判据。
+import { DelegationPolicy } from '../../../src/delegation-policy.js';
 
 export const name = 'dsh-mind-kernel';
 export const inject = ['tools'];
@@ -71,13 +73,55 @@ export async function apply(ctx, config = {}) {
     return () => clearInterval(timer);
   }, 'dsh-mind: 工具总范围热更新');
 
+  // Lead 自主调度授权（2026-10-15 主权者指令「由 lead 根据需求判断使用团队或子智能体或都不使用」）：
+  // 配置在 profile 层 dsh-mind-kernel.delegation（主权者的机器，不归模型/记忆改）；坏配置按未授权
+  // 处理（fail-closed：宁可退回官方默认「用户显式点名」，不静默放权）。
+  const delegation = 建调度策略(config.delegation, logger);
+  ctx.effect?.(() => {
+    const 撤销器 = [];
+    try {
+      // 提示词唯一改动点：官方 team:policy 的首段原位换成部署授权，其余协作纪律保持官方原文。
+      // prepend=true 让本监听最后落值；官方 complete-prompt preset 会在 waterfall 后强制还原，
+      // 那类 preset 不在本授权的兼容范围（delegation_status 读数里如实标注）。
+      撤销器.push(ctx.on('system-prompt/assemble', async (assembly, context, next) => {
+        const out = await next();
+        return delegation.assemble(out, { project: 项目键(context?.agent, 项目), isTeam: 是Team成员(ctx, context?.agent) });
+      }, { prepend: true }));
+    } catch (error) {
+      logger.warn?.(`[dsh-mind] 注册调度提示词监听失败：${错误消息(error)}`);
+    }
+    try {
+      // 创建闸：授权项目内，裸 spawn_teammate/subagent/fork/workflow 一律指回 member_spawn（先判据后创建）。
+      撤销器.push(ctx.tools.guard((exec) => delegation.creationGuard(exec, { subject: agentSubject(exec), project: 项目键(exec?.agent, 项目) })));
+    } catch (error) {
+      logger.warn?.(`[dsh-mind] 注册调度创建闸失败：${错误消息(error)}`);
+    }
+    return () => {
+      for (const 撤 of 撤销器) {
+        try { 撤?.(); } catch { /* 已在卸载路上 */ }
+      }
+      delegation.close();
+    };
+  }, 'dsh-mind: Lead 调度授权');
+
+  // 宿主服务束：member_* 动作经它调官方运行时。每次调用现取（HMR/晚装载的服务取不到就如实为 null）。
+  // signal 必带：Team/子会话服务内部 AbortSignal.any 会校验每一项（漏传 ⇒ "signals[0] is not of
+  // type AbortSignal"，本机重启后实测），官方工具链恒传 exec.signal——这里对齐同一契约。
+  const 宿主服务 = (exec) => ({
+    agent: exec?.agent ?? null,
+    signal: exec?.signal ?? null,
+    agentTeams: 取服务(ctx, 'agentTeams'),
+    subagents: 取服务(ctx, 'subagents'),
+    delegation,
+  });
+
   // 主面（工具）**不吞异常**：注册不上就等于这个组件没生效，
   // 让宿主如实报出装载失败，而不是留下一个「看起来装好了」的假象。
-  ctx.tools.register(mindTool({ org, 项目, 项目键: (exec) => 项目键(exec?.agent, 项目) }));
+  ctx.tools.register(mindTool({ org, 项目, 项目键: (exec) => 项目键(exec?.agent, 项目), 宿主服务 }));
 
   ctx.inject?.(['commands'], (scoped) => {
     try {
-      scoped.commands.register(mindCommand({ org, 项目, 项目键: (agent) => 项目键(agent, 项目) }));
+      scoped.commands.register(mindCommand({ org, 项目, 项目键: (agent) => 项目键(agent, 项目), 宿主服务 }));
     } catch (error) {
       logger.warn?.(`[dsh-mind] 注册 /mind 命令失败：${error instanceof Error ? error.message : String(error)}`);
     }
@@ -153,9 +197,9 @@ export function degradedTool(error) {
 /**
  * `mind` 工具：一个动作参数走全部组织操作。
  * 返回 JSON 文本，于是模型与工作台读的是同一份字节。
- * @param {{ org: object, 项目: string, 项目键: (exec: object) => string }} spec
+ * @param {{ org: object, 项目: string, 项目键: (exec: object) => string, 宿主服务?: (exec: object) => object }} spec
  */
-function mindTool({ org, 项目, 项目键 }) {
+function mindTool({ org, 项目, 项目键, 宿主服务 }) {
   return {
     name: 'mind',
     description: [
@@ -228,6 +272,10 @@ function mindTool({ org, 项目, 项目键 }) {
         审计条数: { type: 'number' },
         limit: { type: 'number', description: '返回条数上限（memory_query 的命中 / bus_read / audit_tail）' },
         条数上限: { type: 'number', description: 'memory_query 返回 条目 的回传条数上限（默认 50；超出截断并附 条目截断: true 与总数）' },
+        方式: { type: 'string', enum: ['team', 'subagent'], description: 'member_spawn 的执行体：持久团队成员（team）或普通持续子会话（subagent）；直接执行不调该动作' },
+        岗位: { type: 'string', description: 'member_spawn 登记的岗位名（须已有岗位卡）' },
+        节点: { type: 'string', description: 'member_spawn 绑定的任务节点 id（须待派发且已定判据）' },
+        任务书: { type: 'string', description: 'member_spawn 的开工任务书（判据与岗位要点由机制自动附上）' },
       },
       required: ['action'],
       additionalProperties: false,
@@ -240,7 +288,7 @@ function mindTool({ org, 项目, 项目键 }) {
     // `probe_health` 曾在这张表里（W3 批3 清掉）：它是**安全类组件**的工具名，
     // 不属于本工具的动作面（`ACTIONS` 里没有它）——留在这里是一条永远匹配不上的死条目，
     // 读的人会以为「探针巡检在这个工具上是并发安全的」。
-    isConcurrencySafe: (args) => ['status', 'workbench', 'memory_query', 'memory_lineage', 'capability_list', 'capability_resolve', 'capability_read', 'bus_read', 'audit_tail', 'audit_verify', 'registry_list', 'registry_can', 'upgrade_pending', 'policy_check'].includes(args?.action),
+    isConcurrencySafe: (args) => ['status', 'workbench', 'memory_query', 'memory_lineage', 'capability_list', 'capability_resolve', 'capability_read', 'bus_read', 'audit_tail', 'audit_verify', 'registry_list', 'registry_can', 'upgrade_pending', 'policy_check', 'delegation_status', 'member_list'].includes(args?.action),
     async execute(args, exec) {
       const 主体 = agentSubject(exec);
       try {
@@ -252,7 +300,7 @@ function mindTool({ org, 项目, 项目键 }) {
         // （`runAction` 会回落到 `subjectFor({根会话: subject?.kind === 'Lead'})`，
         // 而那个回落本身又受「自报的 args.role」影响）。本轮实测过这个半成品形态：
         // 子会话 `agentSubject` 算出成员、`runAction` 收到的却是 Lead（两处读数都在回报里）。
-        return JSON.stringify({ 成功: true, ...(await runAction({ org, 项目: 本次项目, subject: 主体, 主体, args: normalizeArgs(args) })) }, null, 1);
+        return JSON.stringify({ 成功: true, ...(await runAction({ org, 项目: 本次项目, subject: 主体, 主体, args: normalizeArgs(args), ...(宿主服务 ? { 宿主: 宿主服务(exec) } : {}) })) }, null, 1);
       } catch (error) {
         return JSON.stringify({ 成功: false, ...describeFailure(error) }, null, 1);
       }
@@ -266,7 +314,7 @@ function mindTool({ org, 项目, 项目键 }) {
  * `/mind` 命令：工作台页面与人都用它。
  *
  * 与工具**共用同一张动作表**（`lib/actions.js`），不维护第二份逻辑。
- * @param {{ org: object, 项目: string, 项目键: (agent: object) => string, 名册?: object }} spec
+ * @param {{ org: object, 项目: string, 项目键: (agent: object) => string, 名册?: object, 宿主服务?: (agent: object) => object }} spec
  */
 function mindCommand(spec) {
   return {
@@ -290,7 +338,7 @@ function mindCommand(spec) {
         // `面: 'command'` 是**人侧**的标记：命令面专属动作（如改设置的 `presence`）
         // 只在这一面可达，`mind` 工具的 enum 里没有它们（模型没有这只手）。
         // `主体` 一起显式传下去：账上要记**敲这条命令的那个人**，不许归并成一个泛化的 lead。
-        const result = await runAction({ org: spec.org, 项目: args.project ?? 本次项目, subject: 主体, 主体, args: { ...args, action }, 面: 'command' });
+        const result = await runAction({ org: spec.org, 项目: args.project ?? 本次项目, subject: 主体, 主体, args: { ...args, action }, 面: 'command', ...(spec.宿主服务 ? { 宿主: spec.宿主服务(agent) } : {}) });
         return { kind: 'success', text: JSON.stringify({ 成功: true, ...result }, null, 1) };
       } catch (error) {
         return { kind: 'error', text: JSON.stringify({ 成功: false, ...describeFailure(error) }, null, 1) };
@@ -574,6 +622,52 @@ function 挂主权者交互(ctx, org, logger) {
 // ── 辅助 ──────────────────────────────────────────────────────────────────────
 
 /**
+ * 建调度策略：配置非法时按未授权（explicit-user）降级并响亮告警——授权类配置的坏值
+ * 不许静默当成“没配”（那等于放权失败无人知），也不许让整个内核起不来。
+ * @param {unknown} config
+ * @param {object} logger
+ */
+function 建调度策略(config, logger) {
+  try {
+    return new DelegationPolicy(config);
+  } catch (error) {
+    logger.error?.(`[dsh-mind] delegation 配置非法，已按未授权（explicit-user）处理：${错误消息(error)}`);
+    return new DelegationPolicy({});
+  }
+}
+
+/** 取宿主服务：先 ctx.get 再 ctx 直挂（两种形状都认）；未装载返回 null，不让装载失败。 */
+function 取服务(ctx, 名) {
+  try {
+    const s = typeof ctx?.get === 'function' ? ctx.get(名) : null;
+    if (s) return s;
+  } catch {
+    /* 未装载 */
+  }
+  try {
+    return ctx?.[名] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** 该 Agent 是否 Team 成员（含 Lead 伪行）：按真实名册判，不猜 id 前缀。 */
+function 是Team成员(ctx, agent) {
+  const teams = 取服务(ctx, 'agentTeams');
+  if (!teams || !agent) return false;
+  try {
+    return teams.tryMembership(agent) !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+/** @param {unknown} error @returns {string} */
+function 错误消息(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
  * 组织说明段：随身份带的是**岗位与编制**，不是全量历史。
  * 这是 §9「上下文 = 按需拉，不许全量推」在提示词侧的实现。
  * @param {any} org
@@ -586,7 +680,7 @@ function 组织说明(org) {
     // 实际操作另一个。静态句子只教解析规则，不替会话猜项目。
     '项目键：省略 project 参数时取会话工作区目录名（§14.4-5 目录名即项目键）。',
     '身份约定：根会话执行者 = Lead（可派活、可建卡、可汇总验收）；复核者只读数、不改、不提案；成员任务内全权、任务外无。',
-    '派活流程：接需求→定判据（写不出判据就不开工）→查岗位（有需要即建卡/改卡）→宿主侧拉起子会话→registry_assign 登记实例→task_create/task_dispatch（负责人须在册在岗，派给空气会被拒）→复核→采纳/打回→落记忆→结账。',
+    '派活流程：接需求→定判据（写不出判据就不开工）→查岗位（有需要即建卡/改卡）→Lead 按需选择直接执行或 member_spawn 委派（方式=team/subagent＋岗位＋节点＋任务书；机制完成待命握手→registry_assign 登记→绑定节点→装载岗位与判据→发开工消息）→复核→采纳/打回→落记忆→结账。',
     '纪律：写操作一律先过策略引擎；被拒绝时结果里会带「哪条规则 + 改它要什么授权」，照着改，不要绕。',
     '按需拉取：需要组织状态时调 `mind` 的 status / workbench；需要知识时调 memory_query；需要技能规程时调 capability_list。不要假设历史会出现在上下文里。',
     '留痕是自治的门槛：无留痕的自治变更 = 无效。',

@@ -92,6 +92,9 @@ export function fakeHost(options = {}) {
   // cordis 的服务既可用 `ctx.get(name)` 取，也直接挂在 `ctx.<name>` 上；
   // 假宿主必须同时提供两种形状，否则测出的装配路径与真实宿主不一致。
   Object.assign(ctx, 服务面);
+  // 测试可注入额外服务（如 agentTeams/subagents）：与本文件自带的服务面同形状合并。
+  Object.assign(服务面, options.服务 ?? {});
+  Object.assign(ctx, options.服务 ?? {});
 
   return {
     ctx,

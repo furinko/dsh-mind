@@ -140,11 +140,14 @@ describe('dsh-mind 宿主半区', () => {
   });
 
   it('闸是单调的：拒绝后任何后来的监听者都翻不回来', async () => {
-    assert.equal(host.闸.length, 1, '应注册且只注册一道闸');
-    const guard = host.闸[0];
-    // 出厂默认是空名单 = 不额外收窄。
-    assert.equal(guard(fakeExec({ name: 'read' })), undefined);
-    assert.equal(guard(fakeExec({ name: 'pwsh' })), undefined);
+    // 两道闸（2026-10-15 起）：①工具总范围（部署键）②Lead 调度创建闸（delegation 配置）。
+    // 默认都没授权 ⇒ 都不额外收窄；各自的单调性由 dsh-tools 管线保证（拒绝后无人能翻回）。
+    assert.equal(host.闸.length, 2, '应注册且只注册两道闸：工具总范围 + 调度创建闸');
+    for (const guard of host.闸) {
+      assert.equal(guard(fakeExec({ name: 'read' })), undefined);
+      assert.equal(guard(fakeExec({ name: 'pwsh' })), undefined);
+      assert.equal(guard(fakeExec({ name: 'spawn_teammate' })), undefined, '默认未授权项目保持官方行为');
+    }
   });
 
   it('工具总范围配置后立刻生效，并且越权调用带可执行理由', async () => {

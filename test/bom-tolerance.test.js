@@ -104,11 +104,12 @@ describe('BOM 容错读 · 闸层（第二批修复的回归钉）', () => {
   it('带 BOM 的 部署.json：工具总范围闸不咬（guard 放行）', async () => {
     const { home, host } = await 起宿主('\uFEFF{"岗位闲置天数": 5}');
     try {
-      assert.equal(host.闸.length, 1, '内核应注册一道闸');
-      const guard = host.闸[0];
+      // 2026-10-15 起内核有两道单调闸（工具总范围 + Lead 调度创建闸）——全部过一遍才是真实管线。
+      assert.equal(host.闸.length, 2, '内核应注册两道闸（总范围 + 调度）');
+      const 首个理由 = (exec) => host.闸.map((g) => g(exec)).find(Boolean);
       // 修前（2026-10-15 线上事故复现）：闸层裸 JSON.parse ⇒ 故障 ⇒ 返回拒绝串 ⇒ 全工具被拒。
-      assert.equal(guard(fakeExec({ name: 'mind' })), undefined, 'BOM 不该让闸咬人');
-      assert.equal(guard(fakeExec({ name: 'pwsh' })), undefined);
+      assert.equal(首个理由(fakeExec({ name: 'mind' })), undefined, 'BOM 不该让闸咬人');
+      assert.equal(首个理由(fakeExec({ name: 'pwsh' })), undefined);
       const tool = host.工具.get('mind');
       const out = JSON.parse(await tool.execute({ action: 'status' }, fakeExec({ name: 'mind' })));
       assert.equal(out.成功, true, 'mind 工具照常可用');
@@ -121,8 +122,8 @@ describe('BOM 容错读 · 闸层（第二批修复的回归钉）', () => {
   it('闸层 fail-closed 不弱化：真坏的 部署.json ⇒ guard 返回故障拒绝（要指认文件）', async () => {
     const { home, host } = await 起宿主('{"岗位闲置天数": ');
     try {
-      const guard = host.闸[0];
-      assert.match(String(guard(fakeExec({ name: 'mind' }))), /工具范围闸故障/, '真坏的 JSON 仍然全拒（§12.1）');
+      const 首个理由 = (exec) => host.闸.map((g) => g(exec)).find(Boolean);
+      assert.match(String(首个理由(fakeExec({ name: 'mind' }))), /工具范围闸故障/, '真坏的 JSON 仍然全拒（§12.1）');
     } finally {
       host.清理();
       await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });

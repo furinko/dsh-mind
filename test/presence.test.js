@@ -101,6 +101,15 @@ const 冻结动作表 = [
   'debate_say',
   'debate_round',
   'debate_converge',
+  // ── Lead 自主调度（2026-10-15 主权者授权）──
+  // 过「是不是改设置的动作」这一关：不是——授权真源是 profile 的
+  // dsh-mind-kernel.delegation 配置（主权者的机器层）；这组动作只消费授权，
+  // 创建/消息/中断全部走组织登记（registry_assign）、任务图绑定与审计。
+  'delegation_status',
+  'member_spawn',
+  'member_message',
+  'member_stop',
+  'member_list',
 ];
 // sovereign_interaction 不在工具面：它是命令面专属（与 presence 同一张 B 清单），
 // 失联判定的「事实源」——主权者在线——只能由人声明（/mind sovereign_interaction）。
