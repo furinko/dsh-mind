@@ -12,6 +12,9 @@
  * 修复：① handler 经「取任务上下文」取真节点 → capability.publish 透传 → store.write spec.task；
  *  ② task_review handler 按**身份档案真源**把复核员岗成员解析成复核者主体（registry.subjectForRole
  *  唯一映射落点，与缺口4 同族：只信档案、不信自报），仍走策略引擎（§2 复核者 review 放行）。
+ *  【2026-10-16 演进】②的解析已从 task_review 单点上移至 runAction 门②（审查报告 R02 收口，
+ *  见 test/review-path-2026-10-16.test.js）；本文件 ② 用例照跑（到达 handler 的主体已是复核者
+ *  形状），原「解析只在 review 放行」断言已按新语义改写（见下）。
  *
  * 判据2 · 同族全量排查（逐 handler 结论，本文件头部钉存；「不改」均给出理由）：
  *  - status / workbench / policy_check / audit_tail / audit_verify / audit_correct /
@@ -116,11 +119,14 @@ describe('任务上下文透传（649a4）', () => {
     const after = await org.tasks.get(node.id, { 项目: P });
     assert.equal(after.状态, '已采纳', '复核「过」把节点推到已采纳');
     assert.equal(after.复核经过?.[0]?.复核者, 'reviewer', '署名是复核者本人');
-    // 解析只在 task_review 生效：同一复核员成员做别的写（memory_write 无任务）⇒ 照旧拒。
+    // 解析已收口到 runAction 门②（审查报告 R02 · 2026-10-16，dv2jf 批）：同一复核员成员的
+    // 其余写动作按【复核者】判 ⇒ 复核者只读守卫拒。修前这里是「任务外无」——那正是 R02
+    // 实证的越权面：复核员岗成员持负责人匹配任务即得普通业务写权。断言随语义演进改写，
+    // 不是偷偷删红：拒得更早、更对（§2 复核者只读数、不改、不参与提案）。
     await assert.rejects(
       () => runAction({ org, 项目: P, 主体: 复核员成员, args: { action: 'memory_write', 类: '知识', 内容: 'x', 来源: '测试', project: P } }),
-      (e) => e instanceof Denied && /任务外无/.test(e.rule),
-      '复核者的其余写动作仍按成员判（§2 只读数、不改）',
+      (e) => e instanceof Denied && /复核者只读/.test(e.rule),
+      '复核者只读守卫在动作入口生效（其余写动作按复核者判）',
     );
   });
 

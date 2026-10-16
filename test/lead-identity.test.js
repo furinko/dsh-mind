@@ -589,7 +589,11 @@ describe('A 落地（2026-10-10 · 主人拍板：Lead 显式登记 + 会话派�
     try {
       const { 工具, org, host } = await 起宿主(g);
       try {
-        await g.writePrivate('集体L3-成员角色卡/复核员.md', 岗位卡('复核员'));
+        // 2026-10-16 起 A-1 登记的岗位用「插件工程」：R02 收口后，登记为**复核员**的会话派生
+        // 主体在 runAction 门② 被解析成复核者执行（kind=复核者、只读全量视图——那组读数
+        // 钉在 test/review-path-2026-10-16.test.js ②）。本用例要验的是「登记后可用 + 主体
+        // 不自陈岗位 + 成员切片」这套 A 落地语义，用普通成员岗验证最保真，断言一字未放宽。
+        await g.writePrivate('集体L3-成员角色卡/插件工程.md', 岗位卡('插件工程'));
 
         // ── 登记**前**先读一次（同一个子会话、同一条 exec）：这一刻仍被拒 —— A-1/A-2 这一对
         //    正对照的全部差别就是「有没有那次登记」。
@@ -597,14 +601,13 @@ describe('A 落地（2026-10-10 · 主人拍板：Lead 显式登记 + 会话派�
         assert.equal(登记前.成功, false, `登记前必须仍拒（fail-closed）；实际 ${JSON.stringify(登记前)}`);
 
         // ── ① Lead **显式登记**（工具面，根会话执行）：实例 = **该子会话的会话 id**。
-        // 授权引用须真实存在（2026-10-14 审查 P2-2）：先落决议节点，拿它的 id 当依据。
-        const { id: 决议节点 } = await org.tasks.create({ subject: LEAD, 项目: org.project, 描述: '主权者决议：复核员任命 a1', 负责人: 'lead', 判据: ['决议在案'] });
-        const 登记 = JSON.parse(await 工具.execute({ action: 'registry_assign', 岗位: '复核员', 实例: 子id, 代: 1, 授权引用: 决议节点 }, 根会话exec));
+        // 普通成员岗不需要授权引用（复核员任命特判是另一条线，A-2/review-path 在验）。
+        const 登记 = JSON.parse(await 工具.execute({ action: 'registry_assign', 岗位: '插件工程', 实例: 子id, 代: 1 }, 根会话exec));
         assert.equal(登记.成功, true, `Lead 登记该实例要成功（岗位有卡 + 根会话过得了 create）；实际 ${JSON.stringify(登记)}`);
-        assert.equal(登记.实例.岗位, '复核员');
+        assert.equal(登记.实例.岗位, '插件工程');
         assert.equal(登记.实例.状态, '在岗');
         // 读**真源**（不是返回值）：档案里的键就是子会话的会话 id。
-        assert.equal((await org.registry.identity()).members[子id].岗位, '复核员', '档案里的键 = 子会话的会话 id（B 修后的实例键）');
+        assert.equal((await org.registry.identity()).members[子id].岗位, '插件工程', '档案里的键 = 子会话的会话 id（B 修后的实例键）');
 
         // ── ② 子会话调 mind：放行，且主体形状按本批的设计 —— **没有 roleId**。
         const 后 = await 主体读数(工具, 子会话);
@@ -712,10 +715,13 @@ describe('A 落地（2026-10-10 · 主人拍板：Lead 显式登记 + 会话派�
         assert.equal(过.主体.roleId, '复核员');
 
         // ── ③ 两条路不是同一个判据：**同一条 exec、同一份档案**，会话派生那条路照常放行
-        //    （它不填 roleId ⇒ 不参与岗位对账），自报那条路照旧要对账。两格同时成立才是本批的设计。
+        //    且**不自陈任何岗位**——它放行后的 roleId 是档案解析出来的（R02 收口 · 2026-10-16：
+        //    复核员岗在 runAction 门② 解析成复核者），不是主体自报的；① 的自报那一路照旧
+        //    要对账。两格同时成立才是本批设计：「派生不填 roleId」没有把「自报必须一致」短路掉。
         const 派生 = await 主体读数(工具, 子会话);
         assert.equal(派生.成功, true, `同一份档案下会话派生照常放行；实际 ${JSON.stringify(派生)}`);
-        assert.equal(派生.主体.roleId, null, '会话派生的读数里没有 roleId（与 ① 的自报那一路形成对照）');
+        assert.equal(派生.主体.kind, '复核者', '派生主体按档案解析成复核者（入口统一可信角色解析，R02）');
+        assert.equal(派生.主体.roleId, '复核员', 'roleId 来自档案解析——主体自身仍不填（subjectFor({实例}) 无 roleId，见 A-1 断言）');
       } finally {
         host.清理();
         forgetSharedOrg();

@@ -241,7 +241,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务 }) {
         来源: { type: 'string', description: '怎么知道的；记忆写入必填（谁记的默认取主体）' },
         来源引用: { type: 'string', description: '证据/来源对象 id，多个用逗号分隔（契约A 血缘）；know-/exp-/pref-/answ- 查账本、task- 查任务图、artifact- 本批不校验，悬空拒写' },
         任务: { type: 'string', description: '任务节点 id（memory_write / memory_lifecycle / capability_publish 的成员调用必填：声明本次写入归属的任务上下文——「任务内全权」靠它判定；策略引擎仍按节点负责人名单比对，传别人的节点照拒）' },
-        授权引用: { type: 'string', description: '主权者授权依据 id（audit_correct 必填：决议 / 任务节点 id；registry_assign 目标岗=复核员时必填；review_exempt 必填——豁免复核是主权者决定，空授权默认拒；原样进链接受复核）' },
+        授权引用: { type: 'string', description: '主权者授权依据 id（audit_correct 必填：决议 / 任务节点 id；registry_assign 目标岗=复核员时必填；member_spawn 岗位=复核员时必填——起执行体前预检并透传给登记闸；review_exempt 必填——豁免复核是主权者决定，空授权默认拒；原样进链接受复核）' },
         岗位: { type: 'string' },
         标签: { type: 'string' },
         文本: { type: 'string', description: '检索查询词' },
@@ -288,7 +288,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务 }) {
     // `probe_health` 曾在这张表里（W3 批3 清掉）：它是**安全类组件**的工具名，
     // 不属于本工具的动作面（`ACTIONS` 里没有它）——留在这里是一条永远匹配不上的死条目，
     // 读的人会以为「探针巡检在这个工具上是并发安全的」。
-    isConcurrencySafe: (args) => ['status', 'workbench', 'memory_query', 'memory_lineage', 'capability_list', 'capability_resolve', 'capability_read', 'bus_read', 'audit_tail', 'audit_verify', 'registry_list', 'registry_can', 'upgrade_pending', 'policy_check', 'delegation_status', 'member_list'].includes(args?.action),
+    isConcurrencySafe: (args) => ['status', 'workbench', 'memory_query', 'memory_lineage', 'capability_list', 'capability_resolve', 'capability_read', 'bus_read', 'audit_tail', 'audit_verify', 'registry_list', 'registry_can', 'upgrade_pending', 'policy_check', 'delegation_status', 'member_list', 'task_criteria'].includes(args?.action),
     async execute(args, exec) {
       const 主体 = agentSubject(exec);
       try {

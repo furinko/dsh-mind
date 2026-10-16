@@ -51,6 +51,10 @@ const 冻结动作表 = [
   'task_start',
   'task_submit',
   'task_review',
+  // task_criteria（复核汇总后续顺序① · 2026-10-16）：受管冻结判据只读入口。
+  // 过这一关时回答「是不是个改设置的动作」：不是——纯只读白名单投影（判据原文+指派事实），
+  // 不写任何账；闸＝handler 侧在办主体判定 + 策略引擎 read（只增对象可读）。
+  'task_criteria',
   'task_pending',
   'task_resolve',
   // task_settle（W3 批3）：结账——环路最后一步，仅 Lead（policy 的 settle 动作守着）。
