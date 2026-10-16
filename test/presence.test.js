@@ -110,6 +110,10 @@ const 冻结动作表 = [
   // dsh-mind-kernel.delegation 配置（主权者的机器层）；这组动作只消费授权，
   // 创建/消息/中断全部走组织登记（registry_assign）、任务图绑定与审计。
   'delegation_status',
+  // policy_reload（R04 · 审查 2026-10-16）：策略引擎显式重载 + 生效回执。
+  // 过这一关时回答「是不是个改设置的动作」：不是——它不改任何规则/设置文件，只重新读取
+  // 现有文件并回报重载前后的规则数/digest 摘要对照；闸＝仅 Lead / 主权者（机制动作）。
+  'policy_reload',
   'member_spawn',
   'member_message',
   'member_stop',

@@ -13,7 +13,7 @@ import { listFiles, readJsonOrNull, readTextOrNull, atomicWrite, mutateLocked, w
 import { InvalidBody, Fault } from './kernel/errors.js';
 import { parseVersionName } from './kernel/ids.js';
 import { digest } from './kernel/text.js';
-import { assertStructure, formatFrontMatter, highestAuthority, parseDocument } from './tags.js';
+import { assertStructure, effectiveDocument, formatFrontMatter, highestAuthority, parseDocument } from './tags.js';
 import { RULE_FILES } from './paths.js';
 
 /** 走对象存储的 kind。其余 kind 由各自的服务负责。 */
@@ -40,14 +40,25 @@ export class ObjectStore {
    */
   async read(kind, id, spec) {
     const zones = spec.zone ? [spec.zone] : ['私有', '出厂'];
-    for (const zone of zones) {
-      const path = this.#pathFor(kind, { id }, zone, spec.authority);
-      if (!path) continue;
+    // R18（审查 2026-10-16）：显式指定单区时按区读（写侧的回读语义不变）；不指定时
+    // **两侧都读、段级合并**——修前私有命中即短路，出厂里未被私有碰过的段在生效面上消失
+    // （报告实证：法律档能力卡被低档重发后限制实际失效）。与规则件/角色卡同一解析器。
+    if (spec.zone) {
+      const path = this.#pathFor(kind, { id }, spec.zone, spec.authority);
+      if (!path) return null;
       const text = await readTextOrNull(path);
-      if (text === null) continue;
-      return this.#decorate(kind, id, zone, path, text);
+      if (text === null) return null;
+      return this.#decorate(kind, id, spec.zone, path, text);
     }
-    return null;
+    const 私有路径 = this.#pathFor(kind, { id }, '私有', spec.authority);
+    const 出厂路径 = this.#pathFor(kind, { id }, '出厂', spec.authority);
+    const 私有文本 = 私有路径 ? await readTextOrNull(私有路径) : null;
+    const 出厂文本 = 出厂路径 ? await readTextOrNull(出厂路径) : null;
+    if (私有文本 === null && 出厂文本 === null) return null;
+    if (私有文本 === null) return this.#decorate(kind, id, '出厂', 出厂路径, 出厂文本);
+    if (出厂文本 === null) return this.#decorate(kind, id, '私有', 私有路径, 私有文本);
+    const 生效 = effectiveDocument(出厂文本, 私有文本, { 出厂标为: '出厂', 私有标为: '私有' });
+    return this.#decorate(kind, id, '私有', 私有路径, 生效.body, 生效, { 合并来源: 生效.合并来源 });
   }
 
   /**
@@ -318,9 +329,13 @@ export class ObjectStore {
     return this.layout.documentPath(kind, { id: meta.id, authority: authority ?? '自治' }, zone);
   }
 
-  /** @param {string} kind @param {string} id @param {'出厂'|'私有'} zone @param {string} path @param {string} text */
-  #decorate(kind, id, zone, path, text) {
-    const parsed = parseDocument(text);
+  /**
+   * @param {string} kind @param {string} id @param {'出厂'|'私有'} zone @param {string} path @param {string} text
+   * @param {object} [已解析] R18：段级合并的解析结果（省略则按单份文本解析）
+   * @param {{合并来源?: string}} [补充]
+   */
+  #decorate(kind, id, zone, path, text, 已解析, 补充 = {}) {
+    const parsed = 已解析 ?? parseDocument(text);
     // 文件名与 meta.id 不一致 ⇒ 响亮拒（W3 批2·2026-10-09）：此前是 `parsed.meta.id ?? id`，
     // 于是「按 a 去读，拿到 b 的正文」这件事被静默咽下——调用方以为读到的是 a。
     // 对象 id 是引用的凭据（§14.4-1「引用一律用 id」），两处各说各话时读取必须失败，
@@ -343,6 +358,8 @@ export class ObjectStore {
       segments: parsed.segments,
       clauses: parsed.clauses,
       digest: digest(text),
+      // R18：两侧都有时如实标注生效文档是段级合并的产物（不谎称整份来自某一区）。
+      ...(补充.合并来源 ? { 合并来源: 补充.合并来源 } : {}),
     };
   }
 

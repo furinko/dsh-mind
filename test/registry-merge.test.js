@@ -125,8 +125,9 @@ describe('角色注册表 · 双区同名：「列」与「读」是同一个口
     assert.ok(行, `「${同名}」没出现在 list() 里`);
     assert.ok(Array.isArray(行.同名), `list() 的行必须带可读的「同名」数组字段，实际 ${JSON.stringify(行.同名)}`);
     assert.deepEqual(行.同名, ['私有', '出厂'], `两区来源没被如实列出：${JSON.stringify(行.同名)}`);
-    assert.equal(行.来源, '私有', '生效的那一份应是私有版（与 get() 同口径）');
-    assert.equal(行.同名[0], 行.来源, '「同名」的第一项应即生效来源，读的人不用再对照两处');
+    // R18 口径改形：两区都有 ⇒ 来源报「合并（私有+出厂）」（生效文档为段级合并产物）。
+    assert.equal(行.来源, '合并（私有+出厂）', '两区都有时生效来源是段级合并');
+    assert.equal(行.同名[0], '私有', '「同名」的第一项仍即生效首层（私有），读的人不用再对照两处');
   });
 
   it('判据②·对照组：不同名的卡不虚报冲突', async () => {
@@ -141,17 +142,51 @@ describe('角色注册表 · 双区同名：「列」与「读」是同一个口
     const 卡 = await registry.get({ id: 同名 });
     assert.ok(卡);
     assert.equal(卡.来源, 行.来源, 'list() 与 get() 报告了不同的生效来源');
-    assert.equal(卡.来源, '私有', '同名时生效的必须是私有版');
+    // R18（审查 2026-10-16 口径改形）：两区都有时生效文档是**段级合并**的产物，不再报「私有」。
+    // 修前报「私有」而运行态是整文件替换——那正是报告 R18 的「解释与运行态不符」：
+    // 私有只定制无关段时，出厂里未被碰过的条款在生效面上消失（限制实际失效）。
+    assert.equal(卡.来源, '合并（私有+出厂）', '同名时生效的是段级合并版（私有同名段覆盖、未出现段继承出厂）');
   });
 
-  it('判据③：get() 取值语义不变——私有版生效，内容逐字来自私有那份', async () => {
+  it('判据③：get() 取值语义——段级合并版生效（夹具私有四段俱全 ⇒ 内容逐字来自私有那份）', async () => {
     const 卡 = await registry.get({ id: 同名 });
     assert.ok(卡, 'get() 取不到同名岗');
-    assert.equal(卡.来源, '私有');
+    // R18：来源标签改为「合并」（两区都有）；**取值语义**的断言一个不放松——
+    // 本夹具的私有版四段俱全，故合并结果应与私有版逐字一致（同名段覆盖的极端情形）。
+    assert.equal(卡.来源, '合并（私有+出厂）');
     assert.deepEqual(卡.能力引用, ['私有-能力-乙', '私有-能力-丙'], `能力引用应来自私有版：${JSON.stringify(卡.能力引用)}`);
     assert.deepEqual(卡.经验引用, ['私有-经验-乙']);
     assert.ok(卡.正文.includes('私有版'), '正文应来自私有那份');
     assert.ok(!卡.正文.includes('出厂版'), '正文里混进了出厂那份');
+  });
+
+  it('判据③·补：私有只定制一段 ⇒ 出厂其余段必须继承（R18 的修复本体）', async () => {
+    // 修前（整文件替换）：私有命中即短路 ⇒ 出厂里未被碰过的段在生效面上消失。
+    // 报告 R18 实证：出厂权限条款 deny、私有只定制无关段 ⇒ 限制实际消失、请求误 allow。
+    await writeUnder(
+      fixture.privateRoot,
+      `${卡目录}/${同名}.md`,
+      `---
+id: ${同名}
+kind: 身份
+authority: 自治
+zone: 自治
+domain: 个体
+version: 1
+---
+# ${同名}（只定制一段）
+
+## 个体L0 · 身份
+只有这一段是私有改的。
+`,
+    );
+    const 卡 = await registry.get({ id: 同名 });
+    assert.ok(卡, 'get() 取不到同名岗');
+    assert.ok(String(卡.正文).includes('只有这一段是私有改的'), '私有段生效');
+    assert.ok(String(卡.正文).includes('出厂规则') || String(卡.段?.['个体L1 · 规则'] ?? '').includes('出厂'), `未定制的出厂段必须继承：段=${JSON.stringify(卡.段)}`);
+    assert.ok(JSON.stringify(卡.段).includes('出厂-能力-甲') || String(卡.正文).includes('出厂-能力-甲'), `出厂能力段必须继承：${JSON.stringify(卡.段)}`);
+    // 恢复夹具（后续用例依赖原私有版）。
+    await writeUnder(fixture.privateRoot, `${卡目录}/${同名}.md`, 私有版(同名));
   });
 
   it('判据③·对照组：只在出厂区的卡照旧读得到', async () => {
@@ -184,7 +219,13 @@ describe('角色注册表 · 双区同名：「列」与「读」是同一个口
     for (const 行 of 行表) {
       assert.ok(Array.isArray(行.同名), `行 ${行.id} 缺「同名」字段：${JSON.stringify(Object.keys(行))}`);
       assert.ok(行.同名.length >= 1, `行 ${行.id} 的「同名」为空——连生效来源都没记：${JSON.stringify(行.同名)}`);
-      assert.equal(行.同名[0], 行.来源, `行 ${行.id} 的「同名」首项 ${行.同名[0]} 与来源 ${行.来源} 不一致`);
+      // R18 口径改形：两区都有 ⇒ 来源是「合并（…）」，而 同名 首项仍是生效首层（私有）。
+      if (行.同名.length > 1) {
+        assert.equal(行.同名[0], '私有', `两区同名行 ${行.id} 的生效首层应为私有`);
+        assert.ok(String(行.来源).includes(行.同名[0]), `行 ${行.id} 的合并来源「${行.来源}」里应含生效首层 ${行.同名[0]}`);
+      } else {
+        assert.equal(行.同名[0], 行.来源, `单区行 ${行.id} 的来源应与同名首项一致`);
+      }
       assert.equal(new Set(行.同名).size, 行.同名.length, `行 ${行.id} 的来源有重复：${JSON.stringify(行.同名)}`);
       assert.ok(行.同名.every((z) => z === '私有' || z === '出厂'), `行 ${行.id} 出现未知来源：${JSON.stringify(行.同名)}`);
     }

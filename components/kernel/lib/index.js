@@ -67,11 +67,17 @@ export async function apply(ctx, config = {}) {
   const 项目 = config.project ?? DEFAULT_PROJECT;
   刷新工具总范围(org, logger);
   // 主权者随时可能改工具总范围：定时重读，让改动生效而不必重启。
+  // R04（审查 2026-10-16 · 生效闭环）：同一节拍也刷**策略引擎**——修前只刷工具范围，
+  // 规则件/部署介入度改了要等「下一次身份更新顺便重载」（报告实证：改完仍按旧规则判）。
+  // 两侧都走「比签名、变了才重载」的轻量路径（refreshIfStale 只做 stat，不重读不解析）。
   ctx.effect?.(() => {
-    const timer = setInterval(() => 刷新工具总范围(org, logger), 5000);
+    const timer = setInterval(() => {
+      刷新工具总范围(org, logger);
+      void org.policy.refreshIfStale().catch(() => { /* 重载失败=引擎不健康，判定面自会 fail-closed */ });
+    }, 5000);
     if (typeof timer.unref === 'function') timer.unref();
     return () => clearInterval(timer);
-  }, 'dsh-mind: 工具总范围热更新');
+  }, 'dsh-mind: 工具总范围与策略引擎热更新');
 
   // R06（审查 2026-10-16）：安全必需依赖（宿主工具闸）注册失败 ⇒ 拒绝激活——修前仅 warn
   // 后继续：guards=0、mind 工具照常在、探针还绿（审查实证，最需要红灯的时候它绿着）。
@@ -333,8 +339,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务 }) {
     // `probe_health` 曾在这张表里（W3 批3 清掉）：它是**安全类组件**的工具名，
     // 不属于本工具的动作面（`ACTIONS` 里没有它）——留在这里是一条永远匹配不上的死条目，
     // 读的人会以为「探针巡检在这个工具上是并发安全的」。
-    isConcurrencySafe: (args) => ['status', 'workbench', 'memory_query', 'memory_lineage', 'capability_list', 'capability_resolve', 'capability_read', 'bus_read', 'audit_tail', 'audit_verify', 'registry_list', 'registry_can', 'upgrade_pending', 'policy_check', 'delegation_status', 'member_list', 'task_criteria'].includes(args?.action),
-    async execute(args, exec) {
+    isConcurrencySafe: (args) => ['status', 'workbench', 'memory_query', 'memory_lineage', 'capability_list', 'capability_resolve', 'capability_read', 'bus_read', 'audit_tail', 'audit_verify', 'registry_list', 'registry_can', 'upgrade_pending', 'policy_check', 'delegation_status', 'member_list', 'task_criteria'].includes(args?.action),    async execute(args, exec) {
       const 主体 = agentSubject(exec);
       try {
         // 项目键省略时取**当前工作区目录名**（§14.4-5：目录名即项目键）——

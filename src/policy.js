@@ -21,7 +21,7 @@ import { digest } from './kernel/text.js';
 import { Denied, Fault, NeedsApproval } from './kernel/errors.js';
 import { resolveResponseDeadline, evaluateSovereignPresence, BUILTIN_RESPONSE_DEADLINE_HOURS } from './kernel/time.js';
 import { RULE_FILES } from './paths.js';
-import { parseDocument } from './tags.js';
+import { parseDocument, effectiveDocument } from './tags.js';
 
 /** 动作的封闭清单。表外的动作 = 未知动作 = 拒绝（fail-closed）。 */
 export const ACTIONS = [
@@ -91,6 +91,14 @@ export class PolicyEngine {
   #reloadDirty = false;
 
   /**
+   * R04（审查 2026-10-16）：本次加载**实际读过**的授权依赖路径（#loadRules / #loadDefaults
+   * 上报，编制件与身份档案由 #reloadOnce 补齐）。热路径的签名比对按这份清单 stat——
+   * 引擎不另跑 rulePath 枚举，第三批「读取次数不随调用数翻倍」的语义保持。
+   * @type {string[]|null}
+   */
+  #签到路径 = null;
+
+  /**
    * @param {{ layout: import('./paths.js').Layout, clock: import('./kernel/time.js').Clock, audit?: { append: Function } }} spec
    */
   constructor(spec) {
@@ -125,6 +133,17 @@ export class PolicyEngine {
      */
     this.identityMtimeMs = null;
     /**
+     * R04（审查 2026-10-16 · 生效闭环）：**全部授权依赖**的签名。
+     * 修前新鲜度检查只盯身份档案 ⇒ 手改法律件/部署介入度后，判定仍按旧规则跑，直到
+     * 某次身份写入「顺便重载」（报告实证：写逐条审批后当前策略仍按零参与 allow）。
+     * 现在 decide 的热路径比对这个集合，任一依赖变动 ⇒ reload 后再判。
+     * 形状 { 串, 路径 }：`路径` 供后续只 stat 已知清单（不再枚举 rulePath）。
+     * @type {{ 串: string, 路径: string[] } | null}
+     */
+    this.authSig = null;
+    /** R04：本次加载实际读过的授权依赖路径（#loadRules/#loadDefaults 上报，热路径据此比对）。 @type {string[]|null} */
+    this.#签到路径 = null;
+    /**
      * in-flight reload 去重（2026-10-13 第三批性能收口）：身份档案 mtime 一变（每次
      * assign/seal/markInteraction 都会变）之后的并发 decide 各自触发全量 reload——
      * 突发下是 N× 全量加载。进行中的 reload 共享同一个 Promise，后到者等结果不重跑。
@@ -136,14 +155,15 @@ export class PolicyEngine {
   /** 热更新入口：宿主在文件变更时调用；失败不改变「不健康」这个事实。并发调用合并为一次。 */
   reload() {
     if (this.#inFlightReload) {
-      // R05（审查 2026-10-16 · in-flight 合并不丢 dirty）：并发到达**且档案确有新变化**
-      // （此刻 mtime ≠ 已发布快照的 mtime）⇒ 标脏，在飞轮结束再补读一轮——修前共享
+      // R05（审查 2026-10-16 · in-flight 合并不丢 dirty）：并发到达**且确有新变化**
+      // （此刻授权依赖签名 ≠ 已发布快照的签名）⇒ 标脏，在飞轮结束再补读一轮——修前共享
       // Promise 就完事，期间落盘的写入被「已重载」假象吞掉。纯并发去重（文件没变，
       // 第三批的「rulePath 读取次数不随调用数翻倍」语义）不标脏、不补读。
-      // 覆盖面：写入若落在本 stat 之后、在飞轮自己的读前/读后一致性检查之前，由那道
-      // 撕裂重试兜住；落在更晚，decide 的每调用 mtime 快速路会看到差异再触发 reload。
-      void mtimeMsOrNull(this.layout.identityFile()).then((m) => {
-        if (m !== this.identityMtimeMs) this.#reloadDirty = true;
+      // R04 起比对**全部授权依赖**而非只有身份档案（同一份签名、同一把尺）。
+      // 路径清单从**已发布签名**里取（它按 `路径=mtime` 存过一遍）——不走 rulePath 枚举，
+      // 第三批「rulePath 读取次数不随调用数翻倍」的语义照旧成立。
+      void this.#authSignature(this.authSig?.路径).then((sig) => {
+        if (sig.串 !== this.authSig?.串) this.#reloadDirty = true;
       });
       return this.#inFlightReload;
     }
@@ -161,6 +181,72 @@ export class PolicyEngine {
       this.#inFlightReload = null;
     });
     return this.#inFlightReload;
+  }
+
+  /**
+   * R04（审查 2026-10-16 · 生效闭环；判据①的取数点）：授权依赖的**签名**。
+   *
+   * 依赖面＝这份引擎判定时真正读的那些文件：身份档案、每个规则件（私有/出厂两区路径）、
+   * 出厂默认值（介入度 / 响应期限 / 安全类探针声明）、私有部署偏好、编制件（两区）。
+   * 取 mtimeMs 拼成稳定串——热路径只做 stat，不重读不解析（与身份档案那道同款）。
+   * 文件缺席记 '-'（缺席→出现 也是变化，反之亦然）。
+   *
+   * @param {string[]} [路径表] 调用方已知的路径清单（加载流程传它，省一次 rulePath 走查）；
+   *   省略则自行枚举（decide 热路径用）。
+   * @param {{ 身份mtime?: number|null }} [选项] 已知的身份档案时刻（加载流程传「与发布正文
+   *   同一快照」的读后值——R05 的教训：不要在撕裂窗里改用新 stat）。
+   * @returns {Promise<string>}
+   */
+  async #authSignature(路径表, 选项 = {}) {
+    const 文件 = 路径表 ?? this.#authPaths();
+    const 部分 = [];
+    for (const p of 文件) 部分.push(`${p}=${(await mtimeMsOrNull(p)) ?? '-'}`);
+    if (选项.身份mtime !== undefined) {
+      // 发布快照时用「与正文同一快照」的身份 mtime 覆盖那一格（R05：撕裂窗里读到旧正文、
+      // 却记下新 mtime = 撤回永久失效）。其余依赖照常现 stat。
+      const 身份行 = `${this.layout.identityFile()}=${选项.身份mtime ?? '-'}`;
+      const 位置 = 部分.findIndex((x) => x.startsWith(`${this.layout.identityFile()}=`));
+      if (位置 >= 0) 部分[位置] = 身份行;
+      else 部分.unshift(身份行);
+    }
+    return { 串: 部分.join('|'), 路径: 文件 };
+  }
+
+  /** 授权依赖的路径清单（枚举一次，随后只按清单 stat）。@returns {string[]} */
+  #authPaths() {
+    return this.#签到路径 ?? [
+      this.layout.identityFile(),
+      ...RULE_FILES.flatMap((spec) => [this.layout.rulePath(spec.id, '私有'), this.layout.rulePath(spec.id, '出厂')]),
+      this.layout.factoryDefault('介入度'),
+      this.layout.factoryDefault('响应期限'),
+      this.layout.probeDeclaration(),
+      this.layout.deploymentPrefs(),
+      this.layout.establishmentPath('私有'),
+      this.layout.establishmentPath('出厂'),
+    ].filter((p) => typeof p === 'string' && p);
+  }
+
+  /**
+   * R04：把**本次加载实际读过的路径**记为授权依赖清单（加载流程上报，一次走查两用——
+   * 既是加载的足迹，也是后续热路径要比对的清单；引擎不再为此另跑一遍 rulePath 枚举，
+   * 第三批「读取次数不随调用数翻倍」的语义得以保持）。
+   * @param {string[]} 路径
+   */
+  #记授权依赖(路径) {
+    this.#签到路径 = [...new Set(路径.filter((p) => typeof p === 'string' && p))];
+  }
+
+  /**
+   * R04：需要时才重载（签名比对）。内核定时器与 decide 热路径共用这一处判定——
+   * 一处实现，两处调用（报告 §5.3「公共流程：一致的策略快照」）。
+   *
+   * @returns {Promise<{ changed: boolean, reloaded: boolean, ok: boolean }>}
+   */
+  async refreshIfStale() {
+    const sig = await this.#authSignature(this.authSig?.路径);
+    if (sig.串 === this.authSig?.串) return { changed: false, reloaded: false, ok: this.healthy };
+    const ok = await this.reload();
+    return { changed: true, reloaded: true, ok: Boolean(ok) };
   }
 
   async #reloadOnce() {
@@ -189,9 +275,18 @@ export class PolicyEngine {
     }
     try {
       const { rules, digests } = await this.#loadRules();
-      const { defaults, defaults来源, 忽略的默认值键 } = await this.#loadDefaults();
+      const { defaults, defaults来源, 忽略的默认值键, 足迹: 默认值足迹 } = await this.#loadDefaults();
       const establishment = await this.#loadEstablishment();
       this.grants = collectGrants(rules);
+      // R04：授权依赖清单＝规则件足迹（#loadRules 上报，含未命中的候选）＋默认值文件
+      // ＋编制件两区（它在 #loadEstablishment 里读，路径固定）＋身份档案（已在规则足迹里）。
+      this.#记授权依赖([
+        ...(this.#签到路径 ?? []),
+        ...(默认值足迹 ?? []),
+        this.layout.establishmentPath('私有'),
+        this.layout.establishmentPath('出厂'),
+        this.layout.identityFile(),
+      ]);
       this.state = {
         ok: true,
         error: null,
@@ -223,6 +318,10 @@ export class PolicyEngine {
     // R05：成功路径用快照的读后 mtime（与发布的正文同一快照）；失败路径现 stat——
     // 失败时正文没发布，不存在「新 mtime 绑旧正文」的撕裂，只需保证下次 decide 能再试。
     this.identityMtimeMs = identityMtime ?? await mtimeMsOrNull(this.layout.identityFile());
+    // R04：发布快照的同时记下**全部授权依赖**的签名（decide 热路径与内核定时器共用它判新旧）。
+    // 身份那一格用**与发布正文同一快照**的 mtime（R05：撕裂窗里读到旧正文却记新 mtime 会让
+    // 撤回永久失效——本条不能把那个修复重新打穿）。
+    this.authSig = await this.#authSignature(this.#authPaths(), { 身份mtime: this.identityMtimeMs });
     return this.state.ok;
   }
 
@@ -291,15 +390,13 @@ export class PolicyEngine {
    * @returns {Promise<{ verdict: 'allow'|'deny'|'confirm', rule: string, reason: string, requireAuthority: string, howToChange: string, detail?: object, authority?: string, alarm?: boolean }>}
    */
   async decide(input) {
-    // 身份档案新鲜度（审查 B2 半边）：把「写完档案要 reload」从**纪律级**（靠 registry
-    // 写完自觉调用）升级为**机制级**——任何绕过 registry 的写入（手改 JSON、外部工具）
-    // 也必须在下一次判定前生效，否则封存/撤回的成员继续拿到旧快照的权限。
-    // 热路径只花**一次 stat**（不重读不解析）；档案缺失 = 沿用 #loadIdentity 的兜底语义
-    // （「没有任何登记在案的身份」，不是抛错），mtime 记 null，null == null 视为无变化。
-    const mtime = await mtimeMsOrNull(this.layout.identityFile());
-    if (mtime !== this.identityMtimeMs) {
-      await this.reload();
-    }
+    // 授权依赖新鲜度（R04 · 审查 2026-10-16；报告 P04「规则与部署偏好没有宣称的变更热更新」）：
+    // 判定的依据是**一组文件**——身份档案、规则件（两区）、出厂默认值、私有部署偏好、编制件。
+    // 修前这里只 stat 身份档案 ⇒ 手改法律件或部署介入度后判定仍按旧规则跑，直到某次身份
+    // 写入「顺便重载」（报告实证：写逐条审批后当前策略仍按零参与 allow、显式 reload 才变）。
+    // 现在比对全部依赖的签名（同样只做 stat，不重读不解析），任一变动即在本次判定前重载。
+    // 引擎不健康时的行为不变：下面的 !healthy 分支照旧 fail-closed（拒绝 + 告警入账）。
+    await this.refreshIfStale();
     if (!this.healthy) {
       const fault = new Fault('POLICY_NOT_LOADED', `策略引擎不健康：${this.state.error ?? '未知原因'}`).toDecision();
       await this.#auditFault(input, fault);
@@ -851,28 +948,46 @@ export class PolicyEngine {
     /** @type {Array<{id:string, authority:string, zone:string, text:string, digest:string, path:string}>} */
     const rules = [];
     const digests = {};
+    /** R04：本次加载读过的路径（含未命中的候选——「缺席→出现」也是依赖变化）。 */
+    const 足迹 = [];
     for (const spec of RULE_FILES) {
-      let found = null;
-      // 私有区覆盖出厂区（§5 叠加层）：先看私有，命中即生效，出厂那份仍留作基线。
-      for (const zone of ['私有', '出厂']) {
-        const path = this.layout.rulePath(spec.id, zone);
-        if (!path) continue;
-        const text = await readTextOrNull(path);
-        if (text === null) continue;
-        const parsed = parseDocument(text, { defaultAuthority: spec.authority });
-        if (parsed.errors.length) {
-          throw new Error(`规则件 ${spec.id}（${zone}）无法解析：${parsed.errors.join('；')}`);
-        }
-        found = { id: spec.id, authority: spec.authority, zone, text, digest: digest(text), path, parsed };
-        break;
-      }
-      if (!found) {
+      // R18（审查 2026-10-16）：**两侧都读、段级合并**。修前找到私有文件就 break——
+      // 「私有叠加层、未改条款继承出厂」的解释与运行态不符（报告实证：私有只定制无关段
+      // ⇒ 出厂限制条款消失、请求误 allow）。现在私有同名段覆盖出厂，未出现的段继承出厂；
+      // 生效文档由 effectiveDocument 单源产出（与 upgrade.compare 的条款级口径同源）。
+      const 私有路径 = this.layout.rulePath(spec.id, '私有');
+      const 出厂路径 = this.layout.rulePath(spec.id, '出厂');
+      if (私有路径) 足迹.push(私有路径);
+      if (出厂路径) 足迹.push(出厂路径);
+      const 私有文本 = 私有路径 ? await readTextOrNull(私有路径) : null;
+      const 出厂文本 = 出厂路径 ? await readTextOrNull(出厂路径) : null;
+      if (私有文本 === null && 出厂文本 === null) {
         // 宪章缺失 = 没有判据来源 = fail-closed（§7 加载失败 fail-closed）。
         throw new Error(`规则件缺失：${spec.id}（私有区与出厂区都没有）`);
       }
+      const 生效 = effectiveDocument(出厂文本, 私有文本, { defaultAuthority: spec.authority, 出厂标为: '出厂', 私有标为: '私有' });
+      if (生效.errors?.length) {
+        throw new Error(`规则件 ${spec.id}（${生效.合并来源}）无法解析：${生效.errors.join('；')}`);
+      }
+      const found = {
+        id: spec.id,
+        authority: spec.authority,
+        // zone 取实际来源层：只私有 ⇒ 私有；只出厂 ⇒ 出厂；两侧都有 ⇒ 合并（新档，用于
+        // 描述里如实标注生效面，不再谎称「整份来自私有」）。
+        zone: 私有文本 !== null && 出厂文本 !== null ? '合并' : (私有文本 !== null ? '私有' : '出厂'),
+        text: 生效.body,
+        digest: digest(生效.body),
+        path: 私有文本 !== null ? 私有路径 : 出厂路径,
+        parsed: 生效,
+        生效来源: 生效.合并来源,
+      };
       rules.push(found);
       digests[spec.id] = found.digest;
     }
+    // 身份档案也在这条足迹上（它在 #reloadOnce 的读前/读后一致性检查里另读一遍，
+    // 但依赖面必须包含它——否则手改档案的热更就漏了）。
+    足迹.push(this.layout.identityFile());
+    this.#记授权依赖(足迹);
     return { rules, digests };
   }
 
@@ -914,6 +1029,8 @@ export class PolicyEngine {
   async #loadDefaults() {
     // 兜底 72 只写一份：引用 `src/kernel/time.js` 的常量（两处字面量迟早会漂）。
     const merged = { 介入度: '零参与', 失联限制: true, 响应期限小时: BUILTIN_RESPONSE_DEADLINE_HOURS, 工具总范围: '全部', 安全类: [], 会审讨论: { ...DEFAULT_DEBATE_BUDGET }, 岗位闲置天数: DEFAULT_ROLE_IDLE_DAYS };
+    /** R04：本方法读过的默认值文件（并入授权依赖足迹）。 */
+    const 足迹 = [];
     /** 生效值来自哪一层（'出厂' | '私有' | '内置兜底'）—— 「改了不生效」要能一眼看出源。 */
     const 来源 = Object.fromEntries(Object.keys(merged).map((键) => [键, '内置兜底']));
     /** 被剔除的文档键（只留名字，不留正文：正文正是它不该进运行态的原因）。 */
@@ -924,6 +1041,8 @@ export class PolicyEngine {
      * @param {'出厂'|'私有'} 层 生效值来自哪一层
      */
     const 并入 = async (file, 标注, 层) => {
+      // R04：默认值文件的读点只有这里——足迹在此登记（热路径据此发现「手改介入度」）。
+      足迹.push(file);
       const text = await readTextOrNull(file);
       if (text === null) return; // 缺失 ⇒ 保留上一层（全新部署合理）
       let parsed;
@@ -994,7 +1113,7 @@ export class PolicyEngine {
       throw new Error(`岗位闲置天数 非法：${JSON.stringify(merged.岗位闲置天数)}（来源：${来源.岗位闲置天数}）。要 ≥0 的整数（天数；0 = 不判闲置）。修好对应文件后重载即恢复。`);
     }
 
-    return { defaults: merged, defaults来源: 来源, 忽略的默认值键: [...忽略键].sort() };
+    return { defaults: merged, defaults来源: 来源, 忽略的默认值键: [...忽略键].sort(), 足迹 };
   }
 
   async #loadIdentity() {

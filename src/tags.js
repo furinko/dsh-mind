@@ -369,6 +369,115 @@ const STRUCTURE_RULES = {  规则: { sections: [], meta: ['id', 'authority'], be
 };
 
 /**
+ * 生效文档解析器（R18 · 审查 2026-10-16）：**唯一**的「私有叠加层 → 生效内容」解析落点。
+ *
+ * 修前的病（报告 R18）：解释词写着「部分副本叠加层、未改条款继承出厂」，运行态却是
+ * **整文件替换**——`#loadRules` 找到私有文件就停止读出厂那份。于是私有文件只定制一段、
+ * 其余段原样照抄时，出厂里那些**未被私有碰过**的条款（含授权块 grant）在生效面上消失：
+ * 报告实证「出厂权限条款 deny、私有只定制无关段 ⇒ compare 给『直接替换』、compare+reload
+ * 后限制实际消失、grants=[]、请求误 allow」。
+ *
+ * 本函数的语义（与 upgrade.compare 的条款级处置同源）：
+ *  - 以出厂文档为底（缺出厂则空底）；
+ *  - 私有文档里**出现的同名段**（按段 key 比对）覆盖出厂同名段；
+ *  - 私有文档里**没出现的段**继承出厂；
+ *  - 元数据（front matter）以私有为准（它是那份副本的身份），`body` 按合并后的段序重建。
+ *
+ * 返回形状与 `parseDocument` 一致（meta/body/segments/authority/clauses/errors），
+ * 于是策略加载、角色卡读取、对象读取三面可以**共用同一份**结果，不再各写一套覆盖口径。
+ *
+ * @param {string|null|undefined} 出厂文本
+ * @param {string|null|undefined} 私有文本
+ * @param {{ defaultAuthority?: string, 私有标为?: string, 出厂标为?: string }} [options]
+ * @returns {ReturnType<typeof parseDocument> & { 合并来源: string }}
+ */
+export function effectiveDocument(出厂文本, 私有文本, options = {}) {
+  const 出厂有 = typeof 出厂文本 === 'string' && 出厂文本.trim() !== '';
+  const 私有有 = typeof 私有文本 === 'string' && 私有文本.trim() !== '';
+  if (!出厂有 && !私有有) {
+    const 空 = parseDocument('', options);
+    空.errors = [...(空.errors ?? []), '两区都没有内容：生效文档无从解析'];
+    return { ...空, 合并来源: '两区皆缺' };
+  }
+  if (!私有有) {
+    return { ...parseDocument(String(出厂文本), options), 合并来源: options.出厂标为 ?? '出厂' };
+  }
+  if (!出厂有) {
+    return { ...parseDocument(String(私有文本), options), 合并来源: options.私有标为 ?? '私有' };
+  }
+
+  const 出厂 = parseDocument(String(出厂文本), options);
+  const 私有 = parseDocument(String(私有文本), options);
+  if (出厂.errors?.length || 私有.errors?.length) {
+    // 任一侧解析不了就如实报错（调用方按各自口径抛）——不静默退回整文件替换：
+    // 那正是本函数要治的「解释与运行态不符」。
+    return { ...私有, errors: [...(私有.errors ?? []), ...(出厂.errors ?? [])], 合并来源: '解析失败' };
+  }
+
+  // 段级合并：以出厂段序为骨，私有同名段原位替换；私有独有段追加在后（保持稳定序）。
+  const 私有段表 = new Map(私有.segments.map((s) => [s.key, s]));
+  const 用过的 = new Set();
+  const 段 = [];
+  for (const 出段 of 出厂.segments) {
+    const 替代 = 私有段表.get(出段.key);
+    if (替代) {
+      段.push(替代);
+      用过的.add(出段.key);
+    } else {
+      段.push(出段);
+    }
+  }
+  for (const 私段 of 私有.segments) {
+    if (!用过的.has(私段.key) && !出厂.segments.some((s) => s.key === 私段.key)) 段.push(私段);
+  }
+
+  // body 按合并段序重建：段的 `body` 只含段正文（不含标题行），必须把标题补回来——
+  // 否则 `section(body, '个体L2')` 之类的段读取器找不到段（实测：合并后能力引用读成空）。
+  // 段外头（front matter 之后、首段之前的 H1 标题等）以私有为准、缺则取出厂——它是文档的
+  // 标题位，不属于任何段；丢了会让「正文逐字来自私有那份」这类断言与真机阅读面失真。
+  const 头 = 头部(私有).trim() ? 头部(私有) : 头部(出厂);
+  const 段正文 = 段.map((s) => `${s.heading ? `## ${s.heading}\n` : ''}${s.body}`).join('\n');
+  // 授权块（```policy）**不属于任何段**：它写在某段正文里，段级覆盖会把它一起带走。
+  // R18 的安全面（报告实证：私有只定制无关段 ⇒ 出厂 deny 条款实际消失、请求误 allow）：
+  // 出厂的授权块必须**独立继承**——私有自己有块则用私有的（显式改法），否则保留出厂块。
+  const 私有块 = 提取授权块(私有.body);
+  const 出厂块 = 提取授权块(出厂.body);
+  const 授权块 = 私有块 ?? 出厂块;
+  const body = `${头}${段正文}${授权块 ? `\n${授权块}\n` : ''}`.replace(/^\n+/, '');
+  const 合并 = parseDocument(body, { ...options, defaultAuthority: 私有.meta?.authority ?? 出厂.meta?.authority ?? options.defaultAuthority });
+  return {
+    ...合并,
+    meta: { ...出厂.meta, ...私有.meta },
+    segments: 段,
+    clauses: splitClauses(body),
+    authority: AUTHORITY_OF(段, options.defaultAuthority),
+    合并来源: `${options.出厂标为 ?? '出厂'}+${options.私有标为 ?? '私有'}（段级合并）`,
+  };
+}
+
+/** 段外头：front matter 之后、首个 `##` 段标题之前的正文（H1 标题等）。 */
+function 头部(doc) {
+  const body = String(doc?.body ?? '');
+  const 首段 = body.search(/^##\s/m);
+  return 首段 === -1 ? body : body.slice(0, 首段);
+}
+
+/** 取出 ```policy 授权块原文（含围栏）；没有则 null。合并时它与段正文分开继承。 */
+function 提取授权块(body) {
+  const m = /```policy\s*\n[\s\S]*?```/.exec(String(body ?? ''));
+  return m ? m[0] : null;
+}
+
+/** 段内最高授权（合并文档的整体 authority；缺段时回退 fallback）。 */
+function AUTHORITY_OF(段, fallback = '自治') {
+  try {
+    return highestAuthority(段.map((s) => s.authority), fallback);
+  } catch {
+    return fallback;
+  }
+}
+
+/**
  * @param {string} kind
  * @param {ReturnType<typeof parseDocument>} doc
  * @throws {InvalidBody}

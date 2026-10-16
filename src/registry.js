@@ -13,7 +13,7 @@
 import { listFiles, readJsonOrNull, readTextOrNull, atomicWrite, withLock } from './kernel/fsx.js';
 import { Denied, InvalidBody } from './kernel/errors.js';
 import { digest } from './kernel/text.js';
-import { parseDocument } from './tags.js';
+import { effectiveDocument, parseDocument } from './tags.js';
 import { section } from './capability.js';
 import { assertPathSegment } from './paths.js';
 import { ACTIONS, identityStatus } from './policy.js';
@@ -133,6 +133,12 @@ export class RoleRegistry {
     // 但读数要可复现（同一盘同一答案），所以按 ZONES 的优先级序而非扫描次序收敛。
     const 序 = new Map(ZONES.map(([, l], i) => [l, i]));
     for (const row of byId.values()) row.同名.sort((a, b) => 序.get(a) - 序.get(b));
+    // R18（审查 2026-10-16）：来源标签与 get() **同一条口径**——两区都有时生效文档是
+    // 段级合并的产物（私有同名段覆盖、未出现段继承出厂），不再谎称「整份来自私有」。
+    // 这条也是本文件既有的自我约束：`list()` 与 `get()` 必须给同一条答案。
+    for (const row of byId.values()) {
+      if (row.同名.length > 1) row.来源 = `合并（${row.同名.join('+')}）`;
+    }
     return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
   }
 
@@ -143,34 +149,33 @@ export class RoleRegistry {
    */
   async get(spec) {
     const id = assertPathSegment(spec.id, '岗位卡id');
-    // ZONES 的顺序即覆盖优先级（自治在前 ⇒ 私有优先短路）。与 list() 同源，
-    // 所以「读」与「列」不可能再给出两份答案——包括命中的是哪一区、来源标签叫什么。
-    for (const [zone, label] of ZONES) {
-      const dir = this.layout.roleCardDir(zone);
-      const path = `${dir}/${id}.md`;
-      const text = await readTextOrNull(path);
-      if (text === null) continue;
-      const parsed = parseDocument(text);
-      // 解析错误响亮抛（2026-10-14 审查 P2-3）：与 #scanZone / 规则件同口径，
-      // 修前 errors 静默丢弃——读得出一张坏卡 = 身份档案带病运行。
-      if (parsed.errors?.length) {
-        throw new Denied(
-          '角色注册表 · 岗位卡无法解析（fail-closed）',
-          `岗位卡文件「${zone}区/${id}.md」解析失败：${parsed.errors.join('；')}。`,
-          { howToChange: `修好 ${id}.md 的 front matter（${parsed.errors[0]}）后重试。` },
-        );
-      }
-      return {
-        id: parsed.meta.id ?? spec.id,
-        来源: label,
-        meta: parsed.meta,
-        段: Object.fromEntries(SEGMENTS.map((s) => [s, section(parsed.body, s)])),
-        能力引用: refs(section(parsed.body, '个体L2')),
-        经验引用: refs(section(parsed.body, '个体L3')),
-        正文: parsed.body,
-      };
+    // R18（审查 2026-10-16）：**两侧都读、段级合并**（effectiveDocument 单源）——修前
+    // 自治区命中就短路，出厂那份里未被私有碰过的段（个体L1 规则等）在生效面上消失。
+    // 与规则件、对象读取同一口径：私有同名段覆盖出厂、未出现段继承出厂。
+    const 自治文本 = await readTextOrNull(`${this.layout.roleCardDir('自治')}/${id}.md`);
+    const 出厂文本 = await readTextOrNull(`${this.layout.roleCardDir('出厂')}/${id}.md`);
+    if (自治文本 === null && 出厂文本 === null) return null;
+    const parsed = effectiveDocument(出厂文本, 自治文本, { defaultAuthority: '自治', 出厂标为: '出厂', 私有标为: '自治' });
+    // 解析错误响亮抛（2026-10-14 审查 P2-3）：与 #scanZone / 规则件同口径，
+    // 修前 errors 静默丢弃——读得出一张坏卡 = 身份档案带病运行。
+    if (parsed.errors?.length) {
+      const 区 = 自治文本 !== null ? '自治' : '出厂';
+      throw new Denied(
+        '角色注册表 · 岗位卡无法解析（fail-closed）',
+        `岗位卡文件「${区}区/${id}.md」解析失败：${parsed.errors.join('；')}。`,
+        { howToChange: `修好 ${id}.md 的 front matter（${parsed.errors[0]}）后重试。` },
+      );
     }
-    return null;
+    const 来源 = 自治文本 !== null && 出厂文本 !== null ? `合并（${ZONES[0][1]}+${ZONES[1][1]}）` : (自治文本 !== null ? ZONES[0][1] : ZONES[1][1]);
+    return {
+      id: parsed.meta.id ?? spec.id,
+      来源,
+      meta: parsed.meta,
+      段: Object.fromEntries(SEGMENTS.map((s) => [s, section(parsed.body, s)])),
+      能力引用: refs(section(parsed.body, '个体L2')),
+      经验引用: refs(section(parsed.body, '个体L3')),
+      正文: parsed.body,
+    };
   }
 
   /**
