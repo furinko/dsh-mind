@@ -147,8 +147,12 @@ export class ObjectStore {
       // 修前后续失败只把原错误裸抛，调用方会误判「没写成」而盲重试（重试 = 又一个版本）。
       // 最低限度实现（判据允许）：失败必须明示「正文已提交到 vX」并禁止盲重试语义；
       // 完整的 operation id/outbox 恢复面在后续批次。
+      // 第13代复核反例4（2026-10-16）：detail 增 失败阶段 与 指针已写——两断面（指针未写/
+      // 审计失败）在 Fault 里可判，调用方不用人工核盘猜状态。
+      let 阶段 = '指针';
       try {
         await this.#recordPointer(id, pointer);
+        阶段 = '审计';
         await this.audit.append({
           动作: '状态变更',
           主体: spec.subject,
@@ -162,7 +166,7 @@ export class ObjectStore {
         throw new Fault(
           'STORE_PARTIAL_COMMIT',
           `${kind} ${id} 的正文已落盘（v${version}，摘要 ${pointer.digest.slice(0, 8)}…），但提交链未完成：${error instanceof Error ? error.message : String(error)}。不要盲目重试——对象已在盘上，重试会写出新版本而不是修复本次；请核对盘上版本与指针后继续。`,
-          { detail: { id, kind, version, 已落盘正文: true, 摘要: pointer.digest, 失败原因: error instanceof Error ? error.message : String(error) } },
+          { detail: { id, kind, version, 已落盘正文: true, 指针已写: 阶段 === '审计', 失败阶段: 阶段, 摘要: pointer.digest, 失败原因: error instanceof Error ? error.message : String(error) } },
         );
       }
 
