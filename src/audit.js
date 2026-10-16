@@ -165,10 +165,46 @@ export class AuditLog {
       await appendLines(file, [stored]);
       this._chain.set(month, { seq: record.seq, hash });
       await this.#writeAnchor(month, { seq: record.seq, hash, at });
+      // R13/R14（审查 2026-10-16 · 月份清单）：每月首写登记「应当存在的分片」。verify 按
+      // 清单∪日志∪锚核对——无活动月不再被日历连续性误判（R13），整月账本+锚同删也因
+      // 清单在案而必红（R14 的加强面）。清单只由本方法（机制）写入，业务记录填不了它。
+      await this.#ensureMonthRegistered(month);
       if (stored.告警) this.onAlarm({ month, ...stored });
       return { seq: record.seq, hash, 时间: at, 月: month };
       }),
     );
+  }
+
+  /**
+   * 月份清单登记（R13/R14）：读-改-写整个在调用方的锁内（append 的临界区），
+   * 月份已登记则零写入（幂等）。清单缺失（旧部署首用）时以现存的日志月∪锚月做底。
+   * @param {string} month
+   */
+  async #ensureMonthRegistered(month) {
+    const file = this.layout.auditMonthManifest();
+    let list = [];
+    try {
+      const parsed = await readJsonOrNull(file);
+      if (Array.isArray(parsed?.months)) list = parsed.months.filter((m) => typeof m === 'string');
+    } catch {
+      list = [];
+    }
+    if (list.includes(month)) return;
+    if (list.length === 0) {
+      // 旧部署兜底：以盘上已存在的分片做底（只登记事实，不发明月份）。
+      const 锚月 = await this.#anchorMonths();
+      list = [...new Set([...await this.months(), ...锚月])].sort();
+      if (!list.includes(month)) list = [...list, month].sort();
+    } else {
+      list = [...new Set([...list, month])].sort();
+    }
+    await atomicWrite(file, `${JSON.stringify({ months: list }, null, 2)}\n`);
+  }
+
+  /** 锚文件出现的月份（R14：孤立锚＝锚在而日志不在——从日志枚举里看不见的那部分）。 */
+  async #anchorMonths() {
+    const files = await listFiles(this.layout.auditDir(), { recursive: false, filter: (n) => /^audit-\d{4}-\d{2}\.anchor\.json$/.test(n) || /\.anchor\.json$/.test(n) });
+    return [...new Set(files.map((f) => f.replace(/^audit-/, '').replace(/\.anchor\.json$/, '')))].filter((m) => /^\d{4}-\d{2}$/.test(m));
   }
 
   /**
@@ -334,6 +370,23 @@ export class AuditLog {
     const broken = [];
     const 已确认瑕疵 = [];
     let entries = 0;
+    // R14（审查 2026-10-16 · 孤立锚/分片缺失）：期望月集 = 日志月 ∪ 锚月 ∪ 清单月。
+    // 修前 verify 只从日志文件枚举月份——整月日志被删而锚还在时，该月从检查面**整个消失**
+    // （审查实证：删唯一月的日志、锚保留 ⇒ ok=true、months=0 假绿）。并集里「在案而无日志」
+    // 的月份必红且点名来源；R13（无活动月）：日历连续性检查已被清单口径取代——
+    // 月份是否「应当存在」由机制登记说了算，不再由日历说了算。
+    const 锚月集 = new Set(await this.#anchorMonths());
+    let 清单月集 = new Set();
+    try {
+      const parsed = await readJsonOrNull(this.layout.auditMonthManifest());
+      if (Array.isArray(parsed?.months)) 清单月集 = new Set(parsed.months.filter((m) => typeof m === 'string'));
+    } catch { /* 清单坏 = 按无清单处理（旧部署），下方并集仍含日志∪锚 */ }
+    const 在案 = new Set([...months, ...锚月集, ...清单月集]);
+    for (const month of 在案) {
+      if (months.includes(month)) continue;
+      const 来源 = 锚月集.has(month) && 清单月集.has(month) ? '锚+清单' : (锚月集.has(month) ? '锚' : '清单');
+      broken.push({ month, seq: null, 类型: '分片缺失', expected: '该月在案（' + 来源 + '）', actual: '日志分片不存在', 说明: '整月账本被删（锚/月份清单仍记录它曾存在）——孤立锚/缺失分片必须见红（R14）' });
+    }
     // 第一遍：全月份收集更正声明（跨月全局表，见 JSDoc）。声明必定**晚于**目标行入账
     // （追加闭环），边走边收会让「目标行在前、声明在后」的常态永远收不到。
     const 声明表 = new Map(); // 'YYYY-MM#seq' -> row[]
@@ -414,19 +467,12 @@ export class AuditLog {
         broken.push({ month, seq: rows[rows.length - 1]?.seq ?? null, 类型: '锚缺失', expected: null, actual: rows[rows.length - 1]?.hash ?? null });
       }
     }
-    // 月份缺口（2026-10-13 审查 P1-7b）：删掉整月 账本+锚 后该月从 months() 枚举中消失，
-    // verify 对剩余月份照常全绿。月份清单按日历连续性核对：中间缺一个月 ⇒ 响亮见红。
-    // 如实交代剩余面（不吞）：**最早**月份之前与**最新**月份之后的截断没有链外检查点，
-    // 本条查不出（需要跨月滚动的链外留痕，记入设计债）。
-    const 升序 = [...months].sort();
-    for (let i = 1; i < 升序.length; i++) {
-      const [y1, m1] = 升序[i - 1].split('-').map(Number);
-      const [y2, m2] = 升序[i].split('-').map(Number);
-      const 期望下月 = m1 === 12 ? `${y1 + 1}-01` : `${y1}-${String(m1 + 1).padStart(2, '0')}`;
-      if (y2 !== Number(期望下月.split('-')[0]) || m2 !== Number(期望下月.split('-')[1])) {
-        broken.push({ month: 升序[i], seq: null, 类型: '月份缺口', expected: 期望下月, actual: 升序[i], 说明: `${升序[i - 1]} 与 ${升序[i]} 之间缺月：整月账本+锚被删的形状` });
-      }
-    }
+    // R13（审查 2026-10-16）：修前的「日历连续性」月份缺口检查在此——它把「无活动月」
+    // 误判成「整月被删」（审查实证：仅 1 月、3 月各一条记录，2 月无任何活动 ⇒ verify 报
+    // 2 月缺口）。已由上方的清单口径取代：月份是否应当存在，由机制登记（月份清单）说了算；
+    // 真被删的月由「分片缺失」（清单/锚在案而无日志）捕获，且**不需要**造假业务记录来消警。
+    // 残余面（如实交代）：清单启用前的旧月份若账本+锚同删，无链外凭据可查——与修前
+    // 「最早月之前/最新月之后」的残余同款，记入设计债。
     // 未被任何真实瑕疵消费的声明 = 声明与账本对不上（伪造 / 错配 / 目标本无瑕疵）⇒ 仍红。
     // 归属记到**声明自己所在的月份**（它是哪个月入的账，就在哪个月见红）。
     for (const [key, list] of 声明表) {
@@ -477,7 +523,27 @@ export class AuditLog {
     // 锚损坏 = 链外留痕不可信 ⇒ 追加不许继续（fail-closed）：让它以 InvalidBody 抛出去，
     // 不许 fallthrough 到「读整片取尾行」——坏锚 + 好尾行会把断链接成「看起来正常」。
     const anchor = await readJsonOrNull(this.layout.auditAnchor(month));
+    // R15（审查 2026-10-16 · 锚-尾恢复协议）：修前有锚即信——「追加已落账、锚未提交」的
+    // 崩溃断面重启后续写会从锚的 seq 重算，制造 [1,2,2] 重复序号并断链（审查实证
+    // repro-storage #3）。协议三分支：
+    //  ① 锚落后（实际尾 seq > 锚 seq）⇒ 明确恢复：锚重写为实际尾、续写从实际尾继续；
+    //  ② 锚超前/同 seq 而 hash 不符 ⇒ 不接受任意尾部（截断/篡改与崩溃在此分流）⇒ 响亮拒；
+    //  ③ 一致 ⇒ 原样。恢复只认「向前」，攻击者截短重造的尾部永远落在 ②。
     if (anchor?.hash) {
+      const rows = await readJsonl(this.layout.auditLog(month));
+      const last = rows[rows.length - 1] ?? null;
+      if (last && (last.seq ?? 0) > (anchor.seq ?? 0)) {
+        await this.#writeAnchor(month, { seq: last.seq, hash: last.hash, at: last.时间 ?? anchor.at ?? null, 恢复: '锚落后于账本尾——按崩溃断面重写（R15）' });
+        const tail = { seq: last.seq, hash: last.hash };
+        this._chain.set(month, tail);
+        return tail.hash;
+      }
+      if (last && ((last.seq ?? 0) < (anchor.seq ?? 0) || last.hash !== anchor.hash)) {
+        throw new InvalidBody(
+          `审计链 ${month}：锚(seq=${anchor.seq ?? null}) 与实际尾(seq=${last.seq ?? null}, hash=${String(last.hash).slice(0, 8)}…)不一致——疑似截断或篡改。不接受该尾部续写（R15 恢复协议只认「锚落后」的崩溃断面）；人工核对该月分片与锚后处置。`,
+          { detail: { month, 锚: { seq: anchor.seq ?? null, hash: anchor.hash }, 实际尾: { seq: last.seq ?? null, hash: last.hash ?? null } } },
+        );
+      }
       this._chain.set(month, anchor);
       return anchor.hash;
     }

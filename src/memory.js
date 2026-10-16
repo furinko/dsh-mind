@@ -259,6 +259,10 @@ export class MemoryService {
         轮: input.轮 ?? null,
       }),
       同锁追加: input.同锁追加, // 内部通道（overturn 双行同锁）；外部调用方不传
+      // R10（审查 2026-10-16 · 提交点 fence）：带引用的写在最终落线点复验引用——锁外
+      // 那次校验与本次提交之间完成的 purge（状态行已入账、源行已抹）在这里必被 fold
+      // 视图看见：悬空/待删除引用 ⇒ 本条不落线。审查实证的并发窗口就此关闭。
+      ...(来源引用.length > 0 ? { 提交点检查: () => this.#verifyRefs(来源引用) } : {}),
     });
     await this.audit.append({
       动作: '状态变更',
@@ -1160,11 +1164,17 @@ export class MemoryService {
    * 而 `fold()` 按 id 归并 ⇒ 两条记忆静默合成一条，谁都看不出来少了一条。
    * 锁内读到「这个 id 已在账上」就 bump 时刻重算，直到算出一个新 id——不静默、不合并。
    *
+   * R10（审查 2026-10-16 · 提交点原子检查 tombstone）：`提交点检查` 在**锁内、落线前**
+   * 执行——引用校验（remember 的 #verifyRefs 在锁外）与提交之间，purge 可能完整走完
+   * （状态行入账→物理抹除→闭包隔离），修前这条在途写会带着悬空引用落账、默认检索可
+   * 召回（审查实证 repro-state #7-8：purge 返回隔离=[]，随后落账的子条目仍有效）。
+   * 复验读的是 fold 视图（不取锁），在本锁内执行无重入风险。
+   *
    * @param {string} file 账本文件
-   * @param {{ kind: string, seed: string, build: (id: string) => object, 同锁追加?: (row: object) => object[] }} spec
+   * @param {{ kind: string, seed: string, build: (id: string) => object, 同锁追加?: (row: object) => object[], 提交点检查?: () => Promise<void> }} spec
    *   `同锁追加`（2026-10-12 评审 P3）：与新条目**同一把锁、同一次 appendLines** 落账的
    *   伴随行（如 overturn 的「推翻」状态行）——双行同窗口，不留「新条目在、状态行没落上」
-   *   的撕裂态。
+   *   的撕裂态。`提交点检查`（R10）：锁内落线前的最终一道校验，拒绝则本条不落线。
    * @returns {Promise<object>} 实际落线的行
    */
   async #appendEntry(file, spec) {
@@ -1176,6 +1186,7 @@ export class MemoryService {
       while (已用.has(id)) id = objectId(spec.kind, spec.seed, { at: this.#nextStamp() });
       const row = spec.build(id);
       const 伴随 = typeof spec.同锁追加 === 'function' ? spec.同锁追加(row) : [];
+      if (typeof spec.提交点检查 === 'function') await spec.提交点检查();
       await appendLines(file, [row, ...伴随]);
       this.#bump(file); // 读缓存失效（第三批）
       return row;

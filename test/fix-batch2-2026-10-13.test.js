@@ -3,7 +3,7 @@
  *  - P1-10 路由同源防线对非浏览器客户端（无 sec-fetch-site）fail-closed；
  *  - P1-11 remember 内部通道（派生自/同锁追加）不接受外部传入；
  *  - P1-14 披露正则的灾难性回溯在加载期被拒 + 匹配面长度上限；
- *  - P1-7 审计撕裂行可见（坏行/末行无换行 ⇒ broken）、整月删除 ⇒ 月份缺口见红；
+ *  - P1-7 审计撕裂行可见（坏行/末行无换行 ⇒ broken）、整月删除已登记月 ⇒ 分片缺失见红；
  *  - P2-19 auditLog(month) 过路径段校验（`..` 拒）。
  */
 import { describe, it } from 'node:test';
@@ -219,30 +219,28 @@ describe('批次4 · P1-7 审计完整性读数', () => {
     await f.cleanup();
   });
 
-  it('整月成对删除（中间月）⇒ 月份缺口见红', async () => {
+  it('整月成对删除（已登记月）⇒ 分片缺失见红（R13/R14 口径：月份清单取代日历连续性）', async () => {
     const f = await makeFixture();
-    const audit = new AuditLog({ layout: f.layout, clock: new Clock() });
-    // 造三个月账：直接手写最简合法分片（单行自链 + 匹配的锚）。
-    const { chainHash } = await import('../src/kernel/text.js');
+    // R13/R14（审查 2026-10-16 口径改形）：修前「月份缺口」按**日历连续性**判——无活动月
+    // 会被误报成整月被删（R13 实证）。现行口径：机制每月首写登记「月份清单」，verify 按
+    // 清单∪日志∪锚核对——**真被删的已登记月仍必红**（类型从「月份缺口」改为「分片缺失」，
+    // 强度不变：删掉账本+锚成对也照样查得出）。本用例改为经 append 造三个月（清单随之登记）。
+    const { AuditLog } = await import('../src/audit.js');
+    let 当前月 = '2026-08';
+    const 桩钟 = { iso: () => `${当前月}-15T00:00:00Z`, ms: () => Date.parse(`${当前月}-15T00:00:00Z`) };
+    const audit = new AuditLog({ layout: f.layout, clock: 桩钟 });
     for (const m of ['2026-08', '2026-09', '2026-10']) {
-      const row = { seq: 1, 时间: `${m}-01T00:00:00Z`, 主体: 'lead', 动作: '状态变更', 对象: { id: null }, 依据: '', 结果: '记', 档位: '全记', 项目: null, 轮: null, 告警: false, 详情: {}, prev: null };
-      // 与 audit.append 同款归一（P2-1）：先 JSON 往返丢键，再**补回 hash: undefined**——
-      // canonical 把 undefined 算成 null，键必须在场（直接丢键会全盘见红，注释在 audit.append）。
-      row.hash = chainHash(null, { ...JSON.parse(JSON.stringify(row)), hash: undefined });
-      const file = f.layout.auditLog(m);
-      await mkdir(join(file, '..'), { recursive: true });
-      await writeFile(file, `${JSON.stringify(row)}\n`);
-      const anchor = f.layout.auditAnchor(m);
-      await writeFile(anchor, JSON.stringify({ seq: 1, hash: row.hash, at: row.时间 }));
+      当前月 = m;
+      await audit.append({ 动作: '状态变更', 主体: LEAD, 对象: { id: 'x' } });
     }
     const 好 = await audit.verify();
-    assert.equal(好.ok, true, `前提：连续三月全绿（实际 ${JSON.stringify(好.broken)}）`);
-    // 删中间月（账本+锚成对）。
+    assert.equal(好.ok, true, `前提：三月全绿（实际 ${JSON.stringify(好.broken)}）`);
+    // 删中间月（账本+锚成对）——它在月份清单里在案。
     await rm(f.layout.auditLog('2026-09'));
     await rm(f.layout.auditAnchor('2026-09'));
     const 坏 = await audit.verify();
     assert.equal(坏.ok, false, '整月删除必须见红');
-    assert.ok(坏.broken.some((b) => b.类型 === '月份缺口'), `要有月份缺口项：${JSON.stringify(坏.broken)}`);
+    assert.ok(坏.broken.some((b) => b.类型 === '分片缺失' && b.month === '2026-09'), `要有 2026-09 的分片缺失项：${JSON.stringify(坏.broken)}`);
     await f.cleanup();
   });
 

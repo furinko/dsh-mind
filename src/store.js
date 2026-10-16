@@ -10,7 +10,7 @@
  * 走各自的 append-only 服务，因为它们的真相是「事件序列」而不是「当前文本」。
  */
 import { listFiles, readJsonOrNull, readTextOrNull, atomicWrite, mutateLocked, withLock } from './kernel/fsx.js';
-import { InvalidBody } from './kernel/errors.js';
+import { InvalidBody, Fault } from './kernel/errors.js';
 import { parseVersionName } from './kernel/ids.js';
 import { digest } from './kernel/text.js';
 import { assertStructure, formatFrontMatter, highestAuthority, parseDocument } from './tags.js';
@@ -143,16 +143,28 @@ export class ObjectStore {
 
       await atomicWrite(path, text);
       const pointer = { id, kind, zone, version, digest: digest(text), at: this.clock.iso(), path };
-      await this.#recordPointer(id, pointer);
-      await this.audit.append({
-        动作: '状态变更',
-        主体: spec.subject,
-        对象: { id, kind },
-        依据: spec.reason,
-        结果: previous === null ? `创建 v${version}` : `v${previous} → v${version}`,
-        项目: meta.project ?? null,
-        详情: { 版本指针: `${id}@v${version}`, 摘要: pointer.digest, 区: zone },
-      });
+      // R16（审查 2026-10-16 · 部分提交明确化）：正文落盘、版本指针/审计是后续两笔——
+      // 修前后续失败只把原错误裸抛，调用方会误判「没写成」而盲重试（重试 = 又一个版本）。
+      // 最低限度实现（判据允许）：失败必须明示「正文已提交到 vX」并禁止盲重试语义；
+      // 完整的 operation id/outbox 恢复面在后续批次。
+      try {
+        await this.#recordPointer(id, pointer);
+        await this.audit.append({
+          动作: '状态变更',
+          主体: spec.subject,
+          对象: { id, kind },
+          依据: spec.reason,
+          结果: previous === null ? `创建 v${version}` : `v${previous} → v${version}`,
+          项目: meta.project ?? null,
+          详情: { 版本指针: `${id}@v${version}`, 摘要: pointer.digest, 区: zone },
+        });
+      } catch (error) {
+        throw new Fault(
+          'STORE_PARTIAL_COMMIT',
+          `${kind} ${id} 的正文已落盘（v${version}，摘要 ${pointer.digest.slice(0, 8)}…），但提交链未完成：${error instanceof Error ? error.message : String(error)}。不要盲目重试——对象已在盘上，重试会写出新版本而不是修复本次；请核对盘上版本与指针后继续。`,
+          { detail: { id, kind, version, 已落盘正文: true, 摘要: pointer.digest, 失败原因: error instanceof Error ? error.message : String(error) } },
+        );
+      }
 
       return {
         id,

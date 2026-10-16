@@ -382,7 +382,9 @@ export class TaskGraph {
       // 讨论段存在 ⇒ 答案已揭名（或已收敛）：从「已交卷」再交卷会在 fold 里按「同人替换」
       // 静默洗掉本人那份独立答案（2026-10-12 评审 P1-4），零分歧判定就跑在洗过的答案集上。
       // 判定必须在锁内（builder）：debate_opened 与 submit 走同一把项目锁，锁外预读有竞态。
-      // 返工环路不受影响：打回后状态是 已打回/执行中（不是已交卷）， rework 的提交照常放行。
+      // 返工环路不受影响：打回后状态是 已打回/执行中（不是已交卷）， rework 的提交照常放行；
+      // R09（2026-10-16）：打回已把讨论段随代清空——这里拦的恒是**当前代**的改卷，
+      // 上一代的讨论不再误伤新代交卷（审查实证：B 的新卷曾被旧讨论拦死）。
       if (nodeInLock?.讨论 && nodeInLock.状态 === '已交卷') {
         throw new Denied(
           '任务图 · 讨论段开启后不许改卷（§10 独立会审完整性）',
@@ -1180,7 +1182,7 @@ export function fold(rows) {
     if (!row?.id || !row?.kind) continue;
     let node = nodes.get(row.id);
     if (!node) {
-      node = { id: row.id, 状态: '待派发', 打回次数: 0, 产出物引用: [], 复核经过: [] };
+      node = { id: row.id, 状态: '待派发', 打回次数: 0, 产出物引用: [], 复核经过: [], 代: 1, 答案历史: [] };
       nodes.set(row.id, node);
     }
     switch (row.kind) {
@@ -1256,7 +1258,21 @@ export function fold(rows) {
       case 'rejected':
         node.打回次数 = row.打回次数 ?? (node.打回次数 ?? 0) + 1;
         node.最近打回理由 = row.理由;
-        if (node.状态 !== '未验') node.状态 = '已打回';
+        if (node.状态 !== '未验') {
+          node.状态 = '已打回';
+          // R09（审查 2026-10-16 · attempt/epoch）：打回**关闭当前代**——旧答案整代归档、
+          // 讨论段清空；历史事件全在账上（只增不洗），投影只认当前代。修前的两个病：
+          // ①打回后 A 先重交，齐卷=「新A/旧B」混代（审查实证：混合答案实际进入已采纳）；
+          // ②B 的新卷被「不许改卷」用**上一代残留的**讨论段拦死。未验不闭代（复核窗口
+          // 未关，谈不上返工）。
+          const 关代 = node.代 ?? 1;
+          if ((node.独立答案 ?? []).length > 0 || node.讨论) {
+            node.答案历史 = [...(node.答案历史 ?? []), { 代: 关代, 独立答案: node.独立答案 ?? [], 讨论: node.讨论 ?? null, 于: row.at }];
+          }
+          node.代 = 关代 + 1;
+          node.独立答案 = [];
+          node.讨论 = null;
+        }
         break;
       case 'pending':
         node.待决前的状态 = node.状态;

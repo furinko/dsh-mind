@@ -243,10 +243,24 @@ export class MessageBus {
     const rows = await readJsonl(this.layout.busThread(query.项目, query.线程));
     // 只增账按 id 折叠成当前视图（E2）：投递是追加一条同 id 新行，
     // 不折的话一条消息出现两行、「未投递」查询永远命中旧行，状态机不生效。
+    // R12剩余（审查 2026-10-16 · 折叠不吞本体）：瘦状态行（无 正文/内容 键、带 状态 键）
+    // 只把状态键叠加到同 id 的本体行上——本体永不被状态行吞掉，状态史在账上只增可回放。
+    // 旧数据（整份拷贝的投递行）不带此分界，照旧行覆盖语义（兼容）。
     const folded = new Map();
     for (const row of rows) {
       const prev = folded.get(row.id);
-      if (!prev || String(row.追加于 ?? '') >= String(prev.追加于 ?? '')) folded.set(row.id, row);
+      if (!prev) {
+        folded.set(row.id, row);
+        continue;
+      }
+      const 行是瘦状态行 = row.内容 === undefined && row.状态 !== undefined;
+      const 基准有本体 = prev.内容 !== undefined || row.内容 !== undefined;
+      if (行是瘦状态行 && 基准有本体) {
+        const 本体 = row.内容 !== undefined ? row : prev;
+        folded.set(row.id, { ...本体, 状态: row.状态, 投递于: row.投递于 ?? 本体.投递于, 记录: row.记录 ?? 本体.记录 });
+        continue;
+      }
+      if (String(row.追加于 ?? '') >= String(prev.追加于 ?? '')) folded.set(row.id, row);
     }
     let out = [...folded.values()];
     // 收件过滤同时认单值与数组（2026-10-14 审查 P1-5）：normalizeArgs 会把逗号串拆成
@@ -282,11 +296,15 @@ export class MessageBus {
     // 写入与 send 同一把线程锁：不锁的话并发投递会在 send 的写窗口外落行。
     // F4（设计评审 2026-10-15）：外面再套 serializeByKey（同 key = 线程账本文件）——
     // 与 send / audit.js append 同款双层；理由见 send 处注释（Windows 名字锁 rm/create 竞态）。
+    // R12剩余（审查 2026-10-16 · 状态行与本体分立建模）：投递行是**瘦状态行**——只带
+    // id/状态/时刻，不复制正文。修前整份拷贝消息体（正文/发件/类型全重写一遍）：账本随
+    // 状态变更无限膨胀，且「本体」与「状态」两个概念在账上同形，读侧只能靠猜。折叠侧
+    // 见 readRaw——瘦行只叠加状态键，本体永不被吞；旧账里的整份拷贝行照旧按行覆盖（兼容）。
     const 线程账本 = this.layout.busThread(spec.项目, spec.线程);
     await serializeByKey(线程账本, () =>
       withLock(`${线程账本}.lock`, async () => {
         await appendLines(线程账本, [
-          { ...target, 状态: '已投递', 投递于: this.clock.iso(), 记录: '投递动作' },
+          { id: spec.id, 线程: spec.线程, 状态: '已投递', 投递于: this.clock.iso(), 记录: '投递动作' },
         ]);
       }),
     );
