@@ -19,7 +19,7 @@ import { subjectFor, DEFAULT_PROJECT } from '../../../src/org.js';
 import { kernelFactoryRoot } from '../../../src/paths.js';
 import { agentSubject } from '../../../src/subject.js';
 import { describeFailure, InvalidBody } from '../../../src/kernel/errors.js';
-import { stripBom } from '../../../src/kernel/fsx.js';
+import { atomicWrite, stripBom } from '../../../src/kernel/fsx.js';
 import { ACTIONS, runAction } from '../../../lib/actions.js';
 // 看板尾长单源（设计评审 #17 · 2026-10-15）：装配期喂给看板包的「40」改引常量（值不变）。
 import { 看板审计尾条数 } from '../../../src/audit.js';
@@ -73,10 +73,44 @@ export async function apply(ctx, config = {}) {
     return () => clearInterval(timer);
   }, 'dsh-mind: 工具总范围热更新');
 
+  // R06（审查 2026-10-16）：安全必需依赖（宿主工具闸）注册失败 ⇒ 拒绝激活——修前仅 warn
+  // 后继续：guards=0、mind 工具照常在、探针还绿（审查实证，最需要红灯的时候它绿着）。
+  // 两件事：① 注册**回执**写给探针（org.toolGuardReceipts，闸在位探针从此查真实宿主链）；
+  // ② 范围闸注册失败 ⇒ 走装配失败同款降级（只读自述 + error 日志），不装「看起来装好了」。
+  const 闸回执 = {
+    范围闸: { registered: null, error: null },
+    调度创建闸: { registered: null, error: null },
+  };
+  // 回执**落盘**而非内存（R06）：内核与 guard 组件各有自己的 org 装配实例，闸在位探针
+  // 要跨实例读到它，只有私有区的文件做得到（guardReceiptFile 与探针状态同目录）。
+  // 写失败只 warn：注册本身失败的场景里，降级自述已把原因带到模型面，探针侧看不到
+  // 回执会如实标注「不在可观测面」——比让装配崩在半路好。
+  try {
+    await atomicWrite(org.layout.guardReceiptFile(), `${JSON.stringify(闸回执, null, 2)}\n`);
+  } catch (error) {
+    logger.warn?.(`[dsh-mind] 工具闸回执落盘失败（探针将看不到真实注册状态）：${错误消息(error)}`);
+  }
+  try {
+    // 单调闸：只读部署偏好，不读路径，不接受任何人的「通融」。
+    ctx.tools.guard((exec) => 闸判定(exec, 项目));
+    闸回执.范围闸 = { registered: true, error: null };
+    await atomicWrite(org.layout.guardReceiptFile(), `${JSON.stringify(闸回执, null, 2)}\n`);
+  } catch (error) {
+    闸回执.范围闸 = { registered: false, error: 错误消息(error) };
+    try {
+      await atomicWrite(org.layout.guardReceiptFile(), `${JSON.stringify(闸回执, null, 2)}\n`);
+    } catch { /* 已在降级路径：模型面有自述，探针侧看不到回执会如实标注 */ }
+    logger.error?.(`[dsh-mind] 工具范围闸注册失败，拒绝激活（§12.1 闸不许 fail-open）：${闸回执.范围闸.error}`);
+    ctx.tools.register(degradedTool(new Error(`工具范围闸注册失败：${闸回执.范围闸.error}。安全必需依赖不在位，内核按 fail-closed 拒绝激活（R06）——修好注册环境后重启会话。`)));
+    return;
+  }
+
   // Lead 自主调度授权（2026-10-15 主权者指令「由 lead 根据需求判断使用团队或子智能体或都不使用」）：
   // 配置在 profile 层 dsh-mind-kernel.delegation（主权者的机器，不归模型/记忆改）；坏配置按未授权
   // 处理（fail-closed：宁可退回官方默认「用户显式点名」，不静默放权）。
   const delegation = 建调度策略(config.delegation, logger);
+  /** R06：安全必需闸注册失败且不可降级运行时置位——装配在注册 mind 工具前据此中止。 */
+  let 拒绝激活 = null;
   ctx.effect?.(() => {
     const 撤销器 = [];
     try {
@@ -92,9 +126,20 @@ export async function apply(ctx, config = {}) {
     }
     try {
       // 创建闸：授权项目内，裸 spawn_teammate/subagent/fork/workflow 一律指回 member_spawn（先判据后创建）。
+      // R06：注册失败不再仅 warn——回执记红（闸在位探针见红）；若调度授权在本项目生效，
+      // 裸创建闸缺席 = 授权面无闸 ⇒ 拒绝激活（降级只读自述）；未授权项目的创建闸本就
+      // 不承重，记红继续（异常本身仍值得看见）。
       撤销器.push(ctx.tools.guard((exec) => delegation.creationGuard(exec, { subject: agentSubject(exec), project: 项目键(exec?.agent, 项目) })));
+      闸回执.调度创建闸 = { registered: true, error: null };
+      // effect 回调是同步的（宿主的 disposer 契约）：回执落盘即发即忘，写失败不阻断装配。
+      atomicWrite(org.layout.guardReceiptFile(), `${JSON.stringify(闸回执, null, 2)}\n`).catch(() => {});
     } catch (error) {
-      logger.warn?.(`[dsh-mind] 注册调度创建闸失败：${错误消息(error)}`);
+      闸回执.调度创建闸 = { registered: false, error: 错误消息(error) };
+      atomicWrite(org.layout.guardReceiptFile(), `${JSON.stringify(闸回执, null, 2)}\n`).catch(() => {});
+      logger.error?.(`[dsh-mind] 调度创建闸注册失败（闸在位探针将见红）：${闸回执.调度创建闸.error}`);
+      if (delegation.status(项目).authorized) {
+        拒绝激活 = `调度创建闸注册失败：${闸回执.调度创建闸.error}。调度授权已生效而创建闸缺席 = 授权面无闸，按 fail-closed 拒绝激活（R06）。`;
+      }
     }
     return () => {
       for (const 撤 of 撤销器) {
@@ -103,6 +148,11 @@ export async function apply(ctx, config = {}) {
       delegation.close();
     };
   }, 'dsh-mind: Lead 调度授权');
+  if (拒绝激活) {
+    logger.error?.(`[dsh-mind] 拒绝激活内核：${拒绝激活}`);
+    ctx.tools.register(degradedTool(new Error(拒绝激活)));
+    return;
+  }
 
   // 宿主服务束：member_* 动作经它调官方运行时。每次调用现取（HMR/晚装载的服务取不到就如实为 null）。
   // signal 必带：Team/子会话服务内部 AbortSignal.any 会校验每一项（漏传 ⇒ "signals[0] is not of
@@ -146,12 +196,7 @@ export async function apply(ctx, config = {}) {
     次数: config.webServer次数,
   });
 
-  try {
-    // 单调闸：只读部署偏好，不读路径，不接受任何人的「通融」。
-    ctx.tools.guard((exec) => 闸判定(exec, 项目));
-  } catch (error) {
-    logger.warn?.(`[dsh-mind] 注册工具范围闸失败：${error instanceof Error ? error.message : String(error)}`);
-  }
+  // （范围闸注册已上移至装配早期并带 R06 回执/降级——见上方 闸回执 块，此处不再重复注册。）
 
   if (config.audit工具调用 !== false) {
     try {
@@ -460,6 +505,14 @@ function 刷新工具总范围(org, logger) {
   const candidates = [org.layout.deploymentPrefs(), org.layout.factoryDefault('工具总范围')];
   // 每次刷新先归零：上一份状态不能带进本轮（热更场景下文件可能已被主权者删掉）。
   ENVELOPE_STATE.状态 = '未配置';
+  // R01（审查 2026-10-16 · 按配置键继承）：修前对第一个「可解析」的文件整份采信——
+  // 缺 允许/拒绝 键的私有部署 JSON（失联设置就写在同一个 私有部署.json 里，presence
+  // 一改就造出这种形态）被折成两份空数组并 break ⇒ 出厂层的收紧清单被无关操作冲掉，
+  // 白名单变全放行（审查实证：改失联设置前后 write/pwsh 从拒变放）。
+  // 修法：键缺席 = 继承下一层，绝不折成空数组；只有【显式写出的数组】才算该层对键的
+  // 决定（显式空数组仍是主权者的合法选择——整体放行，与出厂件形态一致）。
+  let 允许 = null;
+  let 拒绝 = null;
   for (const file of candidates) {
     let text;
     try {
@@ -472,15 +525,19 @@ function 刷新工具总范围(org, logger) {
       // 第一批修了引擎侧（fsx/policy），这里漏修导致重启后闸仍被 BOM 打趴（全工具 fail-closed）。
       // 经 stripBom 单源，与引擎侧同一把尺；真坏的 JSON 仍按「故障」fail-closed。
       const parsed = JSON.parse(stripBom(text));
-      ENVELOPE_STATE.状态 = '已配置';
-      ENVELOPE_STATE.允许 = Array.isArray(parsed.允许) ? parsed.允许 : [];
-      ENVELOPE_STATE.拒绝 = Array.isArray(parsed.拒绝) ? parsed.拒绝 : [];
-      break;
+      if (允许 === null && Array.isArray(parsed.允许)) 允许 = parsed.允许;
+      if (拒绝 === null && Array.isArray(parsed.拒绝)) 拒绝 = parsed.拒绝;
+      if (允许 !== null && 拒绝 !== null) break; // 两键都有了，不再看下一层
     } catch (error) {
       ENVELOPE_STATE.状态 = '故障';
       ENVELOPE_STATE.错误 = `${file}：${error instanceof Error ? error.message : String(error)}`;
       break;
     }
+  }
+  if (ENVELOPE_STATE.状态 !== '故障') {
+    ENVELOPE_STATE.状态 = (允许 !== null || 拒绝 !== null) ? '已配置' : '未配置';
+    ENVELOPE_STATE.允许 = 允许 ?? [];
+    ENVELOPE_STATE.拒绝 = 拒绝 ?? [];
   }
   // P2-4 裁决乙：告警按内容去重，一次说清——fail-open 可见但不刷屏，故障同理。
   let 告警键 = null;
@@ -490,8 +547,8 @@ function 刷新工具总范围(org, logger) {
     告警文 = `[dsh-mind] 工具总范围无法解析，已按 fail-closed 处理：${ENVELOPE_STATE.错误}`;
   } else if (ENVELOPE_STATE.状态 === '未配置'
     || (ENVELOPE_STATE.允许.length === 0 && ENVELOPE_STATE.拒绝.length === 0)) {
-    // 「已配置但两清单皆空」与「未配置」效果相同（全部放行）——出厂件恰好就是这样，
-    // 只报「未配置」会漏掉这个真实形态。
+    // 「已配置但两清单皆空」与「未配置」效果相同（全部放行）——两键都显式给空数组是
+    // 主权者的合法决定（出厂件恰好就是这样），只报「未配置」会漏掉这个真实形态。
     告警键 = '放行全部';
     告警文 = '[dsh-mind] 工具总范围未生效（未配置，或允许/拒绝两清单皆空）：按出厂语义全部宿主工具放行（fail-open）。'
       + '要收紧，请由主权者在 工具总范围.json 写 允许/拒绝 清单（§4：工具总范围 = 主权者）。';

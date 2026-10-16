@@ -15,7 +15,7 @@
  */
 import { appendLines, listFiles, readJsonl, serializeByKey, withLock } from './kernel/fsx.js';
 import { InvalidBody, Denied, Fault } from './kernel/errors.js';
-import { objectId } from './kernel/ids.js';
+import { randomUUID } from 'node:crypto';
 import { 全员已交 } from './tasks.js';
 
 /** 消息类型（§9 接口契约里 `类型` 的取值面）。 */
@@ -81,7 +81,12 @@ export class MessageBus {
       );
     }
 
-    const id = objectId('消息', `${message.线程}/${发件}/${内容.slice(0, 24)}`, { at: this.clock.ms() });
+    // R08（审查 2026-10-16）：消息 ID 必须 opaque 且唯一。修前 `objectId('消息', 线程/发件/正文前24字, at)`
+    // 把发件人与正文前缀编进 id——盲评遮罩只换字段、id 原样外泄（审查实证：遮罩后 id 仍含
+    // member-a 与结论首句）；且同毫秒同前缀两连发在锁外撞出同 id、按 id 折叠静默丢一条
+    // （R12 实证：固定时钟两连发只剩第二条）。随机 UUID 不编码任何内容、碰撞可忽略；
+    // 旧形态 id 是账上历史——只增不洗，读侧不受影响。
+    const id = `msg-${randomUUID()}`;
     await this.policy.check({
       subject: message.subject,
       action: 'create',
@@ -176,7 +181,8 @@ export class MessageBus {
     try {
       // 占位 id 用与 send 同一款生成器（同一形状）：target.id 也参与判定
       // （拒绝名单按 id 命中，命中即拒——主体自身被撤回同样走这一条）。
-      const id = objectId('消息', `${spec.线程}/${spec.subject?.id ?? 'anonymous'}/预检`, { at: this.clock.ms() });
+      // R08 同款：预检目标 id 也不编码发件人（虽不落盘，统一 opaque 口径防漂移）。
+      const id = `msg-预检-${randomUUID()}`;
       const 决定 = await this.policy.decide({
         subject: spec.subject,
         action: 'create',

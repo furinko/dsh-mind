@@ -326,16 +326,38 @@ export class ProbeRunner {
     };
   }
 
-  /** 防护机制被关闭 ⇒ 见红。闸不在位就是最严重的一种见红。 */
-  #gatePresent() {
+  /**
+   * 防护机制被关闭 ⇒ 见红。闸不在位就是最严重的一种见红。
+   * R06（审查 2026-10-16）：不再只看策略对象——宿主工具闸（范围闸/调度创建闸）的**真实
+   * 注册回执**（layout.guardReceiptFile()，内核装配时落盘）也进本探针。修前定向注入注册
+   * 异常后 guards=0、mind 工具照常在、策略 healthy=true，本探针照样绿（审查实证：最需要
+   * 红灯的时候它绿着）。回执跨 org 实例走文件（内核与 guard 组件各持一个装配实例）；
+   * 文件缺席 = 本部署没有内核装配过（纯服务夹具/命令面）——如实标注，不误红也不装懂。
+   */
+  async #gatePresent() {
     const described = this.policy.describe();
     const ok = described.healthy && described.rules.length > 0 && this.policy.state.ok === true;
+    const 回执 = await readJsonOrNull(this.layout.guardReceiptFile());
+    let 工具闸句 = null;
+    let 工具闸红 = false;
+    if (回执 && typeof 回执 === 'object') {
+      const 失败 = Object.entries(回执).filter(([, r]) => r?.registered === false);
+      const 已注册 = Object.entries(回执).filter(([, r]) => r?.registered === true);
+      const 未尝试 = Object.entries(回执).filter(([, r]) => r?.registered !== false && r?.registered !== true);
+      工具闸红 = 失败.length > 0;
+      工具闸句 = 失败.length > 0
+        ? `工具闸注册失败：${失败.map(([名, r]) => `${名}（${r.error ?? '未知原因'}）`).join('、')}`
+        : `工具闸回执：${已注册.map(([名]) => 名).join('、') || '无'} 已注册${未尝试.length ? `；${未尝试.map(([名]) => 名).join('、')} 未尝试` : ''}`;
+    } else {
+      工具闸句 = '工具闸回执不在本装配可观测面（无内核组件装配记录：纯服务夹具/命令面）';
+    }
     return {
       探针: '闸在位',
-      状态: ok ? '绿' : '红',
-      详情: ok
-        ? `策略引擎在位：${described.rules.length} 条规则，加载于 ${described.loadedAt}`
-        : `闸不在位：healthy=${described.healthy}，规则数=${described.rules.length}，错误=${described.error ?? '无'}`,
+      状态: ok && !工具闸红 ? '绿' : '红',
+      详情: [
+        ok ? `策略引擎在位：${described.rules.length} 条规则，加载于 ${described.loadedAt}` : `闸不在位：healthy=${described.healthy}，规则数=${described.rules.length}，错误=${described.error ?? '无'}`,
+        工具闸句,
+      ].join('；'),
     };
   }
 

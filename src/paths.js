@@ -290,6 +290,15 @@ export class Layout {
     return this.private(DIR.基础设施, DIR.默认值, '探针状态.json');
   }
 
+  /**
+   * 宿主工具闸注册回执（R06 · 审查 2026-10-16）：内核组件装配时写入，闸在位探针读取。
+   * 放探针状态同目录（私有区共享基础设施）：回执是**运行态事实**，必须跨 org 实例可见
+   * （内核与 guard 组件各有自己的装配实例，内存通道对彼此不可见）。
+   */
+  guardReceiptFile() {
+    return this.private(DIR.基础设施, DIR.默认值, '工具闸回执.json');
+  }
+
   /** 探针快照目录：每一版机制留下全绿/见红的证据，供「回滚到全绿最近一版」。 */
   probeSnapshotDir() {
     return this.private(DIR.升级, '探针快照');

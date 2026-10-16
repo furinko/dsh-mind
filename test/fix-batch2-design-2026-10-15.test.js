@@ -305,10 +305,13 @@ describe('设计评审 2026-10-15 · #14：settle 补偿审计 与 事件后审�
       const memory = new MemoryService({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock });
       const { tasks } = 装配(g, { memory });
       const id = await 交齐节点(tasks, '独立会审', '#14 结账');
+      // 攒一条待归档作答（作答类记忆按项目归账，settle 时归档；成员写入要走任务上下文）。
+      // R03（2026-10-16）任务授权寿命：成员带任务上下文的写只在 未终态 放行——生产流里
+      // 作答在交卷前后（执行中/已交卷）落账；这里按生产时序写在 review 之前，不占用
+      // 「已采纳后仍可写」这条从没被设计过的路。
+      await memory.remember({ subject: MEMBER, 类: '作答', 内容: '#14 的独立答案', 来源: '测试', 项目: P, 任务: await tasks.get(id, { 项目: P }) });
       await tasks.review(id, { subject: REVIEWER, 项目: P, 三态: '过', 复核结论: '过' });
       assert.equal((await tasks.get(id, { 项目: P })).状态, '已采纳');
-      // 攒一条待归档作答（作答类记忆按项目归账，settle 时归档；成员写入要走任务上下文）。
-      await memory.remember({ subject: MEMBER, 类: '作答', 内容: '#14 的独立答案', 来源: '测试', 项目: P, 任务: await tasks.get(id, { 项目: P }) });
       const 原账 = await readJsonl(g.layout.taskLog(P));
 
       // 拿住任务图锁：settle 的归档（记忆账本另一把锁，不受影响）先走完，
@@ -369,8 +372,9 @@ describe('设计评审 2026-10-15 · #14：settle 补偿审计 与 事件后审�
       };
       const { tasks } = 装配(g, { memory, audit: 坏审计 });
       const id = await 交齐节点(tasks, '独立会审', 'R3 结账第二笔失败');
-      await tasks.review(id, { subject: REVIEWER, 项目: P, 三态: '过' });
+      // R03：作答按生产时序在 review 之前落账（已交卷态），不占「已采纳后仍可写」。
       await memory.remember({ subject: MEMBER, 类: '作答', 内容: 'R3 的独立答案', 来源: '测试', 项目: P, 任务: await tasks.get(id, { 项目: P }) });
+      await tasks.review(id, { subject: REVIEWER, 项目: P, 三态: '过' });
       await assert.rejects(
         () => tasks.settle(id, { subject: LEAD, 项目: P }),
         (e) => e instanceof Fault && e.code === 'AUDIT_APPEND_FAILED_AFTER_EVENT' && /已落线/.test(e.message) && /不要重试/.test(e.message),

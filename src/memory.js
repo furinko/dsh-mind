@@ -322,9 +322,13 @@ export class MemoryService {
     // 顺序在 policy.check 之后：先由唯一判定点确认「这个主体有权晋升」，
     // 再由这道内容闸拦「这段文本值不值得扩散」。命中拒绝记「披露拦截」审计
     // （骑手① 2026-10-09：拦截企图是安全信号）；豁免放行另记「披露豁免」。
-    const 命中 = this.#disclosureHits(entry);
+    // R11（审查 2026-10-16）：机械检查只查截断前缀（正则执行时间随输入长度放大），
+    // 而晋升复制的是**全文**——修前 20k 之后的正文等于免检扩散（审查实证：凭据词藏在
+    // 23,401 字符处，无豁免照样跨项目命中）。修法：截断即 fail-closed——尾部未检查
+    // 不得视为通过；要么改写/拆分到检查上限内，要么 Lead 核实全文后显式豁免（进审计）。
+    const { 命中, 已截断 } = this.#disclosureHits(entry);
     let 豁免留痕 = null;
-    if (命中.length > 0) {
+    if (命中.length > 0 || 已截断) {
       const 命中模式 = 命中.map((h) => h.名);
       if (spec.披露豁免 === true && spec.subject?.kind !== 'Lead') {
         // 骑手①（契约C 补强 2026-10-09）：披露拦截也入账——「有人试过扩散敏感内容
@@ -336,19 +340,39 @@ export class MemoryService {
           依据: '契约C 补强：豁免越权使用（披露豁免仅 Lead）',
           结果: '拒绝',
           项目: entry.项目,
-          详情: { 命中模式, 拒绝类型: '豁免越权' },
+          详情: { 命中模式, 已截断, 拒绝类型: '豁免越权' },
         });
         throw new Denied(
           '法律 披露豁免仅 Lead（契约C 2026-10-09）',
-          `披露豁免是 Lead 专属参数：${spec.subject?.kind ?? '未知'} 不得使用。命中模式：${命中模式.join('、')}。`,
+          `披露豁免是 Lead 专属参数：${spec.subject?.kind ?? '未知'} 不得使用。命中模式：${命中模式.join('、')}${已截断 ? '；且输入超长未全检' : ''}。`,
           {
             requireAuthority: 'Lead',
             howToChange: '由 Lead 核实该条知识确属可披露后，以 Lead 身份带 披露豁免=true 执行晋升。',
-            detail: { 命中模式 },
+            detail: { 命中模式, 已截断 },
           },
         );
       }
-      if (spec.披露豁免 !== true) {
+      if (spec.披露豁免 !== true && 已截断) {
+        await this.audit.append({
+          动作: '披露拦截',
+          主体: spec.subject,
+          对象: { id, kind: '知识' },
+          依据: '契约C：超长输入未全检（fail-closed）',
+          结果: '拒绝',
+          项目: entry.项目,
+          详情: { 拒绝类型: '超长未全检', 检查上限: 20_000 },
+        });
+        throw new Denied(
+          '法律 知识晋升披露机械检查 · 超长输入未全检（fail-closed）',
+          `该条知识的被检面超过机械检查上限（20,000 字符）：检查只覆盖前缀，而晋升复制全文——未检查的尾部不得视为通过。`,
+          {
+            requireAuthority: 'Lead',
+            howToChange: '两条路：① 改写/拆分条目到上限内再晋升；② Lead 通读全文核实确属可披露后带 披露豁免=true 重试（豁免与「超长」事实一起进审计）。',
+            detail: { 检查上限: 20_000 },
+          },
+        );
+      }
+      if (spec.披露豁免 !== true && 命中.length > 0) {
         // 骑手①：同上——命中被拒入账（主体 + 命中模式名，不抄敏感原文）。
         await this.audit.append({
           动作: '披露拦截',
@@ -372,7 +396,7 @@ export class MemoryService {
       // Lead 显式豁免：放行，但「越过披露闸」这件事必须与命中模式一起留痕。
       // 审计只记模式名，不抄命中片段——把敏感原文再抄进账本等于二次披露。
       // 留痕挂在局部变量上（不用实例字段：并发晋升两个条目会互相覆盖）。
-      豁免留痕 = { 命中模式 };
+      豁免留痕 = { 命中模式, 已截断 };
     }
 
     // 双份留痕：本项目那份保留原样，跨项目那份追一条同 id 的条目，
@@ -397,9 +421,9 @@ export class MemoryService {
         主体: spec.subject,
         对象: { id, kind: '知识' },
         依据: '契约C（2026-10-09）：Lead 显式豁免披露机械检查，放行跨项目晋升',
-        结果: `豁免放行（命中 ${豁免留痕.命中模式.join('、')}）`,
+        结果: `豁免放行（${豁免留痕.已截断 ? '超长未全检' : ''}${豁免留痕.命中模式.length ? `命中 ${豁免留痕.命中模式.join('、')}` : '无命中'}）`,
         项目: entry.项目,
-        详情: { 命中模式: 豁免留痕.命中模式, 岗位: spec.岗位, 理由: spec.理由 },
+        详情: { 命中模式: 豁免留痕.命中模式, 已截断: 豁免留痕.已截断, 岗位: spec.岗位, 理由: spec.理由 },
       });
     }
     await this.audit.append({
@@ -966,13 +990,17 @@ export class MemoryService {
    * 契约C 披露机械检查本体：对 标题+内容+标签 三个面跑敏感模式。
    *
    * @param {object} entry 折叠后的记忆条目
-   * @returns {Array<{名: string}>} 命中的模式（只带名，不带命中片段——片段正是敏感本体）
+   * @returns {{ 命中: Array<{名: string}>, 已截断: boolean }} 命中的模式（只带名，不带命中
+   *   片段——片段正是敏感本体）；已截断＝被检面超过上限、尾部未过检查（R11：调用方必须
+   *   对截断 fail-closed，不得把「前缀干净」当「全文干净」）。
    */
   #disclosureHits(entry) {
     // 输入面长度上限（2026-10-13 审查 P1-14）：正则执行时间随输入长度放大，
-    // 把被检面截到 20k 字符——超长知识先用前 20k 过机械检查（敏感信息极少只藏在两万字之后）。
+    // 把被检面截到 20k 字符——超长输入用前 20k 过机械检查（正则复杂度边界）。
+    // R11（2026-10-16）：截断事实随返回值上交，由晋升闸 fail-closed——不再默默放行尾部。
     const 原面 = [entry?.标题, entry?.内容, ...(Array.isArray(entry?.标签) ? entry.标签 : [])].filter((s) => typeof s === 'string').join('\n');
-    const 面数 = 原面.length > 20_000 ? `${原面.slice(0, 20_000)}\n[披露检查：输入已截断，原长 ${原面.length}]` : 原面;
+    const 已截断 = 原面.length > 20_000;
+    const 面数 = 已截断 ? `${原面.slice(0, 20_000)}\n[披露检查：输入已截断，原长 ${原面.length}]` : 原面;
     const 清单 = this.policy.state.defaults?.披露敏感模式 ?? DEFAULT_DISCLOSURE_PATTERNS;
     const 命中 = [];
     for (const { 名, 正则 } of 清单) {
@@ -990,7 +1018,7 @@ export class MemoryService {
       }
       if (re.test(面数)) 命中.push({ 名 });
     }
-    return 命中;
+    return { 命中, 已截断 };
   }
 
   /**

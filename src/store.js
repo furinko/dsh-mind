@@ -13,7 +13,7 @@ import { listFiles, readJsonOrNull, readTextOrNull, atomicWrite, mutateLocked, w
 import { InvalidBody } from './kernel/errors.js';
 import { parseVersionName } from './kernel/ids.js';
 import { digest } from './kernel/text.js';
-import { assertStructure, formatFrontMatter, parseDocument } from './tags.js';
+import { assertStructure, formatFrontMatter, highestAuthority, parseDocument } from './tags.js';
 import { RULE_FILES } from './paths.js';
 
 /** 走对象存储的 kind。其余 kind 由各自的服务负责。 */
@@ -91,8 +91,28 @@ export class ObjectStore {
       const existing = await this.read(kind, id, { subject: spec.subject, zone });
       // version 从 front matter 里读回来是**字符串**；不转数字就会得到 v1 → v11 这种版本号。
       const previous = existing ? Number(existing.meta.version ?? 1) : null;
-      const authority = existing?.authority ?? meta.authority ?? '自治';
-      meta.authority = meta.authority ?? authority;
+      // R17（审查 2026-10-16 · 按旧/新最高档判定，档位标签不可被重写降级）：修前判定用
+      // 【调用方想写成的】meta.authority——既有法律档对象被同 id 低档位重发覆盖成自治
+      // （审查实证：正确针对既有法律卡的 write 判 deny，经生产能力发布服务却覆盖成功）。
+      // 修法三件：
+      //  ① 判定档 = max(既有对象档, 新元数据档, 新正文段最高档)——正文档来自 parseDocument
+      //     （其 authority 即各段 authority 的最高值，tags.js 单源）；
+      //  ② 写入档跟既有对象：调用方元数据不得改写既有对象的档位标签——降级结构性不可能；
+      //     升档按高档判（实际只有主权者过得去），即「授权标签变更单独过闸」的最小实现；
+      //  ③ 首写对象（无既有面）照 meta 判。
+      const 正文最高档 = parseDocument(String(document.body ?? ''), { defaultAuthority: '自治' }).authority;
+      // 既有档读 front matter 的 authority（标签真源）——decorate 的 .authority 是**段推导**
+      // 值（正文无 `<!-- authority: -->` 段标记时恒自治），吃这个差正是 R17 的病根之一：
+      // 法律标签的卡被读成自治，重发覆盖时按自治判、按自治写，标签静默降级。
+      const 既有档 = existing?.meta?.authority ?? existing?.authority ?? null;
+      let 判定档 = meta.authority ?? 既有档 ?? '自治';
+      for (const 候选 of [既有档, meta.authority, 正文最高档]) {
+        if (候选) 判定档 = highestAuthority([判定档, 候选]);
+      }
+      // 写入档 = 判定档（单调不降）：降级结构性不可能——低档重发按高档判，非主权者过不去；
+      // 主权者带低档元数据重写，落盘档位仍是高档（标签降不下来）。升档同样按高档判，
+      // 等价「授权标签变更单独过闸」的最小实现（能对高档判 write 的只有主权者）。
+      meta.authority = 判定档;
 
       await this.policy.check({
         subject: spec.subject,
@@ -100,7 +120,7 @@ export class ObjectStore {
         target: {
           id,
           kind,
-          authority: meta.authority,
+          authority: 判定档,
           zone,
           domain: meta.domain ?? '集体',
           project: meta.project ?? null,

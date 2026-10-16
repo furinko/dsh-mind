@@ -84,6 +84,13 @@ export class PolicyEngine {
   #inFlightReload = null;
 
   /**
+   * R05（审查 2026-10-16）：在飞重载期间又有 reload() 进来时置位，在飞轮结束再补读一轮——
+   * 修前的「共享 Promise 即完成」会把期间的档案写入吞进旧快照（丢 dirty）。
+   * @type {boolean}
+   */
+  #reloadDirty = false;
+
+  /**
    * @param {{ layout: import('./paths.js').Layout, clock: import('./kernel/time.js').Clock, audit?: { append: Function } }} spec
    */
   constructor(spec) {
@@ -123,21 +130,66 @@ export class PolicyEngine {
      * 突发下是 N× 全量加载。进行中的 reload 共享同一个 Promise，后到者等结果不重跑。
      */
     this.#inFlightReload = null;
+    this.#reloadDirty = false;
   }
 
   /** 热更新入口：宿主在文件变更时调用；失败不改变「不健康」这个事实。并发调用合并为一次。 */
   reload() {
-    this.#inFlightReload ??= this.#reloadOnce().finally(() => {
+    if (this.#inFlightReload) {
+      // R05（审查 2026-10-16 · in-flight 合并不丢 dirty）：并发到达**且档案确有新变化**
+      // （此刻 mtime ≠ 已发布快照的 mtime）⇒ 标脏，在飞轮结束再补读一轮——修前共享
+      // Promise 就完事，期间落盘的写入被「已重载」假象吞掉。纯并发去重（文件没变，
+      // 第三批的「rulePath 读取次数不随调用数翻倍」语义）不标脏、不补读。
+      // 覆盖面：写入若落在本 stat 之后、在飞轮自己的读前/读后一致性检查之前，由那道
+      // 撕裂重试兜住；落在更晚，decide 的每调用 mtime 快速路会看到差异再触发 reload。
+      void mtimeMsOrNull(this.layout.identityFile()).then((m) => {
+        if (m !== this.identityMtimeMs) this.#reloadDirty = true;
+      });
+      return this.#inFlightReload;
+    }
+    this.#inFlightReload = (async () => {
+      // 返回值保持 #reloadOnce 的语义（成功与否）：外层 do-while 是重读控制流，
+      // 不能把「最后一次加载的结果」吞成 undefined——等待方（宿主热更钩子与测试）
+      // 都在用这个布尔值。
+      let ok;
+      do {
+        this.#reloadDirty = false;
+        ok = await this.#reloadOnce();
+      } while (this.#reloadDirty);
+      return ok;
+    })().finally(() => {
       this.#inFlightReload = null;
     });
     return this.#inFlightReload;
   }
 
   async #reloadOnce() {
+    // R05（审查 2026-10-16 · 读前/读后一致才发布）：修前 #loadIdentity（读正文）与
+    // identityMtimeMs 的 stat 隔了整个加载流程——两步之间落盘的合法撤回会把【新 mtime】
+    // 绑给【旧名单】，decide 的 mtime 快速路从此看不出差异，撤回持续失效到下一次身份写入
+    // （审查实证：写入 member-a 拒绝名单后，动作入口照旧放行，直到显式 reload）。
+    // 修法：stat → 读正文 → stat，两端一致才算同一快照；不一致有界重试。
+    const identityFile = this.layout.identityFile();
+    /** @type {object|null} */
+    let identity = null;
+    /** @type {number|null} */
+    let identityMtime = null;
+    let 一致 = false;
+    for (let attempt = 0; attempt < 5 && !一致; attempt += 1) {
+      const 读前 = await mtimeMsOrNull(identityFile);
+      identity = await this.#loadIdentity();
+      identityMtime = await mtimeMsOrNull(identityFile);
+      一致 = 读前 === identityMtime;
+    }
+    if (!一致) {
+      // 5 轮仍在撕裂 = 档案正被高频连续写。如实降级：发布最后一轮读到的正文，mtime 记
+      // 读后值——撕裂期间的写入若改了 mtime，decide 的快速路下一跳就会看到差异再触发
+      // reload。只 warn 不失败：把「正在被写」当「引擎坏」fail-closed，反而挡住写入方收尾。
+      console.warn?.('[dsh-mind] 身份档案连续 5 轮读取都在变动：快照按最后一次读取发布，decide 的 mtime 快速路会兜住后续变化。');
+    }
     try {
       const { rules, digests } = await this.#loadRules();
       const { defaults, defaults来源, 忽略的默认值键 } = await this.#loadDefaults();
-      const identity = await this.#loadIdentity();
       const establishment = await this.#loadEstablishment();
       this.grants = collectGrants(rules);
       this.state = {
@@ -168,7 +220,9 @@ export class PolicyEngine {
     }
     // 不论成败都记下「这次加载看到的档案时刻」：失败时也记，否则下一次 decide
     // 会看到「mtime 没变」而跳过重载——把一个可能已修复的引擎卡死在不健康状态。
-    this.identityMtimeMs = await mtimeMsOrNull(this.layout.identityFile());
+    // R05：成功路径用快照的读后 mtime（与发布的正文同一快照）；失败路径现 stat——
+    // 失败时正文没发布，不存在「新 mtime 绑旧正文」的撕裂，只需保证下次 decide 能再试。
+    this.identityMtimeMs = identityMtime ?? await mtimeMsOrNull(this.layout.identityFile());
     return this.state.ok;
   }
 
@@ -344,14 +398,30 @@ export class PolicyEngine {
       return { ok: false, reason: '该任务节点负责人名单为空（解析失败 / 手工编辑 / 旧数据）：为防越权，空名单按「无人有任务内全权」处理，由 Lead 先把负责人补齐' };
     }
     // ① 实例 id 直配（既有路径，行为不变：按实例派的节点仍精确到实例）。
-    if (名单.includes(subject.id)) return { ok: true };
-    // ② 缺口4（主权者批准 2026-10-12）：直配不中，经身份档案把实例解析成岗位再比。
-    //    成员主体刻意不带 roleId（src/subject.js A 修——岗位由 registry_assign 落在档案），
-    //    「按岗名派发」全靠这条路承重；解析**只信档案真源**：不在册 / 不在岗 ⇒ 不产出岗位；
-    //    自报的 roleId 不参与比对（信自报 = 冒充的第一步）。
-    const 岗位 = this.#档案岗位Of(subject.id);
-    if (岗位 && 名单.includes(岗位)) return { ok: true };
-    return { ok: false, reason: `该任务节点负责人是 ${名单.join('、')}，不是 ${subject.id}` };
+    if (!名单.includes(subject.id)) {
+      // ② 缺口4（主权者批准 2026-10-12）：直配不中，经身份档案把实例解析成岗位再比。
+      //    成员主体刻意不带 roleId（src/subject.js A 修——岗位由 registry_assign 落在档案），
+      //    「按岗名派发」全靠这条路承重；解析**只信档案真源**：不在册 / 不在岗 ⇒ 不产出岗位；
+      //    自报的 roleId 不参与比对（信自报 = 冒充的第一步）。
+      const 岗位 = this.#档案岗位Of(subject.id);
+      if (!(岗位 && 名单.includes(岗位))) {
+        return { ok: false, reason: `该任务节点负责人是 ${名单.join('、')}，不是 ${subject.id}` };
+      }
+    }
+    // ③ 任务授权寿命（R03 · 审查 2026-10-16）：「任务内全权」跟着任务生命周期走，不是
+    //    「曾负责过」的永久凭据。审查实证：同一任务在【待派发】阶段即可充当写凭据；真实
+    //    流转到【已采纳/已结账】终态后仍可。未派发 = 授权还没生效；终态 = 授权已随收口结束。
+    //    已交卷/未验/待决不拦：复核窗口内成员对本节点的只增动作（如 task_pending 标待决）
+    //    是 TRANSITIONS 明文的合法转换（tasks.js:46），拦它会打断既有环路——状态机的
+    //    逐转换合法性由 #requireTransition 守，这里只管「授权是否已生效/已终止」两端。
+    const 状态 = String(task.状态 ?? '');
+    if (状态 === '待派发') {
+      return { ok: false, reason: `该任务节点尚未派发（状态=待派发）：任务授权随派发生效，负责人名单不是预先生效的凭据；由 Lead task_dispatch 后再写` };
+    }
+    if (状态 === '已采纳' || 状态 === '已结账') {
+      return { ok: false, reason: `该任务节点已是终态（状态=${状态}）：任务授权随收口终止，「曾负责过」不构成后续写凭据；需要继续产出由 Lead 另立节点` };
+    }
+    return { ok: true };
   }
 
   /**
