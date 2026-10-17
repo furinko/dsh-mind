@@ -337,6 +337,7 @@ window.__ModuleLoader__.load({
      * 下面的解析 / 失败形状 / 回读判据**一个字都不用改**，换的只是"怎么把请求发出去"。
      */
     var ROUTE_PRESENCE = '/plugins/dsh-mind/presence';
+    var ROUTE_DELEGATION = '/plugins/dsh-mind/delegation';
     var ROUTE_WORKBENCH = '/plugins/dsh-mind/workbench';
     /** 上一次已知快照：取不到投影时仍然有东西可看。 */
     var CACHE_KEY = 'dsh-mind.dashboard.v1';
@@ -2885,7 +2886,7 @@ window.__ModuleLoader__.load({
             var 状态 = Number(response.status);
             var 行不行 = response.ok === true || (状态 >= 200 && 状态 < 300);
             // 读文本再自己解析：响应**不是** JSON 时也要能给出人话（别让 `res.json()` 抛出去）。
-            Promise.resolve(typeof response.text === 'function' ? response.text() : '').then(function (text) {
+            限时(Promise.resolve(typeof response.text === 'function' ? response.text() : ''), COMMAND_TIMEOUT_MS, 说明 + '（响应体）').then(function (text) {
               try {
                 var parsed = parseLooseJson(text);
                 if (!obj(parsed)) {
@@ -2896,10 +2897,10 @@ window.__ModuleLoader__.load({
                 // 见 `describeFailure`）：认出来就不许当成成功 —— 否则设置页会把「被拒绝」
                 // 显示成「已保存」。`理由` 就是那条可执行理由，优先取它。
                 if (parsed.成功 === false) {
-                  resolve({ ok: false, error: line(firstOf(parsed, ['理由', '错误', '原因', '结果', 'message']), '请求被拒绝') });
+                  resolve({ ok: false, value: parsed, status: 状态, error: line(firstOf(parsed, ['理由', '错误', '原因', '结果', 'message']), '请求被拒绝') });
                   return;
                 }
-                if (!行不行) { resolve({ ok: false, error: 'HTTP ' + 状态 }); return; }
+                if (!行不行) { resolve({ ok: false, value: parsed, status: 状态, error: 'HTTP ' + 状态 }); return; }
                 resolve({ ok: true, value: parsed });
               } catch (error) {
                 resolve({ ok: false, error: '解析返回体失败：' + line(error && error.message, String(error)) });
@@ -2925,6 +2926,39 @@ window.__ModuleLoader__.load({
       return runCommand(ctx, sessionId, { method: 'GET', path: 路径 }).then(function (out) {
         if (!out.ok) return out;
         return { ok: true, view: normalizeView(out.value) };
+      });
+    }
+
+    function readDelegation() {
+      return runCommand(activeCtx, '', { method: 'GET', path: ROUTE_DELEGATION }).then(function (out) {
+        if (!out.ok) return out;
+        var data = obj(out.value.数据);
+        if (!data || !obj(data.persistence) || !obj(data.persistence.config) || !obj(data.runtime)
+          || typeof data.persistence.fingerprint !== 'string' || typeof data.runtime.fingerprint !== 'string') {
+          return { ok: false, error: '调度设置回读缺少盘面或真实运行策略。' };
+        }
+        return { ok: true, data: data };
+      });
+    }
+
+    function 刷新调度() {
+      if (!调度页已访问) return Promise.resolve({ ok: false, error: '设置页尚未打开' });
+      var 号 = 调度序号.取号();
+      return readDelegation().then(function (out) {
+        if (!调度序号.该用(号)) return { ok: false, error: '回读已被较新的请求替代，请重新核对。' };
+        发通知(调度store, { phase: out.ok ? 'live' : 'error', data: out.ok ? out.data : null, error: out.ok ? '' : out.error });
+        return out;
+      });
+    }
+
+    function writeDelegation(config, expectedFingerprint) {
+      return runCommand(activeCtx, '', {
+        method: 'POST', path: ROUTE_DELEGATION,
+        body: { delegation: config, expectedFingerprint: expectedFingerprint },
+      }).then(function (post) {
+        // POST 可能重装自身，也可能超时后才提交；无论回执怎样，都只用另一次 GET 验证新实例。
+        调度序号.该用(调度序号.取号());
+        return 刷新调度().then(function (back) { return { post: post, back: back }; });
       });
     }
 
@@ -3119,6 +3153,8 @@ window.__ModuleLoader__.load({
      * store 是模块级的（不是组件 state）：`apply` 只跑一次、组件可多次挂载，
      * 让"只有一个轮询器"和"组件随时订阅"两件事同时成立。
      */
+    var 调度页已访问 = false;
+    var 调度store = { 快照: { phase: 'reading', data: null, error: '' }, 订阅者: [] };
     var 投影store = { 快照: EMPTY, 订阅者: [] };
     var 设置store = { 快照: { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' }, 订阅者: [] };
     /**
@@ -3158,6 +3194,7 @@ window.__ModuleLoader__.load({
     }
     var 投影序号 = 序号器();
     var 设置序号 = 序号器();
+    var 调度序号 = 序号器();
     /**
      * 投影变更签名（2026-10-14 审查 P2-23）：轮询 3s 一拍，**数据没变就不重渲染**——
      * 修前每拍都全量 发通知（7 页 reconcile）+ writeCache 大 JSON.stringify，投影变大后
@@ -3199,6 +3236,8 @@ window.__ModuleLoader__.load({
      * （表现是"A 用例的数据出现在 B 用例页面上"——那会污染断言，比缺陷还难查）。
      */
     function 清空store() {
+      调度页已访问 = false;
+      调度store.快照 = { phase: 'reading', data: null, error: '' };
       投影store.快照 = EMPTY;
       设置store.快照 = { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' };
       界面store.快照 = { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null, 当前页: null, 图谱选中: null, 图谱视图: null, 审计展开: null };
@@ -3691,7 +3730,7 @@ window.__ModuleLoader__.load({
 
     /** 立刻拉一次（两个页面都刷）。给"手动刷新"按钮与 effect 增强用。 */
     function 立即刷新() {
-      return Promise.all([刷新投影(), 刷新设置()]);
+      return Promise.all([刷新投影(), 刷新设置(), 刷新调度()]);
     }
 
     /**
@@ -4426,6 +4465,75 @@ window.__ModuleLoader__.load({
       // ⚠️ 读数来自**模块级 store**（由 `apply` 的裸 setInterval 轮询喂），**不来自 effect**：
       // 这个宿主的 `useEffect` 很可能是空实现 ⇒ 挂在它上面的取数永远不会跑。
       var snap = useStore(设置store);
+      调度页已访问 = true;
+      var 调度快照 = useStore(调度store);
+      useEffect(function () { 刷新调度(); }, []);
+      var 调度表态 = useState({ mode: 'explicit-user', projects: '', authorizationRef: '', fingerprint: '' });
+      var 调度表 = 调度表态[0];
+      var 设调度表 = 调度表态[1];
+      var 调度改态 = useState(false);
+      var 调度已改 = 调度改态[0];
+      var 设调度已改 = 调度改态[1];
+      var 调度提示态 = useState({ saving: false, text: '', ok: false });
+      var 调度提示 = 调度提示态[0];
+      var 设调度提示 = 调度提示态[1];
+      var 调度读数 = 调度快照.data;
+      if (调度读数 && !调度已改 && 调度表.fingerprint !== 调度读数.persistence.fingerprint) {
+        var 当前配置 = 调度读数.persistence.config;
+        设调度表({ mode: 当前配置.mode, projects: arr(当前配置.projects).join(', '), authorizationRef: 当前配置.authorizationRef || '', fingerprint: 调度读数.persistence.fingerprint });
+      }
+
+      function 改调度表(key, value) {
+        if (调度提示.saving) return;
+        var next = Object.assign({}, 调度表);
+        next[key] = value;
+        设调度已改(true);
+        设调度表(next);
+      }
+
+      function 保存调度(撤回) {
+        if (调度提示.saving || !调度表.fingerprint || !调度读数) return;
+        var projects = String(调度表.projects).split(/[,，\s]+/).filter(Boolean).filter(function (p, i, list) { return list.indexOf(p) === i; }).sort();
+        if (撤回) projects = arr(调度读数.persistence.config.projects).slice();
+        var config = { mode: 撤回 ? 'explicit-user' : 调度表.mode, projects: projects, authorizationRef: 撤回 ? 调度读数.persistence.config.authorizationRef : String(调度表.authorizationRef).trim() };
+        if (config.mode === 'lead-discretion' && (!projects.length || !config.authorizationRef)) {
+          设调度提示({ saving: false, text: '未提交：Lead 按需调度必须填写项目范围和授权依据。', ok: false });
+          return;
+        }
+        设调度提示({ saving: true, text: '提交后将重新读取新的运行策略；超时不表示没有保存。', ok: false });
+        writeDelegation(config, 调度表.fingerprint).then(function (out) {
+          var post = out.post;
+          var receipt = obj(post.value) || {};
+          var audit = obj(receipt.audit) || {};
+          var commit = obj(receipt.commit) || {};
+          var text;
+          var ok = false;
+          if (!out.back.ok) {
+            text = '提交与应用状态未知：新的 GET 回读未确认（' + out.back.error + '）。' + (post.error || '');
+          } else {
+            var data = out.back.data;
+            var disk = data.persistence;
+            var runtime = data.runtime;
+            var sameConfig = JSON.stringify(disk.config) === JSON.stringify(config);
+            var same = sameConfig && disk.fingerprint === runtime.fingerprint && runtime.disposed === false;
+            if (same && post.ok && commit.state === 'reconciled' && audit.state === 'recorded'
+              && receipt.requestedFingerprint === disk.fingerprint) {
+              var ready = data.readiness && data.readiness.promptRegistered === true && data.readiness.creationGuardRegistered === true;
+              ok = ready;
+              text = ready ? '已保存，盘面与新的运行授权读数一致；提示词实际应用待下一轮验证。'
+                : '盘面与运行授权一致，但调度接线未全部确认，不能宣称就绪。';
+              设调度已改(false);
+              设调度表({ mode: config.mode, projects: projects.join(', '), authorizationRef: config.authorizationRef, fingerprint: disk.fingerprint });
+            } else if (same) {
+              text = '盘面与运行授权已一致，但提交或审计回执未完整确认：' + (post.error || '状态未知') + '。不要盲目重试。';
+            } else {
+              text = (post.ok ? '已提交，但最新配置可能被其他更新替代，或运行授权尚未应用。' : '请求未确认：' + post.error + '。') + '盘面与请求/运行指纹尚未一致，未确认生效。';
+            }
+            text += ' 审计：' + (audit.state === 'recorded' ? '已记录' : audit.state === 'failed' ? '失败' : '未知') + '。';
+          }
+          设调度提示({ saving: false, text: text, ok: ok });
+        });
+      }
       // 表单草稿：**独立于读数**——回读一来就覆盖输入框，人正在打的字会被吃掉。
       var 表 = useState({ 开关: '是', 小时: '72' });
       var form = 表[0];
@@ -4644,6 +4752,47 @@ window.__ModuleLoader__.load({
         ]),
       ]);
 
+      var 调度块 = h('section', { key: 'delegation', 'data-dshmind': 'delegation-settings' }, [
+        h('h3', { key: 'h', className: 'dshmind-set__title' }, 'Lead 调度授权'),
+        h('p', { key: 'scope', className: 'dshmind-set__lede' }, '写入当前 profile 的部署级授权，仅影响以后新派工的准入与后续提示词；撤回不会终止已有成员。'),
+        h('p', { key: 'boundary', className: 'dshmind-set__hint' }, '仅人侧设置入口提供写入，模型工具不提供改授权动作；本机 shell 与凭据的隔离仍由宿主权限负责。'),
+        !调度读数 ? h('div', { key: 'error', className: 'dshmind-set__notice' }, 调度快照.phase === 'reading' ? '正在读取调度授权…' : '调度设置未接入：' + 调度快照.error) : null,
+        调度读数 ? h('div', { key: 'readings', className: 'dshmind-set__rows' }, [
+          读数行('delegation-current', '当前运行授权', '预览项目 ' + line(调度读数.runtime.project, '未知'), (调度读数.runtime.mode === 'lead-discretion' ? 'Lead 按需选择' : '仅用户点名') + ' · ' + (调度读数.runtime.disposed ? '已卸载' : 调度读数.application && 调度读数.application.state === 'confirmed' ? '盘面与运行一致' : '运行应用未确认')),
+          读数行('delegation-source', '授权真源', '不另存组织私有配置', 调度读数.persistence.source),
+          读数行('delegation-fingerprint', '盘面 / 运行指纹', '保存后必须重新 GET 两面核对，提示词实际应用仍待下一轮验证', 调度读数.persistence.fingerprint.slice(0, 12) + ' / ' + 调度读数.runtime.fingerprint.slice(0, 12)),
+        ]) : null,
+        h('div', { key: 'fields', className: 'dshmind-set__rows' }, [
+          行('delegation-mode', '调度模式', '仅用户点名 = 官方默认，不是强制终止或禁用所有成员', h('select', {
+            className: 'dshmind-set__select', 'aria-label': '调度模式', value: 调度表.mode, disabled: 调度提示.saving || !调度读数,
+            onChange: function (event) { 改调度表('mode', event.target.value); },
+          }, [h('option', { value: 'explicit-user' }, '仅用户点名（官方默认）'), h('option', { value: 'lead-discretion' }, 'Lead 按需选择')])),
+          行('delegation-projects', '授权项目', '项目键用逗号分隔；* 表示所有项目', h('input', {
+            type: 'text', className: 'dshmind-set__number', style: { width: 340, maxWidth: '100%' }, 'aria-label': '授权项目',
+            value: 调度表.projects, disabled: 调度提示.saving || !调度读数,
+            onChange: function (event) { 改调度表('projects', event.target.value); },
+          })),
+          行('delegation-ref', '授权依据', '由部署者填写或确认，不由模型从记忆补造', h('input', {
+            type: 'text', className: 'dshmind-set__number', style: { width: 340, maxWidth: '100%' }, 'aria-label': '授权依据',
+            value: 调度表.authorizationRef, disabled: 调度提示.saving || !调度读数,
+            onChange: function (event) { 改调度表('authorizationRef', event.target.value); },
+          })),
+        ]),
+        String(调度表.projects).split(/[,，\s]+/).indexOf('*') >= 0 ? h('div', { key: 'global', className: 'dshmind-set__notice' }, '⚠ 全项目授权：* 会命中当前 profile 下的所有项目。') : null,
+        h('div', { key: 'actions', className: 'dshmind-set__actions' }, [
+          h('button', { type: 'button', className: 'dshmind-set__btn dshmind-set__btn--primary', disabled: 调度提示.saving || !调度读数 || !调度表.fingerprint, onClick: function () { 保存调度(false); } }, 调度提示.saving ? '调度提交中…' : '保存调度授权'),
+          h('button', { type: 'button', className: 'dshmind-set__btn', disabled: 调度提示.saving || !调度读数, onClick: function () { 保存调度(true); } }, '撤回自主调度'),
+          h('button', { type: 'button', className: 'dshmind-set__btn', onClick: function () { 刷新调度(); } }, '重新读取调度'),
+          h('button', { type: 'button', className: 'dshmind-set__btn', disabled: 调度提示.saving || !调度读数, onClick: function () {
+            if (!调度读数) return;
+            var config = 调度读数.persistence.config;
+            设调度表({ mode: config.mode, projects: arr(config.projects).join(', '), authorizationRef: config.authorizationRef || '', fingerprint: 调度读数.persistence.fingerprint });
+            设调度已改(false);
+          } }, '采用当前配置'),
+        ]),
+        调度提示.text ? h('div', { key: 'receipt', role: 'status', className: 'dshmind-set__toast ' + (调度提示.ok ? 'dshmind-set__toast--ok' : 'dshmind-set__toast--warn') }, 调度提示.text) : null,
+      ]);
+
       return h('section', { className: 'dshmind-set__' }, [
         h('h2', { key: 'h', className: 'dshmind-set__title' }, '心智'),
         h('p', { key: 's', className: 'dshmind-set__lede' },
@@ -4684,6 +4833,7 @@ window.__ModuleLoader__.load({
           h('span', { key: 'c' }, '命令 ' + PRESENCE_COMMAND),
           snap.设置文件 ? h('span', { key: 'f', className: 'dshmind-set__mono' }, '设置文件 ' + snap.设置文件) : null,
         ].filter(Boolean)),
+        调度块,
       ].filter(Boolean));
     }
 

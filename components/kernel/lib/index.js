@@ -27,6 +27,7 @@ import { 看板审计尾条数 } from '../../../src/audit.js';
 // 唯一清单拼出来——手抄一份必漂（src/bus.js 的 MESSAGE_TYPES 是闸的同一真源）。
 import { MESSAGE_TYPES } from '../../../src/bus.js';
 import { 挂同源路由, 看板包 } from './routes.js';
+import { createDelegationSettings } from './delegation-settings.js';
 // Lead 自主调度（2026-10-15 主权者授权）：提示词、创建闸与成员入口共用同一份授权判据。
 import { DelegationPolicy } from '../../../src/delegation-policy.js';
 
@@ -115,6 +116,7 @@ export async function apply(ctx, config = {}) {
   // 配置在 profile 层 dsh-mind-kernel.delegation（主权者的机器，不归模型/记忆改）；坏配置按未授权
   // 处理（fail-closed：宁可退回官方默认「用户显式点名」，不静默放权）。
   const delegation = 建调度策略(config.delegation, logger);
+  const 调度接线回执 = { promptRegistered: false, creationGuardRegistered: false };
   /** R06：安全必需闸注册失败且不可降级运行时置位——装配在注册 mind 工具前据此中止。 */
   let 拒绝激活 = null;
   ctx.effect?.(() => {
@@ -127,6 +129,7 @@ export async function apply(ctx, config = {}) {
         const out = await next();
         return delegation.assemble(out, { project: 项目键(context?.agent, 项目), isTeam: 是Team成员(ctx, context?.agent) });
       }, { prepend: true }));
+      调度接线回执.promptRegistered = true;
     } catch (error) {
       logger.warn?.(`[dsh-mind] 注册调度提示词监听失败：${错误消息(error)}`);
     }
@@ -137,6 +140,7 @@ export async function apply(ctx, config = {}) {
       // 不承重，记红继续（异常本身仍值得看见）。
       撤销器.push(ctx.tools.guard((exec) => delegation.creationGuard(exec, { subject: agentSubject(exec), project: 项目键(exec?.agent, 项目) })));
       闸回执.调度创建闸 = { registered: true, error: null };
+      调度接线回执.creationGuardRegistered = true;
       // effect 回调是同步的（宿主的 disposer 契约）：回执落盘即发即忘，写失败不阻断装配。
       atomicWrite(org.layout.guardReceiptFile(), `${JSON.stringify(闸回执, null, 2)}\n`).catch(() => {});
     } catch (error) {
@@ -200,6 +204,7 @@ export async function apply(ctx, config = {}) {
     logger,
     间隔毫秒: config.webServer间隔毫秒,
     次数: config.webServer次数,
+    调度设置: createDelegationSettings({ ctx, org, delegation, project: 项目, readiness: 调度接线回执 }),
   });
 
   // （范围闸注册已上移至装配早期并带 R06 回执/降级——见上方 闸回执 块，此处不再重复注册。）
@@ -318,7 +323,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务 }) {
         未投递: { type: 'boolean' },
         档位: { type: 'string', enum: ['全记', '记汇总', '不逐次记'] },
         动作: { type: 'string', description: 'policy_check 要判定的动作' },
-        target: { type: 'string', description: 'policy_check 的目标 JSON：{"id","kind","authority","zone"}' },
+        target: { type: 'string', description: 'policy_check 的目标 JSON：{"id","kind","authority","zone","sandbox":true}；sandbox 仅为隔离实验预检标记，不授予或扩大权限' },
         代: { type: 'number' },
         审计条数: { type: 'number' },
         limit: { type: 'number', description: '返回条数上限（memory_query 的命中 / bus_read / audit_tail）' },

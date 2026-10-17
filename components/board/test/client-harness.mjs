@@ -190,6 +190,7 @@ export function collect(tree, options = {}) {
     if (Array.isArray(node)) { node.forEach(visit); return; }
     if (typeof node === 'string' || typeof node === 'number') { texts.push(String(node)); return; }
     if (!node || node.$$element !== true) return;
+    if (options.presenceOnly && node.props['data-dshmind'] === 'delegation-settings') return;
     elements.push(node);
     if (options.skipStyle && node.type === 'style') return;
     visit(node.props.children);
@@ -1819,7 +1820,8 @@ export async function runHarness() {
       const renderer = mountSettings(booted);
       // ⚠️ `doc` 必须一起带出来：样式注入到哪，只有假 document 的 head 知道，
       //    渲染树里看不出来（那正是 Batch 6 缺陷能溜过 247 条断言的原因）。
-      return { renderer, doc: booted.doc, 元素: () => collect(renderer.tree, { skipStyle: true }).elements };
+      // 旧组继续严格验 presence-only 的按钮数/空态；调度表单另由专属真形状夹具验证。
+      return { renderer, doc: booted.doc, 元素: () => collect(renderer.tree, { skipStyle: true, presenceOnly: true }).elements };
     };
     const 常驻 = 渲染(Object.assign(session(), { remote: makeRemote(() => okReply({ 读数: 读数袋(), 设置文件: SETTINGS_FILE, 说明: '读…' })).remote }));
     await textAfterLoad(常驻.renderer);

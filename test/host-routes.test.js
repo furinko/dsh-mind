@@ -27,9 +27,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 const FACTORY = join(here, '..', 'mind');
 const 部署偏好 = '集体L2-共享基础设施/defaults/部署.json';
 const 前缀 = '/plugins/dsh-mind';
-const 端点 = { presence: `${前缀}/presence`, workbench: `${前缀}/workbench`, ping: `${前缀}/ping` };
-/** 注册表里**只许**有这三个（多一个就是通用代理的口子）。 */
-const 应有端点 = [端点.presence, 端点.workbench, 端点.ping];
+const 端点 = { presence: `${前缀}/presence`, workbench: `${前缀}/workbench`, ping: `${前缀}/ping`, delegation: `${前缀}/delegation` };
+/** 只允许明确端点，新增调度设置仍不能打开通用 action 代理。 */
+const 应有端点 = [端点.presence, 端点.workbench, 端点.ping, 端点.delegation];
 
 const 睡 = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -267,13 +267,13 @@ describe('Batch 7：自注册同源路由（换掉永不返回的命令通道）
   });
 
   // ⑤ 没有通用代理：注册表里只有这三条 path，别的路径一律 404
-  it('⑤ 不存在通用代理：注册表只有三个端点，run/command/action 一律 404', async () => {
+  it('⑤ 不存在通用代理：注册表只有四个明确端点，run/command/action 一律 404', async () => {
     const t = await 起宿主();
     try {
       assert.deepEqual(
         [...t.ws.路由表].sort(),
         [...应有端点].sort(),
-        `注册的路径必须只有这三个：${JSON.stringify(t.ws.路由表)}`,
+        `注册的路径必须只有这四个明确端点：${JSON.stringify(t.ws.路由表)}`,
       );
       for (const 名 of ['run', 'command', 'action', 'exec', 'tool', 'dispatch']) {
         for (const 方法 of ['GET', 'POST']) {
@@ -360,7 +360,7 @@ describe('Batch 7：自注册同源路由（换掉永不返回的命令通道）
     const 一 = await 起宿主();
     const { ws, home } = 一;
     try {
-      assert.equal(ws.路由表.length, 3, '第一次 apply 挂上三条');
+      assert.equal(ws.路由表.length, 4, '第一次 apply 挂上四条明确端点');
       // 卸载：effect 的清理器必须把路由 disposer 交回去，否则第二次 apply 撞 duplicate。
       一.host.清理();
       assert.deepEqual(ws.路由表, [], `卸载后不许留残留：${JSON.stringify(ws.路由表)}`);

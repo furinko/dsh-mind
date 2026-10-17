@@ -33,11 +33,12 @@ import { 看板审计尾条数 } from '../../../src/audit.js';
 /** 路由前缀（面板与设置页都按它取数据）。 */
 export const 路由前缀 = '/plugins/dsh-mind';
 
-/** 明确端点表：注册表里**只许**有这三个（多一个就是通用代理的口子）。 */
+/** 只登记明确端点；调度授权另经宿主认证，不开放任意 action 代理。 */
 export const 端点表 = Object.freeze({
   presence: `${路由前缀}/presence`,
   workbench: `${路由前缀}/workbench`,
   ping: `${路由前缀}/ping`,
+  delegation: `${路由前缀}/delegation`,
 });
 
 /** 组件名（ping 自检与被审计的「谁在服务」都用它）。 */
@@ -411,6 +412,46 @@ export function ping路由({ org, ctx }) {
   };
 }
 
+/**
+ * 授权设置不沿用允许无头本机请求的 presence 栅栏；宿主认证缺席即不可用。
+ * @param {{ctx: object, settings: object}} spec
+ * @returns {Function} 只接受 GET/POST 的 exact HTTP handler；写入副作用由正式 ConfigEditor 执行。
+ */
+export function delegation路由({ ctx, settings }) {
+  return async function delegation端点(req, res) {
+    const method = String(req.method ?? 'GET').toUpperCase();
+    if (!['GET', 'POST'].includes(method)) return 回方法不对(res, method, 'GET（读）或 POST（写）');
+    try {
+      const connection = ctx.get('connection');
+      if (!connection || typeof connection.requestRejection !== 'function' || !settings) {
+        return 回JSON(res, 503, { 成功: false, 理由: '宿主 Connection 认证或调度设置服务不可用；不会退回无认证通道。' });
+      }
+      const rejection = connection.requestRejection(req);
+      if (rejection !== undefined) return 回JSON(res, rejection === 401 ? 401 : 403, { 成功: false, 理由: '宿主拒绝此请求：需要已认证的同源浏览器设置入口。' });
+      if (method === 'GET') return 回JSON(res, 200, settings.read());
+      if (取头(req, 'content-type').split(';')[0].trim().toLowerCase() !== 'application/json') {
+        return 回JSON(res, 415, { 成功: false, 理由: '调度设置只接受 application/json。' });
+      }
+      let body;
+      try {
+        body = await 读请求体(req);
+      } catch {
+        return 回JSON(res, 413, { 成功: false, 理由: '请求体读取失败或超过 64 KiB。' });
+      }
+      let input;
+      try {
+        input = JSON.parse(body);
+      } catch {
+        return 回JSON(res, 400, { 成功: false, 理由: '请求体不是合法 JSON。' });
+      }
+      const result = await settings.save(input);
+      回JSON(res, result.status, result.body);
+    } catch (error) {
+      回JSON(res, 503, { 成功: false, ...describeFailure(error) });
+    }
+  };
+}
+
 // ── 注册（webServer 可能晚于插件激活）────────────────────────────────────────
 
 /** 取 webServer 服务：先 `ctx.get`，再退回 `ctx.webServer`（两种宿主形状都认）。 */
@@ -432,7 +473,7 @@ function 取webServer(ctx) {
 }
 
 /**
- * 把三条路由挂到宿主上。
+ * 集中持有全部路由 disposer，避免配置自重装时留下重复端点。
  *
  * webServer 可能**晚于插件激活**（`inject=[]` 不等待依赖，加载器不推迟激活）：
  * 照同机跑通的那个插件的做法 —— 每 500ms 试一次，共 20 次；仍拿不到就**静默结束**
@@ -469,6 +510,7 @@ export function 挂同源路由(spec) {
         新挂.push(ws.register({ kind: 'exact', path: 端点表.presence, handler: presence路由({ org, 项目 }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.workbench, handler: workbench路由({ org, 项目 }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.ping, handler: ping路由({ org, ctx }) }));
+        新挂.push(ws.register({ kind: 'exact', path: 端点表.delegation, handler: delegation路由({ ctx, settings: spec.调度设置 }) }));
       } catch (error) {
         // 挂到一半失败：把已挂的撤掉，别在宿主的注册表里留半个我们。
         for (const 撤 of 新挂) {
@@ -516,7 +558,7 @@ export function 挂同源路由(spec) {
           logger.warn?.(
             `[dsh-mind] 同源路由放弃挂载：轮询 ${次数} 次（${间隔毫秒}ms/次）都没挂上。`
             + (最近错误 ? ` 最后一次注册失败：${最近错误}。` : ' 原因：一直没拿到 webServer。')
-            + ` 未注册的端点：${端点表.presence}（设置页读写）、${端点表.workbench}（看板投影）、${端点表.ping}（自检）。`
+            + ` 未注册的端点：${端点表.presence}（设置页读写）、${端点表.workbench}（看板投影）、${端点表.ping}（自检）、${端点表.delegation}（调度授权设置）。`
             + ` 影响面：工作台面板与设置页将保持空白/读取中，命令面（/mind）不受影响。`,
           );
         }
@@ -524,5 +566,5 @@ export function 挂同源路由(spec) {
     }, 间隔毫秒);
     if (typeof 定时器.unref === 'function') 定时器.unref();
     return 收尾;
-  }, 'dsh-mind: 同源路由（presence / workbench / ping）');
+  }, 'dsh-mind: 同源路由（presence / workbench / ping / delegation）');
 }
