@@ -12,6 +12,7 @@
  *  - **留痕 + 可申诉**：全程入账，主权者可申诉并回滚机制版本。
  */
 import { listFiles, readJsonOrNull, readTextOrNull, atomicWrite, ensureDirPath } from './kernel/fsx.js';
+import { unlink } from 'node:fs/promises';
 import { shortHash } from './kernel/ids.js';
 import { Denied } from './kernel/errors.js';
 // 「按 id 找卡」的共享实现（设计评审 #11 · 2026-10-15）：撤回名单探针与升级比对此前
@@ -24,6 +25,14 @@ export const CLOSED_LIST = ['审计链', '闸在位', '出厂件洁净', '撤回
 
 /** 连续多少次同色才算「恒」。太短会把偶发抖动报成故障。 */
 const STICKY_RUNS = 3;
+
+/**
+ * 快照保留（设计债㉘ · 2026-10-17）。触发线对齐心跳盯守阈值「>200 该盯」；
+ * 清理带回滞（一次清回 150）：不留滞回会「每跑一次删一个」，把审计链灌成保留日志。
+ * 盘面自检一条只读命令：数目录文件数 ≤ 201（200 触发线 + 受保护的最近全绿）。
+ */
+const KEEP_SNAPSHOTS = 200;
+const PRUNE_TO = 150;
 
 /**
  * 探针巡检的主体白名单（2026-10-12 评审 P1-8）。**不挂策略引擎**：探针必须在引擎
@@ -151,6 +160,21 @@ export class ProbeRunner {
         结果: 健康.状态,
         告警: true,
         详情: { 状态: 健康.状态, 说明: 健康.说明, 连续次数: 健康.最近.length },
+      });
+    }
+    // 快照保留（设计债㉘ · 2026-10-17）：放在**本次巡检的证据（快照+入账）落定之后**——
+    // 保留失败不许吞掉它们；但失败也不许静默（required-action-wiring：没跑就硬失败），
+    // 直接抛 ⇒ 调用方（工具面/开机自检）按既有口径记「工具调用失败」。清了文件是
+    // 自治的破坏性动作，删多少必须入账（无留痕的自治变更 = 无效）。
+    const 清理 = await this.#pruneSnapshots();
+    if (清理) {
+      await this.audit.append({
+        动作: '快照保留',
+        主体: spec.subject,
+        对象: { id: '探针快照', kind: '账目' },
+        依据: '设计债㉘（2026-10-17）：探针快照无保留策略无限涨；保留最新 + 永久保护最近全绿（autoRollback 回滚目标）',
+        结果: `清了 ${清理.清了} 个最旧快照，目录现存 ${清理.现存} 个`,
+        详情: { 触发线: KEEP_SNAPSHOTS, 清理目标: PRUNE_TO, ...清理 },
       });
     }
     return ran;
@@ -415,6 +439,31 @@ export class ProbeRunner {
     await atomicWrite(`${dir}/${name}`, text);
     // 内容哈希（裁决3）：按盘上字节算——校验侧对同一文件复算，两边同源。
     return { 名: name, 哈希: shortHash(text, 16) };
+  }
+
+  /**
+   * 快照保留（设计债㉘ · 2026-10-17）：按名序（≈时间序，文件名以 ISO 时刻打头）保留
+   * 最新 PRUNE_TO 个；**「最近全绿」永不在清理之列**——它是 autoRollback「定位全绿的
+   * 最近一版」的唯一目标来源（裁决3 的完整性校验还要求盘上文件与审计哈希对得上），
+   * 保留策略不许吃掉回滚目标。超限才动手（KEEP_SNAPSHOTS 触发线 + 滞回）；失败不吞。
+   * @returns {Promise<{清了: number, 现存: number}|null>} 没超限 ⇒ null（不动盘）
+   */
+  async #pruneSnapshots() {
+    const dir = this.layout.probeSnapshotDir();
+    const files = (await listFiles(dir, { recursive: false, filter: (n) => n.endsWith('.json') })).sort();
+    if (files.length <= KEEP_SNAPSHOTS) return null;
+    const keep = new Set(files.slice(-PRUNE_TO));
+    // 找「最近全绿」：autoRollback 只会取它（.reverse().find(全绿)），护住这一个就够。
+    for (let i = files.length - 1; i >= 0; i -= 1) {
+      const snap = await readJsonOrNull(`${dir}/${files[i]}`);
+      if (snap?.全绿 === true) {
+        keep.add(files[i]);
+        break;
+      }
+    }
+    const 清理 = files.filter((name) => !keep.has(name));
+    for (const name of 清理) await unlink(`${dir}/${name}`);
+    return { 清了: 清理.length, 现存: keep.size };
   }
 
   /** @param {number} limit */

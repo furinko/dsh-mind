@@ -205,7 +205,19 @@ export class Org {
       实例活动: await 计实例活动(this.audit, identity, snapshot.节点),
       生成于: this.clock.iso(),
     });
-    return spec.读者 ? sliceForViewer(view, spec.读者) : view;
+    // ㉔读面收口（设计债 2026-10-17）：会话派生成员不带 roleId（㉑ A 修：岗位只落在档案），
+    // 而 sliceForViewer 按 id/roleId 字面比对 ⇒ 按岗位名合法派发（派发闸② · scopeOf②缺口4）
+    // 的成员「能写不能看」。写面与读面同一口径：在册且在岗 ⇒ 档案岗位（同一份 identity
+    // 读数，不新增 IO）。解析只喂**读者副本**，主体链对账（actions.js）与响应的 主体 字段
+    // 一律不受影响；复核员岗成员在动作入口已被解析成复核者主体（R02），到不了这一支。
+    let 读者 = spec.读者;
+    if (读者?.kind === '成员' && !读者.roleId) {
+      const member = identity?.members?.[读者.id];
+      if (member?.status === '在岗' && typeof member.岗位 === 'string' && member.岗位) {
+        读者 = { ...读者, roleId: member.岗位 };
+      }
+    }
+    return 读者 ? sliceForViewer(view, 读者) : view;
   }
 
   /**
