@@ -381,7 +381,9 @@ const STRUCTURE_RULES = {  规则: { sections: [], meta: ['id', 'authority'], be
  *  - 以出厂文档为底（缺出厂则空底）；
  *  - 私有文档里**出现的同名段**（按段 key 比对）覆盖出厂同名段；
  *  - 私有文档里**没出现的段**继承出厂；
- *  - 元数据（front matter）以私有为准（它是那份副本的身份），`body` 按合并后的段序重建。
+ *  - 元数据（front matter）以私有为准（它是那份副本的身份），`body` 按合并后的段序重建；
+ *  - policy块先脱离正文；grant按subject/action/authority/kind覆盖，未覆盖条款继承，其他块字段按键继承；
+ *  - 同层同选择器保留首条，延续引擎first-match；空grants不删除出厂条款，坏块进入errors。
  *
  * 返回形状与 `parseDocument` 一致（meta/body/segments/authority/clauses/errors），
  * 于是策略加载、角色卡读取、对象读取三面可以**共用同一份**结果，不再各写一套覆盖口径。
@@ -406,8 +408,13 @@ export function effectiveDocument(出厂文本, 私有文本, options = {}) {
     return { ...parseDocument(String(私有文本), options), 合并来源: options.私有标为 ?? '私有' };
   }
 
-  const 出厂 = parseDocument(String(出厂文本), options);
-  const 私有 = parseDocument(String(私有文本), options);
+  // 授权块先脱离段正文：段覆盖不能吞掉未覆盖的grant，也不能让坏块被另一层遮住。
+  const 出厂块 = extractPolicyBlock(出厂文本);
+  const 私有块 = extractPolicyBlock(私有文本);
+  const 出厂 = parseDocument(String(出厂文本).replace(POLICY_BLOCK, ''), options);
+  const 私有 = parseDocument(String(私有文本).replace(POLICY_BLOCK, ''), options);
+  出厂.errors.push(...(出厂块?.解析错误 ?? []).map((error) => `出厂授权块：${error}`));
+  私有.errors.push(...(私有块?.解析错误 ?? []).map((error) => `私有授权块：${error}`));
   if (出厂.errors?.length || 私有.errors?.length) {
     // 任一侧解析不了就如实报错（调用方按各自口径抛）——不静默退回整文件替换：
     // 那正是本函数要治的「解释与运行态不符」。
@@ -437,13 +444,27 @@ export function effectiveDocument(出厂文本, 私有文本, options = {}) {
   // 标题位，不属于任何段；丢了会让「正文逐字来自私有那份」这类断言与真机阅读面失真。
   const 头 = 头部(私有).trim() ? 头部(私有) : 头部(出厂);
   const 段正文 = 段.map((s) => `${s.heading ? `## ${s.heading}\n` : ''}${s.body}`).join('\n');
-  // 授权块（```policy）**不属于任何段**：它写在某段正文里，段级覆盖会把它一起带走。
-  // R18 的安全面（报告实证：私有只定制无关段 ⇒ 出厂 deny 条款实际消失、请求误 allow）：
-  // 出厂的授权块必须**独立继承**——私有自己有块则用私有的（显式改法），否则保留出厂块。
-  const 私有块 = 提取授权块(私有.body);
-  const 出厂块 = 提取授权块(出厂.body);
-  const 授权块 = 私有块 ?? 出厂块;
-  const body = `${头}${段正文}${授权块 ? `\n${授权块}\n` : ''}`.replace(/^\n+/, '');
+  // 主权者裁决（2026-10-17）：只有完整选择器相同才算覆盖，空列表不是删除出厂限制的指令。
+  // 保持出厂条款顺序；同选择器的私有条款原位替换，私有新增条款追加，不暗改first-match语义。
+  const 授权 = { ...出厂块, ...私有块 };
+  delete 授权.解析错误;
+  if (出厂块?.grants || 私有块?.grants) {
+    const 选择器 = (grant) => JSON.stringify([grant.subject, grant.action, grant.authority || null, grant.kind || null]);
+    const 条款表 = new Map();
+    for (const grant of 出厂块?.grants ?? []) {
+      const key = 选择器(grant);
+      if (!条款表.has(key)) 条款表.set(key, grant);
+    }
+    const 私有已见 = new Set();
+    for (const grant of 私有块?.grants ?? []) {
+      const key = 选择器(grant);
+      if (!私有已见.has(key)) 条款表.set(key, grant);
+      私有已见.add(key);
+    }
+    授权.grants = [...条款表.values()];
+  }
+  const 授权块 = 出厂块 || 私有块 ? `\n\`\`\`policy\n${JSON.stringify(授权, null, 2)}\n\`\`\`\n` : '';
+  const body = `${头}${段正文}${授权块}`.replace(/^\n+/, '');
   const 合并 = parseDocument(body, { ...options, defaultAuthority: 私有.meta?.authority ?? 出厂.meta?.authority ?? options.defaultAuthority });
   return {
     ...合并,
@@ -462,10 +483,56 @@ function 头部(doc) {
   return 首段 === -1 ? body : body.slice(0, 首段);
 }
 
-/** 取出 ```policy 授权块原文（含围栏）；没有则 null。合并时它与段正文分开继承。 */
-function 提取授权块(body) {
-  const m = /```policy\s*\n[\s\S]*?```/.exec(String(body ?? ''));
-  return m ? m[0] : null;
+const POLICY_BLOCK = /```policy\r?\n([\s\S]*?)```/g;
+
+/**
+ * 授权块的唯一JSON解析处；所有块都参与校验，坏块不能因叠加覆盖而消失。
+ * @param {string} body 文档正文或完整源文本
+ * @returns {{ grants?: object[], roles?: string[], mode?: string, 解析错误: string[] }|null} 无块返回null；错误由调用方fail-closed。
+ */
+export function extractPolicyBlock(body) {
+  const source = String(body);
+  const blocks = [...source.matchAll(POLICY_BLOCK)];
+  const 开始数 = [...source.matchAll(/```policy(?:\r?\n|$)/g)].length;
+  if (blocks.length === 0 && 开始数 === 0) return null;
+  const merged = {};
+  const 解析错误 = blocks.length === 开始数 ? [] : ['policy 授权块未闭合。'];
+  blocks.forEach(([, raw], index) => {
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      解析错误.push(`\`\`\`policy 块 #${index + 1} 不是合法 JSON：${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      解析错误.push(`\`\`\`policy 块 #${index + 1} 必须是 JSON 对象，收到 ${Array.isArray(parsed) ? '数组' : typeof parsed}`);
+      return;
+    }
+    if (Object.hasOwn(parsed, 'grants')) {
+      if (!Array.isArray(parsed.grants)) {
+        解析错误.push(`policy 块 #${index + 1} 的 grants 必须是数组。`);
+        return;
+      }
+      parsed.grants.forEach((grant, i) => {
+        if (!grant || typeof grant !== 'object' || Array.isArray(grant)) {
+          解析错误.push(`policy 块 #${index + 1} grant#${i + 1} 必须是对象。`);
+          return;
+        }
+        for (const field of ['subject', 'action']) {
+          if (typeof grant[field] !== 'string' || !grant[field].trim()) 解析错误.push(`grant#${i + 1} 缺 ${field} 或不是非空字符串。`);
+        }
+        if (!['allow', 'deny', 'confirm'].includes(grant.verdict ?? 'allow')) 解析错误.push(`grant#${i + 1} 的 verdict 非法：${JSON.stringify(grant.verdict)}。`);
+      });
+    }
+    for (const key of Object.keys(parsed)) {
+      // 配置键不许触发Object.prototype上的setter。
+      const value = Array.isArray(parsed[key]) ? [...(Object.hasOwn(merged, key) ? merged[key] : []), ...parsed[key]] : parsed[key];
+      Object.defineProperty(merged, key, { value, enumerable: true, writable: true, configurable: true });
+    }
+  });
+  merged.解析错误 = 解析错误;
+  return merged;
 }
 
 /** 段内最高授权（合并文档的整体 authority；缺段时回退 fallback）。 */

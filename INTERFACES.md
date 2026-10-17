@@ -52,6 +52,8 @@ DIR, MEMORY_KINDS, RULE_FILES, ROLE_CARD_FILES, DEFAULT_FILES, Layout, defaultLa
 // src/tags.js
 AUTHORITY_RANK, KINDS, AUTHORITIES, compareAuthority, highestAuthority, parseSimpleYaml, formatFrontMatter
 parseDocument(text, {defaultAuthority}) -> {meta, body, segments, authority, clauses, errors}
+effectiveDocument(factoryText, privateText, options) -> 生效文档（段级合并；policy块按下述条款口径继承）
+extractPolicyBlock(body) -> {grants?, roles?, mode?, 解析错误: string[]} | null
 assertStructure(kind, doc)  // 不合规抛 InvalidBody；写入侧唯一校验点
 authorityOfSegment(doc, heading)
 
@@ -72,6 +74,10 @@ identityStatus(engine, id) -> {known, status, reason}
 ```
 
 `parseDocument` 返回的 `meta` 里可能有 `{id, kind, authority, zone, domain, project, version, generation, refs, source, ...}`。
+
+**生效文档与授权块（2026-10-17 主权者选择「按条款覆盖」）**：两区的所有 `policy` 块先独立解析并从段正文剥离，合并后只输出一个块。`grants` 的条款键为 `(subject, action, authority, kind)`；后两项按求值口径把缺省/空值视为不限定。私有同键条款原位替换出厂条款，未覆盖的出厂条款保留，私有新增键追加；同层同键维持首条优先。`grants: []` 不是删除指令；其他块级字段按键私有覆盖、缺键继承。任一侧的 JSON、grant 形状或 verdict 非法都进入错误面，不因另一侧覆盖而隐藏。`extractPolicyBlock` 实现只在 `src/tags.js`，`src/policy.js` 保留原公开导出的 re-export，不是第二份解析器。
+
+**授权依赖热更新**：策略加载的所有文本读取经过同一个依赖登记入口，文件缺席或解析失败也记录路径；后续 `refreshIfStale()` 对已登记路径比对 mtime，变化后重载。安全探针声明在此集合内；工具总范围不由策略加载消费，仍由内核范围闸单独读取，不误列入策略依赖。该签名不是内容哈希：外部写者若刻意保留 mtime，需显式 `policy_reload`。
 
 ## 2 · 待实现模块（各自独立文件，互不 import 彼此，可 import 上面第 1 节的积木）
 

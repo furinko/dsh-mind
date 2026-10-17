@@ -21,7 +21,9 @@ import { digest } from './kernel/text.js';
 import { Denied, Fault, NeedsApproval } from './kernel/errors.js';
 import { resolveResponseDeadline, evaluateSovereignPresence, BUILTIN_RESPONSE_DEADLINE_HOURS } from './kernel/time.js';
 import { RULE_FILES } from './paths.js';
-import { parseDocument, effectiveDocument } from './tags.js';
+import { parseDocument, effectiveDocument, extractPolicyBlock } from './tags.js';
+// 保留既有公开导出；解析实现只在tags.js，避免合并与求值各维护一份口径。
+export { extractPolicyBlock } from './tags.js';
 
 /** 动作的封闭清单。表外的动作 = 未知动作 = 拒绝（fail-closed）。 */
 export const ACTIONS = [
@@ -91,12 +93,11 @@ export class PolicyEngine {
   #reloadDirty = false;
 
   /**
-   * R04（审查 2026-10-16）：本次加载**实际读过**的授权依赖路径（#loadRules / #loadDefaults
-   * 上报，编制件与身份档案由 #reloadOnce 补齐）。热路径的签名比对按这份清单 stat——
-   * 引擎不另跑 rulePath 枚举，第三批「读取次数不随调用数翻倍」的语义保持。
-   * @type {string[]|null}
+   * 所有授权读取共享的依赖集合；缺席或失败的路径同样登记，避免坏配置修好后无法自动恢复。
+   * 热路径沿已发布清单只做stat，不重复枚举rulePath。
+   * @type {Set<string>}
    */
-  #签到路径 = null;
+  #签到路径 = new Set();
 
   /**
    * @param {{ layout: import('./paths.js').Layout, clock: import('./kernel/time.js').Clock, audit?: { append: Function } }} spec
@@ -141,8 +142,6 @@ export class PolicyEngine {
      * @type {{ 串: string, 路径: string[] } | null}
      */
     this.authSig = null;
-    /** R04：本次加载实际读过的授权依赖路径（#loadRules/#loadDefaults 上报，热路径据此比对）。 @type {string[]|null} */
-    this.#签到路径 = null;
     /**
      * in-flight reload 去重（2026-10-13 第三批性能收口）：身份档案 mtime 一变（每次
      * assign/seal/markInteraction 都会变）之后的并发 decide 各自触发全量 reload——
@@ -195,10 +194,10 @@ export class PolicyEngine {
    *   省略则自行枚举（decide 热路径用）。
    * @param {{ 身份mtime?: number|null }} [选项] 已知的身份档案时刻（加载流程传「与发布正文
    *   同一快照」的读后值——R05 的教训：不要在撕裂窗里改用新 stat）。
-   * @returns {Promise<string>}
+   * @returns {Promise<{串: string, 路径: string[]}>}
    */
   async #authSignature(路径表, 选项 = {}) {
-    const 文件 = 路径表 ?? this.#authPaths();
+    const 文件 = 路径表 ?? [...this.#签到路径];
     const 部分 = [];
     for (const p of 文件) 部分.push(`${p}=${(await mtimeMsOrNull(p)) ?? '-'}`);
     if (选项.身份mtime !== undefined) {
@@ -212,28 +211,14 @@ export class PolicyEngine {
     return { 串: 部分.join('|'), 路径: 文件 };
   }
 
-  /** 授权依赖的路径清单（枚举一次，随后只按清单 stat）。@returns {string[]} */
-  #authPaths() {
-    return this.#签到路径 ?? [
-      this.layout.identityFile(),
-      ...RULE_FILES.flatMap((spec) => [this.layout.rulePath(spec.id, '私有'), this.layout.rulePath(spec.id, '出厂')]),
-      this.layout.factoryDefault('介入度'),
-      this.layout.factoryDefault('响应期限'),
-      this.layout.probeDeclaration(),
-      this.layout.deploymentPrefs(),
-      this.layout.establishmentPath('私有'),
-      this.layout.establishmentPath('出厂'),
-    ].filter((p) => typeof p === 'string' && p);
-  }
-
   /**
-   * R04：把**本次加载实际读过的路径**记为授权依赖清单（加载流程上报，一次走查两用——
-   * 既是加载的足迹，也是后续热路径要比对的清单；引擎不再为此另跑一遍 rulePath 枚举，
-   * 第三批「读取次数不随调用数翻倍」的语义得以保持）。
-   * @param {string[]} 路径
+   * 授权依赖只在真正的读取入口登记；读失败或文件缺席仍保留路径，才能自动发现修复与出现。
+   * @param {string} file 授权加载路径
+   * @returns {Promise<string|null>} 与readTextOrNull相同，不另维护会漂移的候选清单。
    */
-  #记授权依赖(路径) {
-    this.#签到路径 = [...new Set(路径.filter((p) => typeof p === 'string' && p))];
+  #readAuth(file) {
+    this.#签到路径.add(file);
+    return readTextOrNull(file);
   }
 
   /**
@@ -275,18 +260,9 @@ export class PolicyEngine {
     }
     try {
       const { rules, digests } = await this.#loadRules();
-      const { defaults, defaults来源, 忽略的默认值键, 足迹: 默认值足迹 } = await this.#loadDefaults();
+      const { defaults, defaults来源, 忽略的默认值键 } = await this.#loadDefaults();
       const establishment = await this.#loadEstablishment();
       this.grants = collectGrants(rules);
-      // R04：授权依赖清单＝规则件足迹（#loadRules 上报，含未命中的候选）＋默认值文件
-      // ＋编制件两区（它在 #loadEstablishment 里读，路径固定）＋身份档案（已在规则足迹里）。
-      this.#记授权依赖([
-        ...(this.#签到路径 ?? []),
-        ...(默认值足迹 ?? []),
-        this.layout.establishmentPath('私有'),
-        this.layout.establishmentPath('出厂'),
-        this.layout.identityFile(),
-      ]);
       this.state = {
         ok: true,
         error: null,
@@ -321,7 +297,7 @@ export class PolicyEngine {
     // R04：发布快照的同时记下**全部授权依赖**的签名（decide 热路径与内核定时器共用它判新旧）。
     // 身份那一格用**与发布正文同一快照**的 mtime（R05：撕裂窗里读到旧正文却记新 mtime 会让
     // 撤回永久失效——本条不能把那个修复重新打穿）。
-    this.authSig = await this.#authSignature(this.#authPaths(), { 身份mtime: this.identityMtimeMs });
+    this.authSig = await this.#authSignature(undefined, { 身份mtime: this.identityMtimeMs });
     return this.state.ok;
   }
 
@@ -948,8 +924,6 @@ export class PolicyEngine {
     /** @type {Array<{id:string, authority:string, zone:string, text:string, digest:string, path:string}>} */
     const rules = [];
     const digests = {};
-    /** R04：本次加载读过的路径（含未命中的候选——「缺席→出现」也是依赖变化）。 */
-    const 足迹 = [];
     for (const spec of RULE_FILES) {
       // R18（审查 2026-10-16）：**两侧都读、段级合并**。修前找到私有文件就 break——
       // 「私有叠加层、未改条款继承出厂」的解释与运行态不符（报告实证：私有只定制无关段
@@ -957,10 +931,8 @@ export class PolicyEngine {
       // 生效文档由 effectiveDocument 单源产出（与 upgrade.compare 的条款级口径同源）。
       const 私有路径 = this.layout.rulePath(spec.id, '私有');
       const 出厂路径 = this.layout.rulePath(spec.id, '出厂');
-      if (私有路径) 足迹.push(私有路径);
-      if (出厂路径) 足迹.push(出厂路径);
-      const 私有文本 = 私有路径 ? await readTextOrNull(私有路径) : null;
-      const 出厂文本 = 出厂路径 ? await readTextOrNull(出厂路径) : null;
+      const 私有文本 = 私有路径 ? await this.#readAuth(私有路径) : null;
+      const 出厂文本 = 出厂路径 ? await this.#readAuth(出厂路径) : null;
       if (私有文本 === null && 出厂文本 === null) {
         // 宪章缺失 = 没有判据来源 = fail-closed（§7 加载失败 fail-closed）。
         throw new Error(`规则件缺失：${spec.id}（私有区与出厂区都没有）`);
@@ -984,10 +956,6 @@ export class PolicyEngine {
       rules.push(found);
       digests[spec.id] = found.digest;
     }
-    // 身份档案也在这条足迹上（它在 #reloadOnce 的读前/读后一致性检查里另读一遍，
-    // 但依赖面必须包含它——否则手改档案的热更就漏了）。
-    足迹.push(this.layout.identityFile());
-    this.#记授权依赖(足迹);
     return { rules, digests };
   }
 
@@ -1029,8 +997,6 @@ export class PolicyEngine {
   async #loadDefaults() {
     // 兜底 72 只写一份：引用 `src/kernel/time.js` 的常量（两处字面量迟早会漂）。
     const merged = { 介入度: '零参与', 失联限制: true, 响应期限小时: BUILTIN_RESPONSE_DEADLINE_HOURS, 工具总范围: '全部', 安全类: [], 会审讨论: { ...DEFAULT_DEBATE_BUDGET }, 岗位闲置天数: DEFAULT_ROLE_IDLE_DAYS };
-    /** R04：本方法读过的默认值文件（并入授权依赖足迹）。 */
-    const 足迹 = [];
     /** 生效值来自哪一层（'出厂' | '私有' | '内置兜底'）—— 「改了不生效」要能一眼看出源。 */
     const 来源 = Object.fromEntries(Object.keys(merged).map((键) => [键, '内置兜底']));
     /** 被剔除的文档键（只留名字，不留正文：正文正是它不该进运行态的原因）。 */
@@ -1041,9 +1007,7 @@ export class PolicyEngine {
      * @param {'出厂'|'私有'} 层 生效值来自哪一层
      */
     const 并入 = async (file, 标注, 层) => {
-      // R04：默认值文件的读点只有这里——足迹在此登记（热路径据此发现「手改介入度」）。
-      足迹.push(file);
-      const text = await readTextOrNull(file);
+      const text = await this.#readAuth(file);
       if (text === null) return; // 缺失 ⇒ 保留上一层（全新部署合理）
       let parsed;
       try {
@@ -1070,7 +1034,7 @@ export class PolicyEngine {
     await 并入(this.layout.factoryDefault('介入度'), '出厂默认值 介入度.json', '出厂');
     await 并入(this.layout.factoryDefault('响应期限'), '出厂默认值 响应期限.json', '出厂');
     // 出厂安全类探针声明：文件里的键叫 `探针`，运行态叫 `安全类`（只改键名，不改行为）。
-    const probeText = await readTextOrNull(this.layout.probeDeclaration());
+    const probeText = await this.#readAuth(this.layout.probeDeclaration());
     if (probeText !== null) {
       let 声明;
       try {
@@ -1113,11 +1077,11 @@ export class PolicyEngine {
       throw new Error(`岗位闲置天数 非法：${JSON.stringify(merged.岗位闲置天数)}（来源：${来源.岗位闲置天数}）。要 ≥0 的整数（天数；0 = 不判闲置）。修好对应文件后重载即恢复。`);
     }
 
-    return { defaults: merged, defaults来源: 来源, 忽略的默认值键: [...忽略键].sort(), 足迹 };
+    return { defaults: merged, defaults来源: 来源, 忽略的默认值键: [...忽略键].sort() };
   }
 
   async #loadIdentity() {
-    const text = await readTextOrNull(this.layout.identityFile());
+    const text = await this.#readAuth(this.layout.identityFile());
     if (text === null) {
       // 身份档案缺失不是「无限制」，而是「没有任何登记在案的身份」——
       // 除主权者外一律拒绝，见 #evaluate 的 fail-closed 兜底。
@@ -1138,7 +1102,7 @@ export class PolicyEngine {
   async #loadEstablishment() {
     const path = this.layout.establishmentPath('私有');
     const factoryPath = this.layout.establishmentPath('出厂');
-    const text = (await readTextOrNull(path)) ?? (await readTextOrNull(factoryPath));
+    const text = (await this.#readAuth(path)) ?? (await this.#readAuth(factoryPath));
     if (text === null) return { roles: [], mode: '独立会审' };
     const parsed = parseDocument(text, { defaultAuthority: '自治' });
     const block = extractPolicyBlock(parsed.body);
@@ -1192,45 +1156,6 @@ export function normalizeSubject(subject) {
     };
   }
   return { id: String(subject ?? 'anonymous'), kind: '未知' };
-}
-
-/**
- * 从正文中取出 ```policy 块并解析成授权表。
- *
- * 坏块**折进 `解析错误[]`，不再 `continue` 掉**（W3 批3·2026-10-09）：静默跳过它的后果是
- * 「整部法律的授权块被丢，而引擎照样报 healthy」——判定随后按三档默认走，谁也看不出
- * 法律件里的授权面已经空了。调用方（`collectGrants` / `#loadEstablishment`）拿到非空
- * `解析错误` 就抛错 ⇒ `reload()` 的 catch 落 `state.error` ⇒ describe/健康面见红 +
- * 全部写动作 fail-closed（与 `validateDebateBudget` 同一层，不另开上报通道）。
- *
- * @param {string} body
- * @returns {{ grants?: object[], roles?: string[], mode?: string, 解析错误: string[] }|null}
- */
-export function extractPolicyBlock(body) {
-  const blocks = [...String(body).matchAll(/```policy\r?\n([\s\S]*?)```/g)];
-  if (blocks.length === 0) return null;
-  const merged = {};
-  /** @type {string[]} */
-  const 解析错误 = [];
-  blocks.forEach(([, raw], index) => {
-    let parsed;
-    try {
-      parsed = JSON.parse(raw);
-    } catch (error) {
-      解析错误.push(`\`\`\`policy 块 #${index + 1} 不是合法 JSON：${error instanceof Error ? error.message : String(error)}`);
-      return;
-    }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      解析错误.push(`\`\`\`policy 块 #${index + 1} 必须是 JSON 对象，收到 ${Array.isArray(parsed) ? '数组' : typeof parsed}`);
-      return;
-    }
-    for (const key of Object.keys(parsed)) {
-      if (Array.isArray(parsed[key])) merged[key] = [...(merged[key] ?? []), ...parsed[key]];
-      else merged[key] = parsed[key];
-    }
-  });
-  merged.解析错误 = 解析错误;
-  return merged;
 }
 
 /**
@@ -1344,20 +1269,8 @@ function collectGrants(rules) {
     }
     if (!block?.grants) continue;
     block.grants.forEach((grant, index) => {
-      // verdict 白名单（2026-10-13 审查 P1-3）：拼错成「拒绝」/"Deny"/空串 ⇒ 响亮抛错，
-      // 不许静默当 allow（「非 deny 即 allow」= fail-open，与全文件口径相反）。
+      // 形状与verdict已在共享解析器中校验，合并与求值不能各用一套合法性口径。
       const verdict = grant.verdict ?? 'allow';
-      if (!['allow', 'deny', 'confirm'].includes(verdict)) {
-        throw new Error(`规则件 ${rule.id}（${rule.zone}区）grant#${index + 1} 的 verdict 非法：${JSON.stringify(verdict)}（只认 allow / deny / confirm）。修好该文件后重载即恢复（当前按引擎不健康处理：全部写动作被拒）。`);
-      }
-      // subject / action 也必须是**写得对的**非空字符串（2026-10-14 审查 P2-4）：修前只验
-      // verdict——subject 拼错或 action 缺失的 grant 静默永不命中，配置烂了引擎还报 healthy。
-      // 与 verdict 同口径：坏条目 = 响亮抛错（引擎不健康，写动作全拒），不许静默跳过。
-      for (const field of ['subject', 'action']) {
-        if (typeof grant[field] !== 'string' || !grant[field].trim()) {
-          throw new Error(`规则件 ${rule.id}（${rule.zone}区）grant#${index + 1} 缺 ${field} 或不是非空字符串：${JSON.stringify(grant[field])}。缺字段的授权条目等于不存在，但不许静默——修好该文件后重载即恢复。`);
-        }
-      }
       out.push({
         ...grant,
         verdict,

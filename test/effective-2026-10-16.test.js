@@ -8,9 +8,11 @@
  *  R18-⑤ effectiveDocument 段级合并（私有同名段覆盖、未出现段继承出厂）
  *  R18-⑥ 审查实证两向：出厂权限条款 deny + 私有只定制无关段 ⇒ 修前限制实际消失、修后仍在
  */
-import { after, before, describe, it } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeFixture, LEAD, MEMBER, SOVEREIGN, writeUnder } from './helpers.mjs';
+import { rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { makeFixture, LEAD, MEMBER, writeUnder } from './helpers.mjs';
+import { extractPolicyBlock } from '../src/policy.js';
 import { Org } from '../src/org.js';
 import { runAction } from '../lib/actions.js';
 import { Denied } from '../src/kernel/errors.js';
@@ -69,7 +71,157 @@ describe('R18 · effectiveDocument 段级合并（唯一解析器）', () => {
   });
 });
 
+describe('R18 · 私有授权块按条款覆盖（2026-10-17 打回修正）', () => {
+  const 文档 = (blocks) => [
+    '---', 'id: 权限矩阵', 'kind: 规则', 'authority: 法律', 'version: 1', '---',
+    '# 权限矩阵', ...blocks.flatMap((block, i) => [`## 段${i}`, '```policy', typeof block === 'string' ? block : JSON.stringify(block), '```']),
+  ].join('\n');
+  const 条款 = (kind, verdict = 'deny', reason = kind) => ({ subject: 'Lead', action: 'write', kind, verdict, reason });
+  const 合并 = (出厂, 私有) => effectiveDocument(文档(出厂), 文档(私有), { defaultAuthority: '法律' });
+
+  it('R18修正：私有有块时保留未覆盖出厂条款且只输出一个授权块', () => {
+    const doc = 合并([{ grants: [条款('知识')] }], [{ grants: [条款('能力')] }]);
+    assert.deepEqual(doc.errors, []);
+    assert.equal([...doc.body.matchAll(/```policy\n/g)].length, 1, '授权块不得留在段正文后再追加一遍');
+    assert.deepEqual(extractPolicyBlock(doc.body).grants, [条款('知识'), 条款('能力')]);
+  });
+
+  it('R18修正：精确选择器原位覆盖而宽窄选择器不互相吞掉', () => {
+    const factory = [条款('知识'), { subject: 'Lead', action: 'write', verdict: 'deny', reason: '广域' }];
+    const override = 条款('知识', 'confirm', '私有确认');
+    const narrow = { ...条款('知识'), authority: '自治', reason: '限定档位' };
+    const doc = 合并([{ grants: factory }], [{ grants: [override, narrow] }]);
+    assert.deepEqual(extractPolicyBlock(doc.body).grants, [override, factory[1], narrow]);
+  });
+
+  it('R18修正：subject与action不同也不算同条覆盖', () => {
+    const factory = [条款('知识'), { ...条款('知识'), subject: '成员' }, { ...条款('知识'), action: 'read' }];
+    const override = 条款('知识', 'confirm');
+    assert.deepEqual(extractPolicyBlock(合并([{ grants: factory }], [{ grants: [override] }]).body).grants, [override, factory[1], factory[2]]);
+  });
+
+  it('R18修正：同层重复选择器保留首条不因合并改成last-match', () => {
+    const first = 条款('知识', 'deny', '首条');
+    const second = 条款('知识', 'allow', '后条');
+    const doc = 合并([{ grants: [条款('知识')] }], [{ grants: [first, second] }]);
+    assert.deepEqual(extractPolicyBlock(doc.body).grants, [first]);
+  });
+
+  it('R18修正：非法grant不能被私有合法同条遮盖', () => {
+    for (const bad of [null, [], { ...条款('知识'), action: '' }, { ...条款('知识'), verdict: 'Deny' }]) {
+      assert.ok(合并([{ grants: [bad] }], [{ grants: [条款('知识')] }]).errors.length > 0);
+    }
+    assert.ok(合并([{ grants: '错误形状' }], [{ grants: [条款('知识')] }]).errors.length > 0);
+  });
+
+  it('R18修正：多授权块逐条合并且空grants不是删除指令', () => {
+    const doc = 合并([{ grants: [条款('知识')], mode: '独立会审' }, { grants: [条款('经历')] }], [{ grants: [] }, { roles: ['复核员'] }]);
+    const block = extractPolicyBlock(doc.body);
+    assert.deepEqual(block.grants, [条款('知识'), 条款('经历')]);
+    assert.deepEqual(block.roles, ['复核员']);
+    assert.equal(block.mode, '独立会审');
+    assert.equal([...doc.body.matchAll(/```policy\n/g)].length, 1);
+  });
+
+  it('R18修正：任一侧坏JSON都不得被另一侧的有效块遮掉', () => {
+    for (const [factory, local] of [
+      [['{坏JSON'], [{ grants: [条款('知识')] }]],
+      [[{ grants: [条款('知识')] }], ['{坏JSON']],
+    ]) {
+      assert.ok(合并(factory, local).errors.some((error) => /policy|授权块/.test(error)), '坏块必须在生效文档errors里可见');
+    }
+    const 未闭合 = 文档([{ grants: [条款('知识')] }]).replace(/\n```$/, '');
+    assert.ok(effectiveDocument(未闭合, 文档([{ grants: [条款('知识')] }]), { defaultAuthority: '法律' }).errors.some((error) => /未闭合/.test(error)));
+    assert.ok(extractPolicyBlock('```policy\n{}').解析错误.some((error) => /未闭合/.test(error)));
+  });
+
+  it('R18修正：真实引擎继承与覆盖均在grant层承重而非宪章提前挡住', async () => {
+    const f = await makeFixture({ rules: { '集体L1-法律/权限矩阵.md': 文档([{ grants: [条款('知识'), 条款('经历')] }]) } });
+    try {
+      await f.writePrivate('集体L1-法律/权限矩阵.md', 文档([{ grants: [条款('经历', 'confirm', '私有确认'), 条款('能力')] }]));
+      assert.equal(await f.policy.reload(), true);
+      assert.equal(f.policy.grants.filter((g) => g.source.startsWith('权限矩阵')).length, 3);
+      for (const [kind, expected] of [['知识', 'deny'], ['经历', 'confirm'], ['能力', 'deny']]) {
+        const result = await f.policy.decide({ subject: LEAD, action: 'write', target: { id: 'r18-' + kind, kind, authority: '自治', zone: '私有' } });
+        assert.equal(result.verdict, expected, JSON.stringify(result));
+        assert.match(result.rule, /grant/);
+      }
+    } finally {
+      assert.match(f.home, /[\\/]mind-fix-[^\\/]+$/);
+      await f.cleanup();
+    }
+  });
+
+  it('R18修正：被私有同名段覆盖的出厂坏块仍令引擎fail-closed', async () => {
+    const f = await makeFixture({ rules: { '集体L1-法律/权限矩阵.md': 文档(['{坏JSON']) } });
+    try {
+      await f.writePrivate('集体L1-法律/权限矩阵.md', 文档([{ grants: [条款('知识')] }]));
+      assert.equal(await f.policy.reload(), false);
+      assert.equal(f.policy.healthy, false);
+    } finally {
+      assert.match(f.home, /[\\/]mind-fix-[^\\/]+$/);
+      await f.cleanup();
+    }
+  });
+});
+
 describe('R04 · 授权依赖新鲜度与显式重载', () => {
+  const 改文件 = async (file, content) => {
+    const previous = await stat(file);
+    await writeFile(file, content, 'utf8');
+    await utimes(file, previous.atime, new Date(previous.mtimeMs + 60_000));
+  };
+
+  it('R04修正：探针声明改动自动刷新且稳定后不重复reload', async () => {
+    const f = await makeFixture();
+    try {
+      const file = f.layout.probeDeclaration();
+      assert.ok(f.policy.authSig.路径.includes(file), '真实读过的声明必须进入签名');
+      await 改文件(file, JSON.stringify({ 探针: ['审计链'] }));
+      assert.deepEqual(await f.policy.refreshIfStale(), { changed: true, reloaded: true, ok: true });
+      assert.deepEqual(f.policy.state.defaults.安全类, ['审计链']);
+      assert.deepEqual(await f.policy.refreshIfStale(), { changed: false, reloaded: false, ok: true });
+    } finally {
+      assert.match(f.home, /[\\/]mind-fix-[^\\/]+$/);
+      await f.cleanup();
+    }
+  });
+
+  it('R04修正：探针声明缺失出现和坏JSON修复均进入自动刷新', async () => {
+    const f = await makeFixture();
+    try {
+      const file = f.layout.probeDeclaration();
+      assert.ok(file.startsWith(f.factoryRoot));
+      await rm(file);
+      assert.equal((await f.policy.refreshIfStale()).changed, true);
+      assert.deepEqual(f.policy.state.defaults.安全类, []);
+      await writeFile(file, JSON.stringify({ 探针: ['闸在位'] }), 'utf8');
+      assert.equal((await f.policy.refreshIfStale()).changed, true);
+      assert.deepEqual(f.policy.state.defaults.安全类, ['闸在位']);
+      await 改文件(file, '{坏JSON');
+      assert.equal((await f.policy.refreshIfStale()).ok, false);
+      assert.equal(f.policy.healthy, false);
+      await 改文件(file, JSON.stringify({ 探针: ['审计链'] }));
+      assert.equal((await f.policy.refreshIfStale()).ok, true);
+      assert.deepEqual(f.policy.state.defaults.安全类, ['审计链']);
+    } finally {
+      assert.match(f.home, /[\\/]mind-fix-[^\\/]+$/);
+      await f.cleanup();
+    }
+  });
+
+  it('R04修正：工具总范围并非策略加载依赖不应误入签名', async () => {
+    const f = await makeFixture();
+    try {
+      const file = f.layout.factoryDefault('工具总范围');
+      assert.equal(f.policy.authSig.路径.includes(file), false);
+      await 改文件(file, JSON.stringify({ 允许: ['read'], 拒绝: ['write'] }));
+      assert.deepEqual(await f.policy.refreshIfStale(), { changed: false, reloaded: false, ok: true });
+    } finally {
+      assert.match(f.home, /[\\/]mind-fix-[^\\/]+$/);
+      await f.cleanup();
+    }
+  });
   it('手改私有部署介入度 ⇒ 下一判定自动生效（无需显式 reload）', async () => {
     const f = await makeFixture();
     try {
