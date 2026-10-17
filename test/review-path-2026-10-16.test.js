@@ -194,6 +194,22 @@ describe('② 统一可信角色解析（R02 收口：复核员岗成员在入�
     assert.equal(tc.节点.复核指派.候选, 'reviewer');
   });
 
+  it('sandbox接线：真实复核员只有布尔true的实验预检可过且不放宽业务写', async () => {
+    const target = { id: '隔离复核实验', kind: '产物', authority: '自治', zone: '私有' };
+    const good = await 执行(复核员成员, { action: 'policy_check', 动作: 'experiment', target: { ...target, sandbox: true } });
+    assert.equal(good.判定.verdict, 'allow', JSON.stringify(good.判定));
+    for (const marker of [undefined, false, 'true', 1]) {
+      const bad = await 执行(复核员成员, { action: 'policy_check', 动作: 'experiment', target: { ...target, sandbox: marker } });
+      assert.equal(bad.判定.verdict, 'deny', `非布尔true不得冒充沙箱：${String(marker)}`);
+      assert.match(bad.判定.rule, /沙箱/);
+    }
+    const write = await 执行(复核员成员, { action: 'policy_check', 动作: 'write', target: { ...target, sandbox: true } });
+    assert.equal(write.判定.verdict, 'deny', '沙箱标记不授予复核员普通业务写权');
+    assert.match(write.判定.rule, /复核者只读/);
+    const unknown = await 执行(复核员成员, { action: 'policy_check', 动作: 'unknown-experiment-action', target: { ...target, sandbox: true } });
+    assert.equal(unknown.判定.verdict, 'deny', '沙箱标记不放行未知动作');
+  });
+
   it('d. 总线写也按复核者判：bus_send ⇒ 复核者只读守卫拒', async () => {
     await assert.rejects(
       () => 执行(复核员成员, { action: 'bus_send', 线程: 't-x', 类型: '提问', 内容: 'x' }),
