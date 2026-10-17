@@ -316,13 +316,27 @@ describe('设计评审 2026-10-15 · #14：settle 补偿审计 与 事件后审�
 
       // 拿住任务图锁：settle 的归档（记忆账本另一把锁，不受影响）先走完，
       // #append 停在锁门口——这就是「已归档、事件未落线」的窗口。
+      // 手动闸门（2026-10-17 测试稳定性批）：修前有两个定时假设——① `withLock` 的**实际
+      // 取得**与 settle 发车之间是启动序竞态（并发负载下 settle 可能先拿到锁，前提当场假）；
+      // ② 持锁 350ms 暗含「断言必须在此窗内做完」（负载下超窗 ⇒ settle 在破账前成功走完）。
+      // 改为**拿到信号再发车、破账后放行**：全程无定时假设，窗口要多长有多长。
       let 结账完成 = false;
-      const 闸 = withLock(g.layout.taskLock(P), async () => { await sleep(350); });
+      let 通报拿到; const 已拿到 = new Promise((resolve) => { 通报拿到 = resolve; });
+      let 放行; const 可放行 = new Promise((resolve) => { 放行 = resolve; });
+      const 闸 = withLock(g.layout.taskLock(P), async () => { 通报拿到(); await 可放行; });
+      await 已拿到; // 锁确在手上，settle 才发车——启动序竞态的根治面
       const 结账 = tasks.settle(id, { subject: LEAD, 项目: P }).then(
         (v) => { 结账完成 = true; return v; },
         (e) => { 结账完成 = true; throw e; },
       );
-      await sleep(80);
+      // 归档先行是**事件序**不是定时序：轮询到「作答账出现归档行」为据——锁在我们手里，
+      // settle 此刻必然停在任务图锁门口（它进不去），轮多久都不会错过窗口。
+      const 归档在账 = async () => (await readJsonl(g.layout.memoryLog(P, '作答'))).some((r) => r.追加 === '归档');
+      const 止 = Date.now() + 5_000;
+      while (!(await 归档在账())) {
+        assert.ok(Date.now() <= 止, '等归档行超时：settle 未在预算内走到任务图锁门口');
+        await sleep(50);
+      }
       assert.equal(结账完成, false, '前提：settle 停在锁门口（归档已先行）');
       // 归档确实已经发生（顺序的证据面）：作答账本里已有指向该条目的归档状态行。
       const 作答账 = await readJsonl(g.layout.memoryLog(P, '作答'));
@@ -331,6 +345,7 @@ describe('设计评审 2026-10-15 · #14：settle 补偿审计 与 事件后审�
       // 注入失败：把任务图账本换成目录（readJsonl/appendLines 都会响亮失败）。
       await rm(g.layout.taskLog(P), { force: true });
       await mkdir(g.layout.taskLog(P), { recursive: true });
+      放行();
       await 闸;
 
       await assert.rejects(() => 结账, (e) => e instanceof Error, '事件未落线 ⇒ settle 必须失败（不许把已归档报成已结账）');

@@ -37,6 +37,25 @@ describe('dsh-mind 宿主半区', () => {
     await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
   });
 
+  /**
+   * 有界轮询审计账（2026-10-17 测试稳定性批）：审计钩子的落账是异步 IO，修前三处
+   * `setTimeout(60)` 定睡在并发全量套件下不够用（负载下红过两轮）。轮询到**判据满足**
+   * 为止——断言原文不变，等的只是「它真的到了」。超时必须响亮（不许静默过）。
+   * @param {(rows: object[]) => boolean} predicate
+   * @param {number} [ms] 预算，默认 5s
+   * @returns {Promise<object[]>} 满足判据时的那批行
+   */
+  const 等到审计行 = async (predicate, ms = 5_000) => {
+    const file = join(home, 'mind-private', '集体L2-共享基础设施', '审计日志', `audit-${new Date().toISOString().slice(0, 7)}.jsonl`);
+    const 止 = Date.now() + ms;
+    for (;;) {
+      const rows = (await readFile(file, 'utf8')).split('\n').filter(Boolean).map((l) => JSON.parse(l));
+      if (predicate(rows)) return rows;
+      if (Date.now() > 止) throw new Error(`等待审计行超时（${ms}ms）：账上现有 ${rows.length} 行`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+
   it('导出符合宿主约定的三个符号', () => {
     // 组件名就是它那一行的包名：插件列表里「包含的组件」显示的就是它。
     assert.equal(plugin.name, 'dsh-mind-kernel');
@@ -167,10 +186,9 @@ describe('dsh-mind 宿主半区', () => {
   it('tools/result 钩子把失败全记进审计', async () => {
     const before = (await (await import('node:fs/promises')).readFile(join(home, 'mind-private', '集体L2-共享基础设施', '审计日志', new Date().toISOString().slice(0, 7).replace(/^/, 'audit-') + '.jsonl'), 'utf8').catch(() => '')).split('\n').filter(Boolean).length;
     host.触发('tools/result', fakeExec({ name: 'pwsh' }), { isError: true, error: { message: '命令失败', info: { code: 'X' } } });
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    const after2 = (await readFile(join(home, 'mind-private', '集体L2-共享基础设施', '审计日志', `audit-${new Date().toISOString().slice(0, 7)}.jsonl`), 'utf8')).split('\n').filter(Boolean);
+    const after2 = await 等到审计行((rows) => rows.length > before);
     assert.ok(after2.length > before, '失败必须落账');
-    const last = JSON.parse(after2[after2.length - 1]);
+    const last = after2[after2.length - 1];
     assert.equal(last.动作, '工具调用失败');
     assert.equal(last.档位, '全记');
     assert.equal(last.详情.原因, '命令失败');
@@ -183,8 +201,7 @@ describe('dsh-mind 宿主半区', () => {
     host.触发('tools/result', fakeExec({ name: 'pwsh', sessionId: 'session-round' }), { isError: false });
     host.触发('tools/result', fakeExec({ name: 'read', sessionId: 'session-round' }), { isError: false });
     host.触发('turn/end', { session: { id: 'session-round' } });
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    const rows = (await readFile(join(home, 'mind-private', '集体L2-共享基础设施', '审计日志', `audit-${new Date().toISOString().slice(0, 7)}.jsonl`), 'utf8')).split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const rows = await 等到审计行((rs) => rs.some((r) => r.动作 === '工具调用成功' && r.轮 === 'session-round'));
     const 汇总 = rows.filter((r) => r.动作 === '工具调用成功' && r.轮 === 'session-round');
     assert.equal(汇总.length, 1, '一轮只落一条汇总');
     assert.equal(汇总[0].详情.成功调用, 1, '只读调用不逐次记，也不进成功计数');
@@ -195,8 +212,7 @@ describe('dsh-mind 宿主半区', () => {
     // 否则前者的桶在后者里永远找不到（汇总永不落，Map 只增不减）。
     host.触发('tools/result', { name: 'pwsh', callId: 'call-无会话' }, { isError: false });
     host.触发('turn/end', {});
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    const rows2 = (await readFile(join(home, 'mind-private', '集体L2-共享基础设施', '审计日志', `audit-${new Date().toISOString().slice(0, 7)}.jsonl`), 'utf8')).split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const rows2 = await 等到审计行((rs) => rs.some((r) => r.动作 === '工具调用成功' && r.轮 === 'unknown-turn'));
     const 兜底 = rows2.filter((r) => r.动作 === '工具调用成功' && r.轮 === 'unknown-turn');
     assert.equal(兜底.length, 1, '无会话 id 时两处必须对齐到同一个兜底键（修前各算各的 ⇒ 汇总永远不落）');
   });

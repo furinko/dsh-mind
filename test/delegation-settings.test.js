@@ -329,12 +329,16 @@ describe('调度设置：正式 editor、认证、锁内 CAS 与分面回执', (
     };
     try {
       await apply(host.ctx, { home, privateRoot: join(home, 'private'), factoryRoot: fileURLToPath(new URL('../mind', import.meta.url)), delegation: INITIAL });
-      const landed = await 等到((doc) => doc.调度创建闸?.registered === true, 3_000);
+      // 观察预算 ≠ 机制承诺（2026-10-17 测试稳定性批）：确认写是 apply+2s 的**定时**——机制
+      // 语义「2秒窗」指这个排程，不是墙钟观测上限。并发全量套件跑起来后事件循环繁忙，
+      // setTimeout 回调晚点几秒是测试环境噪声不是产品行为；修前 3s/4s 预算在负载下超窗
+      // （本批与设计债批复核均实测踩中）——预算放宽，断言（自愈后形态）一字不变。
+      const landed = await 等到((doc) => doc.调度创建闸?.registered === true, 8_000);
       assert.equal(landed.范围闸.registered, true);
       // 冷启动实证场景：二次激活把先到的 true 覆写回初始形态——确认写必须在2秒窗内恢复真实闸态。
       await writeFile(receipt, `${JSON.stringify({ 范围闸: { registered: true, error: null }, 调度创建闸: { registered: null, error: null } }, null, 2)}\n`, 'utf8');
       assert.equal((await 读回执()).调度创建闸.registered, null, '前提：覆写已生效');
-      const healed = await 等到((doc) => doc.调度创建闸?.registered === true, 4_000);
+      const healed = await 等到((doc) => doc.调度创建闸?.registered === true, 15_000);
       assert.deepEqual(healed.调度创建闸, { registered: true, error: null });
     } finally {
       host.清理();

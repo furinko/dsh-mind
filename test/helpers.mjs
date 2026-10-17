@@ -187,7 +187,10 @@ export async function makeFixture(options = {}) {
     policy,
     write: (rel, text) => writeUnder(factoryRoot, rel, text),
     writePrivate: (rel, text) => writeUnder(privateRoot, rel, text),
-    cleanup: () => rm(home, { recursive: true, force: true }),
+    // maxRetries（2026-10-17 测试稳定性批）：Windows 下 rm -r 会撞「目录刚清空但句柄未释」
+    // 的瞬态 ENOTEMPTY——设计债批基线跑实测踩中一次（单文件复跑即绿，纯环境噪声）。
+    // 仓内先例：host.test.js after 钩子 / delegation.test.js 的 rm 都带同款参数。
+    cleanup: () => rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 }),
   };
 }
 

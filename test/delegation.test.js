@@ -18,7 +18,7 @@ import * as kernel from '../components/kernel/lib/index.js';
 import { writeUnder } from './helpers.mjs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -239,7 +239,11 @@ describe('内核接线 · 提示词与创建闸', () => {
   }
 
   it('授权项目：创建闸挡裸 spawn_teammate 并指回 member_spawn；waterfall 原位改写唯一策略段', async () => {
-    const { home, host } = await 起内核({ mode: 'lead-discretion', projects: ['dsh-mind'], authorizationRef: 'test' });
+    // 位置依赖修复（2026-10-17 测试稳定性批）：fakeExec 的 header.cwd = process.cwd()，而
+    // 项目键＝目录名（§14.4-5）⇒ 授权清单写死 'dsh-mind' 只在真仓目录名下绿——TEMP 副本
+    // （校准/复核的常规操作面）跑全量必红。授权**本次实际所在的项目**才是本用例的本意。
+    const 本次项目 = basename(process.cwd());
+    const { home, host } = await 起内核({ mode: 'lead-discretion', projects: [本次项目], authorizationRef: 'test' });
     try {
       const exec = fakeExec({ name: 'spawn_teammate' });
       const reasons = host.闸.map((g) => g(exec)).filter(Boolean);
