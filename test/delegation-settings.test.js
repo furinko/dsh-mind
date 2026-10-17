@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -309,6 +309,35 @@ describe('调度设置：正式 editor、认证、锁内 CAS 与分面回执', (
     } finally {
       host.清理();
       assert.equal(handlers.size, 0);
+      forgetSharedOrg();
+      await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
+    }
+  });
+
+  it('R06回执自愈：apply后落true；被覆写回null后2秒内被幂等确认写恢复（冷启动验收实证场景）', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'delegation-receipt-'));
+    const host = fakeHost({ 提供服务: ['tools', 'commands', 'systemPrompt'] });
+    const receipt = join(home, 'private', '集体L2-共享基础设施', 'defaults', '工具闸回执.json');
+    const 读回执 = async () => JSON.parse(await readFile(receipt, 'utf8'));
+    const 等到 = async (predicate, ms) => {
+      const 止 = Date.now() + ms;
+      for (;;) {
+        try { if (predicate(await 读回执())) return await 读回执(); } catch { /* 尚未落盘 */ }
+        if (Date.now() > 止) throw new Error(`等待回执超时：${await readFile(receipt, 'utf8').catch(() => '<无文件>')}`);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    };
+    try {
+      await apply(host.ctx, { home, privateRoot: join(home, 'private'), factoryRoot: fileURLToPath(new URL('../mind', import.meta.url)), delegation: INITIAL });
+      const landed = await 等到((doc) => doc.调度创建闸?.registered === true, 3_000);
+      assert.equal(landed.范围闸.registered, true);
+      // 冷启动实证场景：二次激活把先到的 true 覆写回初始形态——确认写必须在2秒窗内恢复真实闸态。
+      await writeFile(receipt, `${JSON.stringify({ 范围闸: { registered: true, error: null }, 调度创建闸: { registered: null, error: null } }, null, 2)}\n`, 'utf8');
+      assert.equal((await 读回执()).调度创建闸.registered, null, '前提：覆写已生效');
+      const healed = await 等到((doc) => doc.调度创建闸?.registered === true, 4_000);
+      assert.deepEqual(healed.调度创建闸, { registered: true, error: null });
+    } finally {
+      host.清理();
       forgetSharedOrg();
       await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
     }

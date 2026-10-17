@@ -117,6 +117,15 @@ export async function apply(ctx, config = {}) {
   // 处理（fail-closed：宁可退回官方默认「用户显式点名」，不静默放权）。
   const delegation = 建调度策略(config.delegation, logger);
   const 调度接线回执 = { promptRegistered: false, creationGuardRegistered: false };
+  /**
+   * R06 回执的 effect 侧落盘（2026-10-17 冷启动验收修复）：首写 + 2 秒后一次幂等确认写。
+   * 修前即发即忘且失败静默——冷启动实证回执永停「未尝试」而闸本体行为面在位（假阴性
+   * 同样腐蚀探针可信度）。确认写同时治两类丢失：瞬态写失败，与启动期二次激活把先到的
+   * true 覆写回 null 的竞态。effect 回调必须同步返回 disposer，不能 await——保持即发
+   * 即忘，只是不再吞错、不再只写一次。
+   */
+  const 落闸回执 = (attempt) => atomicWrite(org.layout.guardReceiptFile(), `${JSON.stringify(闸回执, null, 2)}\n`)
+    .catch((error) => logger.error?.(`[dsh-mind] 工具闸回执落盘失败（第${attempt}次，将幂等重写）：${错误消息(error)}`));
   /** R06：安全必需闸注册失败且不可降级运行时置位——装配在注册 mind 工具前据此中止。 */
   let 拒绝激活 = null;
   ctx.effect?.(() => {
@@ -141,11 +150,13 @@ export async function apply(ctx, config = {}) {
       撤销器.push(ctx.tools.guard((exec) => delegation.creationGuard(exec, { subject: agentSubject(exec), project: 项目键(exec?.agent, 项目) })));
       闸回执.调度创建闸 = { registered: true, error: null };
       调度接线回执.creationGuardRegistered = true;
-      // effect 回调是同步的（宿主的 disposer 契约）：回执落盘即发即忘，写失败不阻断装配。
-      atomicWrite(org.layout.guardReceiptFile(), `${JSON.stringify(闸回执, null, 2)}\n`).catch(() => {});
+      // effect 回调是同步的（宿主的 disposer 契约）：首写即发即忘，确认写兜覆写竞态与瞬态失败。
+      落闸回执(1);
+      const 确认写 = setTimeout(() => { if (!delegation.closed) 落闸回执(2); }, 2_000);
+      if (typeof 确认写.unref === 'function') 确认写.unref();
     } catch (error) {
       闸回执.调度创建闸 = { registered: false, error: 错误消息(error) };
-      atomicWrite(org.layout.guardReceiptFile(), `${JSON.stringify(闸回执, null, 2)}\n`).catch(() => {});
+      落闸回执(1);
       logger.error?.(`[dsh-mind] 调度创建闸注册失败（闸在位探针将见红）：${闸回执.调度创建闸.error}`);
       if (delegation.status(项目).authorized) {
         拒绝激活 = `调度创建闸注册失败：${闸回执.调度创建闸.error}。调度授权已生效而创建闸缺席 = 授权面无闸，按 fail-closed 拒绝激活（R06）。`;
