@@ -63,7 +63,7 @@ async function 敲(t, rawInput, agent = {}) {
 
 /** 写一份「主权者写在同一个文件里」的内容，返回其原文本。 */
 async function 放一份别的键(t) {
-  const 文本 = JSON.stringify({ 介入度: '零参与', 说明: '这行不许被顺手改掉' }, null, 2) + '\n';
+  const 文本 = JSON.stringify({ 介入度: '放权', 说明: '这行不许被顺手改掉' }, null, 2) + '\n';
   await t.写私有(部署偏好, 文本);
   return 文本;
 }
@@ -121,7 +121,8 @@ describe('Batch 2.5：presence 的上界 / 读数 null 语义 / 注释与单源'
       assert.equal(记录.length, 1, `越界值的这次意图改设置必须入账一条，实际 ${记录.length} 条`);
       assert.match(String(记录[0].结果), /拒绝/, '结果要如实写「拒绝」');
       assert.match(String(记录[0].详情.拒绝理由), new RegExp(String(MAX_RESPONSE_DEADLINE_HOURS)), '账上要留下拒绝原因（含合法上界）');
-      assert.notEqual(记录[0].主体.id, 'sovereign', '不冒充主权者');
+      assert.equal(记录[0].主体.id, 'sovereign', '人侧入口构造主权者本人（v2 条目14/17）');
+      assert.equal(记录[0].详情.入口, '命令面', '入口事实要可追');
       assert.equal((await t.org.audit.verify()).ok, true, '入账之后审计链必须仍自洽');
     } finally {
       await t.清理();

@@ -35,42 +35,6 @@ test('client-harness：工厂加载、main + sidebar.panellist 注册、非平�
     '活数据页面的文本节点数应 > 80，实际 ' + report.liveTexts);
 });
 
-test('⑮ 强制反对者：真键喂进去 ⇒ 画出来；空串 ⇒ 一个字都不画（行为判据，不是源码文本）', async () => {
-  // 收尾⑥（2026-10-10）：这条以前是**源码文本正则** ——
-  //   /line\(firstOf\(r, \['强制反对者', 'dissenter'\]\), ''\)/ 与 source.indexOf("' · 强制反对者：'")
-  // 那是「源码里有这行字」，不是「页面真的画出来了」：把渲染那一行删掉、把归一化那一行删掉，
-  // 正则照旧命中，判据照旧绿。现在两条都换成**行为读数**（用 harness 同一条渲染路子）：
-  //   喂一份带**真键**的会审行 ⇒ 页面文本里有「强制反对者：<那位>」；喂**空串** ⇒ 一个字都不画。
-  const 有 = sampleView();
-  const a = await renderView(有);
-  assert.ok(a.text.includes('强制反对者：member-c'),
-    '真键 强制反对者=member-c ⇒ 页面上画出「强制反对者：member-c」');
-  assert.equal(a.text.split('强制反对者').length - 1, 1,
-    '整页恰好出现一次「强制反对者」（t-4/t-5 没有讨论段 ⇒ 不许有第二个）');
-
-  const 空 = sampleView();
-  空.会审.find((r) => r.节点 === 't-6').强制反对者 = '';
-  const b = await renderView(空);
-  assert.equal(b.text.includes('强制反对者'), false,
-    '真键给空串 ⇒ 一个字都不画（不给「强制反对者：—」这种空壳读数）');
-  // 反面校准的另一半：页面本身是**渲染出来了**的（不是整页空白造成的「一个字都不画」）。
-  assert.ok(b.text.includes('mind-private') && b.text.includes('会审'),
-    '前提：空串那一份页面照常渲染（降级成空白不算「不画」）');
-
-  // 条数式的总数看不出「某一条不画了」⇒ 按名字点名 harness 里那五条（真键 3 条 + 别名 2 条）。
-  const report = await runHarness();
-  const 要的 = [
-    '指定了强制反对者的会审卡上画出来（真键 强制反对者）',
-    '强制反对者恰好显示一次（不重复画）',
-    '没有讨论段的会审卡一个「强制反对者」都不画（不给空壳读数）',
-    '别名 dissenter 单独喂（没有真键）也归一化画出来 —— 别名只作兼容',
-    '别名给空串同样一个字都不画（别名不是「有键就画」）',
-  ];
-  for (const name of 要的) {
-    assert.ok(report.passed.includes(name), '⑮ 渲染断言缺失或未通过：' + name);
-  }
-});
-
 test('优化批 ②⑤⑥：任务徽章按状态着色、判据限行带 title 全文、审计时间恒带短日期（行为判据）', async () => {
   // 体例同 ⑮：renderView 真渲染一遍，断言页面文本/元素属性（props.style / props.title）。
   // GREEN 与灰态不改共享夹具——用 sampleView() 拷贝局部改字段构造（任务.计数 无断言消费，已核）。
@@ -152,7 +116,7 @@ test('优化批 ②⑤⑥：任务徽章按状态着色、判据限行带 title 
   }
 });
 
-test('优化批 ①④③：空态给可敲命令、读数分身份/健康两组、会审独立答案可折叠（行为判据）', async () => {
+test('优化批 ①④③：空态给可敲命令、读数分身份/健康两组、会审答案可折叠（行为判据）', async () => {
   // 体例同 ②⑤⑥：renderView 真渲染一遍，断言页面文本/元素属性；
   // 点开折叠的**交互**路径由 harness 钉（那边走真实 onClick 再断言）。
   const 全空 = sampleView();
@@ -164,7 +128,7 @@ test('优化批 ①④③：空态给可敲命令、读数分身份/健康两组
   assert.ok(e.text.includes('没有需要你决定的事') && e.text.includes('没有进行中的会审')
     && e.text.includes('任务图为空'), '① 空态仍是明说的一句话（原有措辞保留）');
   assert.ok(e.text.includes("action:'task_create'") && e.text.includes("action:'task_pending'")
-    && e.text.includes("action:'task_submit'"), '① 三块空态各给一条可敲的 mind 命令');
+    && e.text.includes("action:'debate_open'"), '① 三块空态各给一条可敲的 mind 命令（会审入口是 debate_open）');
   const 引导命令 = e.elements.filter((el) => el.type === 'code'
     && String(el.props.className || '').indexOf('dshmind-cmd') >= 0);
   assert.equal(引导命令.length, 3, '① 引导命令恰好三条 code 块（可选中复制，不给控件）');
@@ -184,27 +148,27 @@ test('优化批 ①④③：空态给可敲命令、读数分身份/健康两组
     '④ 失联详情贴格不外溢（Batch 8 定案不翻烧饼）');
 
   const 卡 = findAllByClass(活.tree, 'dshmind-review');
-  assert.ok(findAllByClass(卡[0], 'dshmind-answers').length === 1, '③ 首场会审默认展开');
+  assert.ok(findAllByClass(卡[0], 'dshmind-answers').length === 1, '③ 首场会审默认展开答案');
   assert.ok(findAllByClass(卡[1], 'dshmind-answers').length === 0
-    && textOf(卡[1]).includes('独立答案 3 份'), '③ 其余默认折叠成一行摘要');
-  assert.ok(textOf(卡[1]).includes('成员 A') && !textOf(卡[1]).includes('member-a'),
-    '③ 摘要只给盲标不出成员 id');
+    && textOf(卡[1]).includes('答案 3 份'), '③ 其余默认折叠成一行摘要');
+  assert.ok(textOf(卡[1]).includes('member-a'), '③ 折叠摘要按存档给成员（已收敛场揭名）');
   assert.ok(!活.text.includes('三档划分正确') && !活.text.includes('冻结点正确'),
     '③ 折叠场的结论文本不在页面上（撑爆问题已治）');
 
   // 按名点名 harness 本批新增断言（条数式总数看不出某一条没跑）。
   const report = await runHarness();
   const 要的 = [
-    '③ 首场会审默认展开独立答案（dshmind-answers 在）',
-    '③ 展开的那场给每份结论文本',
-    '③ 第二场默认折叠：一行摘要，不铺独立答案',
-    '③ 折叠摘要只给盲标不出成员 id（揭名口径不因折叠放宽）',
+    '③ 首场会审默认展开答案（dshmind-answers 在）',
+    '盲评卡一份结论文本都不出，也不补「（无结论）」假占位',
+    '揭名卡展开后给每份结论文本',
+    '③ 第二场默认折叠：一行摘要，不铺答案',
+    '③ 折叠摘要不把结论文本搬出来',
     '③ 折叠场有切换钮（button，不是别的可点元素）',
-    '揭名 true 时盲标与成员 id 都给（点开折叠后）',
+    '揭名（已收敛）后答案给真成员 id',
     '③ 再点一下收回去（覆盖表取反，摘要回来）',
-    '③ 切换按会话节点 id 记：首场仍是展开',
+    '③ 切换按会审 id 记：首场仍是展开',
     '① 空态仍是明说的一句话（原有措辞保留）',
-    '① 三块空态各给一条真命令（task_pending / task_submit / task_create）',
+    '① 三块空态各给一条真命令（task_pending / debate_open / task_create）',
     '① 引导命令用等宽可选中的 code 块（恰好三条，不给按钮）',
     '① 空态不画切换钮（引导只给文本）',
     '① 空态不画卡片壳（Batch 9「没数据的格不出现」不倒车）',
@@ -368,7 +332,7 @@ test('八件与环路已从源码里删除（不是注释掉）：渲染、常�
   for (const dead of gone) {
     assert.ok(!source.includes(dead), '已作废的「' + dead + '」不得留在 lib/client.js 里（包括注释与 CSS）');
   }
-  // 「成员」这个词本身还活着（会审的盲标与独立答案里各有一处），死掉的是
+  // 「成员」这个词本身还活着（会审的盲标与答案头里各有一处），死掉的是
   // **视图模型里的顶栏成员清单**与页脚那一行读数。
   assert.ok(!/['"]成员['"]\s*:/.test(source), '视图模型不得再取顶层「成员」清单');
   assert.ok(!/view\.成员/.test(source), '页脚不得再读 view.成员');

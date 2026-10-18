@@ -12,7 +12,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { makeFixture, LEAD, MEMBER, REVIEWER } from './helpers.mjs';
+import { makeFixture, LEAD, MEMBER, REVIEWER, seedReviewRelation } from './helpers.mjs';
 import { AuditLog } from '../src/audit.js';
 import { TaskGraph } from '../src/tasks.js';
 import { RoleRegistry } from '../src/registry.js';
@@ -85,10 +85,11 @@ describe('裁决第二批 · M1 提审分离', () => {
     );
     await assert.rejects(
       () => tasks.review(node.id, { subject: REVIEWER, 项目: P, 三态: '过', 复核者: 'member-a' }),
-      (e) => e instanceof Denied && /自己的卷/.test(e.message),
-      '借 复核者 字段冒名也不行：判据看独立答案归属',
+      (e) => e instanceof Denied && /自己的卷|不许替别人署名/.test(e.message),
+      '借 复核者 字段冒名也不行：v2 起署名必须先等于真实主体',
     );
-    // 反例面：未参与交卷的复核者照常。
+    // 反例面：未参与交卷的复核者（有真实复核任务关联）照常。
+    await seedReviewRelation(f, { 项目: P, 目标: node.id });
     const ok = await tasks.review(node.id, { subject: REVIEWER, 项目: P, 三态: '未验' });
     assert.equal(ok.状态, '未验');
     await f.cleanup();
@@ -140,6 +141,7 @@ describe('裁决第二批 · P3 escalated 去重', () => {
     const tasks = new TaskGraph({ layout: f.layout, policy: f.policy, audit: f.audit, clock: f.clock });
     const node = await tasks.create({ subject: LEAD, 项目: P, 描述: '反复打回', 负责人: 'member-a', 判据: ['x'] });
     await tasks.dispatch(node.id, { subject: LEAD, 项目: P });
+    await seedReviewRelation(f, { 项目: P, 目标: node.id });
     for (let i = 0; i < 3; i++) {
       await tasks.start(node.id, { subject: MEMBER, 项目: P });
       await tasks.submit(node.id, { subject: MEMBER, 项目: P, 结论: `第 ${i + 1} 次` });
@@ -156,15 +158,11 @@ describe('裁决第二批 · P3 escalated 去重', () => {
 describe('裁决第二批 · 裁决3 快照完整性', () => {
   it('快照被篡改 ⇒ autoRollback 拒绝定位并告警', async () => {
     const f = await makeFixture();
-    const probes = new ProbeRunner({ layout: f.layout, policy: f.policy, audit: f.audit, clock: f.clock });
+    const probes = new ProbeRunner({ layout: f.layout, policy: f.policy, audit: f.audit, clock: f.clock, 无内核装配: true });
     const 系统 = { id: 'system', kind: '系统' };
     // 跑两轮：第一轮全绿（回滚目标），第二轮见红（触发 autoRollback）。
-    await probes.run({ subject: 系统, 机制版本: 'v-green' });
-    // 快照文件名按时间戳排序定「最新」：Clock 秒级精度下两轮要跨秒，保证 red 排在 green 后。
-    await new Promise((r) => setTimeout(r, 1100));
-    const { readdir } = await import('node:fs/promises');
-    const { shortHash } = await import('../src/kernel/ids.js');
-    const 见红前文件 = (await readdir(f.layout.probeSnapshotDir())).find((n) => n.includes(shortHash('v-green', 6)));
+    const green = await probes.run({ subject: 系统, 机制版本: 'v-green' });
+    const 见红前文件 = green.快照.名;
     // 造一次见红：往拒绝名单写一个不存在的卡 id ⇒「撤回名单一致」探针红（不动审计账本）。
     const identityFile = f.layout.identityFile();
     const identity = JSON.parse(await readFile(identityFile, 'utf8'));
@@ -179,7 +177,7 @@ describe('裁决第二批 · 裁决3 快照完整性', () => {
     await writeFile(全绿文件, `${JSON.stringify(snap, null, 2)}\n`);
     const r = await probes.autoRollback();
     assert.equal(r.执行, false);
-    assert.equal(r.已定位, undefined, '被篡改的快照不许成为回滚目标');
+    assert.equal(r.已定位, false, '被篡改的快照不许成为回滚目标');
     assert.match(r.原因, /完整性存疑/);
     await f.cleanup();
   });

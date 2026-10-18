@@ -226,13 +226,13 @@ describe('R04 · 授权依赖新鲜度与显式重载', () => {
     const f = await makeFixture();
     try {
       const org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
-      assert.equal(org.policy.state.defaults?.介入度, '零参与', '前提：夹具默认零参与');
-      // 手改部署.json：介入度 → 逐条审批（模拟管理员直接编辑，不经任何服务层入口）。
-      await writeUnder(f.privateRoot, '集体L2-共享基础设施/defaults/部署.json', `${JSON.stringify({ 介入度: '逐条审批' }, null, 2)}\n`);
+      assert.equal(org.policy.state.defaults?.介入度, '放权', '前提：夹具默认放权');
+      // 手改部署.json：介入度 → 审批（模拟管理员直接编辑，不经任何服务层入口）。
+      await writeUnder(f.privateRoot, '集体L2-共享基础设施/defaults/部署.json', `${JSON.stringify({ 介入度: '审批' }, null, 2)}\n`);
       // 不给显式 reload：decide 的依赖签名比对必须在本次判定前发现变化并重载。
       const 判 = await org.policy.decide({ subject: LEAD, action: 'write', target: { id: 'obj-2', kind: '知识', authority: '自治', zone: '私有' }, context: {} });
-      assert.equal(org.policy.state.defaults?.介入度, '逐条审批', '介入度必须已生效');
-      assert.equal(判.verdict, 'confirm', `逐条审批档下 Lead 写应转 confirm（实际 ${JSON.stringify(判)}）`);
+      assert.equal(org.policy.state.defaults?.介入度, '审批', '介入度必须已生效');
+      assert.equal(判.verdict, 'confirm', `审批档下 Lead 写应转 confirm（实际 ${JSON.stringify(判)}）`);
     } finally {
       await f.cleanup();
     }
@@ -249,7 +249,10 @@ describe('R04 · 授权依赖新鲜度与显式重载', () => {
         '# 权限矩阵', '', '## 三档门槛', '你定的 > 组织定的。', '',
         '```policy', JSON.stringify({ grants: [{ subject: '成员', action: 'write', verdict: 'deny', reason: '手改后的新条款' }] }, null, 2), '```', '',
       ].join('\n'));
-      const 判 = await org.policy.decide({ subject: MEMBER, action: 'write', target: { id: 'cap-x', kind: '能力', authority: '自治', zone: '私有' }, context: {} });
+      // v2（条目15）：成员写**能力**现在先被宪章不变式拦（成员不得改能力库），拒因就不是
+      // 新 grant 了，这条用例会测不到「规则件热生效」。换一个 §3.5 不覆盖、但仍走同一 grant 的
+      // 目标类（记忆）——本用例钉的是「手改规则件 ⇒ 下一判定按新条款拒」，不是那一格边界。
+      const 判 = await org.policy.decide({ subject: MEMBER, action: 'write', target: { id: 'mem-x', kind: '记忆', authority: '自治', zone: '私有' }, context: {} });
       // 重载确实发生（摘要变化）且新条款生效。
       assert.equal(判.verdict, 'deny', `新条款必须生效：${JSON.stringify(判)}`);
       assert.match(String(判.rule), /grant/, `拒因应来自新 grant：${判.rule}`);

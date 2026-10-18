@@ -1,5 +1,5 @@
 /**
- * 设计评审修复批次 A 回归（对应 docs/design/设计评审报告-dsh-mind-2026-10-15.md）。
+ * 设计评审修复批次 A 回归（对应 docs/归档/审查轮-2026-10/设计评审报告-dsh-mind-2026-10-15.md）。
  *
  * 覆盖：
  *  F1  memory_query 带 类 单选字符串打崩动作（服务层归一：字符串包数组）。
@@ -196,22 +196,26 @@ describe('设计评审 2026-10-15 · F5：空卷不构成零分歧（双空卷 �
     assert.equal(正.空卷数, 0);
   });
 
-  it('服务面：双空卷会审 ⇒ checkZeroDivergence 不报警、不入「零分歧异常」账，workbench 投影带空卷数', async () => {
+  it('服务面：双空卷会审（v2 作答）⇒ 不报零分歧、不入「零分歧异常」账，存档照实标 false', async () => {
     const { fixture, org } = await 起组织();
     try {
-      const id = await 会审节点(org, {}, {});
-      const r = await org.review.checkZeroDivergence({ subject: LEAD, 项目: P, 节点: id });
+      // 空卷 = 结论层与结论都为空。v2 作答必填结论，所以「空卷」只剩结论层为空这一种形态
+      // （judgeZeroDivergence 的空卷判据：结论层 ?? 结论 ⇒ '' 不回落）。
+      const 开 = await org.council.open({ subject: LEAD, 项目: P, 问题: '双空卷', 参与者: ['member-a', 'member-b'] });
+      await org.council.answer({ subject: { id: 'member-a', kind: '成员', roleId: '插件工程' }, 项目: P, id: 开.id, 结论: '甲的独立答案', 结论层: '' });
+      await org.council.answer({ subject: { id: 'member-b', kind: '成员', roleId: '插件工程' }, 项目: P, id: 开.id, 结论: '乙的独立答案', 结论层: '' });
+      await org.council.unlock({ subject: LEAD, 项目: P, id: 开.id });
+      const r = await org.council.converge({ subject: LEAD, 项目: P, id: 开.id });
       assert.equal(r.零分歧, false, '两份空卷 ⇒ 不构成零分歧');
-      assert.equal(r.触发人工抽检, false, '不许触发人工抽检');
-      assert.equal(r.空卷数, 2, '读数要让读者看见「为什么不判」');
-      const 报警行 = (await org.audit.read({})).filter((row) => row.动作 === '零分歧异常' && row.对象?.id === id);
+      assert.match(r.零分歧依据, /空卷 2 份/, '读数要让读者看见「为什么不判」');
+      const 报警行 = (await org.audit.read({})).filter((row) => row.动作 === '零分歧异常' && row.对象?.id === 开.id);
       assert.equal(报警行.length, 0, `空卷会审不许落「零分歧异常」审计；实际 ${JSON.stringify(报警行)}`);
 
       const wb = await runAction({ org, 项目: P, subject: LEAD, 主体: LEAD, args: { action: 'workbench' } });
-      const 行 = wb.数据.会审.find((s) => s.节点 === id);
-      assert.ok(行, '会审行要在投影里');
-      assert.equal(行.零分歧, false, '投影侧同样不判');
-      assert.equal(行.零分歧空卷数, 2, '投影带零分歧空卷数（机械读数，遮罩安全）');
+      const 行 = wb.数据.会审.find((s) => s.id === 开.id);
+      assert.ok(行, '会审存档行要在投影里');
+      assert.equal(行.零分歧, false, '投影侧同样不判（照搬存档布尔）');
+      assert.equal(行.状态, '已收敛');
     } finally {
       await fixture.cleanup();
     }

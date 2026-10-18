@@ -19,15 +19,15 @@
 //   4. 首帧就渲染出一棵非平凡的树（一条数据都没有时也一样）：标题、四个分区全在，
 //      空态文案是「没有需要你决定的事」这类明说的话，不是空白；
 //   5. 装了 remote：调 `/mind dashboard`、解析 JSON、把活数据画上去，并把快照落缓存；
-//      状态条（闸 / 介入度 / 失联四态 / 探针见红）、待你决定的命令、会审的揭名与零分歧都在；
+//      状态条（闸 / 介入度 / 失联四态 / 探针见红）、待你决定的命令、会审的盲评/答案/零分歧都在；
 //   6. remote 缺失 / ctx.get 抛错 / 返回 error / Promise reject / 返回非 JSON /
 //      返回体结构不明 —— 六条降级路径都**不许抛**，且都渲染出「未连接」+ 旧快照；
 //   7. 定位不到会话 id —— 优雅空态，不是抛错、不是空白；
 //   8. 侧边栏入口：只画 svg 标记，点击与文案都归宿主那一行；
 //   9. 时钟：注册 30s 自动刷新，卸载时 clearInterval。
 //  10. 状态条告警：闸不在位 / 已失联 / 已关闭 / 探针见红 —— 读数块进告警样式，不只是换个点色。
-//  11. 会审：未交齐（揭名 false）只出盲标 + 锁行，成员 id 一个都不许出；交齐后两者都给。
-//  12. 零分歧 true 渲染成**异常**，复核三态三档三个类名。
+//  11. 会审：盲评遮罩行只出盲标 + 锁行，成员 id 一个都不许出；已收敛的存档行给成员/结论。
+//  12. 零分歧 true 渲染成**异常**；未收敛显示「未判定」。
 //  13. 失联四态：`在位` 绿 / `已失联` 红 / `已关闭` **不是绿**（本批修的真缺陷）/ `未知` 灰；
 //      旧宿主只给布尔 ⇒ 降级成 `已失联` / `在位`。
 //  14. 设置页：读（remote 收到 `mind presence`、页面显示生效值与来源）、
@@ -207,7 +207,7 @@ export function classNames(tree) {
 /**
  * 按**类名 token** 找元素（按空格切开比对，所以 `dshmind-review` 不会命中 `dshmind-reviews`）。
  * 会审的断言必须落在单张卡片上：同一页里 `member-a` 既可能出现在揭名的那场，
- * 也可能（不该）出现在未揭名的那场，整页文本搜索分不出来。
+ * 也可能（不该）出现在盲评遮罩的那场，整页文本搜索分不出来。
  */
 export function findAllByClass(tree, token) {
   return collect(tree, { skipStyle: true }).elements.filter((el) => {
@@ -521,7 +521,7 @@ export function makeStrictRequire() {
 // ── 样本数据 ──────────────────────────────────────────────────────────────────
 /**
  * 一份**真实形状**的投影（`src/workbench.js` 的 `projectWorkbench` 输出）。
- * 故意包含：闸在位 / 失联`在位` / 探针见红；两种揭名状态的会审；零分歧 true 的一场；
+ * 故意包含：闸在位 / 失联`在位` / 探针见红；作答中（盲评遮罩）与已收敛的会审各若干；零分歧 true/false 各一场；
  * 三种审计档位各一条。这样每条界面断言都有真数据可打。
  *
  * ⚠️ `状态条.失联` 是**四态字符串**（Batch 2 的契约）：`在位` / `已失联` / `已关闭` / `未知`。
@@ -534,7 +534,7 @@ export function sampleView() {
     边界: { 只读: true, 说明: '工作台是投影：它不存储、不做讨论、不做权威记录。' },
     状态条: {
       闸: { 在位: true, 规则数: 5, 错误: null },
-      介入度: '事后抽检',
+      介入度: '预审',
       失联: '在位',
       失联详情: {
         读数: '在位', 已关闭: false, lost: false, hours: 0.5, since: '2026-10-07T16:50:00+08:00',
@@ -581,48 +581,38 @@ export function sampleView() {
     },
     会审: [
       {
-        // 未交齐（2/3）：只许出盲标
-        节点: 't-4', 描述: '双人独立会审：投影字段收敛', 模式: '独立会审', 揭名: false,
-        交卷: { 已交: 2, 应交: 3, 齐: false },
-        独立答案: [
-          { 盲标: '成员 A', 成员: 'member-x1', 结论: '字段够用', 反例面: ['缺视图切片'], 产出物引用: ['artifact-a'] },
-          { 盲标: '成员 B', 成员: 'member-x2', 结论: '缺审计档位', 反例面: [], 产出物引用: [] },
+        // v2 存档形状（council.list）：作答中 + 盲评遮罩 ⇒ 只给盲标，结论区空白。
+        id: 'council-a1', 问题: '双人会审：投影字段收敛', 状态: '作答中', 参与者: ['member-a', 'member-b'],
+        来源会话: 'session-lead-1', 轮次: '0/2', 盲评遮罩: true,
+        答案: [
+          { 成员: '成员 B', 结论: null, 结论层: null, 反例面: [] },
+          { 成员: '成员 A', 结论: null, 结论层: null, 反例面: [] },
         ],
-        分歧清单: ['审计档位是否逐条'], 反例面: ['权限矩阵未覆盖自动派发'],
-        零分歧: false, 零分歧依据: '结论文本不同', 复核三态: '未验', 复核者: 'reviewer-1',
+        分歧清单: [], 结论: null, 零分歧: false,
+        创建于: '2026-10-07T17:00:00+08:00',
       },
       {
-        // 交齐（3/3）且全票一致：揭名，但零分歧要当异常画
-        节点: 't-5', 描述: '会审：审计档位分级', 模式: '独立会审', 揭名: true,
-        交卷: { 已交: 3, 应交: 3, 齐: true },
-        独立答案: [
-          { 盲标: '成员 A', 成员: 'member-a', 结论: '三档划分正确', 反例面: [], 产出物引用: [] },
-          { 盲标: '成员 B', 成员: 'member-b', 结论: '三档划分正确', 反例面: [], 产出物引用: [] },
-          { 盲标: '成员 C', 成员: 'member-c', 结论: '三档划分正确', 反例面: [], 产出物引用: [] },
+        // 已收敛且全票一致：零分歧必须画成**异常信号**（§10 趋同 = 人工抽检）。
+        id: 'council-a2', 问题: '会审：审计档位分级', 状态: '已收敛', 参与者: ['member-a', 'member-b', 'member-c'],
+        来源会话: 'session-lead-2', 轮次: '1/2',
+        答案: [
+          { 成员: 'member-a', 结论: '三档划分正确', 结论层: '方案A', 反例面: [] },
+          { 成员: 'member-b', 结论: '三档划分正确', 结论层: '方案A', 反例面: [] },
+          { 成员: 'member-c', 结论: '三档划分正确', 结论层: '方案A', 反例面: [] },
         ],
-        分歧清单: [], 反例面: [], 零分歧: true, 零分歧依据: '三份结论逐字一致',
-        复核三态: '过', 复核者: 'reviewer-1',
+        分歧清单: [], 结论: '按方案A收敛', 零分歧: true,
+        创建于: '2026-10-07T17:01:00+08:00', 解锁于: '2026-10-07T17:02:00+08:00', 收敛于: '2026-10-07T17:03:00+08:00',
       },
       {
-        节点: 't-6', 描述: '会审：派发后判据冻结', 模式: '独立会审', 揭名: true,
-        交卷: { 已交: 2, 应交: 2, 齐: true },
-        独立答案: [
-          { 盲标: '成员 A', 成员: 'member-d', 结论: '冻结点正确', 反例面: ['边界未覆盖复派'], 产出物引用: [] },
-          { 盲标: '成员 B', 成员: 'member-e', 结论: '冻结点过早', 反例面: [], 产出物引用: [] },
+        // 已收敛但有分歧：零分歧 false 走中性文案，不得拿异常样式。
+        id: 'council-a3', 问题: '会审：派发后判据冻结', 状态: '已收敛', 参与者: ['member-a', 'member-b'],
+        来源会话: 'session-lead-3', 轮次: '2/2',
+        答案: [
+          { 成员: 'member-a', 结论: '冻结点正确', 结论层: '可修', 反例面: ['边界未覆盖复派'] },
+          { 成员: 'member-b', 结论: '冻结点过早', 结论层: '不采纳', 反例面: [] },
         ],
-        分歧清单: ['冻结时点是否该在派发前'], 反例面: ['复派场景未测'],
-        零分歧: false, 零分歧依据: '结论互斥', 复核三态: '不过', 复核者: 'reviewer-2',
-        // ⑮ 强制反对者（2026-10-10）：**投影在行级给这一个键**（有讨论段才给）。
-        // 这一场是「有值」的那一面；t-4 / t-5 没有讨论段 ⇒ 投影不给键 ⇒ 归一化兜底成空串 ⇒ 一个字都不画。
-        // ⚠️ 夹具喂的是**真键** `强制反对者` —— 这才是 `src/workbench.js` 真发的形状
-        //    （收尾⑥·2026-10-10：以前这里喂的是**别名** `dissenter`，于是「真键能渲染」这件事
-        //     只由一条源码文本正则兜着；别名那一路现在**单列一条断言**钉，不许它冒充真键）。
-        讨论: {
-          状态: '讨论中', 轮次: '1/2', 本轮消息数: '1/24',
-          可收敛: false, 可收敛说明: '不可收敛：本轮还有 1 条新分歧未答复；未表态：member-e。',
-          讨论未收敛: true,
-        },
-        强制反对者: 'member-c',
+        分歧清单: ['member-a: 边界未覆盖复派'], 结论: '按可修收敛', 零分歧: false,
+        创建于: '2026-10-07T17:04:00+08:00', 解锁于: '2026-10-07T17:05:00+08:00', 收敛于: '2026-10-07T17:06:00+08:00',
       },
     ],
     审计尾: [
@@ -658,7 +648,7 @@ export function sampleView() {
         ],
       },
       {
-        线程: 't-6', 条数: 5, 未投递: 0, 会审讨论段: true,
+        线程: 'council-a1', 条数: 5, 未投递: 0, 会审讨论段: true,
       },
     ],
   };
@@ -669,7 +659,7 @@ export function alarmingView() {
   const view = sampleView();
   view.状态条 = {
     闸: { 在位: false, 规则数: 0, 错误: '策略引擎未加载' },
-    介入度: '逐条审批',
+    介入度: '审批',
     失联: '已失联',
     失联详情: {
       读数: '已失联', 已关闭: false, lost: true, hours: 100, since: '2026-10-03T10:00:00+08:00',
@@ -751,9 +741,8 @@ export function 半数缺数据的视图() {
 export const DEGRADED_MARKS = [
   '未连接', '未接入', '任务图为空', '没有需要你决定的事', '没有进行中的会审', '审计尾为空',
 ];
-/** 未交齐时的锁行：文案本身就是断言目标（§10 未交齐不揭名）。 */
-export const LOCK_LINE = '🔒 未交齐，讨论保持锁定';
-export const VERDICT_CLASSES = ['dshmind-verdictPass', 'dshmind-verdictFail', 'dshmind-verdictUnverified'];
+/** 盲评期的锁行：文案本身就是断言目标（§10 未交齐不揭名）。 */
+export const LOCK_LINE = '🔒 盲评中：全员交齐并解锁前，此处只显示盲标；揭名后显示成员与结论';
 export const AUDIT_CLASSES = ['dshmind-auditFull', 'dshmind-auditMid', 'dshmind-auditLow'];
 export const ENTRY_LABEL = '心智 · 数字组织';
 /** 设置页分区：与 lib/client.js 里的常量一致（`settings.section` 的注册契约）。 */
@@ -1050,7 +1039,7 @@ export async function runHarness() {
   passed.push(check(c1.text.includes('1 位负责人未见活动'), '派活闭环：执行中节点亮「负责人未见活动」徽章'));
   passed.push(check(c1.text.includes('artifact-1') && c1.text.includes('artifact-2'), '产物引用显示为 chip'));
   passed.push(check(c1.text.includes('活数据'), '页头显示活数据状态'));
-  passed.push(check(c1.text.includes('事后抽检'), '介入度档位可见'));
+  passed.push(check(c1.text.includes('预审'), '介入度档位可见'));
   const marks = DEGRADED_MARKS.filter((m) => c1.text.includes(m));
   passed.push(check(marks.length === 0, '全量数据下不出现任何降级占位文本', marks.join(',')));
 
@@ -1109,32 +1098,28 @@ export async function runHarness() {
   passed.push(check(c1.text.includes('记忆 存量 12 · 近7天 +3（晋升 1）'),
     '页脚给记忆验账读数（存量 + 近7天新增 + 晋升）'));
 
-  // ③c 会审：未交齐只出盲标 + 锁行（成员 id 一个都不许出）
+  // ③c 会审（v2 存档形状）：盲评期只出盲标 + 锁行；已收敛行给答案/分歧/结论/零分歧。
   const cards = findAllByClass(r1.tree, 'dshmind-review');
   passed.push(check(cards.length === 3, '三场会审各一张卡', String(cards.length)));
   const hidden = textOf(cards[0]);
-  passed.push(check(hidden.includes('成员 A') && hidden.includes('成员 B'), '未交齐的会审仍给盲标'));
-  passed.push(check(hidden.includes(LOCK_LINE), '未交齐的会审给锁行「' + LOCK_LINE + '」'));
-  passed.push(check(!hidden.includes('member-x1') && !hidden.includes('member-x2'),
-    '揭名 false 时成员 id 一个都不许出现在那张卡里', hidden.slice(0, 80)));
-  passed.push(check(!c1.text.includes('member-x1') && !c1.text.includes('member-x2'),
-    '揭名 false 的成员 id 在整页都不许出现'));
-  passed.push(check(hidden.includes('2/3 未齐'), '交卷进度按 `2/3 未齐` 显示'));
-  // ⚠️ 优化批③（2026-10-10）改过这一段的读法（理由留在断言里，不是把历史的红偷偷删掉）：
-  // 独立答案现在默认「首场展开、其余折叠」——第二场的盲标/成员 id 要**点开**才在。
-  // 揭名口径没变：折叠摘要只给盲标；点开后盲标与成员 id 都给（下面点开后再验）。
+  passed.push(check(hidden.includes('成员 A') && hidden.includes('成员 B'), '盲评期的会审仍给盲标（服务层遮罩后的字段）'));
+  passed.push(check(hidden.includes(LOCK_LINE), '盲评期的会审给锁行「' + LOCK_LINE + '」'));
+  passed.push(check(!hidden.includes('member-a') && !hidden.includes('member-b'),
+    '盲评期成员 id 一个都不许出现在那张卡里', hidden.slice(0, 80)));
+  passed.push(check(hidden.includes('参与者 2'), '参与者数按存档显示'));
+  passed.push(check(hidden.includes('轮次 0/2'), '轮次按存档 `已用/上限` 显示'));
+  // 答案折叠：首场展开、其余一行摘要（摘要不出结论；展开后才出）。
   passed.push(check(findAllByClass(cards[0], 'dshmind-answers').length === 1,
-    '③ 首场会审默认展开独立答案（dshmind-answers 在）'));
-  passed.push(check(textOf(cards[0]).includes('字段够用') && textOf(cards[0]).includes('缺审计档位'),
-    '③ 展开的那场给每份结论文本'));
+    '③ 首场会审默认展开答案（dshmind-answers 在）'));
+  passed.push(check(!hidden.includes('三档划分正确') && !hidden.includes('（无结论）'),
+    '盲评卡一份结论文本都不出，也不补「（无结论）」假占位'));
   passed.push(check(findAllByClass(cards[1], 'dshmind-answers').length === 0
-    && textOf(cards[1]).includes('独立答案 3 份'),
-    '③ 第二场默认折叠：一行摘要，不铺独立答案'));
-  passed.push(check(textOf(cards[1]).includes('成员 A') && !textOf(cards[1]).includes('member-a'),
-    '③ 折叠摘要只给盲标不出成员 id（揭名口径不因折叠放宽）', textOf(cards[1]).slice(0, 80)));
+    && textOf(cards[1]).includes('答案 3 份'),
+    '③ 第二场默认折叠：一行摘要，不铺答案'));
+  passed.push(check(!textOf(cards[1]).includes('三档划分正确'), '③ 折叠摘要不把结论文本搬出来'));
   const 二场切换钮 = collect(r1.tree, { skipStyle: true }).elements
     .find((el) => el.type === 'button' && String(el.props.className || '').indexOf('dshmind-toggle') >= 0
-      && textOf(el).includes('独立答案 3 份'));
+      && textOf(el).includes('答案 3 份'));
   passed.push(check(!!二场切换钮, '③ 折叠场有切换钮（button，不是别的可点元素）'));
   // 走真实 onClick（不是直接调内部函数）：点开 ⇒ 展开；每一步后重新取元素（旧快照握着旧闭包）。
   const 请求前 = spy.calls.length;
@@ -1143,73 +1128,51 @@ export async function runHarness() {
   r1.flush();
   const cards点开 = findAllByClass(r1.tree, 'dshmind-review');
   const shown = textOf(cards点开[1]);
-  passed.push(check(shown.includes('成员 A') && shown.includes('member-a') && shown.includes('member-c'),
-    '揭名 true 时盲标与成员 id 都给（点开折叠后）'));
-  passed.push(check(!shown.includes(LOCK_LINE), '交齐的会审没有锁行'));
-  passed.push(check(shown.includes('3/3 齐'), '交齐的会审显示 `3/3 齐`'));
-  // 再点一下收回去：覆盖表取反，摘要回来、全文消失；首场不受影响（按节点 id 记，不按位置记）。
+  passed.push(check(shown.includes('member-a') && shown.includes('member-b') && shown.includes('member-c'),
+    '揭名（已收敛）后答案给真成员 id'));
+  passed.push(check(shown.includes('三档划分正确'), '揭名卡展开后给每份结论文本'));
+  passed.push(check(!shown.includes(LOCK_LINE), '已收敛的会审没有盲评锁行'));
+  passed.push(check(shown.includes('已收敛'), '状态徽章按存档状态显示'));
+  // 再点一下收回去：覆盖表取反，摘要回来、全文消失；首场不受影响（按会审 id 记，不按位置记）。
   const 二场切换钮2 = collect(r1.tree, { skipStyle: true }).elements
     .find((el) => el.type === 'button' && String(el.props.className || '').indexOf('dshmind-toggle') >= 0
-      && textOf(el).includes('独立答案 3 份'));
+      && textOf(el).includes('答案 3 份'));
   二场切换钮2.props.onClick();
   await settle();
   r1.flush();
   const cards收起 = findAllByClass(r1.tree, 'dshmind-review');
   passed.push(check(findAllByClass(cards收起[1], 'dshmind-answers').length === 0
-    && textOf(cards收起[1]).includes('独立答案 3 份'),
+    && textOf(cards收起[1]).includes('答案 3 份'),
     '③ 再点一下收回去（覆盖表取反，摘要回来）'));
   passed.push(check(findAllByClass(cards收起[0], 'dshmind-answers').length === 1,
-    '③ 切换按会话节点 id 记：首场仍是展开'));
+    '③ 切换按会审 id 记：首场仍是展开'));
   // 零请求：折叠切换是纯显示动作——两次点击之间一个命令都不许发（「不是写动作」的真判据）。
   passed.push(check(spy.calls.length === 请求前,
     '③ 折叠切换不发任何请求（纯显示切换，不是写动作）', String(spy.calls.length - 请求前)));
-  passed.push(check(shown.includes('分歧清单') === false && shown.includes('零分歧'), '零分歧那一场照旧报出零分歧'));
-  passed.push(check(textOf(cards[0]).includes('分歧清单：审计档位是否逐条'), '分歧清单渲染出来'));
-  passed.push(check(textOf(cards[0]).includes('反例面：权限矩阵未覆盖自动派发'), '会审级反例面渲染出来'));
+  // 分歧清单/结论只来自存档字段，原样渲染；答案级反例面要展开第三场才在（默认折叠）。
+  passed.push(check(textOf(cards[2]).includes('分歧清单：member-a: 边界未覆盖复派'), '分歧清单渲染出来'));
+  passed.push(check(textOf(cards[2]).includes('结论：按可修收敛'), '收敛结论渲染出来'));
+  passed.push(check(textOf(cards[2]).includes('来源会话：session-lead-3'), '来源会话照实显示（会话绑定）'));
+  const 三场切换钮 = findAllByClass(findAllByClass(r1.tree, 'dshmind-review')[2], 'dshmind-toggle')[0];
+  passed.push(check(!!三场切换钮, '第三场有答案切换钮'));
+  三场切换钮.props.onClick();
+  await settle();
+  r1.flush();
+  const cards三 = findAllByClass(r1.tree, 'dshmind-review');
+  passed.push(check(textOf(cards三[2]).includes('反例面：边界未覆盖复派'), '答案反例面渲染出来（展开后）'));
+  passed.push(check(textOf(cards三[2]).includes('可修'), '结论层 chip 照存档显示'));
 
-  // ③c′ ⑮ 强制反对者（2026-10-10）：讨论那一行**有值才画**——t-6 有讨论段且指定了人，
-  //     所以画出来；t-4 / t-5 投影里没有这个键（没讨论段）⇒ 一个字都不许多画。
-  //     夹具喂的是**真键**（收尾⑥）：这一条钉的是「投影真发的形状能被渲染」。
-  passed.push(check(textOf(cards[2]).includes('强制反对者：member-c'),
-    '指定了强制反对者的会审卡上画出来（真键 强制反对者）'));
-  const 反对者句 = textOf(cards[2]).split('\n').filter((t) => t.indexOf('强制反对者') >= 0);
-  passed.push(check(反对者句.length === 1, '强制反对者恰好显示一次（不重复画）', String(反对者句.length)));
-  passed.push(check(!textOf(cards[0]).includes('强制反对者') && !textOf(cards[1]).includes('强制反对者'),
-    '没有讨论段的会审卡一个「强制反对者」都不画（不给空壳读数）'));
-
-  // ③c″ 别名那一路**单列两条**钉它（收尾⑥）：别名只是兼容旧投影的读法，
-  //      不许它冒充真键 —— 所以这两条**专门**喂一份只有别名、没有真键的投影（有值 / 空串各一条）。
-  //      真键那一路的「空串 ⇒ 一个字都不画」由 `client.test.js` 的行为判据钉（那边直接拿真键喂 ''）。
-  const 别名视图 = sampleView();
-  const 别名行 = 别名视图.会审.find((r) => r.节点 === 't-6');
-  delete 别名行.强制反对者;
-  别名行.dissenter = 'member-c';
-  const 别名页 = await renderView(别名视图);
-  passed.push(check(别名页.text.includes('强制反对者：member-c'),
-    '别名 dissenter 单独喂（没有真键）也归一化画出来 —— 别名只作兼容'));
-  const 别名空 = sampleView();
-  const 别名空行 = 别名空.会审.find((r) => r.节点 === 't-6');
-  delete 别名空行.强制反对者; // 真键在时它先被读到（firstOf 的顺序），要单独验别名就得把它摘掉
-  别名空行.dissenter = '';
-  const 别名空页 = await renderView(别名空);
-  passed.push(check(!别名空页.text.includes('强制反对者'),
-    '别名给空串同样一个字都不画（别名不是「有键就画」）'));
-
-  // ③d 零分歧是异常，不是好消息；复核三态三档三样
+  // ③d 零分歧是异常，不是好消息。三态：已收敛 true=异常 / 已收敛 false=中性 / 未收敛=未判定。
   const anomaly = findAllByClass(r1.tree, 'dshmind-anomaly');
   passed.push(check(anomaly.length === 1, '零分歧 true 恰好一场，且拿异常样式', String(anomaly.length)));
   passed.push(check(textOf(cards[1]).includes('零分歧') && textOf(cards[1]).includes('异常信号'),
     '零分歧 true 渲染成异常信号（§10 全票一致 = 趋同）'));
-  passed.push(check(textOf(cards[1]).includes('依据：三份结论逐字一致'), '零分歧带依据'));
-  passed.push(check(textOf(cards[0]).includes('存在分歧（正常）'),
+  passed.push(check(textOf(cards[0]).includes('未判定'), '未收敛不编造「存在分歧」——零分歧是未判定'));
+  passed.push(check(!textOf(cards[0]).includes('存在分歧（正常）'), '未收敛绝不画成存在分歧'));
+  passed.push(check(textOf(cards[2]).includes('存在分歧（正常）'),
     '零分歧 false 走中性文案，与异常长得不一样'));
+  passed.push(check(!textOf(cards[2]).includes('异常信号'), '有分歧的场次不许拿异常文案'));
   const classes = classNames(r1.tree);
-  for (const verdict of VERDICT_CLASSES) {
-    passed.push(check(classes.some((c) => c.split(/\s+/).indexOf(verdict) >= 0),
-      '复核三态各有独立样式类 ' + verdict));
-  }
-  passed.push(check(textOf(cards[0]).includes('复核 未验'), '未验照原样显示，不是通过'));
-  passed.push(check(textOf(cards[2]).includes('复核 不过'), '不过照原样显示'));
   for (const audit of AUDIT_CLASSES) {
     passed.push(check(classes.some((c) => c.split(/\s+/).indexOf(audit) >= 0),
       '审计档位各有独立样式类 ' + audit));
@@ -1455,8 +1418,11 @@ export async function runHarness() {
     '① 一次都没有再碰旧通道 remote.commands.execute'));
   passed.push(check(设置文本.includes('生效期限 72 小时') && 设置文本.includes('期限来自 出厂'),
     '⑤ 页面显示生效值与来源（生效期限 + 由哪一层给的）', 设置文本.slice(0, 140)));
-  passed.push(check(设置文本.includes('期限 出厂') && 设置文本.includes('开关 出厂'),
-    '⑤ 页面把两个键的来源都显示出来'));
+  passed.push(check(设置文本.includes('期限来自 出厂') && 设置文本.includes('开关来自 出厂'),
+    '⑤ 页面把两个键的来源都显示出来（2026-10-17 改形：独立的「来源」行并入「当前生效值」一行，'
+    + '同一份信息不再排两遍；断言词随之从「期限 出厂 · 开关 出厂」换成附注里的「期限来自/开关来自」）'));
+  passed.push(check(设置文本.includes('私有 ＞ 出厂 ＞ 内置兜底'),
+    '⑤ 生效值层序说明仍在（挪进顶部 lede，不丢信息）'));
   passed.push(check(设置文本.includes('失联保险 开'),
     '⑤ 页面显示「失联限制」的生效值（真源 = 读数里的布尔），且用新词「失联保险」'));
   passed.push(check(设置文本.includes('心智'), '⑤ 设置页有标题'));
@@ -1474,7 +1440,9 @@ export async function runHarness() {
     const renderer = mountSettings(booted);
     const 文本 = await textAfterLoad(renderer);
     const 格 = findAllByClass(renderer.tree, 'dshmind-set__row').find((el) => textOf(el).indexOf('当前生效值') >= 0);
-    const 点 = 格 ? findAllByClass(格, 'dshmind-dot')[0] : null;
+    // 2026-10-17 改形：设置页的点改用**自己的** `dshmind-set__dot`（看板的 `dshmind-dot` 规则住在
+    // 看板子树的 <style> 里，看板没挂载时对设置页不存在 —— 真机截图实测点没有尺寸）。
+    const 点 = 格 ? findAllByClass(格, 'dshmind-set__dot')[0] : null;
     renderer.unmount();
     return { 文本, 行文本: 格 ? textOf(格) : '', 点色: 点 ? 点.props.style.background : null, name };
   };
@@ -1949,12 +1917,81 @@ export async function runHarness() {
       && el.props.className.split(/\s+/).indexOf('dshmind-set__notice') >= 0).length;
     passed.push(check(未接元素数 === 1,
       '⑪ 未接入提示收成紧凑一条（1 个容器块，不是一整屏告警）', String(未接元素数)));
+
+    // ═══ ⑬ 2026-10-17 设置页优化批：视觉收口的行为判据 ═══
+    // 背景：真机截图（`_settings_shot` 装置，离线渲染**真实组件**）钉出的五个面 ——
+    // 态点无尺寸（借看板类名，看板没挂载就不存在）/ 两分区无分隔 / 来源信息排两遍 /
+    // 长文本输入被右栏定宽挤断 / 未接入时表单仍可编辑（硬编码草稿冒充读数）。
+    {
+      // ⑬a 态点有自己的基础规则且**带尺寸**。
+      const 点规则 = 基础规则体('dshmind-set__dot');
+      passed.push(check(/width\s*:/.test(点规则) && /height\s*:/.test(点规则),
+        '⑬ 设置页态点有自己的基础规则且带尺寸（不再借看板的 .dshmind-dot）', 点规则.slice(0, 80)));
+      // ⑬b 分区边界：调度授权区有 section 分隔规则与 subtitle 标题层级，
+      //     且 DOM **真的挂上**这些类（只验 CSS 在源里，DOM 不挂照样绿 —— 空转）。
+      const 全元素 = collect(常驻.renderer.tree, { skipStyle: true }).elements;
+      const 调度节 = 全元素.find((el) => el.props['data-dshmind'] === 'delegation-settings');
+      const 副题 = 全元素.find((el) => el.type === 'h3' && String(el.props.children).indexOf('Lead 调度授权') >= 0);
+      passed.push(check(基础规则体('dshmind-set__section').indexOf('border-top') >= 0
+        && 基础规则体('dshmind-set__subtitle') !== ''
+        && !!调度节 && String(调度节.props.className || '').split(/\s+/).indexOf('dshmind-set__section') >= 0
+        && !!副题 && String(副题.props.className || '').split(/\s+/).indexOf('dshmind-set__subtitle') >= 0,
+        '⑬ 调度授权区有看得见的分区边界（section 分隔线 + subtitle 标题层级，CSS 与 DOM 两面都验）'));
+      // ⑬c 长文本字段行走上下排变体：输入框吃满行宽，不再被右栏定宽挤断。
+      const 字段框 = 全元素.filter((el) => el.type === 'input'
+        && String(el.props['aria-label'] || '').indexOf('授权') === 0);
+      passed.push(check(字段框.length === 2
+        && 字段框.every((el) => String(el.props.className).split(/\s+/).indexOf('dshmind-set__text') >= 0),
+        '⑬ 授权项目/授权依据输入框带 dshmind-set__text（吃满行宽）',
+        JSON.stringify(字段框.map((el) => el.props.className))));
+      const 字段行 = 全元素.filter((el) => String(el.props.className || '').split(/\s+/).indexOf('dshmind-set__row--field') >= 0);
+      passed.push(check(字段行.length === 2, '⑬ 两个长文本字段行都挂上下排变体（dshmind-set__row--field）', String(字段行.length)));
+      // ⑬d 未接入时表单禁用：没有回读真源，框里只是硬编码草稿，不许再让人编它冒充读数；
+      //     「重新读取」是唯一该亮的操作（它是恢复动作）。
+      const 离线控 = 未接.元素().filter((el) => ['select', 'input', 'button'].indexOf(el.type) >= 0);
+      const 离线保存 = 离线控.find((el) => el.type === 'button' && String(el.props.children).indexOf('保存') >= 0);
+      const 离线重读 = 离线控.find((el) => el.type === 'button' && String(el.props.children) === '重新读取');
+      passed.push(check(离线控.filter((el) => el.type !== 'button').every((el) => el.props.disabled === true)
+        && !!离线保存 && 离线保存.props.disabled === true,
+        '⑬ 未接入态：失联保险表单与「保存」全部禁用（草稿不许冒充读数）',
+        JSON.stringify(离线控.map((el) => el.type + ':' + String(el.props.disabled)))));
+      passed.push(check(!!离线重读 && 离线重读.props.disabled !== true,
+        '⑬ 未接入态「重新读取」保持可用（它是唯一的恢复动作）'));
+      // P1-11：未接入时不许把写死初值（是/72）画成读数——控件值必须为空 + 「未读到」占位。
+      const 离线开关 = 未接.元素().find((el) => el.props['aria-label'] === '失联保险');
+      const 离线小时 = 未接.元素().find((el) => el.props['aria-label'] === '响应期限小时');
+      passed.push(check(!!离线开关 && 离线开关.props.value === ''
+        && !!离线小时 && 离线小时.props.value === '' && String(离线小时.props.placeholder).indexOf('未读到') >= 0,
+        'P1-11：未接入态不显示写死的 是/72（值清空 + 未读到占位）',
+        JSON.stringify({ 开关: 离线开关?.props.value, 小时: 离线小时?.props.value })));
+      // ⑬e 页脚恰好一处且排在调度授权区**之后**（原来夹在两区中间，把第二区标题顶得没有喘息）。
+      const 足 = 全元素.filter((el) => el.props.className === 'dshmind-set__foot');
+      const 调度区 = 全元素.findIndex((el) => el.props['data-dshmind'] === 'delegation-settings');
+      const 足位 = 全元素.findIndex((el) => el.props.className === 'dshmind-set__foot');
+      passed.push(check(足.length === 1 && 调度区 >= 0 && 足位 > 调度区,
+        '⑬ 页脚恰好一处且排在调度授权区之后', JSON.stringify({ 足: 足.length, 调度区, 足位 })));
+      // ⑬f 「关闭」收在页脚里（整页动作的落点在页尾，不再停在页面中段的操作行）。
+      const 足内钮 = 足.length ? collect(足[0], { skipStyle: true }).elements.filter((el) => el.type === 'button') : [];
+      passed.push(check(足内钮.length === 1 && String(足内钮[0].props.children) === '关闭',
+        '⑬ 「关闭」收在页脚右端', JSON.stringify(足内钮.map((el) => String(el.props.children)))));
+      // ⑬g Enter 旁路也守住「未接入不写」：按钮禁用挡得住指针，挡不住输入框里的回车。
+      const 离线输入 = 未接.元素().find((el) => el.type === 'input');
+      离线输入.props.onKeyDown({ key: 'Enter' });
+      await settle();
+      未接.renderer.flush();
+      const 拦截文本 = collect(未接.renderer.tree, { skipStyle: true }).text;
+      passed.push(check(拦截文本.indexOf('还没读到当前设置') >= 0 && 拦截文本.indexOf('没写进去') >= 0,
+        '⑬ 未接入时 Enter 保存被本地拦截，明说「还没读到当前设置」（不是"宿主拒绝了"那种泛话）',
+        拦截文本.slice(-160)));
+    }
     未接.renderer.unmount();
 
     // ⑫ **不渲染空容器**：有我们的类名、却既没文本也没控件的块 = 版面上的"空框"。
     //    主人截图右侧那个圆角空框，第一件要做的事就是排除它是不是我们自己画的。
     const 空块 = (元素) => 元素.filter((el) => {
       if (typeof el.props.className !== 'string' || el.props.className.indexOf('dshmind-set__') !== 0) return false;
+      // 态点（dshmind-set__dot）是**纯视觉标记**：无文本无控件是它的本分，不是空框（2026-10-17 优化批新增）。
+      if (el.props.className.split(/\s+/).indexOf('dshmind-set__dot') >= 0) return false;
       const 子 = collect(el, { skipStyle: true });
       const 有控件 = 子.elements.some((x) => ['button', 'select', 'input'].indexOf(x.type) >= 0);
       return 子.text.trim() === '' && !有控件;
@@ -1989,8 +2026,8 @@ export async function runHarness() {
   const 全空 = await renderView(全空视图);
   passed.push(check(全空.text.includes('没有需要你决定的事') && 全空.text.includes('没有进行中的会审')
     && 全空.text.includes('任务图为空'), '① 空态仍是明说的一句话（原有措辞保留）'));
-  passed.push(check(全空.text.includes('task_pending') && 全空.text.includes('task_submit')
-    && 全空.text.includes('task_create'), '① 三块空态各给一条真命令（task_pending / task_submit / task_create）'));
+  passed.push(check(全空.text.includes('task_pending') && 全空.text.includes('debate_open')
+    && 全空.text.includes('task_create'), '① 三块空态各给一条真命令（task_pending / debate_open / task_create）'));
   const 引导命令 = 全空.elements.filter((el) => el.type === 'code'
     && String(el.props.className || '').indexOf('dshmind-cmd') >= 0);
   passed.push(check(引导命令.length === 3, '① 引导命令用等宽可选中的 code 块（恰好三条，不给按钮）',
@@ -2129,6 +2166,10 @@ export async function runHarness() {
 
   // ⑥d 保存抬水位（2026-10-12 评审批次5）：保存链不走 刷新设置 ⇒ 修前在途的轮询响应
   //   回来后把「刚保存的回读」盖回旧值（「已保存」闪现后消失）。现在保存成功先占号抬水位。
+  // ⚠️ 2026-10-17 优化批改形：未接入（含首读未回）时保存**禁用且本地拦截**——框里只是
+  //   硬编码草稿，拿它写等于替盘上瞎编。于是竞态的造法跟着变：原来让**首读**慢（保存时
+  //   还没有读数），现在首读先到位（72）→ 点「重新读取」起一次**慢的轮询读**挂着 → 再保存。
+  //   被测性质不变：保存抬水位，在途的更旧的响应回来时不许盖掉刚保存的回读。
   {
     const 保存后袋 = 真读数('在位');
     保存后袋.生效响应期限小时 = 168; // 可观察标记：保存后页面应稳定显示「生效期限 168 小时」
@@ -2139,9 +2180,11 @@ export async function runHarness() {
     const 桥 = makeRemote(function (_sessionId, 命令) {
       if (命令 === PRESENCE_COMMAND) {
         读第几次 += 1;
-        if (读第几次 === 1) {
+        if (读第几次 === 2) {
+          // 第二次读（点「重新读取」起的那次）挂起，由测试手动放行 —— 它就是那个"慢轮询"。
           return new Promise(function (resolve) { 放行慢读.push(function () { resolve(okReply({ 读数: 旧袋, 设置文件: SETTINGS_FILE, 说明: '读：慢' })); }); });
         }
+        if (读第几次 === 1) return okReply({ 读数: 旧袋, 设置文件: SETTINGS_FILE, 说明: '读：首读' });
         return okReply({ 读数: 保存后袋, 设置文件: SETTINGS_FILE, 说明: '读：回读' });
       }
       if (命令.indexOf(PRESENCE_COMMAND + ' ') === 0) {
@@ -2150,10 +2193,17 @@ export async function runHarness() {
       return okReply(sampleView());
     });
     const 双轨 = boot({ store, services: Object.assign(session(), { remote: 桥.remote }) });
-    await settle(); // 起轮询的第一次设置读（72，慢）正挂着
+    await settle(); // 首读（72）落地
     const sr双 = mountSettings(双轨);
     await settle();
-    // 点保存（表单初值此时未定也无所谓：显式改成 168 再存）
+    sr双.flush();
+    // 前提：首读已到位，表单与保存都可用（2026-10-17 起未接入时禁用）。
+    const 就绪文本 = collect(sr双.tree, { skipStyle: true }).text;
+    passed.push(check(就绪文本.indexOf('生效期限 72 小时') >= 0, '⑥d 前提：首读落地（显示 72）', 就绪文本.slice(-160)));
+    // 点「重新读取」起一次慢读（72，挂着），再改值保存。
+    collect(sr双.tree, { skipStyle: true }).elements
+      .find((el) => el.type === 'button' && String(el.props.children) === '重新读取').props.onClick();
+    await settle();
     collect(sr双.tree, { skipStyle: true }).elements.find((el) => el.type === 'input')
       .props.onChange({ target: { value: '168' } });
     sr双.flush();
@@ -2304,7 +2354,7 @@ export async function runHarness() {
     // ⑩d 描述展开钮：**行为**断言（走真实 onClick）。放在这里是因为要用 `状态render`
     //     （共享 store、不 unmount、带 flush）；`renderView` 挂载后立刻 unmount，
     //     返回静态快照，点了看不到变化。
-    //     体例照 ③「独立答案折叠」：点开验展开、再点验收回、每步重新取元素。
+    //     体例照 ③「答案折叠」：点开验展开、再点验收回、每步重新取元素。
     {
       const r10 = await 状态render(sampleView());
       const 钮10 = findAllByClass(r10.tree, 'dshmind-descToggle')[0];
@@ -2546,8 +2596,8 @@ export async function runHarness() {
     // 介入度那格：**只显示当前生效的那一档**（一个值），而且不带边框/背景/光标。
     const 各格 = 状态条各格(面板.tree);
     const 介入格 = 各格.find((g) => g.键 === '介入度档位');
-    passed.push(check(!!介入格 && 介入格.文本.indexOf('事后抽检') >= 0 && 介入格.文本.indexOf('零参与') < 0
-      && 介入格.文本.indexOf('变更预审') < 0 && 介入格.文本.indexOf('逐条审批') < 0,
+    passed.push(check(!!介入格 && 介入格.文本.indexOf('预审') >= 0 && 介入格.文本.indexOf('放权') < 0
+      && 介入格.文本.indexOf('变更预审') < 0 && 介入格.文本.indexOf('审批') < 0,
       '① 介入度只显示当前生效那一档（其余三档不出现）', 介入格 ? 介入格.文本 : '(缺)'));
     passed.push(check(!!介入格 && collect(介入格.元素).elements.every((el) => !el.props.onClick
       && (!el.props.style || el.props.style.cursor === undefined)),
@@ -2918,12 +2968,13 @@ export async function runHarness() {
     }
 
     // ④ 保存链超时 ⇒ 按钮**不永久「保存中」**，并明说「没写进去」。
-    let 第几次 = 0;
+    // ⚠️ 2026-10-17 优化批改形：处理器原来按**次数**路由（第 1 次正常、之后挂死），
+    //    隐含假设「第一次命令一定是 presence 读」。调度授权区挂载后也发 GET，谁先谁后
+    //    不是这条用例想测的东西 —— 改成按**命令**路由：presence 读正常、写与其它挂死。
+    //    （保存现在在未接入时会被本地拦截，读数必须先到位，按命令路由正好保证这一点。）
     const 保存挂死 = boot({ store, services: Object.assign(session(), {
-      remote: makeRemote(() => {
-        第几次 += 1;
-        // 第一次（读）正常返回；之后（写命令 + 回读）全部挂死 ⇒ 保存链卡住。
-        if (第几次 === 1) return okReply({ 读数: 读数袋(), 设置文件: SETTINGS_FILE, 说明: '读…' });
+      remote: makeRemote((sessionId, command) => {
+        if (command === PRESENCE_COMMAND) return okReply({ 读数: 读数袋(), 设置文件: SETTINGS_FILE, 说明: '读…' });
         return new Promise(() => {});
       }).remote,
     }) });
@@ -3666,7 +3717,7 @@ export async function runHarness() {
         const 节点们 = (漏项.任务 && 漏项.任务.节点) || [];
         漏项.任务 = Object.assign({}, 漏项.任务, {
           节点: 节点们.concat([{
-            id: 'task-存档-9', 描述: '存档节点', 状态: '已派发', 负责人: ['插件工程'], 模式: '独立会审',
+            id: 'task-存档-9', 描述: '存档节点', 状态: '已派发', 负责人: ['插件工程'], 模式: '并行分担',
             判据: [], 判据冻结: true, 依赖: [], 打回次数: 0, 产物: [],
             交卷: { 已交: 0, 应交: 1, 齐: false }, 待决原因: '负责人实例消亡，待裁决处置（作废/存档）',
           }]),
@@ -3749,7 +3800,7 @@ export async function runHarness() {
         const 孤儿 = 接线视图();
         const 孤儿节点 = (孤儿.任务 && 孤儿.任务.节点) || [];
         const 造一条 = (id, 原因) => ({
-          id, 描述: '存档节点' + id, 状态: '已派发', 负责人: ['插件工程'], 模式: '独立会审',
+          id, 描述: '存档节点' + id, 状态: '已派发', 负责人: ['插件工程'], 模式: '并行分担',
           判据: [], 判据冻结: true, 依赖: [], 打回次数: 0, 产物: [],
           交卷: { 已交: 0, 应交: 1, 齐: false }, 待决原因: 原因,
         });
@@ -3850,6 +3901,28 @@ export async function runHarness() {
       }
       r11.unmount();
     }
+  }
+
+  {
+    const historyView = sampleView();
+    historyView.待你决定 = [];
+    historyView.任务 = { 总数: 2, 只读历史数: 1, 现行未结账数: 1, 节点: [
+      { id: 'task-readonly-history', 描述: '历史只读记录', 状态: '已采纳', 模式: '独立会审', 只读历史: true,
+        写入说明: '原记录保留且不提供写入口', 负责人: ['old-owner'], 判据: ['原判据'], 判据冻结: false,
+        打回次数: 2, 升级: true, 负责人无活动: ['old-owner'], 待决原因: '旧说明保留但不催办' },
+      { id: 'task-current-followup', 描述: '现行记录', 状态: '已派发', 负责人: ['owner'], 判据: ['判据'],
+        待决原因: '现行说明仍需关注', 判据冻结: true },
+    ] };
+    const rendered = await renderView(historyView);
+    const historicalCard = findAllByClass(rendered.tree, 'dshmind-node').find(el => textOf(el).includes('task-readonly-history'));
+    const historicalText = historicalCard ? textOf(historicalCard) : '';
+    passed.push(check(historicalText.includes('只读历史') && historicalText.includes('已采纳'), '历史任务卡明确只读且保留原状态'));
+    passed.push(check(historicalText.includes('历史判据 · 只读') && !historicalText.includes('判据可改'), '历史任务卡不把原冻结标记误画为可改判据'));
+    passed.push(check(!historicalText.includes('升级主权者') && !historicalText.includes('负责人未见活动') && !String(historicalCard?.props.className).includes('nodeEscalated'), '历史任务卡不催升级或实例活动'));
+    passed.push(check(historicalText.includes('历史待决说明（只读）：') && historicalText.includes('旧说明保留但不催办'), '历史待决说明保全文但标注只读'));
+    passed.push(check(rendered.text.includes('只读历史 1 · 现行未结账 1'), '任务区消费历史与现行计数而不拿总账差值当待办'));
+    const attention = findAllByClass(rendered.tree, 'dshmind-attnCard').find(el => textOf(el).includes('挂有待决说明'));
+    passed.push(check(attention && textOf(attention).includes('task-current-followup') && !textOf(attention).includes('task-readonly-history'), '只读历史不进挂待决注意力旁路且正常现行不漏'));
   }
 
   return { passed, liveElements: c1.elements.length, liveTexts: c1.texts.length };

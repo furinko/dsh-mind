@@ -6,7 +6,7 @@
  */
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeFixture, SOVEREIGN, LEAD, MEMBER, REVIEWER, writeUnder } from './helpers.mjs';
+import { makeFixture, SOVEREIGN, LEAD, MEMBER, REVIEWER, writeUnder, 钉Lead } from './helpers.mjs';
 import { Denied, Fault, NeedsApproval } from '../src/kernel/errors.js';
 
 /** @type {Awaited<ReturnType<typeof makeFixture>>} */
@@ -61,7 +61,9 @@ describe('策略引擎', () => {
   });
 
   it('自治档：组织自决；成员任务内全权、任务外无', async () => {
-    const target = { id: 'cap-x', kind: '能力', authority: '自治' };
+    // （v2 条目15：成员任务内也不得改**能力库**——「任务内全权」管的是任务产物。
+    //  这一格的载体换成成员合法的写面：记忆。判据本身——任务内放行 / 任务外与别人任务拒——不变。）
+    const target = { id: 'mem-x', kind: '记忆', authority: '自治' };
     assert.equal((await 判定(LEAD, 'write', target)).verdict, 'allow');
     assert.equal((await 判定(MEMBER, 'write', target, { task: { 负责人: 'member-a' } })).verdict, 'allow');
     const 任务外 = await 判定(MEMBER, 'write', target);
@@ -69,14 +71,21 @@ describe('策略引擎', () => {
     assert.match(任务外.reason, /任务外无/);
     const 他人任务 = await 判定(MEMBER, 'write', target, { task: { 负责人: 'member-b' } });
     assert.equal(他人任务.verdict, 'deny');
+    // 同一成员对能力库：任务内也拒（条目15 的硬边界）。
+    const 能力库 = await 判定(MEMBER, 'write', { id: 'cap-x', kind: '能力', authority: '自治' }, { task: { 负责人: 'member-a' } });
+    assert.equal(能力库.verdict, 'deny', '成员任务内也不得改能力库（v2 条目15）');
   });
 
-  it('介入度只影响自治档：变更预审要主权者点头，立宪立法不受影响', async () => {
+  it('介入度只影响自治档：预审档的高风险写要主权者点头，立宪立法不受影响', async () => {
     // 响应期限的两个键归 `presence`（夹具的 defaults 只写 介入度.json，传它会直接抛错）。
-    const gated = await makeFixture({ defaults: { 介入度: '变更预审' } });
+    const gated = await makeFixture({ defaults: { 介入度: '预审' } });
+    // 发布能力在高风险清单里 ⇒ confirm；低风险写（任务）直落。
     const 自治 = await gated.policy.decide({ subject: LEAD, action: 'write', target: { id: 'c', kind: '能力', authority: '自治' } });
     assert.equal(自治.verdict, 'confirm');
     assert.equal(自治.requireAuthority, '主权者');
+    assert.equal(自治.detail?.介入挂起, true, '预审拦下的写带挂起标记（工作台从审计投影）');
+    const 低风险 = await gated.policy.decide({ subject: LEAD, action: 'write', target: { id: 't', kind: '任务', authority: '自治' } });
+    assert.equal(低风险.verdict, 'allow', '预审档低风险写直落');
     const 宪章 = await gated.policy.decide({ subject: SOVEREIGN, action: 'write', target: { id: '宪章', kind: '规则', authority: '宪章' } });
     assert.equal(宪章.verdict, 'allow', '介入度不影响立宪');
     await gated.cleanup();
@@ -151,6 +160,8 @@ describe('策略引擎', () => {
       sovereign: { lastInteraction: new Date().toISOString() },
       denylist: [],
     }, null, 2));
+    // 覆盖身份档案会丢掉钉版：重新建立合法初态（真摘要，不手填），再测失联解除。
+    await 钉Lead(offline);
     await offline.policy.reload();
     assert.equal(offline.policy.presence().lost, false);
     assert.equal((await offline.policy.decide({ subject: LEAD, action: 'write', target: { id: 'c', kind: '能力', authority: '自治' } })).verdict, 'allow');
@@ -166,6 +177,8 @@ describe('策略引擎', () => {
       sovereign: { lastInteraction: new Date().toISOString() },
       denylist: [{ id: '被撤回的对象', 理由: '主权者撤回', 撤于: new Date().toISOString() }],
     }, null, 2));
+    // 覆盖身份档案会丢掉钉版：先补回合法初态，否则测到的是「未钉版拒」而不是「拒绝名单拒」。
+    await 钉Lead(w);
     await w.policy.reload();
     const d = await w.policy.decide({ subject: LEAD, action: 'write', target: { id: '被撤回的对象', kind: '能力', authority: '自治' } });
     assert.equal(d.verdict, 'deny');
@@ -186,10 +199,12 @@ describe('策略引擎', () => {
     assert.match(未知动作.reason, /未知动作/);
   });
 
-  it('法律件里的 policy 授权块真的驱动判定，且能覆盖内置默认', async () => {
+  it('法律件里的 policy 授权块不能越过复核员只读（P1-05；v2 起按岗位名判）', async () => {
     const g = await makeFixture();
-    // 内置默认禁止复核者写（§2）。主权者通过改 权限矩阵.md 给复核者开一个口子：
-    // 这正是「法律件是现行版本、内置表是出厂默认」的可执行证明。
+    // 修前：主权者通过改 权限矩阵.md 给复核者开 write 口子 ⇒ allow（grant 先于 tier）。
+    // 修后：复核员只读是结构性边界，先于授权块求值；同一条 grant 不得放行。
+    // v2（2026-10-18）：边界按 roleId=复核员 判；grant 仍按 kind 匹配——这里故意用
+    // subject:'成员'（复核员的 kind）证明「连能命中的 allow grant 也越不过结构性边界」。
     await g.writePrivate('集体L1-法律/权限矩阵.md', [
       '---',
       'id: 权限矩阵',
@@ -201,19 +216,18 @@ describe('策略引擎', () => {
       '# 权限矩阵',
       '',
       '## 三档门槛',
-      '本部署允许复核者在会审中直接落一条结论草稿。',
+      '本部署允许复核员在会审中直接落一条结论草稿。',
       '',
       '```policy',
-      JSON.stringify({ grants: [{ subject: '复核者', action: 'write', authority: '自治', verdict: 'allow', reason: '本部署允许复核者落结论草稿' }] }),
+      JSON.stringify({ grants: [{ subject: '成员', action: 'write', authority: '自治', verdict: 'allow', reason: '本部署允许复核员落结论草稿' }] }),
       '```',
     ].join('\n'));
     assert.equal(await g.policy.reload(), true);
     const d = await g.policy.decide({ subject: REVIEWER, action: 'write', target: { id: 't1', kind: '任务', authority: '自治' } });
-    assert.equal(d.verdict, 'allow');
-    assert.match(d.rule, /权限矩阵/);
-    assert.match(d.reason, /落结论草稿/);
+    assert.equal(d.verdict, 'deny', 'P1-05：allow grant 不得放行复核员写');
+    assert.match(d.rule, /只读数/);
 
-    // 但宪章不变式仍然翻不动：同一条法律块不能给复核者开「删除」。
+    // 但宪章不变式仍然翻不动：同一条法律块不能给复核员开「删除」。
     const 删除 = await g.policy.decide({ subject: REVIEWER, action: 'delete', target: { id: 't1', kind: '任务', authority: '自治' } });
     assert.equal(删除.verdict, 'deny', '宪章不变式优先于任何法律件');
     await g.cleanup();
@@ -221,7 +235,7 @@ describe('策略引擎', () => {
 
   it('check() 把三种结论分别映射成 allow / NeedsApproval / Denied', async () => {
     assert.equal((await f.policy.check({ subject: LEAD, action: 'read', target: { id: 'k', kind: '知识', authority: '自治' } })).verdict, 'allow');
-    const g = await makeFixture({ defaults: { 介入度: '逐条审批' } });
+    const g = await makeFixture({ defaults: { 介入度: '审批' } });
     await assert.rejects(
       () => g.policy.check({ subject: LEAD, action: 'write', target: { id: 'c', kind: '能力', authority: '自治' } }),
       (error) => error instanceof NeedsApproval && error.requireAuthority === '主权者',

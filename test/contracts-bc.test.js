@@ -282,13 +282,17 @@ describe('契约C · 知识晋升披露机械检查（2026-10-09 主权者裁决
 
   it('工具面 memory_lifecycle promote 把 披露豁免 传到服务层（不传则严格 false）', async () => {
     let 收到 = null;
-    const org = {
-      registry: { identity: async () => ({ members: {} }) },
-      memory: { promoteCrossProject: async (id, spec) => { 收到 = spec; return { id, 岗位: spec.岗位 }; } },
-    };
-    await runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, 主体: LEAD, args: { action: 'memory_lifecycle', op: 'promote', id: 'k-1', 岗位: '插件工程', 原因: 'r', 披露豁免: true } });
-    assert.equal(收到.披露豁免, true, '显式带参要传 true');
-    await runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, 主体: LEAD, args: { action: 'memory_lifecycle', op: 'promote', id: 'k-2', 岗位: '插件工程', 原因: 'r' } });
-    assert.equal(收到.披露豁免, false, '不带参数必须折成 false，不许 undefined 混过条件判断');
+    const g = await makeFixture();
+    try {
+      // 工具面 Lead 自治写要先过钉版闸：用真实 Registry（不是手填摘要的桩）。
+      const org = {
+        registry: g.registry,
+        memory: { promoteCrossProject: async (id, spec) => { 收到 = spec; return { id, 岗位: spec.岗位 }; } },
+      };
+      await runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, 主体: LEAD, args: { action: 'memory_lifecycle', op: 'promote', id: 'k-1', 岗位: '插件工程', 原因: 'r', 披露豁免: true } });
+      assert.equal(收到.披露豁免, true, '显式带参要传 true');
+      await runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, 主体: LEAD, args: { action: 'memory_lifecycle', op: 'promote', id: 'k-2', 岗位: '插件工程', 原因: 'r' } });
+      assert.equal(收到.披露豁免, false, '不带参数必须折成 false，不许 undefined 混过条件判断');
+    } finally { await g.cleanup(); }
   });
 });

@@ -127,16 +127,16 @@ describe('presence 设置入口：命令面专属 + 状态条四态', () => {
   it('② merge：先手工放别的键（介入度 / 安全类），写设置后它们还在', async () => {
     const t = await 起宿主();
     try {
-      await t.写私有(部署偏好, JSON.stringify({ 介入度: '事后抽检', 安全类: ['只留这一条'] }, null, 2));
+      await t.写私有(部署偏好, JSON.stringify({ 介入度: '预审', 安全类: ['只留这一条'] }, null, 2));
       const 写 = await 敲(t, 'presence 开关=否 小时=168');
       assert.equal(写.包.成功, true, 写.回复.text);
       const 文件 = JSON.parse(await readTextOrNull(t.文件));
-      assert.equal(文件.介入度, '事后抽检', '别的键（介入度）不许被写设置顺手丢掉');
+      assert.equal(文件.介入度, '预审', '别的键（介入度）不许被写设置顺手丢掉');
       assert.deepEqual(文件.安全类, ['只留这一条'], '别的键（安全类）也不许丢');
       assert.equal(文件.失联限制, false);
       assert.equal(文件.响应期限小时, 168);
       // 生效面同一条：merge 之后私有层的其它键照样生效（不是「文件里还在、读的时候没了」）。
-      assert.equal(t.org.policy.intervention(), '事后抽检');
+      assert.equal(t.org.policy.intervention(), '预审');
     } finally {
       await t.清理();
     }
@@ -153,7 +153,7 @@ describe('presence 设置入口：命令面专属 + 状态条四态', () => {
       ];
       for (const c of 用例) {
         // 每次先在盘上放一份「主权者写的东西」，用来证明拒绝路径真的没碰它。
-        const 原份 = JSON.stringify({ 介入度: '零参与', 其它: '不许动' }, null, 2) + '\n';
+        const 原份 = JSON.stringify({ 介入度: '放权', 其它: '不许动' }, null, 2) + '\n';
         await t.写私有(部署偏好, 原份);
         const { 回复, 包 } = await 敲(t, c.输入);
         assert.equal(回复.kind, 'error', `${c.标注}：必须被拒（${回复.text}）`);
@@ -185,11 +185,12 @@ describe('presence 设置入口：命令面专属 + 状态条四态', () => {
     }
   });
 
-  // ④ 无条件入账：每次意图改设置都留一条，含原值→新值 + 真实主体。
-  it('④ 每次写动作都入账（含原值→新值、真实主体，且不冒充主权者）', async () => {
+  // ④ 无条件入账：每次意图改设置都留一条，含原值→新值 + 真实主体（人侧入口 = 主权者）。
+  it('④ 每次写动作都入账（含原值→新值；主体=主权者+入口事实，不由会话参数自报）', async () => {
     const t = await 起宿主();
     try {
-      // 用一个**非 Lead、非主权者**的会话身份来敲：账上要记这个真实主体。
+      // 用一个**非 Lead、非主权者**的会话身份来敲：这个身份不许变成设置变更的主体
+      // （人侧入口由可信通道构造主权者本人；会话里的自报参数不参与归属）。
       const agent = { session: { id: 'abcd1234-0000-4000-8000-000000000000', header: { cwd: t.home } } };
       const 设置记录 = async () => (await t.org.audit.read({})).filter((r) => r.动作 === '设置变更');
 
@@ -199,14 +200,13 @@ describe('presence 设置入口：命令面专属 + 状态条四态', () => {
       assert.equal(首次.包.成功, true, 首次.回复.text);
       const 一 = await 设置记录();
       assert.equal(一.length, 1, '写动作必须入账（无条件）');
-      // ⚠️ 实例键（**B 修 · 2026-10-10 改断言**）：判据本体的语义变了 —— 实例键的用途是
-      // 「唯一标识哪一个会话」。修前这里断言的是 `session-abcd1234`（= `'session-'` + 会话 id
-      // 前 8 位），那是把**唯一键截断**后的形状；现在直接断言会话 id 原样（**更严**，不是放宽）。
-      assert.equal(一[0].主体.id, agent.session.id, '账上要记**真实主体**（敲命令的那个人）——实例键 = 会话 id 原样');
-      assert.notEqual(一[0].主体.id, 'sovereign', '不许冒充主权者');
-      assert.notEqual(一[0].主体.kind, '主权者', '不许冒充主权者');
-      assert.equal(一[0].主体.kind, 'Lead', '根会话的执行者按约定是 Lead');
+      // v2 条目14/17（Lead 2026-10-18 修正）：人侧入口生成主权者本人的主体；会话里的
+      // 自报身份不许变成设置变更的主体（更不许拿它冒充主权者）。
+      assert.equal(一[0].主体.id, 'sovereign', '账上主体是主权者本人（人侧入口构造）');
+      assert.equal(一[0].主体.kind, '主权者');
+      assert.notEqual(一[0].主体.id, agent.session.id, '会话身份不能变成设置变更的主体');
       assert.match(String(一[0].依据), /设置入口/, '依据要写明这是设置入口');
+      assert.equal(一[0].详情.入口, '命令面', '入口事实要可追');
       assert.equal(一[0].详情.键.响应期限小时.原值, null, '首次写入：原值是「没有」');
       assert.equal(一[0].详情.键.响应期限小时.新值, 168, '账上要有新值');
       assert.equal(一[0].详情.键.响应期限小时.变更, true);
@@ -347,7 +347,11 @@ describe('presence 设置入口：命令面专属 + 状态条四态', () => {
       assert.equal(状态条.失联详情.已关闭, true, '详情里要能看出这是「关了」而不是「一直在位」');
 
       // 反例面：同一份身份档案下把开关打开，立刻变成「已失联」—— 证明上面那条不是恒真。
+      // 注意：本人改设置本身是一次有效本人交互（v2 条目14/17：会把失联时钟刷新到此刻），
+      // 所以写完之后要重新把档案推回 30 天前，才测得到「开关打开」这一件事。
       assert.equal((await 敲(t, 'presence 开关=是')).包.成功, true);
+      await t.写私有('身份档案/identity.json', JSON.stringify({ members: { lead: { id: 'lead', 岗位: 'Lead', status: '在岗' } }, sovereign: { lastInteraction: 前(30 * 24) }, denylist: [] }, null, 2));
+      assert.equal(await t.org.policy.reload(), true);
       assert.equal((await 看状态条(t)).失联, '已失联', '开关打开后，同一份 30 天未交互的档案 ⇒ 已失联');
     } finally {
       await t.清理();
@@ -359,7 +363,7 @@ describe('presence 设置入口：命令面专属 + 状态条四态', () => {
     const t = await 起宿主();
     try {
       const 原份 = {
-        介入度: '事后抽检',
+        介入度: '预审',
         安全类: ['审计链', '闸在位'],
         嵌套: { a: [1, 2, { b: 'x' }], c: null },
         说明: '主权者手写的文档键',

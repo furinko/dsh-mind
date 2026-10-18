@@ -115,8 +115,8 @@ describe('对象存储 / 能力库 / 角色注册表', () => {
       '---', 'id: 插件工程', 'kind: 身份', 'authority: 自治', 'zone: 私有', 'domain: 个体', 'version: 1', '---',
       '# 插件工程', '', '## 个体L0 · 身份', '插件工程岗。', '',
       '## 个体L1 · 规则', '先搜后写。', '',
-      '## 个体L2 · 能力', '- 同名演示', '- policy-decision', '',
-      '## 个体L3 · 经验', '- 无',
+      '## 个体L2 · 能力引用', '- 同名演示', '- policy-decision', '',
+      '## 个体L3 · 经验引用', '- 无',
     ].join('\n');
     await writeUnder(f.privateRoot, '集体L3-成员角色卡/插件工程.md', 卡);
     const refs = await capability.referencesFor({ 岗位: '插件工程' });

@@ -24,7 +24,8 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const FACTORY = join(here, '..', 'mind');
 const P = 'plug';
-const OFFICIAL = 'Agent Teams is available in this session, but create teammates only when the user explicitly asks to use Agent Teams or teammates.\n\nKeep the official tail.';
+// 新构建（2026-10-17 app.asar）teamPolicy 的文本形状：授权闸句已被上游删除，纯协作纪律。
+const OFFICIAL = 'Agent Teams is available in this session\n\nThe Team Lead and all teammates share the same working directory and filesystem. Edits are immediately visible to every member.\n\nKeep the official tail.';
 const 授权配置 = { mode: 'lead-discretion', projects: [P], authorizationRef: 'test-grant' };
 
 /** 造假宿主服务束：记录调用、可控名册，不碰真实执行体。 */
@@ -37,10 +38,14 @@ function 假宿主({ delegation = new DelegationPolicy(授权配置), agent = { 
     interrupt: (_caller, name) => { calls.interrupts.push(name); return { previousStatus: 'running' }; },
   };
   const subagents = {
-    startContinuable: async (spec) => { calls.spawn.push(spec); return { childId: `sub-${calls.spawn.length}`, messageId: 'm0' }; },
+    // 契约桩（2026-10-18 换代后）：只认 startActivation/drainChildren；校验 request.signal 在场（宿主类型里它是必填）。
+    startActivation: async (spec) => {
+      if (!spec?.request?.signal) throw new Error('contract: request.signal required');
+      calls.spawn.push(spec); return { childId: `sub-${calls.spawn.length}`, messageId: 'm0' };
+    },
     sendMessage: async (_sender, id, content) => { calls.subSend.push({ id, content }); return `sm-${calls.subSend.length}`; },
     interrupt: (id) => { calls.interrupts.push(id); },
-    drainContinuableChildren: async (_parent, ids) => { calls.interrupts.push(...ids); },
+    drainChildren: async (_parent, ids) => { calls.interrupts.push(...ids); },
     listChildren: async () => kids,
   };
   return { 宿主: { agent, agentTeams, subagents, delegation }, calls };
@@ -81,9 +86,17 @@ describe('DelegationPolicy · 授权真源', () => {
     assert.notEqual(out, 装配);
     assert.equal(out.sections[0], 装配.sections[0], '其余段原对象保留');
     assert.equal(out.tools, 装配.tools, 'tools/contexts/variables 不许丢');
-    assert.ok(out.sections[1].text.startsWith(`[${DelegationPolicy.generation}]`));
-    assert.ok(!out.sections[1].text.includes('explicitly asks to use Agent Teams'));
-    assert.ok(out.sections[1].text.includes('Keep the official tail.'), '官方其余纪律保留');
+    assert.ok(out.sections[1].text.startsWith(`[${DelegationPolicy.generation}]`), '组织授权头前置');
+    // 契约换代（2026-10-17）：上游删掉授权闸句 ⇒ 拼接改为「头前置+官方全文逐字保留」。
+    // 判据是「官方文本逐字在案」，不再是「闸句被换掉」（旧断言随旧契约退役）。
+    assert.ok(out.sections[1].text.endsWith(OFFICIAL), '官方全文逐字保留在授权头之后');
+    assert.ok(out.sections[1].text.includes('The Team Lead and all teammates share the same working directory'), '官方协作纪律原样在');
+    // v2（口述收敛 2026-10-18 条目1/3）：提示词里**不许**再出现「复核员任命需要主权者授权」——
+    // 复核员是普通岗位卡，独立性靠冲突排除 + 冻结判据。这句提示词若回来，模型就会照做，
+    // 等于把已砍掉的任命闸从提示词里复活。
+    assert.equal(/Reviewer appointments still require/i.test(out.sections[1].text), false, '不再宣称复核任命需授权');
+    assert.match(out.sections[1].text, /Reviewers are ordinary role cards/, '按 v2 口径写明复核员是普通岗');
+    assert.match(out.sections[1].text, /conflict exclusion/, '独立性由冲突排除承担');
     assert.throws(() => p.assemble({ sections: [] }, { project: P, isTeam: true }), (e) => e.code === 'DELEGATION_TEAM_POLICY');
     assert.throws(() => p.assemble({ sections: [{ name: 'team:policy', text: OFFICIAL }, { name: 'team:policy', text: OFFICIAL }] }, { project: P, isTeam: true }), (e) => e.code === 'DELEGATION_TEAM_POLICY');
     assert.throws(() => p.assemble({ sections: [{ name: 'team:policy', text: '上游改了措辞' }] }, { project: P, isTeam: true }), (e) => e.code === 'DELEGATION_UPSTREAM_POLICY_DRIFT');
@@ -103,7 +116,7 @@ describe('member_* 动作 · 统一治理入口', () => {
   }
   const 执行 = (org, 宿主, args, 主体 = LEAD) => runAction({ org, 项目: P, 主体, subject: 主体, args, 宿主 });
 
-  it('member_spawn（team）：握手→登记→绑定→装载→开工，全链路落账', async () => {
+  it('member_spawn（team）：启动自检→登记→绑定→装载→开工，全链路落账', async () => {
     const { f, org } = await 现场Org();
     try {
       const { 宿主, calls } = 假宿主();
@@ -116,9 +129,12 @@ describe('member_* 动作 · 统一治理入口', () => {
       assert.equal((await org.registry.identity()).members['team-1'].status, '在岗');
       const after = await org.tasks.get(节点.id, { 项目: P });
       assert.equal(after.状态, '已派发');
-      assert.deepEqual(after.负责人, ['team-1']);
+      // v2 条目11：负责人**保留岗位名**（「这一岗」），实例进独立的 `绑定` 字段——
+      // 修前这里 reassign 成 ['team-1']，等于把一岗收成一人的记录。
+      assert.deepEqual(after.负责人, ['插件工程'], '负责人仍是岗位名');
+      assert.deepEqual(after.绑定.map((b) => b.实例), ['team-1'], '实例绑到节点上');
       assert.equal(calls.spawn[0].prompt[0].text, calls.spawn[0].prompt[0].text);
-      assert.match(calls.spawn[0].prompt[0].text, /待命握手/);
+      assert.match(calls.spawn[0].prompt[0].text, /启动自检/);
       assert.equal(calls.teamSend[0].target, r.名, '开工消息按 Team 名发送');
       assert.match(calls.teamSend[0].content[0].text, /判据甲/);
       assert.match(calls.teamSend[0].content[0].text, /task_start/);
@@ -126,7 +142,58 @@ describe('member_* 动作 · 统一治理入口', () => {
     } finally { await f.cleanup(); }
   });
 
-  it('member_spawn（subagent）：走 startContinuable 且 parent 是真实 Agent', async () => {
+  it('开工书只取实例钉住快照：get=v2 / cardOf=v1 ⇒ 只注入 v1（含完整 L0/L1），不混现行正文', async () => {
+    const { f, org } = await 现场Org();
+    try {
+      const { 宿主, calls } = 假宿主();
+      const 节点 = await 建待发节点(org);
+      const v1段 = {
+        '个体L0 · 身份核心': '我是 v1 的插件工程。',
+        '个体L1 · 规则': '1. v1-先搜后写。\n2. v1-不碰判据、不改交卷人。',
+      };
+      // 「现行卡」必须是**真实完整的 v2 卡**（正文 + 由正文派生的段/能力引用同源）：手捏一个
+      // 只带 id/段/能力的无正文空壳卡，会让钉版自校当场拒（补修J card-credential 单源）——
+      // 那是**假初态**抢命中，测不到本用例真正要测的「开工书只取钉住快照」这一层。
+      // 于是写真实卡文件、再用 registry.get 读回（不手填摘要/hash）。
+      // 段标题与夹具卡同名（两区合并按段名覆盖；不同名会两段并存、section 先命中出厂那段）。
+      const v2正文 = '---\nid: 插件工程\nkind: 身份\nauthority: 自治\nzone: 出厂\ndomain: 个体\nversion: 2\n---\n# 插件工程\n\n## 个体L0 · 身份\n我是 v2 的插件工程。\n\n## 个体L1 · 规则\n1. v2-先写后搜。\n\n## 个体L2 · 能力\n- `danger-v2`\n\n## 个体L3 · 经验\n（引用经验条目 id）\n';
+      await writeUnder(f.privateRoot, 岗位卡, v2正文);
+      const v2卡 = await org.registry.get({ id: '插件工程' });
+      assert.match(String(v2卡?.正文), /v2-先写后搜/, '前提：现行卡确已是 v2（真实完整卡，不是空壳桩）');
+      assert.ok((v2卡?.能力引用 ?? []).includes('danger-v2'), '前提：v2 能力引用由正文派生（单源）');
+      const 真cardOf = org.registry.cardOf.bind(org.registry);
+      org.registry.cardOf = async (id) => (id === 'team-1'
+        ? { 就绪: true, 岗位: '插件工程', 段: v1段, 能力引用: ['policy-decision'], 卡版本: { 摘要: 'v1digest0000' } }
+        : 真cardOf(id));
+      await 执行(org, 宿主, { action: 'member_spawn', 方式: 'team', 岗位: '插件工程', 节点: 节点.id, 任务书: '做乙事' });
+      const 书 = calls.teamSend[0].content[0].text;
+      assert.match(书, /v1-先搜后写/, '规程正文取钉住快照');
+      assert.match(书, /v1-不碰判据、不改交卷人/, 'L1 规则完整附上、不被截断');
+      assert.match(书, /v1digest/, '卡版本摘要来自实例钉住的那一版');
+      assert.doesNotMatch(书, /v2-先写后搜/, '不许把现行 get 的正文混进来');
+      assert.doesNotMatch(书, /danger-v2/, '能力引用同样只取钉住版');
+      assert.match(书, /policy-decision/, '能力只引用、不内嵌正文');
+    } finally { await f.cleanup(); }
+  });
+
+  it('卡钉版未就绪 ⇒ member_spawn 明确失败、不发假开工书（实例已登记、阶段可读）', async () => {
+    const { f, org } = await 现场Org();
+    try {
+      const { 宿主, calls } = 假宿主();
+      const 节点 = await 建待发节点(org);
+      const 真cardOf = org.registry.cardOf.bind(org.registry);
+      org.registry.cardOf = async (id) => (id === 'team-1'
+        ? { 就绪: false, 岗位: '插件工程', 段: null, 能力引用: null, 卡版本: null, 原因: '卡快照缺失' }
+        : 真cardOf(id));
+      await assert.rejects(
+        () => 执行(org, 宿主, { action: 'member_spawn', 方式: 'team', 岗位: '插件工程', 节点: 节点.id, 任务书: '做丙事' }),
+        (e) => e.code === 'MEMBER_SPAWN_CARD_NOT_READY' && /未就绪/.test(e.message),
+      );
+      assert.equal(calls.teamSend.length, 0, '未就绪不许发任何开工书');
+    } finally { await f.cleanup(); }
+  });
+
+  it('member_spawn（subagent）：走 startActivation 且 parent 是真实 Agent', async () => {
     const { f, org } = await 现场Org();
     try {
       const { 宿主, calls } = 假宿主();
@@ -135,6 +202,44 @@ describe('member_* 动作 · 统一治理入口', () => {
       assert.equal(r.实例, 'sub-1');
       assert.equal(calls.spawn[0].request.parent, 宿主.agent, '必须传原始 exec.agent，不能传组织主体');
       assert.equal(calls.subSend[0].id, 'sub-1');
+    } finally { await f.cleanup(); }
+  });
+
+  it('member_spawn 模型路由（subagent）：agentOptions 原样透传给宿主；缺省不携带（与既往逐字节一致）', async () => {
+    const { f, org } = await 现场Org();
+    try {
+      const { 宿主, calls } = 假宿主();
+      const 节点A = await 建待发节点(org, '带路由的评审任务');
+      const r = await 执行(org, 宿主, { action: 'member_spawn', 方式: 'subagent', 岗位: '插件工程', 节点: 节点A.id, 任务书: '评审', 模型供应商: 'openai-codex', 模型: 'gpt-6.1-sol' });
+      assert.deepEqual(calls.spawn[0].request.agentOptions, { provider: 'openai-codex', model: 'gpt-6.1-sol' },
+        '路由须原样进 agentOptions（宿主 resolveChildAgentOptions 消费它覆盖继承路由）');
+      assert.deepEqual(r.模型路由, { provider: 'openai-codex', model: 'gpt-6.1-sol' }, '回执带出路由，可入审计/transcript 对账');
+      const 节点B = await 建待发节点(org, '不带路由的默认任务');
+      const r2 = await 执行(org, 宿主, { action: 'member_spawn', 方式: 'subagent', 岗位: '插件工程', 节点: 节点B.id, 任务书: '默认' });
+      assert.ok(!('agentOptions' in calls.spawn[1].request), '缺省不携带 agentOptions——子会话继承父路由，与既往行为逐字节一致');
+      assert.ok(!('模型路由' in r2), '缺省回执不带 模型路由 字段');
+    } finally { await f.cleanup(); }
+  });
+
+  it('member_spawn 模型路由的响亮失败：team 路带路由 ⇒ 拒且零创建；路由缺一半 ⇒ 拒且零创建；推理档随路由透传', async () => {
+    const { f, org } = await 现场Org();
+    try {
+      const { 宿主, calls } = 假宿主();
+      const 节点A = await 建待发节点(org, 'team 带路由');
+      await assert.rejects(
+        () => 执行(org, 宿主, { action: 'member_spawn', 方式: 'team', 岗位: '插件工程', 节点: 节点A.id, 任务书: 'x', 模型供应商: 'openai-codex', 模型: 'gpt-6.1-sol' }),
+        (e) => e.code === 'INVALID_BODY' && /team 不支持模型路由/.test(e.message) && e.detail.阶段 === 'precheck',
+      );
+      assert.equal(calls.spawn.length, 0, '拒绝发生在起执行体之前——不许「先造再杀」（R19 同款纪律）');
+      const 节点B = await 建待发节点(org, '路由缺一半');
+      await assert.rejects(
+        () => 执行(org, 宿主, { action: 'member_spawn', 方式: 'subagent', 岗位: '插件工程', 节点: 节点B.id, 任务书: 'x', 模型: 'gpt-6.1-sol' }),
+        (e) => e.code === 'INVALID_BODY' && /成对/.test(e.message),
+      );
+      assert.equal(calls.spawn.length, 0);
+      const 节点C = await 建待发节点(org, '带推理档');
+      await 执行(org, 宿主, { action: 'member_spawn', 方式: 'subagent', 岗位: '插件工程', 节点: 节点C.id, 任务书: 'x', 模型供应商: 'kimi-coding', 模型: 'k3-256k', 推理档: 'high' });
+      assert.deepEqual(calls.spawn[0].request.agentOptions, { provider: 'kimi-coding', model: 'k3-256k', reasoningEffort: 'high' }, '推理档随路由透传（缺省则子会话用所选模型默认档）');
     } finally { await f.cleanup(); }
   });
 

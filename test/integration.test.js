@@ -100,6 +100,9 @@ describe('装载后的真实调用链', () => {
     // 成员先经注册表在册在岗（派发闸 · 派活闭环 2026-10-15）：登记在派发之前，这也是主干的正顺序。
     const org = await shareOrg({ home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') });
     const LEAD_SUB = { id: 'lead', kind: 'Lead' };
+    // v2 条目10：Lead 自治写前必须先钉版（在岗 + 钉版摘要可读）；这是正规出生路径。
+    const 出生 = await org.registry.ensureLeadInstance({ 实例: 'lead' });
+    assert.equal(出生.就绪, true, `Lead 实例就绪失败：${JSON.stringify(出生)}`);
     await runAction({ org, 项目: P, subject: LEAD_SUB, 主体: LEAD_SUB, args: { action: 'registry_assign', 岗位: '插件工程', 实例: 'member-a' } });
     await runAction({ org, 项目: P, subject: LEAD_SUB, 主体: LEAD_SUB, args: { action: 'registry_assign', 岗位: '插件工程', 实例: 'member-b' } });
 

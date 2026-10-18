@@ -137,7 +137,17 @@ describe('dsh-mind 宿主半区', () => {
 
     // 提审分离（2026-10-13 裁决第二批 M1）：交卷人（本链路里根会话=Lead 交的卷）不得复核
     // 自己的卷——复核者显式给 reviewer（未参与交卷）。
-    const reviewed = JSON.parse(await tool.execute({ action: 'task_review', id, project: 'boot', 三态: '未验', 反例面: '读数拿不到', 复核者: 'reviewer' }, exec));
+    // v2（2026-10-18 条目11）：`task_bind` 把实例绑到复核节点（负责人仍是岗位名），
+    // 全链路因此覆盖「登记 → 绑定 → 复核」这条新接线；绑定只认真实在册在岗实例。
+    const 复核任务 = JSON.parse(await tool.execute({ action: 'task_create', 描述: '宿主链路-复核任务', 负责人: '复核员', 判据: '核对读数', 复核对象: id, project: 'boot' }, exec));
+    assert.equal(复核任务.成功, true, `复核任务创建失败：${JSON.stringify(复核任务)}`);
+    const 登复核 = JSON.parse(await tool.execute({ action: 'registry_assign', 岗位: '复核员', 实例: 'reviewer', project: 'boot' }, exec));
+    assert.equal(登复核.成功, true, `复核实例登记失败：${JSON.stringify(登复核)}`);
+    const 绑定 = JSON.parse(await tool.execute({ action: 'task_bind', id: 复核任务.节点.id, 实例: 'reviewer', 岗位: '复核员', project: 'boot' }, exec));
+    assert.equal(绑定.成功, true, `绑定失败：${JSON.stringify(绑定)}`);
+    // 复核由**另一个 Lead 会话实例**做（签自己）：根会话是交卷人，自己复核自己的卷会被冲突排除拒。
+    const 复核exec = fakeExec({ name: 'mind', sessionId: 'session-host-review-0002' });
+    const reviewed = JSON.parse(await tool.execute({ action: 'task_review', id, project: 'boot', 三态: '未验', 反例面: '读数拿不到' }, 复核exec));
     assert.equal(reviewed.结论.算通过, false);
     assert.equal(reviewed.结论.计打回, false);
   });
@@ -171,7 +181,7 @@ describe('dsh-mind 宿主半区', () => {
 
   it('工具总范围配置后立刻生效，并且越权调用带可执行理由', async () => {
     const prefs = join(home, 'mind-private', '集体L2-共享基础设施', 'defaults', '部署.json');
-    await writeUnder(home, 'mind-private/集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '零参与', 响应期限小时: 72, 工具总范围: '白名单' }, null, 2));
+    await writeUnder(home, 'mind-private/集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '放权', 响应期限小时: 72, 工具总范围: '白名单' }, null, 2));
     assert.ok(prefs.includes('部署.json'));
     // 触发一次热更新周期（apply 里注册的定时器是 5s；这里直接改文件后等一个周期太慢，
     // 因此断言的是「闸读的是文件」这一契约：把名单改成拒绝 read 后，闸必须拒绝它。

@@ -52,8 +52,8 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeFixture, LEAD } from './helpers.mjs';
-import { DebateService, ROUND_BOUNDARY_MARK } from '../src/debate.js';
+import { makeFixture, LEAD, 钉Lead } from './helpers.mjs';
+import { CouncilService, 线程名, ROUND_BOUNDARY_MARK } from '../src/council.js';
 import { TaskGraph } from '../src/tasks.js';
 import { MessageBus } from '../src/bus.js';
 import { ReviewProtocol } from '../src/review.js';
@@ -68,25 +68,24 @@ const P = 'default';
 const MEMBER_A = { id: 'member-a', kind: '成员', roleId: '插件工程' };
 const MEMBER_B = { id: 'member-b', kind: '成员', roleId: '插件工程' };
 
-/** 与 `org.open` 同款接线（本次不用 debate.open 的随机性，故 random 固定成常数）。 */
+/** 与 `org.open` 同款接线（v2：会审 = CouncilService，不再挂任务图）。 */
 function 装配(g) {
   const tasks = new TaskGraph({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock });
   const bus = new MessageBus({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock });
   const registry = new RoleRegistry({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock });
   const review = new ReviewProtocol({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock, tasks, bus, random: () => 0 });
-  const debate = new DebateService({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock, tasks, bus, review, registry });
-  return { tasks, bus, registry, review, debate };
+  const council = new CouncilService({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock, bus, registry });
+  return { tasks, bus, registry, review, council };
 }
 
-/** 造一个已交齐的双人会审节点（前置与 debate-guards 同款）。 */
-async function 交齐会审(tasks) {
-  const node = await tasks.create({
-    subject: LEAD, 项目: P, 描述: 'Lead 身份回归', 负责人: [MEMBER_A.id, MEMBER_B.id], 判据: ['结论一致'], 模式: '独立会审',
-  });
-  await tasks.dispatch(node.id, { subject: LEAD, 项目: P });
-  await tasks.start(node.id, { subject: MEMBER_A, 项目: P });
-  for (const s of [MEMBER_A, MEMBER_B]) await tasks.submit(node.id, { subject: s, 项目: P, 结论: `${s.id} 案` });
-  return node.id;
+/** 备好一场「已解锁 + 已开讨论（第 1 轮）」的双人会审，返回会审 id。 */
+async function 备好会审(parts) {
+  const 开 = await parts.council.open({ subject: LEAD, 项目: P, 问题: 'Lead 身份回归', 参与者: [MEMBER_A.id, MEMBER_B.id] });
+  await parts.council.answer({ subject: MEMBER_A, 项目: P, id: 开.id, 结论: 'a 案' });
+  await parts.council.answer({ subject: MEMBER_B, 项目: P, id: 开.id, 结论: 'b 案' });
+  await parts.council.unlock({ subject: LEAD, 项目: P, id: 开.id });
+  await parts.council.round({ subject: LEAD, 项目: P, id: 开.id });
+  return 开.id;
 }
 
 /**
@@ -94,17 +93,17 @@ async function 交齐会审(tasks) {
  * （成员/复核者一律过档 —— 判据「role:'插件工程' 正对照仍放行」靠的就是这一步）。
  */
 function 动作面org(parts) {
-  return { registry: parts.registry, tasks: parts.tasks, bus: parts.bus, debate: parts.debate };
+  return { registry: parts.registry, tasks: parts.tasks, bus: parts.bus, council: parts.council };
 }
 
-/** 当前轮次 / 状态 / 轮边界消息数（三条「副作用没发生」的读数）。 */
-async function 读数(parts, 节点) {
-  const n = await parts.tasks.get(节点, { 项目: P });
-  const 消息 = await parts.bus.readRaw({ 项目: P, 线程: 节点 });
+/** 当前轮次 / 状态 / 结论 / 轮边界消息数（四条「副作用没发生」的读数）。 */
+async function 读数(parts, 会审id) {
+  const c = await parts.council.get(P, 会审id);
+  const 消息 = await parts.bus.readRaw({ 项目: P, 线程: 线程名(会审id) });
   return {
-    轮次: n.讨论?.轮次 ?? null,
-    状态: n.讨论?.状态 ?? null,
-    表态消息id: n.讨论?.表态消息id ?? null,
+    轮次: c?.轮次 ?? null,
+    状态: c?.状态 ?? null,
+    结论: c?.结论 ?? null,
     边界条数: 消息.filter((m) => String(m.内容 ?? '').startsWith(ROUND_BOUNDARY_MARK)).length,
     消息总数: 消息.length,
   };
@@ -163,8 +162,7 @@ describe('门① 主体构造：Lead 身份不由参数声明（2026-10-10）', 
     const g = await makeFixture();
     try {
       const parts = 装配(g);
-      const 节点 = await 交齐会审(parts.tasks);
-      await parts.debate.open({ subject: LEAD, 项目: P, 节点 });
+      const 节点 = await 备好会审(parts);
       const 前 = await 读数(parts, 节点);
       assert.equal(前.轮次, 1, '前提：讨论开在第 1 轮');
 
@@ -183,7 +181,7 @@ describe('门① 主体构造：Lead 身份不由参数声明（2026-10-10）', 
 
       const 后 = await 读数(parts, 节点);
       assert.equal(后.轮次, 1, '被拒的换轮没有推进轮次（不是纸面拒绝）');
-      assert.equal(后.边界条数, 0, '被拒的换轮没有落轮边界消息 ⇒ 两道预算没被重置');
+      assert.equal(后.边界条数, 前.边界条数, '被拒的换轮没有落新的轮边界消息 ⇒ 两道预算没被重置');
       assert.equal(后.消息总数, 前.消息总数, '被拒的调用一条消息都没落线');
     } finally {
       await g.cleanup();
@@ -194,8 +192,7 @@ describe('门① 主体构造：Lead 身份不由参数声明（2026-10-10）', 
     const g = await makeFixture();
     try {
       const parts = 装配(g);
-      const 节点 = await 交齐会审(parts.tasks);
-      await parts.debate.open({ subject: LEAD, 项目: P, 节点 });
+      const 节点 = await 备好会审(parts);
 
       await assert.rejects(
         () => runAction({
@@ -217,8 +214,8 @@ describe('门① 主体构造：Lead 身份不由参数声明（2026-10-10）', 
         'debate_converge 与 debate_round 共用主体构造 ⇒ 同一个洞',
       );
       const 收 = await 读数(parts, 节点);
-      assert.equal(收.状态, '讨论中', '被拒的收敛没有把讨论改成已收敛');
-      assert.equal(收.表态消息id, null, '被拒的收敛没有落末位表态（表态消息id 仍为空）');
+      assert.equal(收.状态, '讨论中', '被拒的收敛没有把会审改成已收敛');
+      assert.equal(收.结论, null, '被拒的收敛没有落结论');
     } finally {
       await g.cleanup();
     }
@@ -228,8 +225,7 @@ describe('门① 主体构造：Lead 身份不由参数声明（2026-10-10）', 
     const g = await makeFixture();
     try {
       const parts = 装配(g);
-      const 节点 = await 交齐会审(parts.tasks);
-      await parts.debate.open({ subject: LEAD, 项目: P, 节点 });
+      const 节点 = await 备好会审(parts);
       // P2（2026-10-10）后成员身份**只能由宿主显式给**（`主体`）。args 里的 `role`/`实例`
       // 仍然照旧填着 —— 现在它们一个字都不参与构造（留着的意义就是钉住这一点）。
       const 发言 = await runAction({
@@ -248,8 +244,7 @@ describe('门① 主体构造：Lead 身份不由参数声明（2026-10-10）', 
     const g = await makeFixture();
     try {
       const parts = 装配(g);
-      const 节点 = await 交齐会审(parts.tasks);
-      await parts.debate.open({ subject: LEAD, 项目: P, 节点 });
+      const 节点 = await 备好会审(parts);
       // 命令面显式给主体（宿主注入的可信路径）：轮次照常推进 —— 门① 不许把这条路也堵了。
       const 换 = await runAction({
         org: 动作面org(parts), 项目: P, subject: LEAD, 主体: LEAD,
@@ -354,13 +349,13 @@ describe('门② agentSubject：Lead 身份由会话事实决定（2026-10-10）
 });
 
 describe('③ 端到端：子会话主体换轮 / 收敛都拒，根会话放行（2026-10-10）', () => {
-  it('③-回归：经 `mind` 工具真装配 + 真讨论段，判据 3 逐条读数', async () => {
+    it('③-回归：经 `mind` 工具真装配 + 真会审，判据 3 逐条读数', async () => {
     const g = await makeFixture();
     try {
       const { 工具, org, host } = await 起宿主(g);
       try {
-        // 成员要**在册在岗**才会走到 debate 服务那一层（否则被主体链的档案校验先拒，
-      // 那样测到的就不是「仅 Lead」这条判据了）。
+        // 成员要**在册在岗**才会走到会审服务那一层（否则被主体链的档案校验先拒，
+        // 那样测到的就不是「仅 Lead」这条判据了）。
         await g.writePrivate('身份档案/identity.json', JSON.stringify({
           members: {
             'member-a': { id: 'member-a', 岗位: '插件工程', 代: 1, status: '在岗' },
@@ -371,71 +366,54 @@ describe('③ 端到端：子会话主体换轮 / 收敛都拒，根会话放行
           denylist: [],
         }, null, 2));
         await org.registry.sync();
+        // 覆盖身份档案会丢掉钉版：补回合法 Lead 初态（真摘要，不手填），再重载。
+        await 钉Lead(g);
+        // 同一份手写档案里的成员也要迁回合法凭证（真卡版本 + 委派父）——否则下面
+        // council.answer 撞到的是「成员未钉版」而不是本用例要测的子会话边界。
+        for (const 实例 of ['member-a', 'member-b']) {
+          await org.registry.assign({ subject: { id: 'lead', kind: 'Lead', roleId: 'Lead' }, 岗位: '插件工程', 实例 });
+        }
         await org.policy.reload();
 
         const 项目 = JSON.parse(await 工具.execute({ action: 'status' }, 根会话exec)).数据.项目;
         const 跑 = async (args, exec) => JSON.parse(await 工具.execute({ ...args, project: 项目 }, exec));
 
-        // ── 前置（一）：一个会审任务节点 —— 建 / 派 / 开工走**工具面根会话**（Lead 的日常动作，
-        //    这条路必须照常走通；门①/门② 都不许误伤它）。
-        const 建 = await 跑({ action: 'task_create', 描述: '端到端会审', 负责人: 'member-a,member-b', 判据: '结论一致', 模式: '独立会审' }, 根会话exec);
-        assert.equal(建.成功, true, JSON.stringify(建));
-        const 节点 = 建.节点.id;
-        assert.equal((await 跑({ action: 'task_dispatch', id: 节点 }, 根会话exec)).成功, true);
-        assert.equal((await 跑({ action: 'task_start', id: 节点 }, 根会话exec)).成功, true);
-
-        // ── 前置（二）：「两份答案按人留」这一步只能用**服务面**（与 `交齐会审` 同款）。
-        //    为什么（本轮如实读出的功能后果，不是判据）：**工具面的主体由会话事实唯一决定** ——
-        //    内核把 `主体` 显式传给 `runAction` ⇒ `spec.主体 ?? subjectFor({岗位, 实例, …})`
-        //    的前半段短路 ⇒ `args.role` / `args.实例` **不再参与主体构造**。实测（本轮，工作树）：
-        //      同一个根会话 exec 连交两次卷、分别自报 实例=member-a / member-b ⇒
-        //        交卷1 主体 = {"id":"<根会话id>","kind":"Lead","roleId":"Lead"}
-        //        交卷2 主体 = {"id":"<根会话id>","kind":"Lead","roleId":"Lead"}
-        //        独立答案 = ["<根会话id>"]（**1** 份：按主体 id 折叠）
-        //        （⚠️ 这两行是**修前**读数，那时 id 恒为 `session-session-`；B 修后同一条路
-        //         折叠行为**不变**（仍折叠成 1 份），变的只是 id 现在真的是这个会话。）
-        //    ⇒ 「谁交的那一份」不再能靠参数区分。这正是本轮要堵的自报身份面在**同一条路**上的代价，
-        //    已进回报的影响面清点与 `docs/设计债-2026-10-09.md` ⑳（成员会话在工具面恒被拒那一条）。
-        await org.tasks.submit(节点, { subject: MEMBER_A, 项目, 结论: 'a 案' });
-        await org.tasks.submit(节点, { subject: MEMBER_B, 项目, 结论: 'b 案' });
-        const 交齐节点 = await org.tasks.get(节点, { 项目 });
-        assert.equal(交齐节点.独立答案.length, 2, `两份答案按人留：实际 ${JSON.stringify(交齐节点.独立答案.map((a) => a.成员))}`);
-
-        // 讨论段经**组装层同一个 org 的服务面**开（不能用另建的 `装配(g)`：那会在同一份盘上再起
-        // 一套服务实例，与内核持有的那个 org 抢同一批文件）。工具面那条 `debate_open` 的可写预检
-        // 与本节判据无关，混进来只会让失败原因难查。
-        const 开 = await org.debate.open({ subject: LEAD, 项目, 节点 });
-        assert.ok(开.参与者.length >= 2, `讨论段要开得起来：${JSON.stringify(开)}`);
-
-        const 节点读数 = async () => (await org.tasks.get(节点, { 项目 })).讨论;
-        const 线程 = () => org.bus.readRaw({ 项目, 线程: 节点 });
+        // ── 前置：会审经**组装层同一个 org 的服务面**发起/作答/解锁/开讨论。
+        //    （不能用另建的 `装配(g)`：那会在同一份盘上再起一套服务实例，与内核持有的 org 抢文件。）
+        const 开 = await org.council.open({ subject: LEAD, 项目, 问题: '端到端会审', 参与者: ['member-a', 'member-b'] });
+        await org.council.answer({ subject: MEMBER_A, 项目, id: 开.id, 结论: 'a 案' });
+        await org.council.answer({ subject: MEMBER_B, 项目, id: 开.id, 结论: 'b 案' });
+        await org.council.unlock({ subject: LEAD, 项目, id: 开.id });
+        await org.council.round({ subject: LEAD, 项目, id: 开.id });
+        const 节点 = 开.id;
+        const 节点读数 = async () => org.council.get(项目, 节点);
+        const 线程 = () => org.bus.readRaw({ 项目, 线程: 线程名(节点) });
         const 边界条数 = async () => (await 线程()).filter((m) => String(m.内容 ?? '').startsWith(ROUND_BOUNDARY_MARK)).length;
 
-        // ① 子会话换轮 ⇒ 拒，且**三条**「副作用没发生」：轮次未推进 / 没落轮边界 / 一条消息都没落线。
+        // ① 子会话换轮 ⇒ 拒，且**三条**「副作用没发生」：轮次未推进 / 没落新轮边界 / 一条消息都没落线。
         assert.equal((await 节点读数()).轮次, 1, '前提：第 1 轮');
         const 前条数 = (await 线程()).length;
+        const 前边界 = await 边界条数();
         const 子换 = await 跑({ action: 'debate_round', id: 节点 }, 成员会话exec);
         assert.equal(子换.成功, false, '子会话换轮必须被拒（修前 agentSubject 恒 Lead ⇒ 放行、轮次 1→2）');
         assert.equal(子换.主体, undefined, '被拒的调用里没有 Lead 主体（修前这里是 Lead）');
         // 诚实读数：这一拒发生在**主体链的档案校验**那一道（子会话的主体键是会话派生的会话 id，
-        // 身份档案里没有这个实例 ⇒ 最严拒），**早于** debate 服务的「仅 Lead」。两层指向同一个结论；
+        // 身份档案里没有这个实例 ⇒ 最严拒），**早于**会审服务的「仅 Lead」。两层指向同一个结论；
         // 「仅 Lead」那一层本身由 ⑤ 直接钉住。
         assert.match(String(子换.规则), /身份停用 = 最严/, `子会话在主体链就被拦下（档案里没有这个实例键）；实际 ${子换.规则}`);
         assert.equal((await 节点读数()).轮次, 1, '被拒的换轮没有推进轮次');
-        assert.equal(await 边界条数(), 0, '被拒的换轮没有落轮边界消息');
+        assert.equal(await 边界条数(), 前边界, '被拒的换轮没有落新的轮边界消息');
         assert.equal((await 线程()).length, 前条数, '被拒的换轮一条消息都没落线');
 
-        // ② 子会话收敛 ⇒ 拒，且讨论没收敛、没落末位表态、一条消息都没落线。
+        // ② 子会话收敛 ⇒ 拒，且会审没收敛、没落结论、一条消息都没落线。
         const 子收 = await 跑({ action: 'debate_converge', id: 节点 }, 成员会话exec);
         assert.equal(子收.成功, false, '子会话收敛必须被拒');
         assert.equal(子收.主体, undefined, '被拒的调用里没有 Lead 主体');
-        assert.equal((await 节点读数()).状态, '讨论中', '被拒的收敛没有把讨论改成已收敛');
-        assert.equal((await 节点读数()).表态消息id ?? null, null, '被拒的收敛没有落末位表态');
+        assert.equal((await 节点读数()).状态, '讨论中', '被拒的收敛没有把会审改成已收敛');
+        assert.equal((await 节点读数()).结论 ?? null, null, '被拒的收敛没有落结论');
         assert.equal((await 线程()).length, 前条数, '被拒的收敛一条消息都没落线');
 
-        // ②b 第二个子会话（同父）同样拒：「不是 Lead」对**每一个**子会话都成立，不靠
-        //     「只有第一个会话特殊」。⚠️ B 修后这两个子会话的实例键**不再相同**
-        //     （修前两档都取父会话 ⇒ 同一个值）；差异本身由下面的 `B-实例键` 用例正面钉住。
+        // ②b 第二个子会话（同父）同样拒：「不是 Lead」对**每一个**子会话都成立。
         const 子换2 = await 跑({ action: 'debate_round', id: 节点 }, 成员会话exec2);
         assert.equal(子换2.成功, false, '第二个子会话换轮同样拒');
         assert.equal(子换2.主体, undefined, '第二个子会话也没有 Lead 主体');
@@ -445,34 +423,32 @@ describe('③ 端到端：子会话主体换轮 / 收敛都拒，根会话放行
         const 根换 = await 跑({ action: 'debate_round', id: 节点 }, 根会话exec);
         assert.equal(根换.成功, true, `根会话换轮要放行：${JSON.stringify(根换)}`);
         assert.equal(根换.讨论.轮次, 2, '根会话换轮真推进到第 2 轮（功能本体没被改坏）');
-        assert.equal(await 边界条数(), 1, '根会话换轮真落了一条边界消息');
+        assert.equal(await 边界条数(), 前边界 + 1, '根会话换轮真落了一条新边界消息');
         assert.equal(根换.主体.kind, 'Lead', '根会话的主体读数就是 Lead');
 
-        // ④ 正对照：根会话收敛 ⇒ 放行（且真收敛、真落末位表态）。
+        // ④ 正对照：根会话收敛 ⇒ 放行（且真收敛、真落结论）。
         const 根收 = await 跑({ action: 'debate_converge', id: 节点 }, 根会话exec);
         assert.equal(根收.成功, true, `根会话收敛要放行：${JSON.stringify(根收)}`);
-        assert.equal((await 节点读数()).状态, '已收敛', '根会话收敛真把讨论收掉');
-        assert.ok((await 节点读数()).表态消息id, '根会话收敛真落了末位表态');
+        assert.equal((await 节点读数()).状态, '已收敛', '根会话收敛真把会审收掉');
+        assert.ok((await 节点读数()).结论, '根会话收敛真落了结论');
 
         // ⑤ 服务面直钉「仅 Lead」那一层（不经主体链）：一个**已登记**的在册成员直接调
-        // `debate.round` / `converge` ⇒ 必须是被那条判据拒，而不是被身份挡下。
-        // 这一条排除了「① ② 的拒只是因为实例没登记」这种更弱的解释。
+        // `council.round` / `converge` ⇒ 必须是被那条判据拒，而不是被身份挡下。
         const parts = 装配(g);
-        const 节点2 = await 交齐会审(parts.tasks);
-        await parts.debate.open({ subject: LEAD, 项目: P, 节点: 节点2 });
+        const 节点2 = await 备好会审(parts);
         await assert.rejects(
-          () => parts.debate.round({ subject: MEMBER_A, 项目: P, 节点: 节点2 }),
-          (e) => e.name === 'Denied' && /换轮仅 Lead/.test(e.rule) && e.requireAuthority === 'Lead',
+          () => parts.council.round({ subject: MEMBER_A, 项目: P, id: 节点2 }),
+          (e) => e.name === 'Denied' && /仅 Lead/.test(e.rule) && e.requireAuthority === 'Lead',
           '在册成员直接调服务面换轮 ⇒ 被「仅 Lead」拒（与端到端拒的是同一件事，这里换了层）',
         );
         await assert.rejects(
-          () => parts.debate.converge({ subject: MEMBER_A, 项目: P, 节点: 节点2 }),
-          (e) => e.name === 'Denied' && /收敛仅 Lead/.test(e.rule) && e.requireAuthority === 'Lead',
+          () => parts.council.converge({ subject: MEMBER_A, 项目: P, id: 节点2 }),
+          (e) => e.name === 'Denied' && /仅 Lead/.test(e.rule) && e.requireAuthority === 'Lead',
           '在册成员直接调服务面收敛 ⇒ 被「仅 Lead」拒',
         );
-        const 节点2读数 = await parts.tasks.get(节点2, { 项目: P });
-        assert.equal(节点2读数.讨论.轮次, 1, '服务面被拒的换轮同样没有推进轮次');
-        assert.equal(节点2读数.讨论.状态, '讨论中', '服务面被拒的收敛同样没有收敛');
+        const 节点2读数 = await parts.council.get(P, 节点2);
+        assert.equal(节点2读数.轮次, 1, '服务面被拒的换轮同样没有推进轮次');
+        assert.equal(节点2读数.状态, '讨论中', '服务面被拒的收敛同样没有收敛');
       } finally {
         host.清理();
         forgetSharedOrg();
@@ -609,13 +585,15 @@ describe('A 落地（2026-10-10 · 主人拍板：Lead 显式登记 + 会话派�
         // 读**真源**（不是返回值）：档案里的键就是子会话的会话 id。
         assert.equal((await org.registry.identity()).members[子id].岗位, '插件工程', '档案里的键 = 子会话的会话 id（B 修后的实例键）');
 
-        // ── ② 子会话调 mind：放行，且主体形状按本批的设计 —— **没有 roleId**。
+        // ── ② 子会话调 mind：放行，且主体形状按本批的设计 —— 派生主体自身**没有 roleId**，
+        //    但 runAction 会从档案回填（v2 · 2026-10-18：R02 的「解析成复核者」改为回填档案岗位，
+        //    复核员岗的只读边界靠 roleId 判 ⇒ 回填是机制要件，不是泄漏）。
         const 后 = await 主体读数(工具, 子会话);
         assert.equal(后.成功, true, `登记后该子会话必须能执行（这正是本批要治的那一格）；实际 ${JSON.stringify(后)}`);
         assert.equal(Object.hasOwn(subjectFor({ 实例: 子id }), 'roleId'), false, '会话派生的主体**不带 roleId**（字段缺席，不是一个哨兵值）');
         assert.equal(后.主体.id, 子id, '主体 id = 这个子会话自己的会话 id');
         assert.equal(后.主体.kind, '成员', '会话派生的主体种类是成员（岗位在档案里，不在主体上）');
-        assert.equal(后.主体.roleId, null, '序列化读数里 roleId 是 null —— 与「字段缺席」同义（`lib/actions.js:162` 的 `?? null`）');
+        assert.equal(后.主体.roleId, '插件工程', 'v2：响应里的 roleId 是 runAction 从档案回填的（真源=身份档案，不是主体自报）');
 
         // ── ③ 真动作执行（不只是「过闸」）：工作台按**读者**切片那条路照常走通，
         //    且切的是「成员只读自己那片」—— 说明主体真流进了服务层。
@@ -667,10 +645,13 @@ describe('A 落地（2026-10-10 · 主人拍板：Lead 显式登记 + 会话派�
           denylist: [],
         }, null, 2));
         await org.registry.sync();
+        // 手写档案同样会丢掉 Lead 钉版：由主权者重新建立合法初态（真摘要），
+        // 否则后面那条 assign 撞上的会是「未钉版」而不是「岗位卡不存在」（反例轴就错了）。
+        await org.registry.assign({ subject: { id: 'sovereign', kind: '主权者' }, 岗位: 'Lead', 实例: 'lead' });
         await org.policy.reload();
         const 手写 = await 主体读数(工具, 子会话);
         assert.equal(手写.成功, true, `手写档案（在册在岗）⇒ 放行，且与岗位叫什么无关；实际 ${JSON.stringify(手写)}`);
-        assert.equal(手写.主体.roleId, null, '放行时主体依然**没有 roleId** ⇒ ㉓ 那个「靠哨兵值撞上对账」的形态已不存在');
+        assert.equal(手写.主体.roleId, '未登记', 'v2：roleId 由档案回填（档案写什么就是什么）；但放行只由「在册且在岗」决定——roleId 只挑岗位边界，挑不出任何特权（复核员边界按精确字符串判）');
         // sanctioned 面复跑：`registry_assign` 到岗位「未登记」⇒ 拒（岗位卡不存在）。
         await assert.rejects(
           () => org.registry.assign({ subject: LEAD, 岗位: '未登记', 实例: 子id, 代: 1 }),
@@ -708,20 +689,21 @@ describe('A 落地（2026-10-10 · 主人拍板：Lead 显式登记 + 会话派�
           '主体自陈的岗位与档案不符 ⇒ 拒（会话派生那条「不填 roleId」不许把这一格也短路掉）',
         );
 
-        // ── ② 正对照：主体自陈的岗位**与档案一致**（复核员）⇒ 放行，主体是复核者。
+        // ── ② 正对照：主体自陈的岗位**与档案一致**（复核员）⇒ 放行。
+        //    v2（2026-10-18）：复核员是成员 kind，roleId=复核员；不再有「复核者」主体类。
         //    证明 ① 的拒不是「凡带岗位就拒」，而是「带的岗位必须与档案一致」。
         const 过 = await runAction({ org, 项目: org.project, subject: LEAD, 主体: subjectFor({ 岗位: '复核员', 实例: 子id }), args: { action: 'status', role: '复核员', 实例: 子id } });
-        assert.equal(过.主体.kind, '复核者', `与档案一致时按岗位构造主体；实际 ${JSON.stringify(过.主体)}`);
+        assert.equal(过.主体.kind, '成员', `与档案一致时按岗位构造主体（v2：复核员=成员 kind）；实际 ${JSON.stringify(过.主体)}`);
         assert.equal(过.主体.roleId, '复核员');
 
         // ── ③ 两条路不是同一个判据：**同一条 exec、同一份档案**，会话派生那条路照常放行
-        //    且**不自陈任何岗位**——它放行后的 roleId 是档案解析出来的（R02 收口 · 2026-10-16：
-        //    复核员岗在 runAction 门② 解析成复核者），不是主体自报的；① 的自报那一路照旧
+        //    且**不自陈任何岗位**——它放行后的 roleId 是 runAction 从档案回填的（v2：
+        //    R02 的「解析成复核者」改为「回填档案岗位」，kind 恒为成员）；① 的自报那一路照旧
         //    要对账。两格同时成立才是本批设计：「派生不填 roleId」没有把「自报必须一致」短路掉。
         const 派生 = await 主体读数(工具, 子会话);
         assert.equal(派生.成功, true, `同一份档案下会话派生照常放行；实际 ${JSON.stringify(派生)}`);
-        assert.equal(派生.主体.kind, '复核者', '派生主体按档案解析成复核者（入口统一可信角色解析，R02）');
-        assert.equal(派生.主体.roleId, '复核员', 'roleId 来自档案解析——主体自身仍不填（subjectFor({实例}) 无 roleId，见 A-1 断言）');
+        assert.equal(派生.主体.kind, '成员', 'v2：派生主体保持成员 kind（复核者主体类已移除）');
+        assert.equal(派生.主体.roleId, '复核员', 'roleId 来自档案回填——主体自身仍不填（subjectFor({实例}) 无 roleId，见 A-1 断言）');
       } finally {
         host.清理();
         forgetSharedOrg();

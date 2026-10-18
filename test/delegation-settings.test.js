@@ -191,7 +191,9 @@ describe('调度设置：正式 editor、认证、锁内 CAS 与分面回执', (
       for (const subject of [LEAD, MEMBER]) {
         const decision = await f.policy.decide({ subject, action: 'write', target, context: {} });
         assert.equal(decision.verdict, 'deny', `${subject.kind} 不得改部署授权：${JSON.stringify(decision)}`);
-        assert.match(decision.rule, /宪章/);
+        // 拒绝轴不变（模型面不可触及）；v2 条目20 起成员/Lead 写前可能先命中「不越授」父判，
+        // 也是结构性拒绝，两条都算命中（不把判据放宽成「任何错误都行」——verdict 必须 deny）。
+        assert.match(decision.rule, /宪章|不越授/);
       }
       const sovereign = await f.policy.decide({ subject: SOVEREIGN, action: 'write', target, context: {} });
       assert.equal(sovereign.verdict, 'allow');
@@ -329,16 +331,15 @@ describe('调度设置：正式 editor、认证、锁内 CAS 与分面回执', (
     };
     try {
       await apply(host.ctx, { home, privateRoot: join(home, 'private'), factoryRoot: fileURLToPath(new URL('../mind', import.meta.url)), delegation: INITIAL });
-      // 观察预算 ≠ 机制承诺（2026-10-17 测试稳定性批）：确认写是 apply+2s 的**定时**——机制
-      // 语义「2秒窗」指这个排程，不是墙钟观测上限。并发全量套件跑起来后事件循环繁忙，
-      // setTimeout 回调晚点几秒是测试环境噪声不是产品行为；修前 3s/4s 预算在负载下超窗
-      // （本批与设计债批复核均实测踩中）——预算放宽，断言（自愈后形态）一字不变。
-      const landed = await 等到((doc) => doc.调度创建闸?.registered === true, 8_000);
-      assert.equal(landed.范围闸.registered, true);
-      // 冷启动实证场景：二次激活把先到的 true 覆写回初始形态——确认写必须在2秒窗内恢复真实闸态。
+      // 观察预算 ≠ 机制承诺（2026-10-17 测试稳定性批）：确认写是 apply+2s 的**定时**。
+      // 修前测试先等第一次 true 再覆写——负载下第一次 true 可能已越过 2s 窗，覆写发生在
+      // 确认写之后，永远等不到自愈（把机制缺陷误判成测试超时）。现在**立即**模拟二次激活
+      // 覆写回 null（在 2s 窗内），再等确认写恢复；这才是要测的场景。
+      await new Promise((resolve) => setTimeout(resolve, 50));
       await writeFile(receipt, `${JSON.stringify({ 范围闸: { registered: true, error: null }, 调度创建闸: { registered: null, error: null } }, null, 2)}\n`, 'utf8');
-      assert.equal((await 读回执()).调度创建闸.registered, null, '前提：覆写已生效');
+      assert.equal((await 读回执()).调度创建闸.registered, null, '前提：覆写已生效（在 2 秒确认写之前）');
       const healed = await 等到((doc) => doc.调度创建闸?.registered === true, 15_000);
+      assert.equal(healed.范围闸.registered, true);
       assert.deepEqual(healed.调度创建闸, { registered: true, error: null });
     } finally {
       host.清理();

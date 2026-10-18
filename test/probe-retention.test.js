@@ -51,7 +51,7 @@ describe('设计债㉘：探针快照保留策略', () => {
   it('㉘-回归：超限（>200）才动手，滞回清回 150，最旧先走、清量入账', async () => {
     await withFixture({}, async (f) => {
       const names = await seed(f, 205); // 全红种子 ⇒ 本次 run（全绿）是唯一的「最近全绿」
-      const probes = new ProbeRunner({ layout: f.layout, policy: f.policy, audit: f.audit, clock: f.clock });
+      const probes = new ProbeRunner({ layout: f.layout, policy: f.policy, audit: f.audit, clock: f.clock, 无内核装配: true });
       const ran = await probes.run({ subject: LEAD });
       assert.equal(ran.全绿, true, '健康夹具上本次巡检应全绿（种子全红不影响探针本身）');
       const after = await listSnapshots(f);
@@ -72,7 +72,7 @@ describe('设计债㉘：探针快照保留策略', () => {
     // 这样「最近全绿」就是 0 号种子，正好落在清理窗口（最新 150）之外。
     await withFixture({ denylist: [{ id: 'ghost-card-x' }] }, async (f) => {
       const names = await seed(f, 205, [0]);
-      const probes = new ProbeRunner({ layout: f.layout, policy: f.policy, audit: f.audit, clock: f.clock });
+      const probes = new ProbeRunner({ layout: f.layout, policy: f.policy, audit: f.audit, clock: f.clock, 无内核装配: true });
       const ran = await probes.run({ subject: LEAD });
       assert.equal(ran.全绿, false, '前置：撤回名单探针必须真的见红（否则「本次 run 也红」没成立）');
       assert.ok(ran.见红.some((r) => r.探针 === '撤回名单一致'));
@@ -87,7 +87,7 @@ describe('设计债㉘：探针快照保留策略', () => {
   it('㉘-未超限不动盘：200 及以下不清理、不入账（保留行只在真删了文件时出现）', async () => {
     await withFixture({}, async (f) => {
       await seed(f, 199);
-      const probes = new ProbeRunner({ layout: f.layout, policy: f.policy, audit: f.audit, clock: f.clock });
+      const probes = new ProbeRunner({ layout: f.layout, policy: f.policy, audit: f.audit, clock: f.clock, 无内核装配: true });
       await probes.run({ subject: LEAD });
       const after = await listSnapshots(f);
       assert.equal(after.length, 200, '199 种子 + 1 新 = 200，未越过触发线（>200）⇒ 一个都不删');

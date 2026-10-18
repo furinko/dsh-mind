@@ -17,7 +17,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { makeFixture, LEAD, MEMBER, REVIEWER, SOVEREIGN, writeUnder } from './helpers.mjs';
+import { makeFixture, LEAD, MEMBER, REVIEWER, SOVEREIGN, writeUnder, seedReviewRelation } from './helpers.mjs';
 import { Clock } from '../src/kernel/time.js';
 import { appendLines, readJsonl } from '../src/kernel/fsx.js';
 import { Denied, InvalidBody } from '../src/kernel/errors.js';
@@ -110,7 +110,10 @@ describe('W3 批3 · 入口与边界', () => {
       // 一条真实作答（成员任务内）——结账要把它归档
       const 作答 = await memory.remember({ subject: MEMBER, 类: '作答', 内容: '我的作答内容', 来源: '实例作答', 项目: P, 任务: { 负责人: 'member-a' } });
       await tasks.submit(节点.id, { subject: MEMBER, 项目: P, 结论: '做完了' });
-      await tasks.review(节点.id, { subject: REVIEWER, 项目: P, 三态: '过' });
+      await seedReviewRelation(f, { 项目: P, 目标: 节点.id });
+      const 过 = await tasks.review(节点.id, { subject: REVIEWER, 项目: P, 三态: '过' });
+      // 补修K：复核只出票；采纳是 Lead 的独立一步（引用真票）——settle 前置仍是「已采纳」。
+      await tasks.accept(节点.id, { subject: LEAD, 项目: P, 票: 过.待采纳?.票 });
       assert.equal((await tasks.get(节点.id, { 项目: P })).状态, '已采纳');
 
       // 权限：成员与复核者都不许结账——**要钉住的是「结账是 Lead 的收尾权」这条规则本身**，
@@ -124,7 +127,7 @@ describe('W3 批3 · 入口与边界', () => {
       }
       assert.equal((await tasks.get(节点.id, { 项目: P })).状态, '已采纳', '被拒的结账不许改动节点');
 
-      const 结账 = await tasks.settle(节点.id, { subject: LEAD, 项目: P });
+      const 结账 = await tasks.settle(节点.id, { subject: LEAD, 项目: P, 记忆处置: {} });
       assert.equal(结账.状态, '已结账');
       assert.equal(结账.归档条数, 1, '该项目的作答要被归档（1 条）');
       assert.equal((await memory.readableBy(作答.id, { 读者: MEMBER })).可读, false, '归档后成员不可读');
@@ -144,9 +147,12 @@ describe('W3 批3 · 入口与边界', () => {
       await tasks.dispatch(另一.id, { subject: LEAD, 项目: P });
       await tasks.start(另一.id, { subject: MEMBER, 项目: P });
       await tasks.submit(另一.id, { subject: MEMBER, 项目: P, 结论: 'ok' });
-      await tasks.review(另一.id, { subject: REVIEWER, 项目: P, 三态: '过' });
-      const org = { tasks, memory, policy, audit, registry: { identity: async () => ({ members: {} }) } };
-      const 结果 = await runAction({ org, 项目: P, subject: LEAD, 主体: LEAD, args: { action: 'task_settle', id: 另一.id } });
+      await seedReviewRelation(f, { 项目: P, 目标: 另一.id });
+      const 过另一 = await tasks.review(另一.id, { subject: REVIEWER, 项目: P, 三态: '过' });
+      // 补修K：复核只出票；采纳是 Lead 的独立一步（引用真票）。
+      await tasks.accept(另一.id, { subject: LEAD, 项目: P, 票: 过另一.待采纳?.票 });
+      const org = { tasks, memory, policy, audit, registry: f.registry };
+      const 结果 = await runAction({ org, 项目: P, subject: LEAD, 主体: LEAD, args: { action: 'task_settle', id: 另一.id, 记忆处置: {} } });
       assert.equal(结果.节点.状态, '已结账');
       assert.match(结果.说明, /已结账/);
 
@@ -156,7 +162,10 @@ describe('W3 批3 · 入口与边界', () => {
       await tasks.dispatch(第三个.id, { subject: LEAD, 项目: P });
       await tasks.start(第三个.id, { subject: MEMBER, 项目: P });
       await tasks.submit(第三个.id, { subject: MEMBER, 项目: P, 结论: 'ok' });
-      await tasks.review(第三个.id, { subject: REVIEWER, 项目: P, 三态: '过' });
+      await seedReviewRelation(f, { 项目: P, 目标: 第三个.id });
+      const 过第三 = await tasks.review(第三个.id, { subject: REVIEWER, 项目: P, 三态: '过' });
+      // 补修K：复核只出票；采纳是 Lead 的独立一步（引用真票）。
+      await tasks.accept(第三个.id, { subject: LEAD, 项目: P, 票: 过第三.待采纳?.票 });
       const 裸图 = new TaskGraph({ layout: f.layout, policy, audit, clock: f.clock });
       await assert.rejects(
         () => 裸图.settle(第三个.id, { subject: LEAD, 项目: P }),
@@ -239,30 +248,33 @@ describe('W3 批3 · 入口与边界', () => {
     assert.deepEqual(y.errors, []);
   });
 
-  it('⑨workbench 未交齐：连 零分歧/零分歧依据 一起遮；齐后照给', () => {
-    const 造节点 = (答案) => ({ id: 'n-w3c', 描述: '技术路线', 状态: '已交卷', 模式: '独立会审', 负责人: ['member-a', 'member-b', 'member-c'], 判据: ['x'], 判据冻结: true, 独立答案: 答案 });
-    const 两份一致 = [
-      { 成员: 'member-a', 结论: '用会话命令', 反例面: [] },
-      { 成员: 'member-b', 结论: '用会话命令', 反例面: [] },
-    ];
-    const 未齐 = projectWorkbench({ 项目: 'p', 节点: [造节点(两份一致)], 探针: { 结果: [] }, 策略: { healthy: true, rules: [] } }).会审[0];
-    assert.equal(未齐.揭名, false);
-    // 盲标单源（设计评审 #8 · 2026-10-15）：n-w3c 种子下 member-a→B、member-b→A
-    // （review.盲标分配 的确定性置换，可复算）。
-    assert.deepEqual(未齐.独立答案, [{ 盲标: '成员 B' }, { 盲标: '成员 A' }]);
-    assert.equal(未齐.零分歧, undefined, '未交齐时「这两份一致」本身也是内容级信息 ⇒ 不投影');
-    assert.equal(未齐.零分歧依据, undefined);
-    assert.doesNotMatch(JSON.stringify(未齐), /全票一致/, '依据文本也不许漏出去');
-
-    const 齐 = projectWorkbench({
+  it('⑨workbench 会审区按存档形状搬：未收敛不冒充判定，收敛后零分歧照给', () => {
+    const 行 = (over) => ({
+      id: 'council-w3c', 问题: '技术路线', 参与者: ['member-a', 'member-b', 'member-c'], 轮次: '1/2',
+      来源会话: 'lead', 答案: [], 分歧清单: [], 结论: null, 零分歧: false, 创建于: 't',
+      ...over,
+    });
+    const 未收 = projectWorkbench({
       项目: 'p',
-      节点: [造节点([...两份一致, { 成员: 'member-c', 结论: '用会话命令', 反例面: [] }])],
-      探针: { 结果: [] },
-      策略: { healthy: true, rules: [] },
+      会审存档: [行({ 状态: '作答中', 答案: [{ 成员: '成员 B', 结论: null, 结论层: null, 反例面: [] }] })],
+      探针: { 结果: [] }, 策略: { healthy: true, rules: [] },
     }).会审[0];
-    assert.equal(齐.揭名, true);
-    assert.equal(齐.零分歧, true, '齐后照给（三份一致且无人给反例面 ⇒ 零分歧异常信号）');
-    assert.match(齐.零分歧依据, /全票一致/);
+    // 存档是布尔：作答中时服务层折出的 零分歧异常 恒 false。投影只搬，不自己判定；
+    // 「未收敛 ⇒ 未判定」的裁决在渲染层（按 状态 判），这里钉的是形状不撒谎。
+    assert.equal(未收.状态, '作答中');
+    assert.equal(未收.零分歧, false);
+    assert.equal('零分歧依据' in 未收, false, 'v2 存档没有 零分歧依据 字段（判定在服务层现算并入账）');
+    assert.doesNotMatch(JSON.stringify(未收), /全票一致/, '依据文本不许从投影漏出去');
+
+    const 收 = projectWorkbench({
+      项目: 'p',
+      会审存档: [行({ 状态: '已收敛', 结论: '按方案A收敛', 零分歧异常: true, 收敛于: 't2' })],
+      探针: { 结果: [] }, 策略: { healthy: true, rules: [] },
+    }).会审[0];
+    assert.equal(收.状态, '已收敛');
+    assert.equal(收.零分歧, true, '收敛后零分歧异常照实投影（异常信号由渲染层画成告警）');
+    assert.equal(收.结论, '按方案A收敛');
+    assert.equal(收.收敛于, 't2');
   });
 
   it('⑩registry.assign 在岗换岗位 ⇒ 拒（先 seal 再 assign）；同岗位仍幂等', async () => {

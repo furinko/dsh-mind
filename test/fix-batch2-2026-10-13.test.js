@@ -10,7 +10,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, writeFile, rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { makeFixture, LEAD, MEMBER } from './helpers.mjs';
+import { makeFixture, LEAD, MEMBER, seedReviewRelation } from './helpers.mjs';
 import { AuditLog } from '../src/audit.js';
 import { Clock } from '../src/kernel/time.js';
 import { Layout } from '../src/paths.js';
@@ -261,7 +261,10 @@ describe('批次2 · P1-6 任务状态机锁内复检（语义抽样）', () => 
     await tasks.dispatch(node.id, { subject: LEAD, 项目: P });
     await tasks.start(node.id, { subject: MEMBER, 项目: P });
     await tasks.submit(node.id, { subject: MEMBER, 项目: P });
-    await tasks.review(node.id, { subject: { id: 'reviewer', kind: '复核者' }, 项目: P, 三态: '过' });
+    await seedReviewRelation(f, { 项目: P, 目标: node.id });
+    const 过 = await tasks.review(node.id, { subject: { id: 'reviewer', kind: '成员', roleId: '复核员' }, 项目: P, 三态: '过' });
+    // 补修K：复核只出票；采纳是 Lead 的独立一步（引用真票）——终态由采纳产生。
+    await tasks.accept(node.id, { subject: LEAD, 项目: P, 票: 过.待采纳?.票 });
     const 已采纳 = await tasks.get(node.id, { 项目: P });
     assert.equal(已采纳.状态, '已采纳');
     await assert.rejects(

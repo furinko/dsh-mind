@@ -59,7 +59,7 @@ describe('闸门留痕：身份未登记拦截入账（缺口1A）', () => {
           org,
           项目: P,
           主体: ghost,
-          args: { action: 'memory_write', 类: '知识', 内容: 敏感字串, 来源: 敏感字串, project: P },
+          args: { action: 'memory_write', 类: '经历', 内容: 敏感字串, 来源: 敏感字串, project: P },
         }),
       (e) => e instanceof Denied && /§12.2/.test(e.rule),
     );
@@ -78,7 +78,7 @@ describe('闸门留痕：身份未登记拦截入账（缺口1A）', () => {
           org,
           项目: P,
           主体: MEMBER,
-          args: { action: 'memory_write', 类: '知识', 内容: '任务外写', 来源: '测试', project: P },
+          args: { action: 'memory_write', 类: '经历', 内容: '任务外写', 来源: '测试', project: P },
         }),
       (e) => e instanceof Denied && /任务外无/.test(e.rule),
     );

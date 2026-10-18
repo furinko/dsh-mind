@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { appendLines, listFiles, readTextOrNull, sleep, withLock } from '../src/kernel/fsx.js';
 import { formatFrontMatter, parseDocument, parseSimpleYaml } from '../src/tags.js';
-import { makeFixture, LEAD, MEMBER, REVIEWER, SOVEREIGN } from './helpers.mjs';
+import { makeFixture, LEAD, MEMBER, REVIEWER, SOVEREIGN, seedReviewRelation } from './helpers.mjs';
 import { Clock } from '../src/kernel/time.js';
 import { AuditLog } from '../src/audit.js';
 import { PolicyEngine } from '../src/policy.js';
@@ -163,7 +163,10 @@ describe('W3 批4 · 四条门禁', () => {
       await tasks.start(节点.id, { subject: MEMBER, 项目: P });
       await memory.remember({ subject: MEMBER, 类: '作答', 内容: '我的作答', 来源: '实例作答', 项目: P, 任务: { 负责人: 'member-a' } });
       await tasks.submit(节点.id, { subject: MEMBER, 项目: P, 结论: 'ok' });
-      await tasks.review(节点.id, { subject: REVIEWER, 项目: P, 三态: '过' });
+      await seedReviewRelation(f, { 项目: P, 目标: 节点.id });
+      const 过 = await tasks.review(节点.id, { subject: REVIEWER, 项目: P, 三态: '过' });
+      // 补修K：复核只出票；采纳是 Lead 的独立一步（引用真票）——settle 前置仍是「已采纳」。
+      await tasks.accept(节点.id, { subject: LEAD, 项目: P, 票: 过.待采纳?.票 });
 
       const 原check = policy.check.bind(policy);
       policy.check = async (input) => {
@@ -172,14 +175,14 @@ describe('W3 批4 · 四条门禁', () => {
         }
         return 原check(input);
       };
-      await assert.rejects(() => tasks.settle(节点.id, { subject: LEAD, 项目: P }), (e) => e instanceof Denied);
+      await assert.rejects(() => tasks.settle(节点.id, { subject: LEAD, 项目: P, 记忆处置: {} }), (e) => e instanceof Denied);
       policy.check = 原check;
 
       assert.equal((await tasks.get(节点.id, { 项目: P })).状态, '已采纳', '归档被拒 ⇒ 节点不许显示已结账');
       assert.ok(!(await tasks.events({ 项目: P })).some((r) => r.kind === 'settled'), '事件流里不许留下 settled');
 
       // 撤拦截 ⇒ 正常结账
-      const 结 = await tasks.settle(节点.id, { subject: LEAD, 项目: P });
+      const 结 = await tasks.settle(节点.id, { subject: LEAD, 项目: P, 记忆处置: {} });
       assert.equal(结.状态, '已结账');
       assert.equal(结.归档条数, 1);
     } finally {
@@ -187,37 +190,44 @@ describe('W3 批4 · 四条门禁', () => {
     }
   });
 
-  it('②c 未交齐不投影零分歧，但内部判定仍是全量答案现算（齐后照给；分歧时给 false）', () => {
-    const 造节点 = (答案) => ({ id: 'n-w3d', 描述: '路线', 状态: '已交卷', 模式: '独立会审', 负责人: ['member-a', 'member-b', 'member-c'], 判据: ['x'], 判据冻结: true, 独立答案: 答案 });
-    const 投影 = (答案) => projectWorkbench({ 项目: 'p', 节点: [造节点(答案)], 探针: { 结果: [] }, 策略: { healthy: true, rules: [] } }).会审[0];
-
+  it('②c 零分歧判定用全量答案现算（纯函数）；workbench 只搬存档，不拿遮罩行重判', () => {
+    const 行 = (over) => ({
+      id: 'council-w3d', 问题: '路线', 状态: '作答中', 参与者: ['member-a', 'member-b', 'member-c'],
+      轮次: '0/2', 来源会话: 'lead', 答案: [], 分歧清单: [], 结论: null, 零分歧: false, 创建于: 't',
+      ...over,
+    });
     const 一致两份 = [
       { 成员: 'member-a', 结论: '用会话命令', 反例面: [] },
       { 成员: 'member-b', 结论: '用会话命令', 反例面: [] },
     ];
-    const 未齐 = 投影(一致两份);
-    assert.equal(未齐.零分歧, undefined, '未交齐不投影（批3 的遮罩）');
-    assert.equal(judgeZeroDivergence(一致两份).零分歧, true, '判定用的是**全量答案**（同一个纯函数），只是不投影');
-    // W3 批5：未交齐时补的**机械读数**——它由全量答案算得、不含任何人的结论文本。
-    // 没有它，「判定读的是全量还是遮罩后的行」在未交齐场景下没有任何可观察判据
-    // （复核实测：把判定改成读遮罩行仍然全绿）。遮罩行没有结论 ⇒ 基数会塌成 0。
-    assert.equal(未齐.零分歧判定基数, 2, '未交齐（2/3）时基数 = 全量答案里带结论的条数（2）');
-    assert.deepEqual(未齐.独立答案, [{ 盲标: '成员 A' }, { 盲标: '成员 B' }], '同时答案行只有盲标（遮罩仍在）');
-    assert.doesNotMatch(JSON.stringify(未齐), /用会话命令/, '机械读数不许把结论带出来');
+    // 判定本体仍是纯函数、吃全量答案（v2：调用方是 council.converge，不是投影）。
+    assert.equal(judgeZeroDivergence(一致两份).零分歧, true, '判定用的是全量答案（同一个纯函数）');
 
-    const 齐 = 投影([...一致两份, { 成员: 'member-c', 结论: '用会话命令', 反例面: [] }]);
-    assert.equal(齐.零分歧, true, '齐后照给');
-    assert.equal(齐.零分歧判定基数, undefined, '齐后给的是判定值本身，不需要基数这个旁证');
+    const 未收 = projectWorkbench({
+      项目: 'p',
+      会审存档: [行({ 状态: '作答中', 盲评遮罩: true, 答案: [{ 成员: '成员 A', 结论: null, 结论层: null, 反例面: [] }] })],
+      探针: { 结果: [] }, 策略: { healthy: true, rules: [] },
+    }).会审[0];
+    assert.equal(未收.零分歧, false, '存档布尔原样搬（作答中折出的异常标记恒 false）');
+    assert.equal(未收.状态, '作答中', '「未判定」由渲染层按状态裁决，投影不冒充');
+    assert.deepEqual(未收.答案, [{ 成员: '成员 A', 结论: null, 结论层: null, 反例面: [] }], '答案行只有盲标');
+    assert.doesNotMatch(JSON.stringify(未收), /用会话命令/, '投影不许把结论带出来');
 
-    // 反向：结论不同 ⇒ false。这条能识别「拿遮罩后的行去判」那种实现——
-    // 遮罩行没有 成员/结论，`结论层` 会塌成一个空串，于是任何会审都被判成"零分歧"。
+    const 收 = projectWorkbench({
+      项目: 'p',
+      会审存档: [行({ 状态: '已收敛', 零分歧异常: true, 结论: '全票一致', 收敛于: 't' })],
+      探针: { 结果: [] }, 策略: { healthy: true, rules: [] },
+    }).会审[0];
+    assert.equal(收.零分歧, true, '收敛后的零分歧异常照给');
+
+    // 反向（纯函数）：结论层不同 ⇒ false。这条能识别「拿遮罩后的空结论去判」那种实现。
     const 分歧三份 = [
       { 成员: 'member-a', 结论: '用会话命令', 反例面: [] },
       { 成员: 'member-b', 结论: '用常驻进程', 反例面: [] },
       { 成员: 'member-c', 结论: '用会话命令', 反例面: [] },
     ];
-    const 齐分歧 = 投影(分歧三份);
-    assert.equal(齐分歧.零分歧, false, '结论层有分歧 ⇒ 不是零分歧（拿遮罩行去判会误报 true）');
-    assert.match(齐分歧.零分歧依据, /分歧数 2/);
+    const 判 = judgeZeroDivergence(分歧三份);
+    assert.equal(判.零分歧, false, '结论层有分歧 ⇒ 不是零分歧（拿遮罩行去判会误报 true）');
+    assert.match(判.依据, /分歧数 2/);
   });
 });

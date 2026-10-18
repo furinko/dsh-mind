@@ -1,5 +1,5 @@
 /**
- * 设计评审修复批次 C（2026-10-15，对应 docs/design/设计评审报告-dsh-mind-2026-10-15.md）。
+ * 设计评审修复批次 C（2026-10-15，对应 docs/归档/审查轮-2026-10/设计评审报告-dsh-mind-2026-10-15.md）。
  *
  * 覆盖（十二项中的可测项）：
  *   #7  markInteraction 来源白名单闸 + 失联→在线迁移那一刻的单条审计（常规心跳不刷）；
@@ -30,7 +30,7 @@ import { GRADE, 审计尾默认条数, 看板审计尾条数 } from '../src/audi
 import { 盲标分配 } from '../src/review.js';
 import { projectWorkbench } from '../src/workbench.js';
 import { runAction } from '../lib/actions.js';
-import { 看板包 } from '../components/kernel/lib/routes.js';
+import { 看板包, 端点表 } from '../components/kernel/lib/routes.js';
 import { readJsonl, readJsonOrNull } from '../src/kernel/fsx.js';
 import { Denied, InvalidBody } from '../src/kernel/errors.js';
 import { DIR } from '../src/paths.js';
@@ -140,57 +140,58 @@ describe('设计评审 2026-10-15 批次C · #7 markInteraction 来源闸与迁�
   });
 });
 
-// ── #8 盲标单源：workbench 会审行 = review.盲标分配 ────────────────────────────
+// ── #8 盲标单源：council 遮罩 = review.盲标分配 ────────────────────────────────
 
 describe('设计评审 2026-10-15 批次C · #8 盲标单源', () => {
-  it('同一节点同一批交卷人：workbench 投影盲标与 review.openBlind 一一对应（同人同标）', async () => {
+  it('同一场会审：成员读者看到的盲标与 盲标分配(线程名(会审id), 参与者) 一一对应（同人同标）', async () => {
     const f = await makeFixture();
-    let org;
     try {
-      org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
-      const id = await 会审节点(org);
-      const blind = await org.review.openBlind({ subject: LEAD, 项目: P, 线程: id, 节点: id, 参与者: ['member-a', 'member-b'], 已交: [] });
-      const view = await org.workbench({ 项目: P });
-      const 行 = view.会审.find((a) => a.节点 === id);
-      assert.ok(行, '会审行在投影里');
-      assert.equal(行.揭名, true, '交齐后揭名（行上带成员，可逐人对照）');
-      for (const row of 行.独立答案) {
-        const 对 = blind.盲标.find((b) => b.id === row.成员);
-        assert.ok(对, `openBlind 名册里有 ${row.成员}`);
-        assert.equal(row.盲标, 对.盲标, `同人同标：${row.成员} 在投影与落线侧必须是同一个盲标`);
-      }
-      assert.equal(new Set(行.独立答案.map((r) => r.盲标)).size, 行.独立答案.length, '盲标不重复');
+      const org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
+      const 开 = await org.council.open({ subject: LEAD, 项目: P, 问题: '盲标单源', 参与者: ['member-a', 'member-b'] });
+      await org.council.answer({ subject: { id: 'member-a', kind: '成员', roleId: '插件工程' }, 项目: P, id: 开.id, 结论: '甲卷' });
+      const { 线程名 } = await import('../src/council.js');
+      const 标 = new Map(盲标分配(线程名(开.id), 开.会审.参与者).map((e) => [e.id, e.盲标]));
+      const 乙读 = (await org.council.list({ 项目: P, 读者: { id: 'member-b', kind: '成员', roleId: '插件工程' } }))[0];
+      const 甲条 = 乙读.答案.find((a) => a.成员 === 标.get('member-a'));
+      assert.ok(甲条, '乙读到的他人条目必须用单源盲标（同人同标）');
+      assert.equal(甲条.成员, 标.get('member-a'), '盲标逐字等于 盲标分配 的结果');
+      assert.equal(甲条.结论, null, '盲标条目不许带结论');
+      assert.equal(new Set([...标.values()]).size, 2, '盲标不重复');
     } finally {
       await f.cleanup();
     }
   });
 
   it('确定性置换钉值：名册集合变 ⇒ 同一成员的标跟着变；输入顺序变 ⇒ 映射不变', () => {
-    const 造节点 = (id, 答案) => ({ id, 描述: '技术路线', 状态: '已交卷', 模式: '独立会审', 负责人: 答案.map((a) => a.成员), 判据: ['x'], 判据冻结: true, 独立答案: 答案 });
-    const 投影 = (节点) => projectWorkbench({ 项目: 'p', 节点: [节点], 探针: { 结果: [] }, 策略: { healthy: true, rules: [] } }).会审[0].独立答案;
-    const 甲 = (结论) => ({ 成员: 'member-a', 结论, 反例面: [] });
-    const 乙 = (结论) => ({ 成员: 'member-b', 结论, 反例面: [] });
-    const 丙 = (结论) => ({ 成员: 'member-c', 结论, 反例面: [] });
-
-    // 钉值（种子 c-盲标同源 + 名册 {a,b}）：a→B、b→A——非下标恒等，确定性洗牌真实生效。
-    assert.deepEqual(投影(造节点('c-盲标同源', [甲('x'), 乙('y')])).map((r) => r.盲标), ['成员 B', '成员 A'], '同一成员两套盲标不许并存（修前下标盲标恒 [A,B]）');
-    // 输入顺序变（名册集合不变）⇒ 同人同标（盲标分配是集合语义，P2-13 的先例在投影侧成立）。
-    assert.deepEqual(投影(造节点('c-盲标同源', [乙('y'), 甲('x')])).map((r) => r.盲标), ['成员 A', '成员 B'], '交卷顺序不许决定谁拿 A（集合语义）');
-    // 名册集合变 ⇒ 同一成员（member-a）的标变：c-盲标同源 里 a→B，c-名册换人（{a,c}）里 a→A。
-    assert.equal(投影(造节点('c-名册换人', [甲('x'), 丙('z')]))[0].盲标, '成员 A', '种子含名册集合：换人 ⇒ 重洗（下标盲标恒 a→A，察觉不了名册变化）');
-    assert.notEqual(投影(造节点('c-名册换人', [甲('x'), 丙('z')]))[0].盲标, 投影(造节点('c-盲标同源', [甲('x'), 乙('y')]))[0].盲标, '两个名册下 member-a 的标必须不同');
+    const 线程 = '会审/c-盲标来源';
+    const 映 = (名册) => new Map(盲标分配(线程, 名册).map((e) => [e.id, e.盲标]));
+    const 甲乙 = 映(['member-a', 'member-b']);
+    // 非下标恒等：确定性洗牌真实生效（若实现退回下标盲标，a 恒为成员 A）。
+    assert.notEqual(甲乙.get('member-a'), '成员 A', '同一成员两套盲标不许并存（下标盲标恒 A）');
+    // 输入顺序变（名册集合不变）⇒ 同人同标（集合语义）。
+    assert.deepEqual([...映(['member-b', 'member-a'])].sort(), [...甲乙].sort(), '交卷顺序不许决定谁拿 A');
+    // 名册集合变 ⇒ 同一成员的标变（种子含名册集合）。
+    const 甲丙 = 映(['member-a', 'member-c']);
+    assert.notEqual(甲丙.get('member-a'), 甲乙.get('member-a'), '换人 ⇒ 重洗（下标盲标察觉不了名册变化）');
   });
 
-  it('与单源函数直连复核：投影的标表 === 盲标分配(节点id, 独立答案成员)', () => {
-    const 答案 = [
-      { 成员: 'member-a', 结论: 'x', 反例面: [] },
-      { 成员: 'member-b', 结论: 'y', 反例面: [] },
-      { 成员: 'member-c', 结论: 'z', 反例面: [] },
-    ];
-    const 节点 = { id: 'c-复核', 描述: 'd', 状态: '已交卷', 模式: '独立会审', 负责人: ['member-a', 'member-b', 'member-c'], 判据: ['x'], 独立答案: 答案 };
-    const 行 = projectWorkbench({ 项目: 'p', 节点: [节点], 探针: { 结果: [] }, 策略: { healthy: true, rules: [] } }).会审[0].独立答案;
-    const 直连 = new Map(盲标分配('c-复核', 答案.map((a) => a.成员)).map((e) => [e.id, e.盲标]));
-    for (const row of 行) assert.equal(row.盲标, 直连.get(row.成员), `${row.成员} 与单源函数直连结果一致`);
+  it('与单源函数直连复核：council 遮罩的标表 === 盲标分配(线程名(会审id), 参与者)', async () => {
+    const f = await makeFixture();
+    try {
+      const org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
+      const 开 = await org.council.open({ subject: LEAD, 项目: P, 问题: '标表复核', 参与者: ['member-a', 'member-b'] });
+      const { 线程名 } = await import('../src/council.js');
+      const 直连 = new Map(盲标分配(线程名(开.id), 开.会审.参与者).map((e) => [e.id, e.盲标]));
+      await org.council.answer({ subject: { id: 'member-a', kind: '成员', roleId: '插件工程' }, 项目: P, id: 开.id, 结论: '甲' });
+      const 乙读 = (await org.council.list({ 项目: P, 读者: { id: 'member-b', kind: '成员', roleId: '插件工程' } }))[0];
+      assert.deepEqual(
+        乙读.答案.map((r) => r.成员),
+        [直连.get('member-a')],
+        'member-a 的盲标与单源函数直连结果一致',
+      );
+    } finally {
+      await f.cleanup();
+    }
   });
 });
 
@@ -280,6 +281,9 @@ describe('设计评审 2026-10-15 批次C · #12 assign 岗位卡锁内复检', 
     try {
       const reg = new RoleRegistry({ layout: f.layout, policy: f.policy, audit: f.audit, clock: f.clock });
       const 卡路径 = `${f.layout.roleCardDir('自治')}/插件工程.md`;
+      // 夹具默认也带一张出厂 插件工程 卡（默认真钉用）：本反例要「岗位上没有任何卡」，
+      // 竞态窗口里必须两张一起删，否则锁内复检会被出厂卡兜住（前提不成立 ⇒ 假绿）。
+      const 出厂卡路径 = `${f.layout.roleCardDir('出厂')}/插件工程.md`;
       // 正例：卡在 ⇒ 登记成功（锁内复检不误伤正常路径）。
       const ok = await reg.assign({ subject: LEAD, 岗位: '插件工程', 实例: 'member-ok' });
       assert.equal(ok.状态, '在岗');
@@ -290,6 +294,7 @@ describe('设计评审 2026-10-15 批次C · #12 assign 岗位卡锁内复检', 
         if (!已删) {
           已删 = true;
           await rm(卡路径);
+          await rm(出厂卡路径, { force: true });
         }
         return 原check(input);
       };
@@ -312,11 +317,15 @@ describe('设计评审 2026-10-15 批次C · #16 INTERFACES.md 漂移守卫', ()
     const text = readFileSync(new URL('../INTERFACES.md', import.meta.url), 'utf8');
     // 锚「旧登记形态」（逗号连接的导出行）：文档里点名历史（斜杠连接）不算登记。
     assert.ok(!/RoundRecorder,\s*entryFingerprint/.test(text), '§1 不许再登记 src 里不存在的导出（轮桶在 kernel 内存 Map）');
-    assert.match(text, /async unlock\(\{ subject, 项目, 节点, 线程, 全员已交, 参与者, 内容 \}\)/, '§2.2 bus.unlock 签名 = 实况');
-    assert.match(text, /async nominate\(\{ subject, 项目, 节点, 实例\?, 理由\? \}\)/, '§2.9 review.nominate 签名 = 实况');
+    const busSource = readFileSync(new URL('../src/bus.js', import.meta.url), 'utf8');
+    assert.match(busSource, /async unlock\(spec = \{\}\)/, '实况为退役墓碑，不恢复旧写入签名');
+    assert.match(text, /async unlock\(spec = \{\}\)/, '§2.2 墓碑签名必须对应当前代码');
+    assert.match(text, /对任何旧节点恒拒/, '旧节点没有再次解锁写面的旁路');
+    // v2（2026-10-18 复核者降级）：review.nominate / appoint 已删，文档须登记删除而非登记签名。
+    assert.ok(!/async nominate\(/.test(text), '§2.9 review.nominate 已随复核者降级删除，不许再登记签名');
+    assert.match(text, /提名 \/ 池 \/ 轮派 \/ 任命/, '§2.9 须点名复核员任命链已整体删除（v2）');
     assert.match(text, /有实现、无动作\/命令入口/, '§2.6 registry.restore 标注入口现状');
-    assert.match(text, /动作面没有它的入口/, '§2.20-7 review.appoint 按现状改写（任命走 registry_assign+授权引用）');
-    assert.match(text, /\/plugins\/dsh-mind\/ping/, '同源路由面：三端点已记载');
+    for (const path of Object.values(端点表)) assert.ok(text.includes(path), `同源路由面须登记真实端点：${path}`);
   });
 });
 

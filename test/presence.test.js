@@ -48,9 +48,26 @@ const 冻结动作表 = [
   // 仅 Lead、仅 待派发/已派发 态（服务层状态机 + Lead 闸守着），事件流与审计都留痕。
   'task_reassign',
   'task_dispatch',
+  // task_bind（v2 口述收敛 2026-10-18 条目11）：把**实例**绑到节点（负责人不动）。
+  // 过这一关时回答「是不是改设置的动作」：不是——它写的是任务图节点的绑定事实（事件流 +
+  // 审计留痕），仅 Lead/主权者、仅 待派发/已派发 态，且要求实例在册在岗、岗位与档案和
+  // 节点负责人对得上。它是 member_spawn 自动绑定之外的人工正门。
+  'task_bind',
+  // task_attach（v2 条目6 补修）：Lead/主权者把复核读根（源码目录/产物文件绝对路径）附到
+  // 复核任务上。过「是否改设置」这一关：不是——它写任务事件流 + 审计，仅供复核员文件读面；
+  // 成员交付产物另有普通 attach，不授予文件读权限。
+  'task_attach',
   'task_start',
   'task_submit',
   'task_review',
+  // task_accept（补修K · 2026-10-18 · 主权者条目4「采纳权在 Lead」）：复核结论只出可引用票，
+  // 采纳是 Lead 的独立一步（引用本任务当前有效过票 rv-N / 合法免审依据）。
+  // 过「是不是改设置的动作」这一关：不是——它只推进任务图状态、写 accepted 事件与审计，
+  // 仅 Lead/主权者可达，成员/复核岗无这只手。
+  'task_accept',
+  // task_disagree（补修K）：Lead 记录不同意——只追加异议记录（审计），不改复核三态/冻结判据。
+  // 过同一关：不是改设置，是账本上的只增记录。
+  'task_disagree',
   // task_criteria（复核汇总后续顺序① · 2026-10-16）：受管冻结判据只读入口。
   // 过这一关时回答「是不是个改设置的动作」：不是——纯只读白名单投影（判据原文+指派事实），
   // 不写任何账；闸＝handler 侧在办主体判定 + 策略引擎 read（只增对象可读）。
@@ -60,14 +77,10 @@ const 冻结动作表 = [
   // task_settle（W3 批3）：结账——环路最后一步，仅 Lead（policy 的 settle 动作守着）。
   // 它是**工具面可达**的：收尾必须是 Lead 显式拍板的一步，藏进 review 内部就没有独立动作记录了。
   'task_settle',
-  // review_nominate（G1 · 交接件《复核员任命闭环缺口》2026-10-14）：提名复核者进任务图。
-  // 过这一关时回答「是不是改设置的动作」：不是——它只往任务图落 review_nominated 事件
-  // （节点转待决·复核提名），仅 Lead、仅 已交卷/未验/已打回，候选不得是交卷人（§3.4）；
-  // 提名 ≠ 任命：不触碰 registry_assign（任命仍由主权者授权引用驱动）。事件流与审计都留痕。
-  'review_nominate',
-  // review_exempt（G4 · 同交接件）：复核豁免登记（主权者决定不复核时留可查询的账）。
-  // 过这一关时回答「是不是改设置的动作」：不是——它往任务图落 review_exempted 标记事件，
-  // 仅 Lead/主权者 + 授权引用必填（空授权默认拒，防 Lead 自豁免拆掉独立复核线）。
+  // review_exempt（v2 口述收敛 2026-10-18 条目5）：复核豁免登记——读部署设置「复核免审」
+  // 全局开关（默认关 ⇒ 一律拒）。它只往任务图落 review_exempted 标记事件，不改设置。
+  // 提名机制（review_nominate）随复核者降级移除：复核员是普通岗位卡，
+  // 由 Lead 按任务 member_spawn 起实例。
   'review_exempt',
   'memory_write',
   'memory_query',
@@ -100,8 +113,10 @@ const 冻结动作表 = [
   'registry_revoke',
   'upgrade_pending',
   'review_zero',
-  'bus_unlock',
+  // bus_unlock 已退役（v2 条目18 补修）：会审退出任务图，旧独立会审线程只读。
   'debate_open',
+  'debate_answer',
+  'debate_unlock',
   'debate_say',
   'debate_round',
   'debate_converge',
@@ -128,12 +143,15 @@ const 前 = (小时) => new Date(Date.now() - 小时 * 3600_000).toISOString();
 /** 覆盖私有区 部署.json（主权者改的那份）。 */
 const 写部署偏好 = (f, obj) => writeUnder(f.privateRoot, 部署偏好, JSON.stringify(obj, null, 2));
 
-/** 身份档案：指定「最后一次交互」在多少小时前。 */
-const 写身份 = (f, 小时) => writeUnder(f.privateRoot, '身份档案/identity.json', JSON.stringify({
-  members: { lead: { id: 'lead', 岗位: 'Lead', status: '在岗' } },
-  sovereign: { lastInteraction: 前(小时) },
-  denylist: [],
-}, null, 2));
+/** 身份档案：指定「最后一次交互」在多少小时前。保留夹具已建立的 Lead 钉版（不手填摘要）。 */
+const 写身份 = async (f, 小时) => {
+  const 钉 = (await f.registry.cardOf('lead'))?.卡版本 ?? null;
+  await writeUnder(f.privateRoot, '身份档案/identity.json', JSON.stringify({
+    members: { lead: { id: 'lead', 岗位: 'Lead', status: '在岗', ...(钉 ? { 卡版本: 钉 } : {}) } },
+    sovereign: { lastInteraction: 前(小时) },
+    denylist: [],
+  }, null, 2));
+};
 
 /** 自治档写动作的判定（失联冻结就是拦在这一条上）。 */
 const 自治写 = (policy) => policy.decide({ subject: { id: 'lead', kind: 'Lead' }, action: 'write', target: { id: 'c', kind: '能力', authority: '自治' } });
@@ -483,7 +501,7 @@ describe('失联限制：出厂件是真源，开关可关', () => {
     // 反向面：运行键必须还在 —— 别把整份都剔了当「干净」。
     assert.equal(g.policy.state.defaults.响应期限小时, 72, '私有层的运行键仍要生效');
     assert.equal(g.policy.state.defaults.失联限制, true);
-    assert.equal(g.policy.state.defaults.介入度, '零参与');
+    assert.equal(g.policy.state.defaults.介入度, '放权');
     // 剔除不是静默丢弃：被剔掉的键名要能看见（写错键名的人否则会以为「设置生效了」）。
     assert.deepEqual(g.policy.describe().忽略的默认值键, ['说明'], '被剔除的文档键名要如实列出');
     await g.cleanup();
@@ -518,8 +536,8 @@ describe('失联限制：出厂件是真源，开关可关', () => {
       );
     }
     // 反例面：合法写法照样能用（介入度走 defaults，响应期限走 presence）。
-    const g = await makeFixture({ defaults: { 介入度: '事后抽检' }, presence: { 响应期限小时: 168 } });
-    assert.equal(g.policy.intervention(), '事后抽检');
+    const g = await makeFixture({ defaults: { 介入度: '预审' }, presence: { 响应期限小时: 168 } });
+    assert.equal(g.policy.intervention(), '预审');
     assert.equal(g.policy.state.defaults.响应期限小时, 168);
     await g.cleanup();
   });
@@ -528,7 +546,7 @@ describe('失联限制：出厂件是真源，开关可关', () => {
   it('⑬ S2 介入度.json 遗留的 响应期限小时 以 响应期限.json 为准（有意为之的中间层次序）', async () => {
     const g = await makeFixture({
       rules: {
-        '集体L2-共享基础设施/defaults/介入度.json': JSON.stringify({ 介入度: '变更预审', 响应期限小时: 999 }, null, 2),
+        '集体L2-共享基础设施/defaults/介入度.json': JSON.stringify({ 介入度: '预审', 响应期限小时: 999 }, null, 2),
       },
       presence: { 失联限制: true, 响应期限小时: 72 },
     });
@@ -539,7 +557,7 @@ describe('失联限制：出厂件是真源，开关可关', () => {
     assert.equal(g.policy.state.defaults来源.响应期限小时, '出厂', '生效值来自 响应期限.json（出厂层）');
     assert.equal(g.policy.presence().响应期限小时来源, '出厂', '读数里也要标出这一层');
     // 反例面：介入度.json 确实被读了 —— 否则上面那条可能只是「整个文件被忽略」。
-    assert.equal(g.policy.intervention(), '变更预审', '介入度.json 里的 介入度 仍要生效');
+    assert.equal(g.policy.intervention(), '预审', '介入度.json 里的 介入度 仍要生效');
     await g.cleanup();
   });
 

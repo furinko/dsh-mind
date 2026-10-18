@@ -12,7 +12,7 @@
  */
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeFixture, SOVEREIGN, LEAD, MEMBER, REVIEWER } from './helpers.mjs';
+import { makeFixture, SOVEREIGN, LEAD, MEMBER, REVIEWER, seedReviewRelation } from './helpers.mjs';
 import { TaskGraph } from '../src/tasks.js';
 import { MessageBus } from '../src/bus.js';
 import { MemoryService } from '../src/memory.js';
@@ -54,7 +54,11 @@ describe('审查修复 · 批次 1+2', () => {
     await tasks.dispatch(node.id, { subject: LEAD, 项目: P });
     await tasks.start(node.id, { subject: MEMBER, 项目: P });
     await tasks.submit(node.id, { subject: MEMBER, 项目: P });
-    const adopted = await tasks.review(node.id, { subject: REVIEWER, 项目: P, 三态: '过', 复核者: 'reviewer' });
+    await seedReviewRelation(f, { 项目: P, 目标: node.id });
+    const 过 = await tasks.review(node.id, { subject: REVIEWER, 项目: P, 三态: '过', 复核者: 'reviewer' });
+    // 补修K：复核「过」只出票、不自动采纳；采纳是 Lead 的独立一步（引用真票）。
+    assert.equal(过.状态, '已交卷', '复核「过」不自动采纳');
+    const adopted = await tasks.accept(node.id, { subject: LEAD, 项目: P, 票: 过.待采纳?.票 });
     assert.equal(adopted.状态, '已采纳');
     // 终态不许复活，也不许再挂任何事件。
     await assert.rejects(() => tasks.start(node.id, { subject: MEMBER, 项目: P }), (e) => e instanceof Denied);
@@ -68,6 +72,7 @@ describe('审查修复 · 批次 1+2', () => {
     await tasks.dispatch(node.id, { subject: LEAD, 项目: P });
     await tasks.start(node.id, { subject: MEMBER, 项目: P });
     await tasks.submit(node.id, { subject: MEMBER, 项目: P });
+    await seedReviewRelation(f, { 项目: P, 目标: node.id });
     await tasks.review(node.id, { subject: REVIEWER, 项目: P, 三态: '不过', 分歧清单: ['判据未满足'], 复核者: 'reviewer' });
     await tasks.start(node.id, { subject: MEMBER, 项目: P });
     const resubmitted = await tasks.submit(node.id, { subject: MEMBER, 项目: P });
@@ -75,13 +80,13 @@ describe('审查修复 · 批次 1+2', () => {
     assert.equal(resubmitted.打回次数, 1, '返工不清打回计数');
   });
 
-  it('任务写动作的闸：复核者不能交卷，任务外成员不能交卷', async () => {
+  it('任务写动作的闸：复核员不能交卷，任务外成员不能交卷', async () => {
     const node = await tasks.create({ subject: LEAD, 项目: P, 描述: '闸演示', 负责人: 'member-a', 判据: ['x'] });
     await tasks.dispatch(node.id, { subject: LEAD, 项目: P });
     await tasks.start(node.id, { subject: MEMBER, 项目: P });
     await assert.rejects(
       () => tasks.submit(node.id, { subject: REVIEWER, 项目: P }),
-      (e) => e instanceof Denied && /复核者/.test(e.rule),
+      (e) => e instanceof Denied && /只读数/.test(e.rule),
     );
     await assert.rejects(
       () => tasks.submit(node.id, { subject: MEMBER_B, 项目: P }),
@@ -115,16 +120,16 @@ describe('审查修复 · 批次 1+2', () => {
       () => memory.purge(entry.id, { subject: LEAD, 理由: '这段不敏感，但我想删' }),
       (e) => e instanceof Denied && /记忆处置表/.test(e.rule),
     );
-    // 复核者就算声明了敏感也不行：write 闸先一步拦住（复核者只读数）。
+    // 复核员就算声明了敏感也不行：只读闸先一步拦住（复核员岗 · 只读数）。
     await assert.rejects(
       () => memory.purge(entry.id, { subject: REVIEWER, 理由: '这是敏感数据', 敏感: true }),
-      (e) => e instanceof Denied && /复核者/.test(e.rule),
+      (e) => e instanceof Denied && /只读数/.test(e.rule),
     );
     const purged = await memory.purge(entry.id, { subject: LEAD, 理由: '这是敏感数据', 敏感: true });
     assert.equal(purged.已删除, true);
   });
 
-  it('bus.deliver 过闸：复核者不能放行被压住的消息', async () => {
+  it('bus.deliver 过闸：复核员不能放行被压住的消息', async () => {
     const held = await bus.send({ subject: LEAD, 项目: P, 线程: 't-gate', 发件: 'lead', 收件: 'member-a', 内容: '暂缓', 暂不投递: true });
     await assert.rejects(
       () => bus.deliver({ subject: REVIEWER, 项目: P, 线程: 't-gate', id: held.id }),
@@ -134,10 +139,10 @@ describe('审查修复 · 批次 1+2', () => {
     assert.equal(delivered.状态, '已投递');
   });
 
-  it('archiveAnswers 过闸：复核者不能归档作答', async () => {
+  it('archiveAnswers 过闸：复核员不能归档作答', async () => {
     await assert.rejects(
       () => memory.archiveAnswers({ subject: REVIEWER, 项目: P, 任务: 'task-x' }),
-      (e) => e instanceof Denied && /复核者/.test(e.rule),
+      (e) => e instanceof Denied && /只读数/.test(e.rule),
     );
     const archived = await memory.archiveAnswers({ subject: LEAD, 项目: P, 任务: 'task-x' });
     assert.ok(typeof archived.归档条数 === 'number');

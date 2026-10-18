@@ -15,6 +15,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeFixture } from './helpers.mjs';
 import { fakeHost, fakeExec } from './host-harness.mjs';
+import { shareOrg } from '../src/runtime.js';
 import guardModule, { ACTIONS } from '../components/guard/lib/index.js';
 const guardApply = guardModule.apply;
 
@@ -36,6 +37,10 @@ describe('guard 残留面：主体来自会话事实（2026-10-10 收口）', ()
     const host = fakeHost();
     try {
       await guardApply(host.ctx, { home: g.home, factoryRoot: g.factoryRoot, privateRoot: g.privateRoot, 开机自检: false });
+      // v2 条目10：根会话 Lead 也要有在册在岗 + 钉版才可写；这是正规出生路径（机制动作）。
+      const org = await shareOrg({ home: g.home, factoryRoot: g.factoryRoot, privateRoot: g.privateRoot });
+      const 出生 = await org.registry.ensureLeadInstance({ 实例: 'session-root-guard1', 代次: { 代: 'gen-test', pid: process.pid } });
+      assert.equal(出生.就绪, true, `根会话 Lead 出生/钉版未就绪：${JSON.stringify(出生)}`);
       const tool = host.工具.get('mind_guard');
       assert.ok(tool, 'guard 工具已注册到宿主');
       assert.ok(ACTIONS.includes('upgrade_resolve'), '前提：upgrade_resolve 在本组件动作表');
@@ -73,6 +78,10 @@ describe('guard 残留面：主体来自会话事实（2026-10-10 收口）', ()
     const host = fakeHost();
     try {
       await guardApply(host.ctx, { home: g.home, factoryRoot: g.factoryRoot, privateRoot: g.privateRoot, 开机自检: false });
+      // 命令面根会话同样要在册在岗 + 钉版（v2 条目10）；不是新授权，仍是「会话事实」那一位。
+      const org = await shareOrg({ home: g.home, factoryRoot: g.factoryRoot, privateRoot: g.privateRoot });
+      const 出生 = await org.registry.ensureLeadInstance({ 实例: 'session-root-guard2', 代次: { 代: 'gen-test', pid: process.pid } });
+      assert.equal(出生.就绪, true, `命令面根会话 Lead 出生/钉版未就绪：${JSON.stringify(出生)}`);
       const command = host.命令.get('mind-guard');
       assert.ok(command, '/mind-guard 命令已注册');
 

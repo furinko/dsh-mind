@@ -75,6 +75,9 @@ describe('派发闸：负责人必须就位', () => {
   });
 
   it('Lead 自领（负责人 = 本次主体自己）⇒ 放行，不查档案', async () => {
+    // v2 条目10：Lead 实例要先进身份档案（在岗 + 钉版）才能做自治写；这条是正规出生路径。
+    const 出生 = await org.registry.ensureLeadInstance({ 实例: 'lead-2', 代次: { 代: 'gen-test', pid: process.pid } });
+    assert.equal(出生.就绪, true, `Lead 实例出生必须就绪：${JSON.stringify(出生)}`);
     const node = await org.tasks.create({ subject: LEAD2, 项目: P, 描述: 'Lead 顺手干', 负责人: 'lead-2', 判据: ['x'] });
     assert.equal((await org.tasks.dispatch(node.id, { subject: LEAD2, 项目: P })).状态, '已派发');
   });

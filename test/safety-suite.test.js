@@ -27,7 +27,7 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
   before(async () => {
     f = await makeFixture();
     upgrade = new UpgradeManager({ layout: f.layout, policy: f.policy, audit: f.audit, clock: f.clock });
-    probes = new ProbeRunner({ layout: f.layout, policy: f.policy, audit: f.audit, clock: f.clock });
+    probes = new ProbeRunner({ layout: f.layout, policy: f.policy, audit: f.audit, clock: f.clock, 无内核装配: true });
   });
   after(async () => {
     await f.cleanup();
@@ -207,11 +207,14 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
     const result = await probes.autoRollback();
     assert.equal(result.执行, false, '运行态不自动改文件：只有定位，没有执行面');
     assert.equal(result.已定位, true);
-    assert.equal(result.目标版本, 'mech-1', '跨过见红的 mech-2/mech-3，定位到全绿的最近一版');
+    const green = (await f.audit.read({})).find((r) => r.动作 === '探针巡检' && r.详情?.快照);
+    assert.equal(result.目标版本, green.详情.机制版本, '跳过见红快照，定位到全绿最近一版的真实代码身份');
+    assert.notEqual(result.目标版本, 'mech-1', '调用方标签不能充当代码版本');
+    assert.equal(result.可恢复, '不可确定', '代码身份不是精确恢复制品凭据');
     const rows = await f.audit.read({});
     const 回滚 = rows.filter((r) => r.动作 === '自动回滚');
     assert.ok(回滚.length >= 1, '无条件入账');
-    assert.match(String(回滚.at(-1).结果), /已定位回滚目标 mech-1.*入账并升级主权者/);
+    assert.match(String(回滚.at(-1).结果), /已定位回滚目标 dsh-mind@.*入账并升级主权者/);
     assert.doesNotMatch(String(回滚.at(-1).结果), /待执行|回滚制品未定义|待批次4/, '审计口径已按甲′裁决改实');
     assert.doesNotMatch(String(回滚.at(-1).结果), /mech-\d+ → mech-\d+/, '不许再写「x → y」这种像真回滚过的口径');
   });
@@ -225,7 +228,8 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
 
   it('影响面声明说清动了哪些检测逻辑', async () => {
     const statement = await probes.impactStatement({ 机制版本: 'mech-3' });
-    assert.equal(statement.机制版本, 'mech-3');
+    assert.match(statement.机制版本, /^dsh-mind@1\.1\.0\+sha256:[0-9a-f]{64}$/);
+    assert.equal(statement.状态, '不可确定', '没有不同代码版本的基线，不能说逻辑未改');
     assert.equal(typeof statement.声明, 'string');
     assert.ok(Array.isArray(statement.动了));
     assert.ok(Array.isArray(statement.未动));
@@ -267,7 +271,7 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
         { id: 'n3', 描述: '被打回两次', 状态: '已打回', 打回次数: 2, 升级: { 原因: '打回≥2', 至: '主权者' } },
       ],
       探针: { 状态: '正常', 结果: [] },
-      策略: { healthy: true, rules: [{ id: '宪章' }], 介入度: '零参与', 失联: { lost: false } },
+      策略: { healthy: true, rules: [{ id: '宪章' }], 介入度: '放权', 失联: { lost: false } },
       审计尾: [{ 时间: 't', 动作: '状态变更', 主体: { id: 'lead', kind: 'Lead' }, 结果: 'ok', 档位: '全记' }],
       生成于: '2026-10-07T00:00:00Z',
     };
@@ -282,7 +286,7 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
     // 四态字符串（Batch 2 起）：策略给了 lost:false 且开关没关 ⇒ 「在位」。
     assert.equal(a.状态条.失联, '在位');
     assert.equal(a.状态条.失联详情.lost, false, '详情要把原始读数带出来（这里没有 已关闭 这个字段 ⇒ 不是「关了」）');
-    assert.equal(a.状态条.介入度, '零参与');
+    assert.equal(a.状态条.介入度, '放权');
 
     // 待你决定：待决项与打回升级都要进来，并且**每项都给该敲的命令**（工作台只读）
     const 类型 = [...new Set(a.待你决定.map((x) => x.类型))].sort();
@@ -298,71 +302,89 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
     assert.equal(n1.判据冻结, true);
     assert.deepEqual(n1.交卷, { 已交: 0, 应交: 1, 齐: false });
     assert.equal(a.任务.节点.find((n) => n.id === 'n3').打回次数, 2);
-    assert.deepEqual(a.任务.计数, { 待派发: 0, 进行中: 1, 已交卷: 0, 已采纳: 0, 已打回: 1, 未验: 0, 已结账: 0, 待决: 1 });
+    assert.deepEqual(a.任务.计数, { 待派发: 0, 进行中: 1, 已交卷: 0, 已采纳: 0, 待采纳: 0, 已打回: 1, 未验: 0, 已结账: 0, 待决: 1 });
 
     const after = await readdir(f.privateRoot, { recursive: true });
     assert.deepEqual(after, before, '工作台在磁盘上不留任何东西（无存储）');
   });
 
-  it('会审块：N 份独立答案按人留，未交齐不揭名，零分歧按异常呈现', () => {
-    const 节点 = {
-      id: 'n9',
-      描述: '技术路线',
-      状态: '已交卷',
-      模式: '独立会审',
-      负责人: ['member-a', 'member-b', 'member-c'],
-      判据: ['x'],
-      判据冻结: true,
-      独立答案: [
-        { 成员: 'member-a', 结论: '用会话命令', 反例面: [], 产出物引用: ['方案-a'] },
-        { 成员: 'member-b', 结论: '用会话命令', 反例面: ['无会话首屏'], 产出物引用: ['方案-b'] },
+  it('会审块：v2 存档按原样投影（问题/答案/分歧/结论/零分歧），不二次判定', () => {
+    const 存档 = [{
+      id: 'council-n9',
+      问题: '技术路线',
+      状态: '已收敛',
+      参与者: ['member-a', 'member-b', 'member-c'],
+      来源会话: 'session-lead-9',
+      轮次: 1, 轮次上限: 2,
+      答案: [
+        { 成员: 'member-a', 结论: '用会话命令', 结论层: '方案A', 反例面: [], 于: 't' },
+        { 成员: 'member-b', 结论: '用会话命令', 结论层: '方案A', 反例面: ['无会话首屏'], 于: 't2' },
       ],
-    };
-    const 未齐 = projectWorkbench({ 项目: 'p', 节点: [节点], 探针: { 结果: [] }, 策略: { healthy: true, rules: [] } }).会审[0];
-    assert.deepEqual(未齐.交卷, { 已交: 2, 应交: 3, 齐: false });
-    assert.equal(未齐.揭名, false, '未交齐 ⇒ 不揭名');
-    // 盲标单源（设计评审 #8 · 2026-10-15）：n9 种子下 member-a→B、member-b→A（确定性置换）。
-    assert.deepEqual(未齐.独立答案.map((a) => a.盲标), ['成员 B', '成员 A'], 'N 份答案都留下来了');
-    // W3 批3：未交齐时**零分歧也不投影**（「这两份一致」本身就是内容级信息，盲评要互不可见）。
-    assert.equal(未齐.零分歧, undefined, '未交齐 ⇒ 零分歧/依据都不出');
-    assert.equal(未齐.零分歧依据, undefined);
+      分歧清单: ['member-b: 无会话首屏'],
+      结论: '按方案A收敛',
+      零分歧异常: false,
+      创建于: 't0', 解锁于: 't1', 收敛于: 't3',
+    }];
+    const 行 = projectWorkbench({ 项目: 'p', 会审存档: 存档, 探针: { 结果: [] }, 策略: { healthy: true, rules: [] } }).会审[0];
+    assert.equal(行.问题, '技术路线');
+    assert.equal(行.状态, '已收敛');
+    assert.deepEqual(行.参与者, ['member-a', 'member-b', 'member-c']);
+    assert.equal(行.轮次, '1/2');
+    assert.equal(行.答案.length, 2, 'N 份答案按存档原样搬');
+    assert.equal(行.答案[0].结论, '用会话命令');
+    assert.deepEqual(行.答案[1].反例面, ['无会话首屏']);
+    assert.deepEqual(行.分歧清单, ['member-b: 无会话首屏']);
+    assert.equal(行.结论, '按方案A收敛');
+    assert.equal(行.零分歧, false);
+    assert.equal(行.来源会话, 'session-lead-9');
 
-    // 交齐且**无人给反例面** ⇒ 零分歧（全票一致 = 异常信号）
-    const 齐节点 = {
-      ...节点,
-      独立答案: ['member-a', 'member-b', 'member-c'].map((成员) => ({ 成员, 结论: '用会话命令', 反例面: [], 产出物引用: [] })),
-    };
-    const 齐 = projectWorkbench({ 项目: 'p', 节点: [齐节点], 探针: { 结果: [] }, 策略: { healthy: true, rules: [] } }).会审[0];
-    assert.equal(齐.揭名, true);
-    assert.deepEqual(齐.交卷, { 已交: 3, 应交: 3, 齐: true });
-    assert.equal(齐.零分歧, true, '三份结论层一致且无人给反例面 ⇒ 零分歧（异常信号）');
-    assert.match(齐.零分歧依据, /全票一致 = 异常信号/);
+    // 盲评遮罩已在服务层做过：投影只搬，不许自己再补结论或真名。
+    const 遮 = projectWorkbench({
+      项目: 'p',
+      会审存档: [{
+        ...存档[0], 状态: '作答中', 盲评遮罩: true, 零分歧异常: false, 结论: null, 分歧清单: [],
+        答案: [{ 成员: '成员 B', 结论: null, 结论层: null, 反例面: [] }],
+      }],
+      探针: { 结果: [] }, 策略: { healthy: true, rules: [] },
+    }).会审[0];
+    assert.equal(遮.盲评遮罩, true);
+    assert.deepEqual(遮.答案, [{ 成员: '成员 B', 结论: null, 结论层: null, 反例面: [] }], '遮罩行原样搬：真名与结论都不许补回来');
+    assert.doesNotMatch(JSON.stringify(遮), /用会话命令/, '整块里不许出现任何人的答案');
   });
 
-  it('成员只读自己任务那片；Lead 与复核者看全量', () => {
+  it('成员只读自己任务那片；Lead 看全量；复核员只读「绑定复核任务→复核对象」那片', () => {
     const view = projectWorkbench({
       项目: 'p-slice',
       节点: [
         { id: 'n1', 描述: '我的', 状态: '执行中', 负责人: ['member-a'], 待决原因: '等我', 独立答案: [{ 成员: 'member-a', 结论: 'x', 反例面: [] }] },
         { id: 'n2', 描述: '别人的', 状态: '执行中', 负责人: ['member-b'] },
+        // 复核实例绑定的复核任务（显式复核对象 n1）：读域只有它自己 + n1。
+        { id: 'rev-1', 描述: '复核任务', 状态: '已派发', 负责人: ['复核员'], 绑定: [{ 实例: 'r', 岗位: '复核员' }], 复核对象: ['n1'] },
+      ],
+      // v2：会审是与会话绑定的独立存档，切片按 **参与者**（不是任务负责人）。
+      会审存档: [
+        { id: 'c-mine', 问题: '我参与的会审', 状态: '已收敛', 参与者: ['member-a'], 答案: [], 分歧清单: [], 零分歧异常: false },
+        { id: 'c-other', 问题: '别人的会审', 状态: '已收敛', 参与者: ['member-b'], 答案: [], 分歧清单: [], 零分歧异常: false },
       ],
       审计尾: [
-        { 时间: 't1', 动作: '状态变更', 主体: { id: 'member-a', kind: '成员' }, 结果: 'a' },
-        { 时间: 't2', 动作: '状态变更', 主体: { id: 'member-b', kind: '成员' }, 结果: 'b' },
+        { 时间: 't1', 动作: '状态变更', 主体: { id: 'member-a', kind: '成员' }, 对象: { id: 'n1', kind: '任务' }, 项目: 'p-slice', 结果: 'a' },
+        { 时间: 't2', 动作: '状态变更', 主体: { id: 'member-b', kind: '成员' }, 对象: { id: 'n2', kind: '任务' }, 项目: 'p-slice', 结果: 'b' },
       ],
     });
     const mine = sliceForViewer(view, { id: 'member-a', kind: '成员', roleId: '插件工程' });
     assert.deepEqual(mine.任务.节点.map((n) => n.id), ['n1'], '只看得见自己的节点');
-    assert.deepEqual(mine.会审.map((a) => a.节点), ['n1'], '会审也切片');
+    assert.deepEqual(mine.会审.map((a) => a.id), ['c-mine'], '会审按参与者切片（不按任务负责人）');
     assert.equal(mine.审计尾.length, 1);
     assert.equal(mine.边界.只读, true);
     assert.match(mine.视图, /自己任务那片/);
 
     const leadView = sliceForViewer(view, { id: 'lead', kind: 'Lead' });
-    assert.equal(leadView.任务.节点.length, 2);
+    assert.equal(leadView.任务.节点.length, 3);
     assert.equal(leadView.审计尾.length, 2);
-    const reviewerView = sliceForViewer(view, { id: 'r', kind: '复核者' });
-    assert.match(reviewerView.视图, /复核者/);
+    const reviewerView = sliceForViewer(view, { id: 'r', kind: '成员', roleId: '复核员' });
+    assert.match(reviewerView.视图, /复核读域/);
+    assert.deepEqual(reviewerView.任务.节点.map((n) => n.id).sort(), ['n1', 'rev-1'].sort(), '读域 = 复核任务 + 显式复核对象');
+    assert.ok(!reviewerView.任务.节点.some((n) => n.id === 'n2'), '读域外的任务不可见');
   });
 
   it('未知对象无从比对时报错，而不是悄悄给个「没问题」', async () => {

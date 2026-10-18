@@ -1,43 +1,35 @@
 /**
- * 设计评审修复批次 B 回归（对应 docs/design/设计评审报告-dsh-mind-2026-10-15.md 的
- * F3 / F4 / #9 / #14 四条；批次 A 的 F1/F2/F2b/F5/#13/#15 见 test/fix-batch-design-2026-10-15.test.js）。
+ * 设计评审修复批次 B 回归（对应 docs/归档/审查轮-2026-10/设计评审报告-dsh-mind-2026-10-15.md；
+ * 批次 A 的 F1/F2/F2b/F5/#13/#15 见 test/fix-batch-design-2026-10-15.test.js）。
  *
- *  F3  debate 齐卷 TOCTOU + 三事件游离 TRANSITIONS——齐卷检查通过后、debateOpened 落线前，
- *      节点被 review(过) 推进到已采纳 ⇒ 开讨论必须被拒（锁内复检是权威）；
- *      debate_round / debate_converged 在主状态离开「已交卷」后冻结。
+ * v2（2026-10-18 条目18）重划：
+ *  F3  debate 齐卷 TOCTOU / 三事件 TRANSITIONS——任务图 debate_* 写路径整体删除，
+ *      被测对象已不存在，本文件不再保留；对应 v2 语义（会审状态机/锁内复检）见
+ *      test/v2-council-2026-10-18.test.js。
  *  F4  tasks/bus 补 serializeByKey——并发 N 个 submit/send 同节点/同线程，
  *      全部落线、行数正确、不因包裹而死锁（行为面；Windows rm/create 竞态本身
  *      无法确定性复现，见文件尾「测试强度」注）。
- *  #9  bus.unlock 模式闸（并行分担交齐不触发会审解锁广播）；
- *      review.openBlind 从任务图重算齐卷（自报 已交 名单不承重）。
+ *  #9  bus.unlock 模式闸对**历史独立会审**节点仍生效（并行分担/无模式节点交齐不触发
+ *      会审解锁广播）；review.openBlind 从任务图重算齐卷（自报 已交 名单不承重）。
  *  #14 settle 归档先行、事件未落线 ⇒ 响亮补偿审计（告警:true，注明重试可收敛）；
- *      bus.send / debate 补记的事件后审计失败 ⇒ Fault（消息/事件已落线、不可重试）。
+ *      bus.send 的事件后审计失败 ⇒ Fault（消息已落线、不可重试）。
+ *      （#14.2 的 debate 补记分支随写路径删除一并退役。）
  *
  * 并发手法（沿 concurrency-w3.test.js 的确定性构造）：「先把闸拿在手里，再断言操作被
  * 挡住/按注入的次序落线」，不靠 sleep 撞运气——sleep 只用于把异步操作**停进**已知位置。
  *
- * 塞 bug 校准（副本仓 $env:TEMP\dshmind-calib-b，校准后已删）：拆掉对应修复 ⇒ 本文件
- * **7 红 / 6 绿**（2026-10-15 实跑读数）——
- *   红（红在对应断言）：F3 并发序列（Missing expected rejection: 齐卷窗口内被 review(过)
- *   抢先）、F3 换轮冻结、#9 模式闸、#9 openBlind 重算、#14.1 补偿审计（expected 1 实得 0）、
- *   #14.2 bus.send Fault、#14.2 debate 补记 Fault；
- *   绿（正对照/独立路径，塞 bug 后照旧绿）：F3 正对照、F4×3、#9 独立会审正对照、
- *   #9 openBlind 未注入 tasks 的独立用法。
- * F4 的诚实边界：把 serializeByKey 拆成直通（副本实测）后 F4 三条**仍绿**——它防的
- * Windows rm/create 竞态在进程内单测试无法确定性复现（appendLines 的 O_APPEND 单写
- * 本就不撕行）。行为面只钉「不因包裹而死锁/丢行/幂等破坏」；竞态本身的兜底与
- * audit.js 同款双层（fsx.js:302-309 的事故记录是它的依据，不是可复现的测试面）。
+ * 塞 bug 校准（副本仓 $env:TEMP\dshmind-calib-b，校准后已删；v2 后 F3/#14.2 debate 已退役，
+ * 下面的历史读数只作存档，不再由本文件重跑）：
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { makeFixture, LEAD, MEMBER, REVIEWER } from './helpers.mjs';
+import { makeFixture, LEAD, MEMBER, REVIEWER, seedLegacyIndependentCouncil, seedReviewRelation } from './helpers.mjs';
 import { TaskGraph } from '../src/tasks.js';
 import { MessageBus } from '../src/bus.js';
 import { ReviewProtocol } from '../src/review.js';
 import { RoleRegistry } from '../src/registry.js';
 import { MemoryService } from '../src/memory.js';
-import { DebateService } from '../src/debate.js';
 import { appendLines, readJsonl, sleep, withLock } from '../src/kernel/fsx.js';
 import { Denied, Fault, InvalidBody } from '../src/kernel/errors.js';
 
@@ -63,104 +55,10 @@ async function 交齐节点(tasks, 模式, 描述) {
   return id;
 }
 
-/** debateOpened 的最小入参（编排层 debate.open 会算好这些快照）。 */
-const 开讨论入参 = (id) => ({ subject: LEAD, 项目: P, 参与者: ['member-a', 'member-b'], 轮次上限: 2, 预算快照: { 每轮消息上限: 24, 每人每轮字符上限: 4000 } });
-
-// ── F3 ────────────────────────────────────────────────────────────────────────
-
-describe('设计评审 2026-10-15 · F3：debate 齐卷 TOCTOU 与三事件入 TRANSITIONS', () => {
-  it('并发序列：齐卷检查通过后、落线前节点被 review(过) 推进到已采纳 ⇒ debateOpened 锁内复检拒、零事件落线', async () => {
-    const g = await makeFixture();
-    try {
-      const { tasks } = 装配(g);
-      const id = await 交齐节点(tasks, '独立会审', 'F3 并发序列');
-
-      // ① 拿住任务图锁：debateOpened 的锁外检查（#require / #checkWrite / 齐卷快过）全在
-      //    锁外跑得通，#append 会停在 withLock 门口——这正是「齐卷检查已通过、事件未落线」的窗口。
-      let 开讨论完成 = false;
-      const 闸 = withLock(g.layout.taskLock(P), async () => { await sleep(350); });
-      const 开讨论 = tasks.debateOpened(id, 开讨论入参(id)).then(
-        (v) => { 开讨论完成 = true; return v; },
-        (e) => { 开讨论完成 = true; throw e; },
-      );
-      await sleep(80);
-      assert.equal(开讨论完成, false, '前提：debateOpened 已过锁外检查、停在锁门口（窗口已打开）');
-
-      // ② 窗口内注入并发推进：review(过) 落线。这里直写事件行（不走 withLock）是**有意的**
-      //    测试手法——它扮演「抢在开讨论之前拿到锁的另一个写者」；被测的权威判定是
-      //    debateOpened 锁内复检，不依赖别的调用方守不守锁。
-      const rows = await readJsonl(g.layout.taskLog(P));
-      await appendLines(g.layout.taskLog(P), [{
-        seq: rows.length + 1,
-        at: new Date().toISOString(),
-        by: { id: REVIEWER.id, kind: '复核者' },
-        kind: 'reviewed',
-        id,
-        三态: '过',
-        状态: '已采纳',
-        分歧清单: [],
-        反例面: [],
-        复核者: REVIEWER.id,
-        算通过: true,
-        计打回: false,
-      }]);
-
-      // ③ 放闸：debateOpened 进锁，必须以「锁内状态已推进」被拒。
-      await 闸;
-      await assert.rejects(
-        () => 开讨论,
-        (e) => e instanceof Denied && /锁内复检|已采纳/.test(e.rule + e.message),
-        '齐卷窗口内被 review(过) 抢先 ⇒ 开讨论必须拒（修前在已采纳节点上落出活跃讨论段）',
-      );
-      const events = (await tasks.events({ 项目: P })).filter((r) => r.id === id);
-      assert.equal(events.filter((r) => r.kind === 'debate_opened').length, 0, '被拒的 debate_opened 不得落线');
-      const node = await tasks.get(id, { 项目: P });
-      assert.equal(node.状态, '已采纳');
-      assert.equal(node.讨论, undefined, '已采纳节点上不许存在讨论段');
-    } finally {
-      await g.cleanup();
-    }
-  });
-
-  it('正对照：正常已交卷节点开讨论照常成功（TRANSITIONS 新增不误伤）', async () => {
-    const g = await makeFixture();
-    try {
-      const { tasks } = 装配(g);
-      const id = await 交齐节点(tasks, '独立会审', 'F3 正对照');
-      const 节点 = await tasks.debateOpened(id, 开讨论入参(id));
-      assert.equal(节点.讨论.状态, '讨论中', '开讨论照常成功');
-      assert.equal(节点.状态, '已交卷', '讨论是子状态：主状态不动');
-    } finally {
-      await g.cleanup();
-    }
-  });
-
-  it('讨论中被 review(过) 推进到已采纳后：debate_round / debate_converged 冻结（锁外快速失败即拒）', async () => {
-    const g = await makeFixture();
-    try {
-      const { tasks } = 装配(g);
-      const id = await 交齐节点(tasks, '独立会审', 'F3 冻结');
-      await tasks.debateOpened(id, 开讨论入参(id));
-      // 软约束（既有语义不动）：讨论中仍可 review。
-      await tasks.review(id, { subject: REVIEWER, 项目: P, 三态: '过', 复核结论: '讨论中直接采纳' });
-      assert.equal((await tasks.get(id, { 项目: P })).状态, '已采纳');
-      await assert.rejects(
-        () => tasks.debateRounded(id, { subject: LEAD, 项目: P, 轮次: 2 }),
-        (e) => e instanceof Denied && /已采纳|已交卷|状态/.test(e.message),
-        '已采纳节点上换轮必须拒（TRANSITIONS debate_round 前驱=带讨论段的已交卷）',
-      );
-      await assert.rejects(
-        () => tasks.debateConverged(id, { subject: LEAD, 项目: P, 表态消息id: 'msg-x' }),
-        (e) => e instanceof Denied && /已采纳|已交卷|状态/.test(e.message),
-        '已采纳节点上收敛必须拒（同上）',
-      );
-      const events = (await tasks.events({ 项目: P })).filter((r) => r.id === id);
-      assert.equal(events.filter((r) => r.kind === 'debate_round' || r.kind === 'debate_converged').length, 0, '被拒的换轮/收敛事件不得落线');
-    } finally {
-      await g.cleanup();
-    }
-  });
-});
+// v2（2026-10-18 条目18）：会审退出任务图，tasks.debateOpened / debateRounded /
+// debateConverged 三个写路径整体删除（历史事件仍由 fold 回放）。F3 的 TOCTOU 断言钉的
+// 是「写路径的锁内复检」——被测对象已不存在；对应 v2 语义（会审发起/作答/解锁/收敛的
+// 状态机与锁内复检）改由 test/v2-council-2026-10-18.test.js 覆盖。
 
 // ── F4 ────────────────────────────────────────────────────────────────────────
 
@@ -238,15 +136,32 @@ describe('设计评审 2026-10-15 · #9：bus.unlock 模式闸 与 openBlind 重
     }
   });
 
-  it('独立会审节点交齐 ⇒ 照常解锁并广播（正对照，判据不误伤）', async () => {
+  it('旧独立会审节点交齐 ⇒ 解锁入口恒拒、零广播（v2 条目18：旧写入口已封闭）', async () => {
     const g = await makeFixture();
     try {
       const { bus, tasks } = 装配(g);
-      const id = await 交齐节点(tasks, '独立会审', '#9 正对照');
-      const r = await bus.unlock({ subject: LEAD, 项目: P, 节点: id, 线程: id, 全员已交: true, 参与者: ['member-a', 'member-b'] });
-      assert.equal(r.解锁, true);
+      const id = await seedLegacyIndependentCouncil(g, { 项目: P, 描述: '#9 旧账封写' });
+      // v2 起旧独立会审整体只读：答案按历史账本形状直接播种（不再经 start/submit 写入口）。
+      const 旧账 = await readJsonl(g.layout.taskLog(P));
+      const seq = (旧账.at(-1)?.seq ?? 0) + 1;
+      const at = new Date().toISOString();
+      await appendLines(g.layout.taskLog(P), [
+        { seq, at, by: { id: 'member-a', kind: '成员' }, kind: 'submitted', id, 状态: '已交卷', 产出物引用: [], 结论: 'A 案', 反例面: [], 知识候选: [] },
+        { seq: seq + 1, at, by: { id: 'member-b', kind: '成员' }, kind: 'submitted', id, 状态: '已交卷', 产出物引用: [], 结论: 'B 案', 反例面: [], 知识候选: [] },
+      ]);
+      assert.equal((await tasks.get(id, { 项目: P })).独立答案.length, 2, '前提：旧账上两人已交');
+      // 旧写入口另有一层服务闸：任何写动作对旧独立会审节点恒拒（不靠状态闸碰巧拦）。
+      await assert.rejects(
+        () => tasks.start(id, { subject: MEMBER, 项目: P }),
+        (e) => e instanceof Denied && /只读历史/.test(e.rule),
+      );
+      // 即便齐卷，旧会审的解锁广播也不再落线：历史节点只读，新会审走 council 服务。
+      await assert.rejects(
+        () => bus.unlock({ subject: LEAD, 项目: P, 节点: id, 线程: id, 全员已交: true, 参与者: ['member-a', 'member-b'] }),
+        (e) => e instanceof Denied && /已退役|写入口已封闭/.test(e.rule),
+      );
       const 落线 = (await bus.readRaw({ 项目: P, 线程: id })).filter((m) => m.类型 === '广播');
-      assert.equal(落线.length, 1, '解锁广播真落线');
+      assert.equal(落线.length, 0, '零广播落线（历史账本不变）');
     } finally {
       await g.cleanup();
     }
@@ -310,7 +225,10 @@ describe('设计评审 2026-10-15 · #14：settle 补偿审计 与 事件后审�
       // 作答在交卷前后（执行中/已交卷）落账；这里按生产时序写在 review 之前，不占用
       // 「已采纳后仍可写」这条从没被设计过的路。
       await memory.remember({ subject: MEMBER, 类: '作答', 内容: '#14 的独立答案', 来源: '测试', 项目: P, 任务: await tasks.get(id, { 项目: P }) });
-      await tasks.review(id, { subject: REVIEWER, 项目: P, 三态: '过', 复核结论: '过' });
+      await seedReviewRelation(g, { 项目: P, 目标: id });
+      const 过 = await tasks.review(id, { subject: REVIEWER, 项目: P, 三态: '过', 复核结论: '过' });
+      // 补修K：复核只出票；采纳是 Lead 的独立一步（引用真票）——settle 前置仍是「已采纳」。
+      await tasks.accept(id, { subject: LEAD, 项目: P, 票: 过.待采纳?.票 });
       assert.equal((await tasks.get(id, { 项目: P })).状态, '已采纳');
       const 原账 = await readJsonl(g.layout.taskLog(P));
 
@@ -325,7 +243,7 @@ describe('设计评审 2026-10-15 · #14：settle 补偿审计 与 事件后审�
       let 放行; const 可放行 = new Promise((resolve) => { 放行 = resolve; });
       const 闸 = withLock(g.layout.taskLock(P), async () => { 通报拿到(); await 可放行; });
       await 已拿到; // 锁确在手上，settle 才发车——启动序竞态的根治面
-      const 结账 = tasks.settle(id, { subject: LEAD, 项目: P }).then(
+      const 结账 = tasks.settle(id, { subject: LEAD, 项目: P, 记忆处置: {} }).then(
         (v) => { 结账完成 = true; return v; },
         (e) => { 结账完成 = true; throw e; },
       );
@@ -363,7 +281,7 @@ describe('设计评审 2026-10-15 · #14：settle 补偿审计 与 事件后审�
       const 事后 = await tasks.get(id, { 项目: P });
       assert.equal(事后.状态, '已采纳', '事件未落线 ⇒ 节点仍已采纳（重试 settle 的入口还在）');
       assert.equal((await tasks.events({ 项目: P })).filter((r) => r.kind === 'settled').length, 0, '没有 settled 事件落线');
-      const 重试 = await tasks.settle(id, { subject: LEAD, 项目: P });
+      const 重试 = await tasks.settle(id, { subject: LEAD, 项目: P, 记忆处置: {} });
       assert.equal(重试.状态, '已结账', `修复后重试 settle 可收敛；实际 ${重试.状态}`);
     } finally {
       await g.cleanup();
@@ -389,9 +307,12 @@ describe('设计评审 2026-10-15 · #14：settle 补偿审计 与 事件后审�
       const id = await 交齐节点(tasks, '独立会审', 'R3 结账第二笔失败');
       // R03：作答按生产时序在 review 之前落账（已交卷态），不占「已采纳后仍可写」。
       await memory.remember({ subject: MEMBER, 类: '作答', 内容: 'R3 的独立答案', 来源: '测试', 项目: P, 任务: await tasks.get(id, { 项目: P }) });
-      await tasks.review(id, { subject: REVIEWER, 项目: P, 三态: '过' });
+      await seedReviewRelation(g, { 项目: P, 目标: id });
+      const 过 = await tasks.review(id, { subject: REVIEWER, 项目: P, 三态: '过' });
+      // 补修K：复核只出票；采纳是 Lead 的独立一步（引用真票）。
+      await tasks.accept(id, { subject: LEAD, 项目: P, 票: 过.待采纳?.票 });
       await assert.rejects(
-        () => tasks.settle(id, { subject: LEAD, 项目: P }),
+        () => tasks.settle(id, { subject: LEAD, 项目: P, 记忆处置: {} }),
         (e) => e instanceof Fault && e.code === 'AUDIT_APPEND_FAILED_AFTER_EVENT' && /已落线/.test(e.message) && /不要重试/.test(e.message),
       );
       assert.equal(注入次数, 1, '故障必须命中结账审计，不是前置路径失败');
@@ -412,8 +333,11 @@ describe('设计评审 2026-10-15 · #14：settle 补偿审计 与 事件后审�
       const memory = new MemoryService({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock });
       const { tasks } = 装配(g, { memory });
       const id = await 交齐节点(tasks, '独立会审', 'R3 正常结账');
-      await tasks.review(id, { subject: REVIEWER, 项目: P, 三态: '过' });
-      assert.equal((await tasks.settle(id, { subject: LEAD, 项目: P })).状态, '已结账');
+      await seedReviewRelation(g, { 项目: P, 目标: id });
+      const 过 = await tasks.review(id, { subject: REVIEWER, 项目: P, 三态: '过' });
+      // 补修K：复核只出票；采纳是 Lead 的独立一步（引用真票）。
+      await tasks.accept(id, { subject: LEAD, 项目: P, 票: 过.待采纳?.票 });
+      assert.equal((await tasks.settle(id, { subject: LEAD, 项目: P, 记忆处置: {} })).状态, '已结账');
       const rows = await g.audit.read({});
       assert.equal(rows.filter((r) => r.动作 === '结账' && r.对象.id === id).length, 1);
       assert.equal(rows.filter((r) => r.动作 === '结账未落线').length, 0);
@@ -439,32 +363,9 @@ describe('设计评审 2026-10-15 · #14：settle 补偿审计 与 事件后审�
     }
   });
 
-  it('#14.2 debate 补记：讨论事件已落线、反对者指定补记审计失败 ⇒ Fault；debate_opened 在事件流上', async () => {
-    const g = await makeFixture();
-    try {
-      // 审计桩：只对「反趋同 · 强制反对者」那条补记失败（其余审计放行——讨论开启的
-      // 审计依据是「任务图事件流」、揭名是「§10 盲评」，都不含「反趋同」，不掺和本条要钉的失败点）。
-      const 坏审计 = {
-        append: async (entry) => {
-          if (String(entry.依据 ?? '').includes('反趋同')) throw new Error('注入：补记审计失败');
-          return { seq: 0 };
-        },
-        read: async () => [],
-      };
-      const { tasks, bus, registry, review } = 装配(g, { audit: 坏审计 });
-      const debate = new DebateService({ layout: g.layout, policy: g.policy, audit: 坏审计, clock: g.clock, tasks, bus, review, registry });
-      const id = await 交齐节点(tasks, '独立会审', '#14 补记');
-      await assert.rejects(
-        () => debate.open({ subject: LEAD, 项目: P, 节点: id }),
-        (e) => e instanceof Fault && e.code === 'AUDIT_APPEND_FAILED_AFTER_EVENT' && /不要重试 debate_open/.test(e.message),
-        '补记审计失败 ⇒ Fault 且指明不可用重试 debate_open 修复（修前裸抛，两个事实源越漂越远）',
-      );
-      const node = await tasks.get(id, { 项目: P });
-      assert.equal(node.讨论?.状态, '讨论中', 'debate_opened 事件已落线（Fault 描述的是「第二笔缺失」，不是「没开成」）');
-    } finally {
-      await g.cleanup();
-    }
-  });
+  // #14.2 debate 补记：v2 删除了 debate 写路径（含「反趋同 · 强制反对者」补记审计），
+  // 被测对象已不存在；会审事件「落线后审计失败 ⇒ Fault 不可重试」的语义由
+  // `src/council.js` 的 #append 承担，回归见 test/v2-council-2026-10-18.test.js。
 });
 
 /**

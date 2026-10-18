@@ -54,7 +54,7 @@ describe('任务上下文透传（接口缺口修复）', () => {
       项目: P,
       subject: { id: 'lead', kind: 'Lead' },
       主体: MEMBER,
-      args: { action: 'memory_write', 类: '知识', 内容: '任务内产出', 来源: '测试', ...extra },
+      args: { action: 'memory_write', 类: '经历', 内容: '任务内产出', 来源: '测试', ...extra },
     });
 
   it('① 成员任务内带「任务」写记忆 ⇒ 成功', async () => {

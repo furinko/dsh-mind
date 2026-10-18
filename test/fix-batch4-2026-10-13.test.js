@@ -65,7 +65,8 @@ describe('第三批 · normalizeActor 伪主体', () => {
     const audit = new AuditLog({ layout: f.layout, clock: f.clock });
     await audit.append({ 动作: '状态变更', 主体: { kind: '成员' }, 对象: { id: 'x' }, 结果: 'ok' });
     const rows = await audit.read({});
-    const row = rows.find((r) => r.动作 === '状态变更');
+    // 夹具初态也有「状态变更」行（Lead 钉版登记）：按本条的对象 id 精确取，不按动作名抢第一条。
+    const row = rows.find((r) => r.动作 === '状态变更' && r.对象?.id === 'x');
     assert.equal(row.主体.id, '未知', `id 缺席记「未知」（实际 ${JSON.stringify(row.主体)}）`);
     assert.notEqual(row.主体.id, 'undefined', '不许把缺席折成伪主体 undefined');
     await f.cleanup();

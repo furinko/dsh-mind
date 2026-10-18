@@ -16,7 +16,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdir } from 'node:fs/promises';
-import { makeFixture, SOVEREIGN, LEAD, MEMBER, REVIEWER } from './helpers.mjs';
+import { makeFixture, SOVEREIGN, LEAD, MEMBER, REVIEWER, seedReviewRelation } from './helpers.mjs';
 import { Org } from '../src/org.js';
 import { runAction } from '../lib/actions.js';
 import { assertPathSegment } from '../src/paths.js';
@@ -43,20 +43,29 @@ async function 会审节点(org, { 结论层A = '方案A', 结论层B = 结论�
 }
 
 describe('2026-10-14 审查修复 · A 批（宿主 P1）', () => {
-  it('P1-1：结论层贯通——交卷落事件、fold 进独立答案、workbench 判定输入带结论层', async () => {
+  it('P1-1：结论层贯通——交卷落事件、fold 进独立答案、会审作答进存档并随投影给到', async () => {
     const { fixture, org } = await 起组织();
     try {
       const id = await 会审节点(org, { 结论层A: '方案A', 结论层B: '方案B' });
       const node = await org.tasks.get(id, { 项目: P });
-      assert.deepEqual(node.独立答案.map((a) => a.结论层), ['方案A', '方案B'], 'fold 的独立答案必须带结论层（零分歧判据比的是它）');
+      assert.deepEqual(node.独立答案.map((a) => a.结论层), ['方案A', '方案B'], 'fold 的独立答案必须带结论层');
       // 事件流里有结论层（状态权威 = 事件流）。
       const events = await org.tasks.events({ 项目: P });
       const submits = events.filter((e) => e.kind === 'submitted' && e.id === id);
       assert.deepEqual(submits.map((e) => e.结论层), ['方案A', '方案B'], 'submitted 事件必须原样带结论层');
-      // workbench 会审行（动作面）也带结论层——复核者看的就是这个面。
+
+      // v2：会审的判定输入改在 council 存档里（任务图只留历史只读路径）。
+      // 两份答案结论层不同 ⇒ 收敛时不报零分歧；结论层原样进存档与工作台投影。
+      const 开 = await org.council.open({ subject: LEAD, 项目: P, 问题: '结论层贯通', 参与者: ['member-a', 'member-b'] });
+      await org.council.answer({ subject: MEMBER, 项目: P, id: 开.id, 结论: '甲的独立答案', 结论层: '方案A' });
+      await org.council.answer({ subject: { id: 'member-b', kind: '成员', roleId: '插件工程' }, 项目: P, id: 开.id, 结论: '乙的独立答案', 结论层: '方案B' });
+      await org.council.unlock({ subject: LEAD, 项目: P, id: 开.id });
+      const 收 = await org.council.converge({ subject: LEAD, 项目: P, id: 开.id });
+      assert.deepEqual(收.会审.答案.map((a) => a.结论层), ['方案A', '方案B'], '会审存档带结论层（零分歧判据比的是它）');
+      assert.equal(收.零分歧, false, '结论层不同 ⇒ 不是零分歧');
       const bench = await runAction({ org, 项目: P, subject: LEAD, 主体: LEAD, args: { action: 'workbench' } });
-      const 行 = JSON.stringify(bench);
-      assert.ok(行.includes('方案A') && 行.includes('方案B'), 'workbench 判定输入必须带结论层');
+      const 行 = bench.数据.会审.find((r) => r.id === 开.id);
+      assert.deepEqual(行.答案.map((a) => a.结论层), ['方案A', '方案B'], '工作台投影必须带结论层');
     } finally {
       await fixture.cleanup();
     }
@@ -91,14 +100,18 @@ describe('2026-10-14 审查修复 · A 批（宿主 P1）', () => {
         (e) => e instanceof Denied && /提审分离/.test(e.rule),
         '交卷人复核自己的卷必须拒（§3.4）',
       );
-      // 署名复核者也不能自报成交卷人（Lead 代执行 + 署名别人是合规形态；署名交卷人本人 = 拒）。
+      // 署名必须恒等于真实执行主体（v2 补修）：Lead 也不例外，代签交卷人同样拒。
       await assert.rejects(
         () => org.tasks.review(id, { subject: LEAD, 项目: P, 三态: '过', 复核者: 'member-a', 复核结论: '署名交卷人' }),
-        (e) => e instanceof Denied && /提审分离/.test(e.rule),
-        '署名复核者=交卷人 ⇒ 仍拒（自报绕不过）',
+        (e) => e instanceof Denied && /不许替别人署名|实际操作者|提审分离/.test(e.rule + e.message),
+        '署名复核者≠执行主体 ⇒ 拒（Lead 代签也不行）',
       );
+      await seedReviewRelation(fixture, { 项目: P, 目标: id });
       const ok = await org.tasks.review(id, { subject: REVIEWER, 项目: P, 三态: '过', 复核结论: '独立复核通过' });
-      assert.equal(ok.状态, '已采纳', '复核员（未交卷）复核 ⇒ 放行');
+      // 补修K：复核只出票、不代 Lead 采纳；采纳是 Lead 的独立一步（引用真票）。
+      assert.equal(ok.状态, '已交卷', '复核员（未交卷）复核 ⇒ 放行出票');
+      const 采纳 = await org.tasks.accept(id, { subject: LEAD, 项目: P, 票: ok.待采纳?.票 });
+      assert.equal(采纳.状态, '已采纳');
     } finally {
       await fixture.cleanup();
     }
@@ -143,6 +156,7 @@ describe('2026-10-14 审查修复 · A 批（宿主 P1）', () => {
   it('P1-7：探针快照文件名同秒不撞（含随机段与内容哈希）', async () => {
     const { fixture, org } = await 起组织();
     try {
+      org.probes.无内核装配 = true; // 纯服务夹具：没有内核装配/闸回执，显式声明
       await org.probes.run({ subject: LEAD });
       await org.probes.run({ subject: LEAD });
       const files = await readdir(org.layout.probeSnapshotDir());
@@ -171,17 +185,34 @@ describe('2026-10-14 审查修复 · A 批（宿主 P1）', () => {
     }
   });
 
-  it('P1-9：appoint 带 proposerId——主权者任命他人过闸；任命自己 = 自批拒', async () => {
+  it('v2 冲突排除：负责人不得复核自己的任务（复核者降级后独立性由这条硬规则承担）', async () => {
+    // review.appoint 已随复核者降级删除（2026-10-18：复核员是普通岗位卡，不再有任命闸）。
+    // 独立性改由复核时的冲突排除承担——本用例钉「负责人不得复核本节点」这道新闸。
     const { fixture, org } = await 起组织();
     try {
-      // 复核者卡属法律档（§2 主权者改）⇒ 任命动作的主体是主权者；Lead 无此手。
-      const ok = await org.review.appoint({ subject: SOVEREIGN, 实例: 'reviewer-new', 项目: P });
-      assert.equal(ok.状态, '已任命', '主权者任命他人 ⇒ 过（修前缺 proposerId 恒拒，API 不可用）');
+      const node = await org.tasks.create({ subject: LEAD, 项目: P, 描述: 'Lead 自办的活', 负责人: 'lead', 判据: ['x'] });
+      await org.tasks.dispatch(node.id, { subject: LEAD, 项目: P });
+      await org.tasks.start(node.id, { subject: LEAD, 项目: P });
+      await org.tasks.submit(node.id, { subject: LEAD, 项目: P, 结论: 'Lead 交卷' });
       await assert.rejects(
-        () => org.review.appoint({ subject: SOVEREIGN, 实例: 'sovereign', 项目: P }),
-        (e) => e instanceof Denied && /自批|提案人/.test(e.rule + e.message),
-        '任命自己 = 提案者自批 ⇒ 拒',
+        () => org.tasks.review(node.id, { subject: LEAD, 项目: P, 三态: '过' }),
+        (e) => e instanceof Denied && /负责人不得复核|交卷人不得复核/.test(e.rule),
+        '负责人（也是交卷人）复核自己的任务 = 自己验收自己 ⇒ 拒',
       );
+      // 对照（v2 条目11 + 署名安全 H 补修）：Lead 冒签复核员 ⇒ 拒；真正由复核员本人执行、
+      // 且其复核任务显式 `复核对象` 含本节点 ⇒ 落结论。
+      const 复核任务 = await org.tasks.create({ subject: LEAD, 项目: P, 描述: 'Lead 自办活的复核任务', 负责人: '复核员', 判据: ['核对'], 复核对象: [node.id] });
+      await org.tasks.bind(复核任务.id, { subject: LEAD, 项目: P, 实例: 'reviewer', 岗位: '复核员' });
+      await assert.rejects(
+        () => org.tasks.review(node.id, { subject: LEAD, 项目: P, 三态: '过', 复核者: 'reviewer' }),
+        (e) => e instanceof Denied && /不许替别人署名|实际操作者/.test(e.rule + e.message),
+        'Lead 不能把结论记到复核员头上（署名=实际主体）',
+      );
+      const ok = await org.tasks.review(node.id, { subject: REVIEWER, 项目: P, 三态: '过' });
+      // 补修K：复核只出票；采纳是 Lead 的独立一步（引用真票）——「过 ⇒ 已采纳」的旧硬闸已拆成两步。
+      assert.equal(ok.状态, '已交卷', '真实复核实例（有本任务关联）的结论照常出票');
+      const 采纳 = await org.tasks.accept(node.id, { subject: LEAD, 项目: P, 票: ok.待采纳?.票 });
+      assert.equal(采纳.状态, '已采纳');
     } finally {
       await fixture.cleanup();
     }

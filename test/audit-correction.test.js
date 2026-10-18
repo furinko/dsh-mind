@@ -201,7 +201,7 @@ describe('审计链更正声明（缺口2a）', () => {
     let probes;
     before(async () => {
       ({ f, audit, month } = await 造瑕疵夹具());
-      probes = new ProbeRunner({ layout: f.layout, policy: f.policy, audit: f.audit, clock: f.clock });
+      probes = new ProbeRunner({ layout: f.layout, policy: f.policy, audit: f.audit, clock: f.clock, 无内核装配: true });
     });
     after(async () => {
       await f.cleanup();

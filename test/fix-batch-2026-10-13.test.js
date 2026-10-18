@@ -76,11 +76,16 @@ describe('审查批次1（2026-10-13）· fail-closed 方向修正', () => {
     await g.cleanup();
   });
 
-  it('P2-1：介入度坏值 ⇒ 加载期抛错，不静默回退「零参与」', async () => {
-    const g = await makeFixture({ defaults: { 介入度: '变更预审 ' } }); // 带空格的坏值
-    assert.equal(g.policy.healthy, false, '坏介入度必须让引擎不健康');
+  it('P2-1：介入度坏值 ⇒ 加载期抛错，不静默回退最宽松档；v2 旧档名同样 fail-closed', async () => {
+    // 「事后抽检」在 v1.5 是合法档——v2 砍档后它必须成为**非法值**（旧值加载期 fail-closed，
+    // 不做静默迁移：静默迁移等于替主权者改设置）。
+    const g = await makeFixture({ defaults: { 介入度: '事后抽检' } });
+    assert.equal(g.policy.healthy, false, '旧档名/坏介入度必须让引擎不健康');
     const d = await g.policy.decide({ subject: LEAD, action: 'write', target: { id: 'c', kind: '能力', authority: '自治' } });
     assert.equal(d.verdict, 'deny', '引擎不健康 ⇒ 写全拒（不会静默用最宽松档放行）');
+    const g2 = await makeFixture({ defaults: { 介入度: '预审 ' } }); // 带空格的坏值
+    assert.equal(g2.policy.healthy, false, '带空格的坏值同样不健康');
     await g.cleanup();
+    await g2.cleanup();
   });
 });

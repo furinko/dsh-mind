@@ -8,7 +8,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, writeFile, stat } from 'node:fs/promises';
-import { makeFixture, LEAD, MEMBER, REVIEWER } from './helpers.mjs';
+import { makeFixture, LEAD, MEMBER, REVIEWER, seedReviewRelation } from './helpers.mjs';
 import { TaskGraph } from '../src/tasks.js';
 
 const P = 'p-cache';
@@ -64,14 +64,19 @@ describe('第三批 · 任务图读缓存', () => {
     await tasks.dispatch(node.id, { subject: LEAD, 项目: P });
     await tasks.start(node.id, { subject: MEMBER, 项目: P });
     await tasks.submit(node.id, { subject: MEMBER, 项目: P, 结论: '完工' });
-    await tasks.review(node.id, { subject: REVIEWER, 项目: P, 三态: '过' });
+    // v2 条目6：成员复核需要真实关联（复核任务 + 显式复核对象）——夹具是测试准备。
+    await seedReviewRelation(f, { 项目: P, 目标: node.id });
+    const 过 = await tasks.review(node.id, { subject: REVIEWER, 项目: P, 三态: '过' });
+    // 补修K：复核只出票；采纳是 Lead 的独立一步（引用真票）——事件数随之多一条 accepted。
+    await tasks.accept(node.id, { subject: LEAD, 项目: P, 票: 过.待采纳?.票 });
     const final = await tasks.get(node.id, { 项目: P });
     assert.equal(final.状态, '已采纳');
     const rows = await tasks.events({ 项目: P });
-    assert.equal(rows.length, 5, `created/dispatched/started/submitted/reviewed 共 5 行（实际 ${rows.length}）`);
+    // 业务 6 行（created/dispatched/started/submitted/reviewed/accepted）+ 复核任务 3 行 = 9；缓存不许改变语义。
+    assert.equal(rows.length, 9, `业务 6 行 + 复核任务关联 3 行 = 9（实际 ${rows.length}）`);
     // 缓存是纯读面：盘上行数 = 内存行数，没有多写也没有少写。
     const 盘上 = (await readFile(f.layout.taskLog(P), 'utf8')).trim().split('\n').length;
-    assert.equal(盘上, 5);
+    assert.equal(盘上, 9);
     await f.cleanup();
   });
 });

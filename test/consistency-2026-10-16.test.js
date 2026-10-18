@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { makeFixture, LEAD, writeUnder } from './helpers.mjs';
+import { makeFixture, LEAD, writeUnder, seedLegacyIndependentCouncil, seedReviewRelation } from './helpers.mjs';
 import { Org } from '../src/org.js';
 import { AuditLog } from '../src/audit.js';
 import { runAction } from '../lib/actions.js';
@@ -30,7 +30,7 @@ const P = 'proj-consistency3';
 const MEMBER_A = { id: 'member-a', kind: '成员', roleId: '插件工程' };
 const MEMBER_B = { id: 'member-b', kind: '成员', roleId: '插件工程' };
 const SOVEREIGN = { id: 'sovereign', kind: '主权者' };
-const REVIEWER = { id: 'reviewer', kind: '复核者', roleId: '复核员' };
+const REVIEWER = { id: 'reviewer', kind: '成员', roleId: '复核员' };
 
 /** 记录器桩钟：按当前月返回 iso/ms（审计按月分片，造跨月场景用）。 */
 function 桩钟() {
@@ -55,11 +55,16 @@ describe('A · R09 任务 attempt/epoch（打回关代）', () => {
       await org.tasks.start(node.id, { subject: MEMBER_A, 项目: P });
       await org.tasks.submit(node.id, { subject: MEMBER_A, 项目: P, 结论: '旧代A的结论' });
       await org.tasks.submit(node.id, { subject: MEMBER_B, 项目: P, 结论: '旧代B的结论' });
-      await org.debate.open({ subject: LEAD, 项目: P, 节点: node.id });
+      // v2 删了 debate 写路径；「第一代开过讨论」按历史账本形状播种（只读回放契约仍在）。
+      await appendLines(f.layout.taskLog(P), [{
+        seq: 9999, at: new Date().toISOString(), by: LEAD, kind: 'debate_opened', id: node.id,
+        参与者: ['member-a', 'member-b'], 轮次上限: 2, 状态: '讨论中',
+      }]);
       const 一代 = await org.tasks.get(node.id, { 项目: P });
       assert.equal(一代.代, 1, '前提：当前代=1');
       assert.ok(一代.讨论, '前提：讨论段已开');
       // 复核不过 ⇒ 打回：关代。
+      await seedReviewRelation(f, { 项目: P, 目标: node.id });
       await org.tasks.review(node.id, { subject: REVIEWER, 项目: P, 三态: '不过', 分歧清单: ['判据未满足'] });
       const 二代 = await org.tasks.get(node.id, { 项目: P });
       assert.equal(二代.代, 2, '打回必须关代（代 +1）');
@@ -80,7 +85,10 @@ describe('A · R09 任务 attempt/epoch（打回关代）', () => {
       assert.ok(!齐文本.includes('旧代A的结论'), '旧代答案不混入当前齐卷（R09 病根①）');
       // 复核只对当前代：复核员不在当前代答案里 ⇒ 可复核；再判"过"。
       const 过 = await org.tasks.review(node.id, { subject: REVIEWER, 项目: P, 三态: '过', 分歧清单: [] });
-      assert.equal(过.状态, '已采纳');
+      // 补修K：复核「过」只出可引用票、不自动采纳；采纳是 Lead 的独立一步（引用真票）。
+      assert.equal(过.状态, '已交卷', '复核「过」不自动采纳');
+      const 采纳 = await org.tasks.accept(node.id, { subject: LEAD, 项目: P, 票: 过.待采纳?.票 });
+      assert.equal(采纳.状态, '已采纳');
     } finally {
       await f.cleanup();
     }
@@ -239,15 +247,14 @@ describe('D · 第12代复核增量（R08 存量 id 盲标化 / R07 错误详情
     const f = await makeFixture();
     try {
       const org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
-      const node = await org.tasks.create({ subject: LEAD, 项目: P, 描述: 'D-R08-存量id', 负责人: ['member-a', 'member-b'], 判据: ['x'], 模式: '独立会审' });
-      await org.tasks.dispatch(node.id, { subject: LEAD, 项目: P });
+      const nodeId = await seedLegacyIndependentCouncil(f, { 项目: P, 描述: 'D-R08-存量id' });
       // 直接往线程账本落一条**旧格式** id 的消息（真实部署的存量形态）。
       const 结论串 = '旧格式正文前缀SECRETOLDPREFIX';
-      const 旧id = `msg-${node.id}-member-a-${结论串.slice(0, 24)}`;
-      const 账本 = f.layout.busThread(P, node.id);
-      await appendLines(账本, [{ id: 旧id, 线程: node.id, 发件: 'member-a', 收件: [], 类型: '交卷', 内容: 结论串, 状态: '已投递', 追加于: new Date().toISOString() }]);
+      const 旧id = `msg-${nodeId}-member-a-${结论串.slice(0, 24)}`;
+      const 账本 = f.layout.busThread(P, nodeId);
+      await appendLines(账本, [{ id: 旧id, 线程: nodeId, 发件: 'member-a', 收件: [], 类型: '交卷', 内容: 结论串, 状态: '已投递', 追加于: new Date().toISOString() }]);
       const 前 = readFileSync(账本, 'utf8');
-      const r = await runAction({ org, 项目: P, 主体: MEMBER_B, subject: MEMBER_B, args: { action: 'bus_read', 线程: node.id } });
+      const r = await runAction({ org, 项目: P, 主体: MEMBER_B, subject: MEMBER_B, args: { action: 'bus_read', 线程: nodeId } });
       const 遮 = (r.消息 ?? []).find((m) => m.盲评遮罩 === true);
       assert.ok(遮, 'B 读到遮罩条目');
       assert.ok(!遮.id.includes('member-a'), `遮罩 id 不泄露发件人：${遮.id}`);

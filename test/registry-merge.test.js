@@ -20,7 +20,7 @@ import { Clock } from '../src/kernel/time.js';
 import { Layout } from '../src/paths.js';
 import { AuditLog } from '../src/audit.js';
 import { RoleRegistry } from '../src/registry.js';
-import { makeFixture, writeUnder } from './helpers.mjs';
+import { makeFixture, writeUnder, LEAD } from './helpers.mjs';
 
 const 卡目录 = '集体L3-成员角色卡';
 const 同名 = '同名岗';
@@ -196,15 +196,10 @@ version: 1
   });
 
   it('判据③：canTouch() 的取值链没被去重改动带偏——同名实例的能力/经验仍取自私有版', async () => {
-    await writeUnder(
-      fixture.privateRoot,
-      '身份档案/identity.json',
-      `${JSON.stringify(
-        { members: { 'member-same': { id: 'member-same', 岗位: 同名, 代: 1, status: '在岗' } }, sovereign: { lastInteraction: new Date().toISOString() }, denylist: [] },
-        null,
-        2,
-      )}\n`,
-    );
+    // 合法初态（card-credential 单源收口后）：不再手种一条没有卡版本的在岗记录——那会让
+    // canTouch 的钉版链拿不到读数。改用**已真钉的 Lead** 走正规 registry.assign 登记该岗
+    // 实例：实例随之钉住当时的合并卡，canTouch 读的就是真实钉版快照。断言口径不变。
+    await fixture.registry.assign({ subject: LEAD, 岗位: 同名, 实例: 'member-same' });
     await fixture.policy.reload();
     const 答 = await registry.canTouch({ id: 'member-same' });
     assert.equal(答.岗位, 同名);

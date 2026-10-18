@@ -80,23 +80,31 @@ describe('任务上下文透传（649a4）', () => {
     return node;
   };
 
-  it('① capability_publish：成员带「任务」上下文发卡成功（过策略引擎）；不带 ⇒ 仍拒', async () => {
+  it('① capability_publish：成员任务内也被拒（v2 条目15）；Lead 发卡照旧通（透传链未断）', async () => {
     const node = await 建节点('pub-任务内发卡');
-    // 反向对照：不带任务 ⇒ 修后照旧拒（不放宽）。
+    // v2（口述收敛 2026-10-18 条目15）：**成员实例任务内也不得改能力库 / 角色卡引用**。
+    // 修前本用例钉的是「带任务上下文 ⇒ 成员能发卡」，那是「任务内全权」被误读到「能力面」。
+    // 真源改口后本臂翻成拒绝；真正要保的「透传链没断」由下面 Lead 那条承重。
+    await assert.rejects(
+      () => runAction({ org, 项目: P, 主体: 成员A, args: { action: 'capability_publish', 名: 'taskctx卡', 正文: '怎么做：先搜后写。', 适用岗位: ['插件工程'], 依据: '任务内产出', 任务: node.id } }),
+      (e) => e instanceof Denied && /§3\.5|条目15|能力库/.test(e.rule + e.message),
+      '成员带任务上下文发卡 ⇒ 拒（条目15）',
+    );
+    // 反向对照：不带任务同样拒（不放宽）。
     await assert.rejects(
       () => runAction({ org, 项目: P, 主体: 成员A, args: { action: 'capability_publish', 名: 'noctx卡', 正文: 'x', 适用岗位: ['插件工程'], 依据: '任务内产出' } }),
-      (e) => e instanceof Denied && /任务外无/.test(e.rule),
-      '不带任务上下文 ⇒ 照旧「任务外无」拒（闸的方向不变）',
+      (e) => e instanceof Denied,
+      '不带任务上下文 ⇒ 仍拒',
     );
-    // 正向：带任务 ⇒ 全链路透传到 store.write 的策略判定，放行。
-    const r = await runAction({ org, 项目: P, 主体: 成员A, args: { action: 'capability_publish', 名: 'taskctx卡', 正文: '怎么做：先搜后写。', 适用岗位: ['插件工程'], 依据: '任务内产出', 任务: node.id } });
+    // 透传链仍通：Lead 发卡经 handler → capability.publish → store.write 全链路放行并落盘。
+    const r = await runAction({ org, 项目: P, 主体: LEAD, args: { action: 'capability_publish', 名: 'leadctx卡', 正文: '怎么做：先搜后写。', 适用岗位: ['插件工程'], 依据: 'Lead 发布' } });
     assert.equal(r.能力.来源, '自治');
     assert.ok(r.能力.version >= 1);
-    // 传别人的节点 ⇒ scopeOf 拒（自报 id 不承重）。
+    // 任务上下文比对仍承重：成员往**别人的**节点里写记忆 ⇒ 负责人名单比对拒。
     const node2 = await org.tasks.create({ subject: LEAD, 项目: P, 描述: 'pub-他人节点', 负责人: 'member-b', 判据: ['判据一'] });
     await org.tasks.dispatch(node2.id, { subject: LEAD, 项目: P });
     await assert.rejects(
-      () => runAction({ org, 项目: P, 主体: 成员A, args: { action: 'capability_publish', 名: 'stolen卡', 正文: 'x', 适用岗位: ['插件工程'], 依据: '任务内产出', 任务: node2.id } }),
+      () => runAction({ org, 项目: P, 主体: 成员A, args: { action: 'memory_write', 类: '经历', 内容: 'x', 来源: '测试', 任务: node2.id } }),
       (e) => e instanceof Denied && /负责人是/.test(e.message),
       '传别人的节点 ⇒ 负责人名单比对拒',
     );
@@ -112,21 +120,29 @@ describe('任务上下文透传（649a4）', () => {
       (e) => e instanceof Denied,
       '普通成员复核照旧拒（不放宽）',
     );
-    // 复核员岗成员（teammate 形状）⇒ 档案解析成复核者主体，策略引擎放行 review。
+    // 复核员岗成员（teammate 形状，kind=成员、不自陈岗位）⇒ runAction 回填档案岗位
+    // （roleId=复核员），策略引擎按岗位名放行 review；v2 条目6 还要求真实复核任务关联。
+    const 复核任务 = await org.tasks.create({ subject: LEAD, 项目: P, 描述: `复核-${node.id}`, 负责人: '复核员', 判据: ['核对'], 复核对象: [node.id] });
+    await org.tasks.bind(复核任务.id, { subject: LEAD, 项目: P, 实例: 'reviewer', 岗位: '复核员' });
+    await org.tasks.dispatch(复核任务.id, { subject: LEAD, 项目: P });
     const r = await runAction({ org, 项目: P, 主体: 复核员成员, args: { action: 'task_review', id: node.id, 三态: '过', 分歧清单: [] } });
     assert.equal(r.结论.三态, '过');
     assert.equal(r.结论.算通过, true);
+    // 补修K：复核「过」只出可引用票、不代 Lead 采纳——状态停在已交卷，采纳另走 task_accept。
     const after = await org.tasks.get(node.id, { 项目: P });
-    assert.equal(after.状态, '已采纳', '复核「过」把节点推到已采纳');
-    assert.equal(after.复核经过?.[0]?.复核者, 'reviewer', '署名是复核者本人');
-    // 解析已收口到 runAction 门②（审查报告 R02 · 2026-10-16，dv2jf 批）：同一复核员成员的
-    // 其余写动作按【复核者】判 ⇒ 复核者只读守卫拒。修前这里是「任务外无」——那正是 R02
-    // 实证的越权面：复核员岗成员持负责人匹配任务即得普通业务写权。断言随语义演进改写，
-    // 不是偷偷删红：拒得更早、更对（§2 复核者只读数、不改、不参与提案）。
+    assert.equal(after.状态, '已交卷', '复核「过」不自动采纳');
+    assert.match(String(r.结论.票), /^rv-\d+$/, '回执必须带真票');
+    const 采纳 = await runAction({ org, 项目: P, 主体: LEAD, args: { action: 'task_accept', id: node.id, 票: r.结论.票 } });
+    assert.equal(采纳.节点.状态, '已采纳', 'Lead 显式采纳（引用真票）后才到已采纳');
+    const 采纳后 = await org.tasks.get(node.id, { 项目: P });
+    assert.equal(采纳后.复核经过?.[0]?.复核者, 'reviewer', '署名是复核者本人');
+    // v2（2026-10-18 复核者降级）：复核员岗成员的其余写动作按**岗位名**拒——
+    // #preGrantBoundary 的「复核员岗 · 只读数」守卫（修前 R02 是入口解析成复核者主体，
+    // 修后不再换 kind，边界随 roleId 走，越权面同样闭合）。
     await assert.rejects(
       () => runAction({ org, 项目: P, 主体: 复核员成员, args: { action: 'memory_write', 类: '知识', 内容: 'x', 来源: '测试', project: P } }),
-      (e) => e instanceof Denied && /复核者只读/.test(e.rule),
-      '复核者只读守卫在动作入口生效（其余写动作按复核者判）',
+      (e) => e instanceof Denied && /只读数/.test(e.rule),
+      '复核员只读守卫按岗位名生效（其余写动作全拒）',
     );
   });
 

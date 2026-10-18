@@ -6,7 +6,7 @@
  */
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeFixture, SOVEREIGN, LEAD, MEMBER, REVIEWER } from './helpers.mjs';
+import { makeFixture, SOVEREIGN, LEAD, MEMBER, REVIEWER, seedReviewRelation } from './helpers.mjs';
 import { TaskGraph } from '../src/tasks.js';
 import { MessageBus } from '../src/bus.js';
 import { MemoryService } from '../src/memory.js';
@@ -40,13 +40,13 @@ describe('主干环路', () => {
     await f.cleanup();
   });
 
-  it('任务：判据必填，一岗多人必标模式', async () => {
+  it('任务：判据必填；v2 多人只剩并行分担（不再需要「模式」声明）', async () => {
     await assert.rejects(() => tasks.create({ subject: LEAD, 项目: P, 描述: '没判据', 负责人: 'member-a' }), (e) => e instanceof InvalidBody);
     await assert.rejects(() => tasks.create({ subject: LEAD, 项目: P, 描述: '没负责人', 判据: ['x'] }), (e) => e instanceof InvalidBody);
-    await assert.rejects(
-      () => tasks.create({ subject: LEAD, 项目: P, 描述: '两人没模式', 负责人: ['member-a', 'member-b'], 判据: ['x'] }),
-      (e) => e instanceof InvalidBody && /一岗多人/.test(e.message),
-    );
+    // v2（条目18）：会审退出任务图 ⇒ 多人形态只剩并行分担，名单即全部事实，不再要求模式声明。
+    const 两人 = await tasks.create({ subject: LEAD, 项目: P, 描述: '两人并行分担', 负责人: ['member-a', 'member-b'], 判据: ['x'] });
+    assert.ok(!('模式' in 两人), '模式字段已删除（不是 null 空壳；历史事件仍可折出旧值）');
+    assert.deepEqual(两人.负责人, ['member-a', 'member-b']);
     const node = await tasks.create({ subject: LEAD, 项目: P, 描述: '合法节点', 负责人: 'member-a', 判据: ['能建', '能派'] });
     assert.equal(node.状态, '待派发');
     assert.equal(node.判据.length, 2);
@@ -80,6 +80,7 @@ describe('主干环路', () => {
     await tasks.start(node.id, { subject: MEMBER, 项目: P });
     await tasks.submit(node.id, { subject: MEMBER, 项目: P, 产出物引用: ['artifact-9'] });
 
+    await seedReviewRelation(f, { 项目: P, 目标: node.id });
     const 未验 = await review.record({ subject: REVIEWER, 项目: P, 节点: node.id, 三态: '未验', 反例面: ['读数拿不到'] });
     assert.equal(未验.算通过, false);
     assert.equal(未验.计打回, false);
@@ -93,6 +94,10 @@ describe('主干环路', () => {
     assert.equal(after1.打回次数, 1);
     assert.equal(after1.升级, undefined);
 
+    // P1-02：打回关闭当前代并清空答案；第二次复核前必须先返工交卷，
+    // 否则「不合格产出一份新证据都没有」也会被计数/采纳。打回计数语义不变。
+    await tasks.start(node.id, { subject: MEMBER, 项目: P });
+    await tasks.submit(node.id, { subject: MEMBER, 项目: P, 产出物引用: ['artifact-10'] });
     await review.record({ subject: REVIEWER, 项目: P, 节点: node.id, 三态: '不过', 分歧清单: ['判据 1 仍未满足'] });
     const after2 = await tasks.get(node.id, { 项目: P });
     assert.equal(after2.打回次数, 2);
@@ -122,28 +127,22 @@ describe('主干环路', () => {
     assert.deepEqual(resolved.待决记录.map((r) => r.决定), ['用出厂版']);
   });
 
-  it('动作面 bus_unlock：未交齐被拒；交齐后解锁并广播可见', async () => {
+  it('动作面 bus_unlock 已退役：模型面没有这只手，旧会审线程零广播', async () => {
     const MEMBER_B = { id: 'member-b', kind: '成员', roleId: '插件工程' };
-    const node = await tasks.create({ subject: LEAD, 项目: P, 描述: '会审接线演示', 负责人: ['member-a', 'member-b'], 判据: ['x'], 模式: '独立会审' });
+    const node = await tasks.create({ subject: LEAD, 项目: P, 描述: '会审接线演示', 负责人: ['member-a', 'member-b'], 判据: ['x'] });
     await tasks.dispatch(node.id, { subject: LEAD, 项目: P });
     await tasks.start(node.id, { subject: MEMBER, 项目: P });
-    // runAction 只需要这两只手（主体是 Lead，不做成员身份档案核验；P2 后主体由宿主显式给）。
     const org = { tasks, bus, registry: { identity: async () => ({ members: {} }) } };
-    const 敲解锁 = () => runAction({ org, 项目: P, subject: LEAD, 主体: LEAD, args: { action: 'bus_unlock', id: node.id, 线程: node.id } });
-
-    // 谁都没交：拒，且理由要点名「全员」。
-    await assert.rejects(敲解锁, (e) => e.name === 'Denied' && /全员/.test(e.message), '未交齐必须被拒');
-    // 交了一份还有一份没交：仍拒（自报绕不过——「全员已交」由任务图重算，不从调用方接）。
     await tasks.submit(node.id, { subject: MEMBER, 项目: P, 结论: 'A 案' });
-    await assert.rejects(敲解锁, (e) => e.name === 'Denied' && /1\/2/.test(e.message), '只交一份仍必须被拒');
-    // 交齐：解锁成功，广播在总线上读得到。
     await tasks.submit(node.id, { subject: MEMBER_B, 项目: P, 结论: 'B 案' });
-    const 结果 = await 敲解锁();
-    assert.equal(结果.结果.解锁, true, JSON.stringify(结果));
+    // v2 条目18：会审退出任务图后，旧「齐卷解锁广播」入口整体退役（模型面未知动作即响亮失败）。
+    await assert.rejects(
+      () => runAction({ org, 项目: P, subject: LEAD, 主体: LEAD, args: { action: 'bus_unlock', id: node.id, 线程: node.id } }),
+      (e) => e instanceof InvalidBody && /未知 action/.test(e.message),
+      'bus_unlock 不再在动作面存在',
+    );
     const rows = await bus.read({ subject: LEAD, 项目: P, 线程: node.id });
-    const 广播 = rows.find((m) => m.类型 === '广播');
-    assert.ok(广播, '解锁广播必须在总线上可见');
-    assert.deepEqual(广播.收件.sort(), ['member-a', 'member-b'], '广播要发给全体负责人');
+    assert.equal(rows.filter((m) => m.类型 === '广播').length, 0, '零广播落线（历史账本不变）');
   });
 
   it('记忆 query 的条目预算：默认最多 50 条并如实标注截断；条数上限 可调', async () => {
@@ -184,12 +183,16 @@ describe('主干环路', () => {
     const delivered = await bus.deliver({ 项目: P, 线程: 't-1', id: deferred.id, subject: LEAD });
     assert.equal(delivered.状态, '已投递');
 
-    const locked = await bus.unlock({ subject: LEAD, 项目: P, 线程: 't-1', 全员已交: false, 参与者: ['member-a'] });
-    assert.equal(locked.解锁, false);
-    assert.match(locked.原因, /全员已交/);
-    const unlocked = await bus.unlock({ subject: LEAD, 项目: P, 线程: 't-1', 全员已交: true, 参与者: ['member-a'] });
-    assert.equal(unlocked.解锁, true);
-    assert.ok(unlocked.广播);
+    // v2 条目18：旧「齐卷解锁」服务入口已退役（对任何节点恒拒，不落广播）。
+    await assert.rejects(
+      () => bus.unlock({ subject: LEAD, 项目: P, 线程: 't-1', 全员已交: false, 参与者: ['member-a'] }),
+      (e) => e instanceof Denied && /已退役/.test(e.rule),
+    );
+    await assert.rejects(
+      () => bus.unlock({ subject: LEAD, 项目: P, 线程: 't-1', 全员已交: true, 参与者: ['member-a'] }),
+      (e) => e instanceof Denied && /已退役/.test(e.rule),
+    );
+    assert.equal((await bus.read({ subject: LEAD, 项目: P, 线程: 't-1' })).filter((m) => m.类型 === '广播').length, 0, '零广播落线');
   });
 
   it('⑦ 消息总线投影：全部线程 + 未投递 + 会审讨论段盲评收起 + 投影取数免审计', async () => {
@@ -238,14 +241,13 @@ describe('主干环路', () => {
     });
 
     // ① 未交齐的会审节点（负责人 2 人、1 份独立答案、**没开讨论**）⇒ 线程也遮。
-    //    修前：名单只装「开了讨论」的节点 ⇒ 这条线程原样画出「发件 + 正文」，而同一份面板的
-    //    会审行只有盲标 —— 「会审行看不见、总线行看得见」。
+    //    修前：名单只装「开了讨论」的节点 ⇒ 这条线程原样画出「发件 + 正文」。
+    //    v2：会审行已迁到存档（任务节点不再投影成会审行），但历史任务图的线程仍按盲评口径遮。
     const 未齐会审 = { id: 'task-mask-a', 状态: '执行中', 负责人: ['member-a', 'member-b'], 独立答案: [{ 成员: 'member-a', 结论: 'A 案' }] };
     const 视图 = 投影([未齐会审], [{ 线程: 'task-mask-a', 条数: 1, 未投递: 0, 最新: 消息行('密文-未齐会审') }]);
     assert.equal(视图.消息总线[0].会审讨论段, true, '未交齐的会审节点线程必须遮：判据是「揭名之前不给内容」，与有没有开讨论无关');
     assert.equal(视图.消息总线[0].最新, undefined, '遮罩行不给正文与发件');
-    assert.ok(!JSON.stringify(视图).includes('密文-未齐会审'), '会审行盲标时，同一份投影里不许出现那串密文');
-    assert.equal(视图.会审[0].揭名, false, '前置读数：此时会审行确实只有盲标（漏口就在这两行之间）');
+    assert.ok(!JSON.stringify(视图).includes('密文-未齐会审'), '同一份投影里不许出现那串密文');
 
     // ② 判定键必须与落线侧同源：落线是 `busThread()` 直接 join 文件系统（NTFS 大小写不敏感）
     //    ⇒ 大写别名线程是同一个文件。修前用精确键 ⇒ miss ⇒ 正文进面板。
@@ -304,8 +306,9 @@ describe('主干环路', () => {
         '前置：这条落线路径本身是允许的（真落线，不是纸面允许）',
       );
       const 视图 = await org.workbench({ 项目: P });
-      assert.equal(视图.会审[0].揭名, false, '未交齐 ⇒ 会审行只有盲标');
-      assert.ok(!JSON.stringify(视图).includes(密文), '同一份面板上，会审行盲标时总线行不许把结论画出来');
+      const 总线行 = 视图.消息总线.find((t) => t.线程 === 节点.id);
+      assert.equal(总线行?.会审讨论段, true, '未交齐 ⇒ 历史会审节点线程按盲评口径收起正文');
+      assert.ok(!JSON.stringify(视图).includes(密文), '同一份面板上，会审线程遮罩时总线行不许把结论画出来');
 
       // 泄漏路径 B：讨论开启**之前**用大写别名先建线（先落的那一侧决定文件名形态，
       // 与真 id 是同一个文件）——判定侧用精确键就会 miss。
@@ -546,16 +549,29 @@ describe('主干环路', () => {
     assert.match(wrong.差异.join('；'), /判据冻结/);
   });
 
-  it('反趋同：强制反对者不重复、不选参与者；盲评提交前不解锁', async () => {
-    const first = await review.pickDissenter({ 项目: P, 节点: 'n-1', 参与者: ['member-a'], 候选: ['member-a', 'member-b', 'member-c'] });
-    assert.notEqual(first.反对者, 'member-a');
-    const second = await review.pickDissenter({ 项目: P, 节点: 'n-1', 参与者: ['member-a'], 候选: ['member-a', 'member-b', 'member-c'] });
-    assert.notEqual(second.反对者, first.反对者, '同一节点不得重复指定');
+  it('反趋同：零分歧由会审存档现算（强制反对者已砍）；盲评提交前不解锁', async () => {
+    // v2（条目18/19）：强制反对者砍掉、会审退出任务图 ⇒ 「反趋同」落在
+    // council.converge 的零分歧判定与存档报警上；提交前解锁仍被服务层拒。
+    const MEMBER_B = { id: 'member-b', kind: '成员', roleId: '插件工程' };
+    const org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
+    const 开 = await org.council.open({ subject: LEAD, 项目: P, 问题: '反趋同', 参与者: ['member-a', 'member-b'] });
+    await org.council.answer({ subject: MEMBER, 项目: P, id: 开.id, 结论: 'A 案', 结论层: '方案A' });
+    await assert.rejects(
+      () => org.council.unlock({ subject: LEAD, 项目: P, id: 开.id }),
+      (e) => e instanceof Denied && /全员已交/.test(e.rule),
+      '未交齐不得提前揭名（盲评边界）',
+    );
+    await org.council.answer({ subject: MEMBER_B, 项目: P, id: 开.id, 结论: 'A 案', 结论层: '方案A' });
+    await org.council.unlock({ subject: LEAD, 项目: P, id: 开.id });
+    const 收 = await org.council.converge({ subject: LEAD, 项目: P, id: 开.id });
+    assert.equal(收.零分歧, true, '结论层一致且无人给反例面 ⇒ 全票一致 = 异常信号');
+    const 报警 = (await org.audit.read({})).filter((r) => r.动作 === '零分歧异常' && r.对象?.id === 开.id);
+    assert.equal(报警.length, 1, '零分歧报警入审计（人工抽检的触发面）');
 
+    // 历史任务图的 openBlind 语义不动（旧数据只读；鉴权与重算仍按任务图）。
     // 夹具改形（#9 · 设计评审 2026-10-15）：openBlind 在注入了任务图时必须给 节点 并从
     // 独立答案重算（与 bus.unlock 修法同路）——修前按自报 已交 名单判定，任务图未齐也放行。
     // 本夹具的 review 恒注入 tasks（before 块），所以这里用真实节点而不是自报名单。
-    const MEMBER_B = { id: 'member-b', kind: '成员', roleId: '插件工程' };
     const 未交齐节点 = await tasks.create({ subject: LEAD, 项目: P, 描述: '盲评未交齐', 负责人: ['member-a', 'member-b'], 模式: '独立会审', 判据: ['x'] });
     await tasks.dispatch(未交齐节点.id, { subject: LEAD, 项目: P });
     await tasks.start(未交齐节点.id, { subject: MEMBER, 项目: P });
@@ -615,6 +631,7 @@ describe('主干环路', () => {
     await tasks.dispatch(node.id, { subject: LEAD, 项目: P });
     await tasks.start(node.id, { subject: MEMBER, 项目: P });
     await tasks.submit(node.id, { subject: MEMBER, 项目: P });
+    await seedReviewRelation(f, { 项目: P, 目标: node.id });
     await review.record({ subject: REVIEWER, 项目: P, 节点: node.id, 三态: '不过', 分歧清单: ['判据未满足'] });
     const before = await tasks.get(node.id, { 项目: P });
     const disagreement = await review.recordDisagreement({ subject: LEAD, 项目: P, 节点: node.id, 理由: '我不同意' });

@@ -17,16 +17,17 @@
  */
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { cp as fsCp, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { makeFixture, LEAD, writeUnder } from './helpers.mjs';
+import { makeFixture, LEAD, writeUnder, seedLegacyIndependentCouncil, seedReviewRelation } from './helpers.mjs';
 import { Org } from '../src/org.js';
 import { runAction } from '../lib/actions.js';
 import { Denied } from '../src/kernel/errors.js';
 import { MessageBus } from '../src/bus.js';
+import { appendLines } from '../src/kernel/fsx.js';
 import { slug } from '../src/kernel/ids.js';
 import { fakeHost, fakeExec } from './host-harness.mjs';
 import * as kernel from '../components/kernel/lib/index.js';
@@ -39,18 +40,16 @@ const MEMBER_A = { id: 'member-a', kind: '成员', roleId: '插件工程' };
 const MEMBER_B = { id: 'member-b', kind: '成员', roleId: '插件工程' };
 const SOVEREIGN = { id: 'sovereign', kind: '主权者' };
 
-/** 带 member-a 拒绝名单的新身份档案（R05 撤回场景的落盘内容）。 */
-function 撤回档案() {
-  return `${JSON.stringify({
-    members: {
-      'member-a': { id: 'member-a', 岗位: '插件工程', 代: 1, status: '在岗' },
-      'member-b': { id: 'member-b', 岗位: '插件工程', 代: 1, status: '在岗' },
-      lead: { id: 'lead', 岗位: 'Lead', 代: 1, status: '在岗' },
-      reviewer: { id: 'reviewer', 岗位: '复核员', 代: 1, status: '在岗' },
-    },
-    sovereign: { lastInteraction: new Date().toISOString() },
-    denylist: [{ id: 'member-a' }],
-  }, null, 2)}\n`;
+/**
+ * 带 member-a 拒绝名单的新身份档案（R05 撤回场景的落盘内容）。
+ *
+ * **只改被测的撤回位**：members 从夹具当前真实档案里取（保留真卡版本 + 委派父），
+ * 不手写裸成员行——否则 R05a 测到的是「缺凭证被拒」而不是「撤回立即生效」。
+ */
+function 撤回档案(fixture) {
+  const doc = JSON.parse(readFileSync(fixture.layout.identityFile(), 'utf8'));
+  doc.denylist = [{ id: 'member-a' }];
+  return `${JSON.stringify(doc, null, 2)}\n`;
 }
 
 describe('A · R01：工具范围按配置键继承（缺省 ≠ 显式空数组）', () => {
@@ -134,7 +133,7 @@ describe('A · R05：重载快照读前/读后一致＋在飞合并不丢 dirty'
           已注入 = true;
           // 审查实证的撕裂窗：身份正文已读、快照未发布、尾部 mtime 未记——此刻撤回落盘。
           // clock.iso 在状态组装段被调，正落在这个窗口里（见文件头注释）。
-          writeFileSync(join(g.privateRoot, '身份档案/identity.json'), 撤回档案());
+          writeFileSync(join(g.privateRoot, '身份档案/identity.json'), 撤回档案(g));
         }
         return 原iso();
       };
@@ -161,7 +160,7 @@ describe('A · R05：重载快照读前/读后一致＋在飞合并不丢 dirty'
       g.clock.iso = () => {
         if (!已注入) {
           已注入 = true;
-          writeFileSync(join(g.privateRoot, '身份档案/identity.json'), 撤回档案());
+          writeFileSync(join(g.privateRoot, '身份档案/identity.json'), 撤回档案(g));
           // 并发 reload：第一轮还在飞（我们就在它的加载窗口里）——修前它只共享 Promise
           // 就完事；修后【确有新变化】的并发调用标脏，在飞轮结束再补读一轮。
           void g.policy.reload();
@@ -204,7 +203,7 @@ describe('A · R03：任务授权寿命（未派发/终态不是写凭据）', (
     await f.cleanup();
   });
   const 执行 = (主体, args) => runAction({ org, 项目: P, 主体, subject: 主体, args });
-  const 写知识 = (主体, 任务节点) => 执行(主体, { action: 'memory_write', 类: '知识', 内容: 'x', 来源: '测试', ...(任务节点 ? { 任务: 任务节点.id ?? 任务节点 } : {}), project: P });
+  const 写知识 = (主体, 任务节点) => 执行(主体, { action: 'memory_write', 类: '经历', 内容: 'x', 来源: '测试', ...(任务节点 ? { 任务: 任务节点.id ?? 任务节点 } : {}), project: P });
 
   it('待派发（未派发）：负责人名单匹配也拒，拒因指向状态', async () => {
     const node = await org.tasks.create({ subject: LEAD, 项目: P, 描述: 'R03-未派发', 负责人: 'member-a', 判据: ['x'] });
@@ -227,7 +226,8 @@ describe('A · R03：任务授权寿命（未派发/终态不是写凭据）', (
     await org.tasks.dispatch(b.id, { subject: LEAD, 项目: P });
     await org.tasks.start(b.id, { subject: MEMBER_A, 项目: P });
     await org.tasks.submit(b.id, { subject: MEMBER_A, 项目: P, 结论: '交卷' });
-    await org.tasks.review(b.id, { subject: { id: 'reviewer', kind: '复核者' }, 项目: P, 三态: '不过', 分歧清单: ['x'] });
+    await seedReviewRelation(f, { 项目: P, 目标: b.id });
+    await org.tasks.review(b.id, { subject: { id: 'reviewer', kind: '成员', roleId: '复核员' }, 项目: P, 三态: '不过', 分歧清单: ['x'] });
     await 写知识(MEMBER_A, b); // 已打回（返工态）
     await org.tasks.start(b.id, { subject: MEMBER_A, 项目: P }); // 打回重开（状态机路径照常）
   });
@@ -237,13 +237,16 @@ describe('A · R03：任务授权寿命（未派发/终态不是写凭据）', (
     await org.tasks.dispatch(node.id, { subject: LEAD, 项目: P });
     await org.tasks.start(node.id, { subject: MEMBER_A, 项目: P });
     await org.tasks.submit(node.id, { subject: MEMBER_A, 项目: P, 结论: '交卷' });
-    await org.tasks.review(node.id, { subject: { id: 'reviewer', kind: '复核者' }, 项目: P, 三态: '过', 分歧清单: [] });
+    await seedReviewRelation(f, { 项目: P, 目标: node.id });
+    const 过 = await org.tasks.review(node.id, { subject: { id: 'reviewer', kind: '成员', roleId: '复核员' }, 项目: P, 三态: '过', 分歧清单: [] });
+    // 补修K：复核只出票；采纳是 Lead 的独立一步（引用真票）——终态仍只由采纳产生。
+    await org.tasks.accept(node.id, { subject: LEAD, 项目: P, 票: 过.待采纳?.票 });
     await assert.rejects(
       () => 写知识(MEMBER_A, node),
       (e) => e instanceof Denied && /终态/.test(e.message) && /已采纳/.test(e.message),
       '「曾负责过」不构成永久写凭据（审查实证：真实流转到终态后写仍成功）',
     );
-    await org.tasks.settle(node.id, { subject: LEAD, 项目: P });
+    await org.tasks.settle(node.id, { subject: LEAD, 项目: P, 记忆处置: {} });
     await assert.rejects(
       () => 写知识(MEMBER_A, node),
       (e) => e instanceof Denied && /终态/.test(e.message),
@@ -256,7 +259,10 @@ describe('A · R03：任务授权寿命（未派发/终态不是写凭据）', (
     await org.tasks.dispatch(node.id, { subject: LEAD, 项目: P });
     await org.tasks.start(node.id, { subject: MEMBER_A, 项目: P });
     await org.tasks.submit(node.id, { subject: MEMBER_A, 项目: P, 结论: '交卷' });
-    await org.tasks.review(node.id, { subject: { id: 'reviewer', kind: '复核者' }, 项目: P, 三态: '过', 分歧清单: [] });
+    await seedReviewRelation(f, { 项目: P, 目标: node.id });
+    const 过 = await org.tasks.review(node.id, { subject: { id: 'reviewer', kind: '成员', roleId: '复核员' }, 项目: P, 三态: '过', 分歧清单: [] });
+    // 补修K：复核只出票；采纳是 Lead 的独立一步（引用真票）——「已采纳态下 Lead 照写」的前提。
+    await org.tasks.accept(node.id, { subject: LEAD, 项目: P, 票: 过.待采纳?.票 });
     await 写知识(LEAD, node); // 已采纳态下 Lead 照写（结账前的组织侧记录）
   });
 });
@@ -355,11 +361,24 @@ describe('B · R08：opaque 唯一消息 ID ＋ 盲评输出白名单', () => {
     const f = await makeFixture();
     try {
       const org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
-      const node = await org.tasks.create({ subject: LEAD, 项目: P, 描述: 'R08-遮罩', 负责人: ['member-a', 'member-b'], 判据: ['x'], 模式: '独立会审' });
-      await org.tasks.dispatch(node.id, { subject: LEAD, 项目: P });
+      // v2 删了任务「模式」写入路径：按真实历史账本形状播种一个独立会审节点（只读契约仍在）。
+      const 节点id = await seedLegacyIndependentCouncil(f, { 项目: P, 描述: 'R08-遮罩' });
       const 结论串 = '选择方案甲不要乙-R08';
-      await runAction({ org, 项目: P, 主体: MEMBER_A, subject: MEMBER_A, args: { action: 'bus_send', 线程: node.id, 类型: '交卷', 内容: 结论串 } });
-      const r = await runAction({ org, 项目: P, 主体: MEMBER_B, subject: MEMBER_B, args: { action: 'bus_read', 线程: node.id } });
+      // v2 旧独立会审已封写（bus_send 恒拒）：遮罩是**读面**契约，按历史账本形状直接播种一条消息，
+      // 不经过已封闭的写入口（只测读面，不造已不允许的写）。
+      await appendLines(f.layout.busThread(P, 节点id), [{
+        id: `msg-blind-${Date.now().toString(36)}`,
+        线程: 节点id,
+        发件: 'member-a',
+        收件: [],
+        类型: '交卷',
+        内容: 结论串,
+        状态: '已投递',
+        延后: false,
+        引用: null,
+        追加于: new Date().toISOString(),
+      }]);
+      const r = await runAction({ org, 项目: P, 主体: MEMBER_B, subject: MEMBER_B, args: { action: 'bus_read', 线程: 节点id } });
       const 他条 = (r.消息 ?? []).find((m) => m.盲评遮罩 === true);
       assert.ok(他条, 'B 读到的是遮罩条目（A 的消息不原样出）');
       const 白名单 = ['id', '线程', '类型', '状态', '追加于', '发件', '内容', '盲评遮罩'];

@@ -276,6 +276,8 @@ describe('审查修复 · 批次3+5（身份链 / 一致性）', () => {
       const { AuditLog } = await import('../src/audit.js');
       const a = new AuditLog({ layout: g4.layout, clock: g4.clock });
       const b = new AuditLog({ layout: g4.layout, clock: g4.clock });
+      // 夹具初态本身有审计行（Lead 钉版登记等）：本条只断言**本轮新增** 20 条。
+      const 基线 = (await g4.audit.read({})).length;
       await Promise.all([
         ...Array.from({ length: 10 }, (_, i) => a.append({ 动作: '状态变更', 主体: { id: `a-${i}`, kind: 'Lead' }, 对象: '并发', 依据: 'E3', 结果: 'ok' })),
         ...Array.from({ length: 10 }, (_, i) => b.append({ 动作: '状态变更', 主体: { id: `b-${i}`, kind: 'Lead' }, 对象: '并发', 依据: 'E3', 结果: 'ok' })),
@@ -292,7 +294,7 @@ describe('审查修复 · 批次3+5（身份链 / 一致性）', () => {
       const rows = await g4.audit.read({});
       const seqs = rows.map((r) => r.seq);
       assert.equal(new Set(seqs).size, seqs.length, '并发下 seq 必须唯一');
-      assert.equal(seqs.length, 20, `20 条都要落下，实际 ${seqs.length}`);
+      assert.equal(seqs.length, 基线 + 20, `本轮 20 条都要落下（基线 ${基线}，实际 ${seqs.length}）`);
     } finally {
       await g4.cleanup();
     }
@@ -326,7 +328,7 @@ describe('审查修复 · 批次3+5（身份链 / 一致性）', () => {
       审计尾: [],
       升级挂起: [{ id: 'p-1', 对象: '权限矩阵', 条款: '三档门槛', 可选项: ['用出厂版', '用我的版'] }],
       探针: { 状态: '正常', 结果: [] },
-      策略: { healthy: true, 错误: null, 介入度: '零参与', 失联: {} },
+      策略: { healthy: true, 错误: null, 介入度: '放权', 失联: {} },
       生成于: '2026-10-08T00:00:00Z',
     });
     const 项 = view.待你决定.find((i) => i.类型 === '升级挂起');

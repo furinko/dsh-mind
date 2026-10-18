@@ -27,9 +27,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 const FACTORY = join(here, '..', 'mind');
 const 部署偏好 = '集体L2-共享基础设施/defaults/部署.json';
 const 前缀 = '/plugins/dsh-mind';
-const 端点 = { presence: `${前缀}/presence`, workbench: `${前缀}/workbench`, ping: `${前缀}/ping`, delegation: `${前缀}/delegation` };
+const 端点 = { presence: `${前缀}/presence`, workbench: `${前缀}/workbench`, ping: `${前缀}/ping`, delegation: `${前缀}/delegation`, intervention: `${前缀}/intervention` };
 /** 只允许明确端点，新增调度设置仍不能打开通用 action 代理。 */
-const 应有端点 = [端点.presence, 端点.workbench, 端点.ping, 端点.delegation];
+const 应有端点 = [端点.presence, 端点.workbench, 端点.ping, 端点.delegation, 端点.intervention];
 
 const 睡 = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -96,7 +96,15 @@ function 假WebServer() {
 
 async function 起宿主(options = {}) {
   const home = await mkdtemp(join(tmpdir(), 'mind-routes-'));
-  const host = options.提供服务 ? fakeHost({ 提供服务: options.提供服务 }) : fakeHost();
+  // P1-06：presence 写现在要求宿主 Connection 认证；默认给「已认证」的假 Connection，
+  // 负向面（缺席 503 / 被拒 401）由 options 显式关掉/拒绝。
+  const 提供服务 = new Set(options.提供服务 ?? ['tools', 'commands', 'systemPrompt']);
+  const 服务 = {};
+  if (!options.不要认证) {
+    提供服务.add('connection');
+    服务.connection = { requestRejection: options.拒绝认证 ? () => 401 : () => undefined };
+  }
+  const host = fakeHost({ 提供服务: [...提供服务], 服务 });
   const ws = 假WebServer();
   if (options.时机 !== 'late' && options.时机 !== 'never') host.ctx.webServer = ws;
   await kernel.apply(host.ctx, {
@@ -182,21 +190,23 @@ describe('Batch 7：自注册同源路由（换掉永不返回的命令通道）
     const t = await 起宿主();
     try {
       // 先手工放一个别的键：merge 不许把它丢掉。
-      await t.写私有(部署偏好, JSON.stringify({ 介入度: '事后抽检' }, null, 2));
+      await t.写私有(部署偏好, JSON.stringify({ 介入度: '预审' }, null, 2));
       const 路由 = await t.ws.请求('POST', 端点.presence, { 体: JSON.stringify({ 小时: 168 }) });
       assert.equal(路由.状态码, 200, 路由.体);
       assert.equal(路由.json?.成功, true, 路由.体);
       const 文件 = JSON.parse(await readTextOrNull(t.文件));
       assert.equal(文件.响应期限小时, 168, '路由面写必须落到同一个文件');
-      assert.equal(文件.介入度, '事后抽检', 'merge 写：别的键不许丢');
+      assert.equal(文件.介入度, '预审', 'merge 写：别的键不许丢');
       assert.equal(t.org.policy.presence().生效响应期限小时, 168, '写完立刻生效');
 
       const 审计 = (await t.org.audit.read({})).filter((r) => r.动作 === '设置变更');
       assert.equal(审计.length, 1, `路由面的写必须入账，实际 ${审计.length} 条`);
-      assert.equal(审计[0].主体.id, '设置页', '账上主体是「设置页」');
-      assert.equal(审计[0].主体.kind, 'Lead');
-      assert.notEqual(审计[0].主体.id, 'sovereign', '绝不许冒充主权者');
+      // v2 条目14/17（Lead 2026-10-18 修正）：人侧真实 Owner 由可信入口生成**主权者本人**的
+      // 主体，审计记「主权者 + 已认证设置页来源」——不再记「设置页/Lead」这个假身份。
+      assert.equal(审计[0].主体.id, 'sovereign', '账上主体是主权者本人（人侧入口构造）');
+      assert.equal(审计[0].主体.kind, '主权者');
       assert.match(String(审计[0].依据), /同源路由|设置页/, '依据要写明这是走同源路由的浏览器设置页');
+      assert.equal(审计[0].详情.入口, '设置页', '入口事实要可追');
       assert.equal(审计[0].详情.键.响应期限小时.新值, 168, '账上要有原值→新值');
 
       // 与命令面写同形：同一组键、同样的嵌套形状（值可以不同 —— 两次写的值本来就不同）。
@@ -217,6 +227,28 @@ describe('Batch 7：自注册同源路由（换掉永不返回的命令通道）
     }
   });
 
+  // ②b P1-06：presence 写必须有宿主 Connection 认证——缺席 503、被拒 401；
+  //     读面不要求认证（已声明的本机读取舍不延伸到写）。
+  it('②b P1-06：presence 写认证缺席 503 / 被拒 401；读面仍可用', async () => {
+    const 无认证 = await 起宿主({ 不要认证: true });
+    try {
+      const 读 = await 无认证.ws.请求('GET', 端点.presence);
+      assert.equal(读.状态码, 200, '读面不要求 Connection 认证');
+      const 写 = await 无认证.ws.请求('POST', 端点.presence, { 体: JSON.stringify({ 小时: 96 }) });
+      assert.equal(写.状态码, 503, 写.体);
+      assert.match(String(写.json?.理由), /认证/, '缺认证要明说');
+    } finally {
+      await 无认证.清理();
+    }
+    const 拒绝 = await 起宿主({ 拒绝认证: true });
+    try {
+      const 写 = await 拒绝.ws.请求('POST', 端点.presence, { 体: JSON.stringify({ 小时: 96 }) });
+      assert.equal(写.状态码, 401, 写.体);
+    } finally {
+      await 拒绝.清理();
+    }
+  });
+
   // ③ 非法值 ⇒ 拒绝、文件不动、账上有那条拒绝
   it('③ 非法值（小时:0 / 小时:999999999 / 开关:"也许"）⇒ 拒绝 + 文件不动 + 账上有拒绝', async () => {
     const t = await 起宿主();
@@ -227,7 +259,7 @@ describe('Batch 7：自注册同源路由（换掉永不返回的命令通道）
         { 参数: { 开关: '也许' }, 理由: /开关/ },
       ];
       for (const c of 用例) {
-        const 原份 = JSON.stringify({ 介入度: '零参与', 其它: '不许动' }, null, 2) + '\n';
+        const 原份 = JSON.stringify({ 介入度: '放权', 其它: '不许动' }, null, 2) + '\n';
         await t.写私有(部署偏好, 原份);
         const 路由 = await t.ws.请求('POST', 端点.presence, { 体: JSON.stringify(c.参数) });
         const 标注 = JSON.stringify(c.参数);
@@ -238,7 +270,7 @@ describe('Batch 7：自注册同源路由（换掉永不返回的命令通道）
       }
       const 拒绝 = (await t.org.audit.read({})).filter((r) => r.动作 === '设置变更' && /拒绝/.test(String(r.结果)));
       assert.ok(拒绝.length >= 3, `每条拒绝都要入账，实际 ${拒绝.length} 条`);
-      assert.equal(拒绝[0].主体.id, '设置页');
+      assert.equal(拒绝[0].主体.id, 'sovereign', '拒绝也记主权者本人（人侧入口）');
       // 反例面：合法值照样能写 —— 证明上面拒的不是「这个端点不能用」。
       assert.equal((await t.ws.请求('POST', 端点.presence, { 体: JSON.stringify({ 小时: 72 }) })).json.成功, true);
     } finally {
@@ -360,7 +392,7 @@ describe('Batch 7：自注册同源路由（换掉永不返回的命令通道）
     const 一 = await 起宿主();
     const { ws, home } = 一;
     try {
-      assert.equal(ws.路由表.length, 4, '第一次 apply 挂上四条明确端点');
+      assert.equal(ws.路由表.length, 5, '第一次 apply 挂上五条明确端点');
       // 卸载：effect 的清理器必须把路由 disposer 交回去，否则第二次 apply 撞 duplicate。
       一.host.清理();
       assert.deepEqual(ws.路由表, [], `卸载后不许留残留：${JSON.stringify(ws.路由表)}`);

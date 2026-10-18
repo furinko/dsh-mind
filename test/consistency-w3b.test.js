@@ -153,7 +153,7 @@ describe('W3 批2 · 口径与静默失效', () => {
   it('⑤探针声明坏 JSON：折成「问题」并见红，run 仍落快照与审计', async () => {
     const { f, done } = await 造区();
     try {
-      const probes = new ProbeRunner({ layout: f.layout, policy: f.policy, audit: f.audit, clock: f.clock });
+      const probes = new ProbeRunner({ layout: f.layout, policy: f.policy, audit: f.audit, clock: f.clock, 无内核装配: true });
       await f.write('集体L2-共享基础设施/defaults/安全类探针.json', '{ 探针: [ 这不是 JSON');
       const 声明 = await probes.declare();
       assert.equal(声明.一致, false);
@@ -260,31 +260,39 @@ describe('W3 批2 · 口径与静默失效', () => {
     }
   });
 
-  it('⑩workbench 未交齐遮罩：答案行只给盲标，交齐才给真名与结论', () => {
-    const 造节点 = (答案) => ({ id: 'n-w3b', 描述: '技术路线', 状态: '已交卷', 模式: '独立会审', 负责人: ['member-a', 'member-b', 'member-c'], 判据: ['x'], 判据冻结: true, 独立答案: 答案 });
-    const 两份 = [
-      { 成员: 'member-a', 结论: '用会话命令', 反例面: [], 产出物引用: ['方案-a'] },
-      { 成员: 'member-b', 结论: '用会话命令', 反例面: ['无会话首屏'], 产出物引用: ['方案-b'] },
-    ];
-    const 未齐 = projectWorkbench({ 项目: 'p', 节点: [造节点(两份)], 探针: { 结果: [] }, 策略: { healthy: true, rules: [] } }).会审[0];
-    assert.equal(未齐.揭名, false);
-    // 盲标单源（设计评审 #8 · 2026-10-15）：会审行盲标改用 review.盲标分配 的确定性置换
-    // （线程=节点 id + 排序名册）——n-w3b 这组种子里 member-a→B、member-b→A。
-    // 断言钉「行只有盲标」与具体标位（标位由同源算法决定，可复算）。
-    assert.deepEqual(未齐.独立答案, [{ 盲标: '成员 B' }, { 盲标: '成员 A' }], '未交齐只给盲标：真名与结论都不许出');
-    assert.doesNotMatch(JSON.stringify(未齐), /member-a|用会话命令|无会话首屏|方案-a/, '整个会审块里不许出现任何人的答案（修前 揭名 只是个提示字段）');
-    assert.deepEqual(未齐.交卷, { 已交: 2, 应交: 3, 齐: false });
-
-    const 齐 = projectWorkbench({
+  it('⑩workbench 会审区只搬存档：盲评行只给盲标，未遮行原样给真名与结论', () => {
+    const 行 = (over) => ({
+      id: 'council-w3b', 问题: '技术路线', 参与者: ['member-a', 'member-b', 'member-c'], 轮次: '0/2',
+      来源会话: 'lead', 答案: [], 分歧清单: [], 结论: null, 零分歧: false, 创建于: 't',
+      ...over,
+    });
+    const 未遮 = projectWorkbench({
       项目: 'p',
-      节点: [造节点([...两份, { 成员: 'member-c', 结论: '用会话命令', 反例面: [], 产出物引用: [] }])],
-      探针: { 结果: [] },
-      策略: { healthy: true, rules: [] },
+      会审存档: [行({
+        状态: '已解锁',
+        答案: [
+          { 成员: 'member-a', 结论: '用会话命令', 结论层: '方案A', 反例面: [], 于: 't' },
+          { 成员: 'member-b', 结论: '用常驻进程', 结论层: '方案B', 反例面: ['无会话首屏'], 于: 't' },
+        ],
+      })],
+      探针: { 结果: [] }, 策略: { healthy: true, rules: [] },
     }).会审[0];
-    assert.equal(齐.揭名, true);
-    assert.deepEqual(齐.独立答案.map((a) => a.成员), ['member-a', 'member-b', 'member-c'], '交齐后全给');
-    assert.equal(齐.独立答案[0].结论, '用会话命令');
-    assert.deepEqual(齐.独立答案[1].反例面, ['无会话首屏']);
+    assert.equal(未遮.状态, '已解锁');
+    assert.deepEqual(未遮.答案.map((a) => a.成员), ['member-a', 'member-b']);
+    assert.equal(未遮.答案[0].结论, '用会话命令');
+    assert.deepEqual(未遮.答案[1].反例面, ['无会话首屏']);
+
+    const 遮 = projectWorkbench({
+      项目: 'p',
+      会审存档: [行({
+        状态: '作答中', 盲评遮罩: true,
+        答案: [{ 成员: '成员 B', 结论: null, 结论层: null, 反例面: [] }],
+      })],
+      探针: { 结果: [] }, 策略: { healthy: true, rules: [] },
+    }).会审[0];
+    assert.equal(遮.盲评遮罩, true);
+    assert.deepEqual(遮.答案, [{ 成员: '成员 B', 结论: null, 结论层: null, 反例面: [] }], '未遮前只给盲标：真名与结论都不许补回来');
+    assert.doesNotMatch(JSON.stringify(遮), /用会话命令|无会话首屏/, '整个会审块里不许出现任何人的答案（投影不替服务层揭名）');
   });
 
   it('⑪a memory 口径：检索候选文档数与账本条目数分开报，谁也不覆盖谁', async () => {

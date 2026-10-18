@@ -33,7 +33,7 @@ import { TaskGraph } from '../src/tasks.js';
 import { MessageBus } from '../src/bus.js';
 import { RoleRegistry } from '../src/registry.js';
 import { ReviewProtocol } from '../src/review.js';
-import { DebateService } from '../src/debate.js';
+import { CouncilService } from '../src/council.js';
 import { MemoryService } from '../src/memory.js';
 import { ObjectStore } from '../src/store.js';
 import { sliceForViewer } from '../src/workbench.js';
@@ -53,8 +53,8 @@ function 装配(g) {
   const bus = new MessageBus({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock });
   const registry = new RoleRegistry({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock });
   const review = new ReviewProtocol({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock, tasks, bus, random: () => 0 });
-  const debate = new DebateService({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock, tasks, bus, review, registry });
-  return { tasks, bus, registry, review, debate };
+  const council = new CouncilService({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock, bus, registry });
+  return { tasks, bus, registry, review, council };
 }
 
 describe('批次6 · P3 后端', () => {
@@ -69,22 +69,25 @@ describe('批次6 · P3 后端', () => {
     }
   });
 
-  it('② converge 末位表态的发件人 = 真实主体 id（不是硬编码 lead）', async () => {
+  it('② converge 记录真实主体 id（不是硬编码 lead）——v2 落在会审收敛审计的主体上', async () => {
     const g = await makeFixture();
     try {
-      const { tasks, bus, debate } = 装配(g);
-      const node = await tasks.create({ subject: LEAD, 项目: P, 描述: '末位表态', 负责人: ['member-a', 'member-b'], 判据: ['x'], 模式: '独立会审' });
-      await tasks.dispatch(node.id, { subject: LEAD, 项目: P });
-      await tasks.start(node.id, { subject: { id: 'member-a', kind: '成员', roleId: '插件工程' }, 项目: P });
+      const { council } = 装配(g);
+      const 开 = await council.open({ subject: LEAD, 项目: P, 问题: '末位表态', 参与者: ['member-a', 'member-b'] });
       for (const id of ['member-a', 'member-b']) {
-        await tasks.submit(node.id, { subject: { id, kind: '成员', roleId: '插件工程' }, 项目: P, 结论: `${id} 案` });
+        await council.answer({ subject: { id, kind: '成员', roleId: '插件工程' }, 项目: P, id: 开.id, 结论: `${id} 案` });
       }
-      await debate.open({ subject: LEAD, 项目: P, 节点: node.id });
+      await council.unlock({ subject: LEAD, 项目: P, id: 开.id });
       const 真Lead = { id: 'root-lead-实例', kind: 'Lead' };
-      await debate.converge({ subject: 真Lead, 项目: P, 节点: node.id, 内容: '到此为止' });
-      const 消息 = await bus.readRaw({ 项目: P, 线程: node.id });
-      const 末位 = 消息.filter((m) => m.类型 === '表态').pop();
-      assert.equal(末位.发件, 'root-lead-实例', '末位表态必须记真实主体 id（修前硬编码 lead，对不上账）');
+      // v2 条目10：Lead 自治写前要真实钉版（在岗 + 摘要可读），先走正规出生路径。
+      const 出生 = await g.registry.ensureLeadInstance({ 实例: 真Lead.id });
+      assert.equal(出生.就绪, true, `Lead 实例就绪失败：${JSON.stringify(出生)}`);
+      const 收 = await council.converge({ subject: 真Lead, 项目: P, id: 开.id, 内容: '到此为止' });
+      assert.equal(收.会审.结论, '到此为止');
+      // 收敛是事件 + 审计双落：审计行的主体必须记真实主体 id（修前讨论段的末位表态硬编码 'lead'）。
+      const 收敛审计 = (await g.audit.read({})).filter((r) => r.动作 === '会审收敛' && r.对象?.id === 开.id);
+      assert.equal(收敛审计.length, 1);
+      assert.equal(收敛审计[0].主体?.id, 'root-lead-实例', '收敛审计必须记真实主体 id（不是硬编码 lead）');
     } finally {
       await g.cleanup();
     }
@@ -210,6 +213,9 @@ describe('批次6 · P3 后端', () => {
     try {
       await kernel.apply(host.ctx, { home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') });
       const org = await shareOrg({ home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') });
+      // v2 条目10：Lead 自治写前要真实钉版（在岗 + 摘要可读），先走正规出生路径。
+      const 出生 = await org.registry.ensureLeadInstance({ 实例: 'lead' });
+      assert.equal(出生.就绪, true, `Lead 实例就绪失败：${JSON.stringify(出生)}`);
       await org.memory.remember({ subject: LEAD, 类: '作答', 内容: '归档的旧答案', 来源: { 谁: 'lead', 怎么知道: '批次6测试' }, 项目: P });
       await org.memory.archiveAnswers({ 项目: P, 任务: 'task-p3-bool', subject: LEAD });
       // 对照臂：不带 显式 ⇒ 归档作答不进检索面。

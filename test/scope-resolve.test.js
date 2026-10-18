@@ -69,7 +69,7 @@ describe('scopeOf 经身份档案解析岗位（缺口4）', () => {
       org,
       项目: P,
       主体: 实例甲,
-      args: { action: 'memory_write', 类: '知识', 内容: '岗名节点任务内写入', 来源: '测试', project: P, 任务: 岗名节点.id },
+      args: { action: 'memory_write', 类: '经历', 内容: '岗名节点任务内写入', 来源: '测试', project: P, 任务: 岗名节点.id },
     });
     assert.ok(written.条目?.id, '任务内写动作（memory_write 带任务上下文）必须放行');
   });
