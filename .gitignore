@@ -5,3 +5,11 @@ node_modules/
 Thumbs.db
 .vscode/
 .idea/
+
+# 临时调试输出（批次调试时的 shell 转储，不是产物）
+.w[0-9]*
+.w*-*.txt
+.tasks-fixed-draft.js
+
+# 官方 SDK 抽取物：第三方代码，不进仓；需要时用 .recovery/asar.mjs 重新抽取
+.recovery/asar-out/
