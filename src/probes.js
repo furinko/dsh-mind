@@ -15,6 +15,7 @@ import { listFiles, readJsonOrNull, readTextOrNull, atomicWrite, ensureDirPath }
 import { unlink } from 'node:fs/promises';
 import { shortHash } from './kernel/ids.js';
 import { Denied } from './kernel/errors.js';
+import { mechanismArtifact } from './mechanism-artifact.js';
 // 「按 id 找卡」的共享实现（设计评审 #11 · 2026-10-15）：撤回名单探针与升级比对此前
 // 各有一份候选集（探针版漏了能力卡 ⇒ 撤回一张能力卡会被误报成「撤回变成删除」）。
 // import 图无环：upgrade 只 import kernel/paths，不依赖本文件。
@@ -42,7 +43,9 @@ const PROBE_RUNNERS = ['Lead', '主权者', '系统'];
 
 export class ProbeRunner {
   /**
-   * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock, capability?: object }} spec
+   * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock, capability?: object, 无内核装配?: boolean }} spec
+   *   `无内核装配: true` 只给纯服务夹具/命令面用：没有内核装配就没有回执文件，
+   *   探针必须显式知道这一点；**缺省不猜**，回执缺席按「未知」见红（P1-04）。
    */
   constructor(spec) {
     this.layout = spec.layout;
@@ -50,6 +53,7 @@ export class ProbeRunner {
     this.audit = spec.audit;
     this.clock = spec.clock;
     this.capability = spec.capability ?? null;
+    this.无内核装配 = spec.无内核装配 === true;
   }
 
   /**
@@ -99,11 +103,9 @@ export class ProbeRunner {
    * 它不靠身份档案（引擎不健康时档案同样不可信），而 kind 由会话事实链供给（内核
    * 门①/门② 已封自报），成员在工具面拿不到 Lead 这个 kind。
    *
-   * 「机制版本」恒由声明文件现算（`#mechanismVersion`）；`spec.机制版本` 只余装配/测试通道
-   * （开机自检的 'boot'、测试造版本差），动作面已不可达——快照是回滚目标的唯一来源，
-   * 自报标签 = 回滚目标投毒。
+   * 机制版本只取实际加载包的代码身份，不采信调用方标签；制品凭据缺失不等于可恢复。
    *
-   * @param {{ subject: object, 机制版本?: string }} spec
+   * @param {{ subject: object }} spec
    * @returns {Promise<{全绿: boolean, 结果: Array<object>, 见红: Array<object>, 机制版本: string, 于: string, 声明问题: string[]}>}
    */
   async run(spec = {}) {
@@ -120,8 +122,10 @@ export class ProbeRunner {
     }
     const 见红 = 结果.filter((r) => r.状态 === '红').map((r) => ({ 探针: r.探针, 详情: r.详情 }));
     const 全绿 = 见红.length === 0 && declaration.一致;
+    const 代码身份 = mechanismArtifact();
     const ran = {
-      机制版本: spec.机制版本 ?? (await this.#mechanismVersion()),
+      机制版本: 代码身份.机制版本,
+      代码身份,
       于: this.clock.iso(),
       全绿,
       结果,
@@ -146,6 +150,8 @@ export class ProbeRunner {
       告警: !全绿,
       详情: { 机制版本: ran.机制版本, 见红, 声明问题: declaration.问题, 快照 },
     });
+    // 必须在本次快照入账后、健康/保留等旁路之前触发；不能让后续巡检或旁路故障吃掉本次红灯。
+    const 回滚 = 全绿 ? null : await this.autoRollback(快照);
     // 恒红/恒绿报警接线（2026-10-13 裁决第二批 · P2-10）：§4「恒亮的灯等于没灯」——
     // evaluateHealth 此前只返回结构、无消费点，恒绿可能静默。巡检后现判，恒态 ⇒ 告警入账。
     const 健康 = await this.evaluateHealth();
@@ -177,7 +183,7 @@ export class ProbeRunner {
         详情: { 触发线: KEEP_SNAPSHOTS, 清理目标: PRUNE_TO, ...清理 },
       });
     }
-    return ran;
+    return { ...ran, 快照, 回滚 };
   }
 
   /**
@@ -225,93 +231,87 @@ export class ProbeRunner {
    * 执行面（甲′）：运行态**不自动改文件、不自建回滚制品**——回滚制品＝git/包版本（开发仓），
    * 装回全绿版本由主权者经版本管理执行；这里只定位目标并入账，不假装执行过（F2）。
    *
-   * @returns {Promise<{执行: boolean, 已定位?: boolean, 目标版本: string|null, 原因: string}>}
+   * @param {{名: string, 哈希: string}} [reference] 内部巡检传本次已落快照；工具面不接此参数。
+   * @returns {Promise<object>} 定位/未知/拒绝的可读结果；副作用仅无条件审计告警，审计或定位故障抛出。
    */
-  async autoRollback() {
-    const snapshots = await this.#recentSnapshots(Number.MAX_SAFE_INTEGER);
-    const latest = snapshots[snapshots.length - 1];
-    if (!latest || latest.全绿) {
-      return { 执行: false, 目标版本: null, 原因: '最新一次探针全绿，没有回滚的必要。' };
+  async autoRollback(reference) {
+    let result = { 执行: false, 已定位: false, 目标版本: null, 可恢复: '不可确定', 制品来源: null, 状态: '不可确定', 原因: '' };
+    let failure = null;
+    try {
+      if (!reference) {
+        const rows = await this.audit.read({});
+        reference = rows.filter((r) => ['探针巡检', '探针异常'].includes(r.动作)).at(-1)?.详情?.快照;
+      }
+      const latest = reference
+        ? await readJsonOrNull(`${this.layout.probeSnapshotDir()}/${reference.名}`)
+        : null;
+      if (!latest) {
+        result.原因 = '触发快照缺失：无法确定红灯或回滚目标，升级主权者核查。';
+      } else {
+        const checked = await this.#verifySnapshotIntegrity(latest, reference);
+        if (!checked.ok) {
+          result.状态 = '拒绝定位';
+          result.原因 = `快照完整性存疑（${checked.原因}），不定位，升级主权者核查。`;
+        } else if (latest.全绿 === true) {
+          return { ...result, 状态: '无需定位', 原因: '本次探针全绿，没有回滚的必要。' };
+        } else {
+          result.触发快照 = { 名: checked.名, 哈希: checked.哈希 };
+          const rows = await this.audit.read({});
+          const index = rows.findLastIndex((r) => ['探针巡检', '探针异常'].includes(r.动作) && r.详情?.快照?.名 === checked.名 && r.详情.快照.哈希 === checked.哈希);
+          if (index < 0) throw new Error('本次快照的审计凭据消失');
+          // 审计提交序决定“之前”，而非全局latest或同秒随机文件名序；后续绿/红都不能替换触发者。
+          const candidate = rows.slice(0, index).reverse().find((r) => r.动作 === '探针巡检' && r.详情?.快照);
+          if (!candidate) {
+            result.原因 = '历史里没有任何已入账全绿快照，回滚无目标，升级主权者。';
+          } else {
+            const targetRef = candidate.详情.快照;
+            const target = await readJsonOrNull(`${this.layout.probeSnapshotDir()}/${targetRef.名}`);
+            const targetCheck = target ? await this.#verifySnapshotIntegrity(target, targetRef) : { ok: false, 原因: '全绿目标快照已丢失' };
+            if (!targetCheck.ok || target.全绿 !== true) {
+              result.状态 = '拒绝定位';
+              result.原因 = `回滚目标快照完整性存疑（${targetCheck.原因 ?? '全绿标记不符'}），升级主权者。`;
+            } else if (target.代码身份?.状态 !== '已核代码身份' || !target.机制版本 || target.代码身份.机制版本 !== target.机制版本) {
+              result.原因 = '历史全绿快照缺代码身份/制品凭据（含boot及声明哈希旧标签）；不能倒灌当前身份或认定可恢复，升级主权者。';
+              result.历史标签 = target.机制版本 ?? null;
+            } else {
+              result = { ...result, 状态: '已定位代码身份', 已定位: true, 目标版本: target.机制版本, 目标快照: targetRef, 包名: target.代码身份.包名, 包版本: target.代码身份.包版本,
+                原因: `已定位回滚目标 ${target.机制版本}（全绿最近一版的代码身份），入账并升级主权者；没有精确git/包制品出处，可恢复性不可确定。运行态不自动改文件、不自建回滚制品，装回由主权者经版本管理执行。` };
+            }
+          }
+        }
+      }
+    } catch (error) {
+      failure = error;
+      result.状态 = '定位失败';
+      result.原因 = `回滚定位失败：${error instanceof Error ? error.message : String(error)}；升级主权者核查。`;
     }
-    // 快照完整性校验（2026-10-13 裁决第二批 · 裁决3）：快照是无哈希普通 JSON，改一份
-    // 历史「全绿+版本X」即可把回滚目标定位到伪造版本（投毒面）。修法：定位出的目标快照
-    // 与账上「探针巡检/异常」行记录的内容哈希比对——不符 ⇒ 告警 + 拒绝定位（fail-closed）。
-    const 校验 = await this.#verifySnapshotIntegrity(latest);
-    if (!校验.ok) {
-      await this.audit.append({
-        动作: '自动回滚',
-        主体: { id: 'system', kind: '系统' },
-        对象: { id: '机制版本', kind: '账目' },
-        依据: '§4 快照完整性校验（裁决第二批·裁决3）：回滚目标与审计入账哈希不符 = 投毒嫌疑，拒绝定位',
-        结果: `最新快照完整性校验失败：${校验.原因}——不定位回滚目标，升级主权者核查`,
-        告警: true,
-        详情: { 校验 },
-      });
-      return { 执行: false, 目标版本: null, 原因: `快照完整性存疑（${校验.原因}），已告警并升级主权者；不定位回滚目标。` };
-    }
-    // 关键：不是「上一版」，是「**全绿的最近一版**」——中间可能隔着好几版见红。
-    const 目标 = [...snapshots].reverse().find((s) => s.全绿 === true);
-    if (!目标) {
-      await this.audit.append({
-        动作: '自动回滚',
-        主体: { id: 'system', kind: '系统' },
-        对象: { id: '机制版本', kind: '账目' },
-        依据: '§4 探针红 ⇒ 自动回滚（甲′裁决 2026-10-09：定位全绿最近一版＋无条件入账＋告警升级主权者；执行面归主权者经版本管理装回）',
-        结果: '找不到任何全绿版本：无回滚目标可定位，保持见红并升级主权者',
-        告警: true,
-        详情: { 见红: latest.见红 },
-      });
-      return { 执行: false, 目标版本: null, 原因: '历史里没有任何全绿快照，回滚无目标；已入账并升级主权者。' };
-    }
-    // 口径如实（F2 + 甲′裁决 2026-10-09）：运行态不自动改文件、不自建回滚制品——
-    // 回滚制品＝git/包版本（开发仓），装回全绿版本由主权者经版本管理执行。
-    // 这里只「定位目标并入账」，不许审计里出现「版本 x → 版本 y」这种像真回滚过的写法。
-    // 回滚目标快照同样过完整性校验（裁决3）：目标被改过 = 定位到伪造版本，同拒。
-    const 目标校验 = await this.#verifySnapshotIntegrity(目标);
-    if (!目标校验.ok) {
-      await this.audit.append({
-        动作: '自动回滚',
-        主体: { id: 'system', kind: '系统' },
-        对象: { id: '机制版本', kind: '账目' },
-        依据: '§4 快照完整性校验（裁决第二批·裁决3）：回滚目标与审计入账哈希不符 = 投毒嫌疑，拒绝定位',
-        结果: `回滚目标快照完整性校验失败：${目标校验.原因}——不定位，升级主权者核查`,
-        告警: true,
-        详情: { 校验: 目标校验, 候选目标: 目标.机制版本 },
-      });
-      return { 执行: false, 目标版本: null, 原因: `回滚目标快照完整性存疑（${目标校验.原因}），已告警并升级主权者。` };
-    }
+    // 包括未知、拒绝与读取异常，均必须审计告警；审计失败直接抛，不得伪报“已入账”。
     await this.audit.append({
-      动作: '自动回滚',
-      主体: { id: 'system', kind: '系统' },
-      对象: { id: '机制版本', kind: '账目' },
-      依据: '§4 探针红 ⇒ 自动回滚：定位探针全绿的最近一版＋无条件入账＋告警升级主权者（甲′裁决 2026-10-09）',
-      结果: `已定位回滚目标 ${目标.机制版本}（${latest.机制版本} 见红），入账并升级主权者；运行态不自动改文件，装回全绿版本由主权者经版本管理（git/包版本）执行`,
-      告警: true,
-      详情: { 回滚目标: 目标.机制版本, 目标于: 目标.于, 见红: latest.见红, 定性: '策略引擎内置行为：无条件入账；运行态不自动改文件，回滚制品＝git/包版本，执行面归主权者（甲′裁决 2026-10-09）' },
+      动作: '自动回滚', 主体: { id: 'system', kind: '系统' }, 对象: { id: '机制版本', kind: '账目' },
+      依据: '§4 甲′：定位全绿最近一版＋无条件入账＋告警升级主权者；运行态不自动改文件、不自建回滚制品',
+      结果: result.原因, 告警: true, 详情: { ...result, 触发快照: result.触发快照 ?? reference ?? null, 升级: '主权者' },
     });
-    return { 执行: false, 已定位: true, 目标版本: 目标.机制版本, 原因: '探针见红，已定位全绿的最近一版（不是紧邻上一版）并入账升级主权者；运行态不自动改文件——装回全绿版本由主权者经版本管理（git/包版本）执行。' };
+    if (failure) throw new Error(result.原因, { cause: failure });
+    return result;
   }
 
   /**
    * 影响面声明：每次强更必须声明动了哪些检测逻辑（§4 五道配套之一）。
-   * @param {{ 机制版本: string }} spec
-   * @returns {Promise<{机制版本: string, 动了: string[], 未动: string[], 声明: string}>}
+   * @returns {Promise<object>} 真实代码文件差异，不从相同探针名称推断“实现未改”；无基线则未知。只读。
    */
-  async impactStatement(spec) {
+  async impactStatement() {
+    const 当前 = mechanismArtifact();
     const snapshots = await this.#recentSnapshots(Number.MAX_SAFE_INTEGER);
-    const previous = snapshots.filter((s) => s.机制版本 !== spec.机制版本).pop();
-    const 当前 = await this.declare();
-    const before = new Set(previous?.结果?.map((r) => r.探针) ?? []);
-    const 动了 = 当前.声明.filter((name) => !before.has(name));
-    const 未动 = 当前.声明.filter((name) => before.has(name));
-    return {
-      机制版本: spec.机制版本,
-      动了,
-      未动,
-      声明: 动了.length
-        ? `本版改动了检测逻辑：${动了.join('、')}。探针本身受安全类保护，强更不能绕过它。`
-        : '本版未改动检测逻辑（对比上一个有快照的机制版本）。',
-    };
+    const previous = snapshots.filter((s) => s.代码身份?.状态 === '已核代码身份' && s.机制版本 !== 当前.机制版本).pop();
+    if (当前.状态 !== '已核代码身份' || !previous) {
+      return { 机制版本: 当前.机制版本, 状态: '不可确定', 动了: [], 未动: [], 声明: '代码身份或上一个不同版本的代码清单缺失，检测逻辑影响面不可确定；相同探针声明不证明实现未变。' };
+    }
+    const before = new Map(previous.代码身份.文件.map((f) => [f.路径, f.SHA256]));
+    const after = new Map(当前.文件.map((f) => [f.路径, f.SHA256]));
+    const paths = [...new Set([...before.keys(), ...after.keys()])].sort();
+    const 动了 = paths.filter((p) => before.get(p) !== after.get(p));
+    const 未动 = paths.filter((p) => before.get(p) === after.get(p));
+    return { 机制版本: 当前.机制版本, 状态: '已核代码差异', 动了, 未动, 声明: `代码文件差异 ${动了.length} 项（不是逻辑语义等价证明）；探针本身受安全类保护。` };
   }
 
   // ── 探针实现 ────────────────────────────────────────────────────────────────
@@ -365,15 +365,29 @@ export class ProbeRunner {
     let 工具闸句 = null;
     let 工具闸红 = false;
     if (回执 && typeof 回执 === 'object') {
+      // P1-04（全面审查 2026-10-17）：修前只有 registered===false 才红，回执缺席/
+      // 未尝试/旧回执全绿——「不知道」被当成「安全」。回执是内核装配的机械读数：
+      // 缺项、未确认（registered 不是严格 true）、显式失败，三者任一都按红处理；
+      // 只有每个应有闸都 registered===true 才是绿。
+      const 应有 = ['范围闸', '调度创建闸'];
+      const 缺项 = 应有.filter((名) => !回执[名]);
       const 失败 = Object.entries(回执).filter(([, r]) => r?.registered === false);
+      const 未确认 = Object.entries(回执).filter(([, r]) => !r || r.registered !== true);
       const 已注册 = Object.entries(回执).filter(([, r]) => r?.registered === true);
-      const 未尝试 = Object.entries(回执).filter(([, r]) => r?.registered !== false && r?.registered !== true);
-      工具闸红 = 失败.length > 0;
-      工具闸句 = 失败.length > 0
-        ? `工具闸注册失败：${失败.map(([名, r]) => `${名}（${r.error ?? '未知原因'}）`).join('、')}`
-        : `工具闸回执：${已注册.map(([名]) => 名).join('、') || '无'} 已注册${未尝试.length ? `；${未尝试.map(([名]) => 名).join('、')} 未尝试` : ''}`;
+      工具闸红 = 缺项.length > 0 || 失败.length > 0 || 未确认.length > 0;
+      const 句们 = [];
+      if (失败.length) 句们.push(`工具闸注册失败：${失败.map(([名, r]) => `${名}（${r.error ?? '未知原因'}）`).join('、')}`);
+      if (未确认.length) 句们.push(`工具闸未确认：${未确认.map(([名, r]) => `${名}（registered=${r?.registered ?? '缺'}）`).join('、')}`);
+      if (缺项.length) 句们.push(`工具闸回执缺项：${缺项.join('、')}`);
+      if (已注册.length) 句们.push(`${已注册.map(([名]) => 名).join('、')} 已注册`);
+      工具闸句 = 句们.join('；');
+    } else if (this.无内核装配) {
+      // 纯服务夹具/命令面：没有内核装配就没有回执，必须由夹具**显式声明**；
+      // 缺省不猜（缺省按红），否则「没装内核」会被静默读成「闸在位」。
+      工具闸句 = '无内核装配（纯服务夹具显式声明）：工具闸回执不在可观测面';
     } else {
-      工具闸句 = '工具闸回执不在本装配可观测面（无内核组件装配记录：纯服务夹具/命令面）';
+      工具闸红 = true;
+      工具闸句 = '工具闸回执缺失：当前装配无法证明闸在位（未知 ≠ 绿）';
     }
     return {
       探针: '闸在位',
@@ -434,7 +448,7 @@ export class ProbeRunner {
     // 机制版本不变时同秒两次巡检同名 ⇒ atomicWrite 静默覆盖 ⇒ 审计里两行「探针巡检」
     // 同名不同哈希 ⇒ 快照完整性校验见红 ⇒ autoRollback 拒绝定位——回滚机制会被自己的
     // 命名碰撞毒化。
-    const name = `${ran.于.replace(/[:.]/g, '-')}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}-${shortHash(ran.机制版本, 6)}.json`;
+    const name = `${ran.于.replace(/[:.]/g, '-')}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}-${shortHash(ran.机制版本 ?? 'unknown', 6)}.json`;
     const text = `${JSON.stringify(ran, null, 2)}\n`;
     await atomicWrite(`${dir}/${name}`, text);
     // 内容哈希（裁决3）：按盘上字节算——校验侧对同一文件复算，两边同源。
@@ -479,21 +493,15 @@ export class ProbeRunner {
     return out;
   }
 
-  /** 机制版本：以探针声明文件的内容哈希为准（改了声明就是换了机制）。 */
-  async #mechanismVersion() {
-    const text = (await readTextOrNull(this.layout.probeDeclaration())) ?? '';
-    return shortHash(text, 12);
-  }
-
   /**
    * 快照完整性校验（裁决3）：给定快照对象，找到盘上对应文件，复算内容哈希并与
    * 审计「探针巡检/异常」行入账的哈希比对。不符 / 找不到入账 ⇒ 不 ok（fail-closed）。
    * @param {object} snap
    * @returns {Promise<{ok: boolean, 原因?: string, 名?: string, 哈希?: string}>}
    */
-  async #verifySnapshotIntegrity(snap) {
+  async #verifySnapshotIntegrity(snap, reference) {
     const dir = this.layout.probeSnapshotDir();
-    const files = (await listFiles(dir, { recursive: false, filter: (n) => n.endsWith('.json') })).sort();
+    const files = reference ? [reference.名] : (await listFiles(dir, { recursive: false, filter: (n) => n.endsWith('.json') })).sort();
     const 正文 = `${JSON.stringify(snap, null, 2)}\n`;
     let 名 = null;
     for (const f of files) {
@@ -502,6 +510,7 @@ export class ProbeRunner {
     }
     if (!名) return { ok: false, 原因: '盘上找不到与该快照逐字节一致的文件（内容已被改动或已丢失）' };
     const 哈希 = shortHash(正文, 16);
+    if (reference && reference.哈希 !== 哈希) return { ok: false, 原因: '本次绑定快照哈希不符' };
     const rows = await this.audit.read({});
     const 记录 = rows.filter((r) => ['探针巡检', '探针异常'].includes(r.动作) && r.详情?.快照?.名 === 名).at(-1);
     if (!记录) return { ok: false, 原因: `账上没有快照 ${名} 的入账哈希（入账缺失或早于裁决3的旧快照）` };

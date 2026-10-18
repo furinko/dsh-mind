@@ -20,8 +20,18 @@ import { readTextOrNull, stripBom } from './kernel/fsx.js';
 import { digest } from './kernel/text.js';
 import { Denied, Fault, NeedsApproval } from './kernel/errors.js';
 import { resolveResponseDeadline, evaluateSovereignPresence, BUILTIN_RESPONSE_DEADLINE_HOURS } from './kernel/time.js';
-import { RULE_FILES } from './paths.js';
+import { RULE_FILES, COUNCIL_THREAD_PREFIX, 线程等价键 } from './paths.js';
 import { parseDocument, effectiveDocument, extractPolicyBlock } from './tags.js';
+// v2 条目8：机制动作的**封闭清单**（系统主体的唯一权限面）。单源住 src/mechanism.js，
+// 判定与"谁能拼系统主体"两件事都读它——不在本文件另抄一份清单。
+import { MECHANISM_SUBJECT, MECHANISM_NAMES, mechanismAllows } from './mechanism.js';
+// 条目10 补修J（2026-10-18 独立审计）：写前凭证闸要验**钉住卡的真实内容**（重算摘要 +
+// 派生面重算），不能只认一个摘要字符串；读取/校验面只有 card-credential 一处。
+import { readVerifiedCardSnapshot } from './card-credential.js';
+// v2 条目14/17（2026-10-18 补修F）：主权者逐请求放行的**唯一读取点**。放行上下文只由
+// 重放路径 `以放行上下文` 包住那一次调用（AsyncLocalStorage）；匹配按**步骤计划**
+// （底层 动作+目标 kind/id）逐条消费，宏动作名不参与——本文件只读、不写。
+import { 本次放行匹配, 本次放行可匹配 } from './intervention.js';
 // 保留既有公开导出；解析实现只在tags.js，避免合并与求值各维护一份口径。
 export { extractPolicyBlock } from './tags.js';
 
@@ -47,10 +57,52 @@ export const ACTIONS = [
 ];
 
 /** 主体种类的封闭清单（§2 主体表）。 */
-export const SUBJECT_KINDS = ['主权者', '出厂作者', 'Lead', '成员', '复核者', '系统'];
+// v2（口述收敛 2026-10-18 条目1/5）：复核者退出主体清单——复核员是普通岗位卡，
+// 其约束由 #preGrantBoundary 按岗位名（roleId）判，不再占一个主体类。
+export const SUBJECT_KINDS = ['主权者', '出厂作者', 'Lead', '成员', '系统'];
+
+/**
+ * 岗位名 → 主体种类（**唯一映射**，v2 条目8/20）。
+ *
+ * 为什么单源：不越授 / 不自授都问「这个岗位会造就什么主体」，
+ * 注册表模块的 `subjectForRole` 与 `canTouch` 也在问同一件事。
+ * 判据抄在哪个入口里，就只有那个入口受保护——所以映射只留这一处，registry 反过来 import 它。
+ *
+ * 封闭：只有三个名字映射到非成员种类；其余（含「复核员」与一切成员岗）⇒ 成员。
+ * 表外的名字不会「升级」，因为本函数不给它们留猜的余地。
+ *
+ * @param {unknown} 岗位
+ * @returns {'Lead'|'主权者'|'出厂作者'|'成员'}
+ */
+export function subjectKindForRole(岗位) {
+  if (岗位 === 'Lead') return 'Lead';
+  if (岗位 === '主权者') return '主权者';
+  if (岗位 === '出厂作者') return '出厂作者';
+  return '成员';
+}
+
+/**
+ * 职权级（只用于「是不是同一级或更高」这一问，**不是**权限面比较）。
+ *
+ * 权限面的实际包含关系要有**真凭证**才判得出（本组织的缺口如实记在 `#不越授` 的注释里），
+ * 这里只回答一个结构事实：成员 < Lead < {主权者, 出厂作者}。主权者与出厂作者不同域
+ * （治理 / 出厂件），但在「不得由 Lead 造出来」这一点上同级——所以给同一个级。
+ * 系统不属于任何岗位能造就的种类，单独给最高级（永远不会被当作被派主体）。
+ */
+const 职权级 = (kind) => ({ 成员: 1, Lead: 2, 主权者: 3, 出厂作者: 3, 系统: 4 })[kind] ?? 0;
+
+/**
+ * 职权级的外部读数（registry 算「不自授」的扩张集合时要用同一把尺）。
+ * 只暴露这一问，不暴露判定本体——扩张集合的**比较**仍只有 registry 一处。
+ * @param {string} kind
+ * @returns {number}
+ */
+export function subjectRank(kind) {
+  return 职权级(kind);
+}
 
 /** 介入度四档（§4），只影响自治档。 */
-export const INTERVENTION = ['零参与', '事后抽检', '变更预审', '逐条审批'];
+export const INTERVENTION = ['放权', '预审', '审批'];
 
 /**
  * 运行态默认值键的**封闭清单**（白名单）：出厂件可以写任意给人看的文档键
@@ -60,7 +112,7 @@ export const INTERVENTION = ['零参与', '事后抽检', '变更预审', '逐�
  * 序列化出去 —— 读的人分不清「这是文档」还是「这是一条生效的设置」；
  * 而黑名单永远漏一个（写个 `备注` / `note` / 中文的新叫法就绕过去了）。
  */
-const RUNTIME_DEFAULT_KEYS = ['介入度', '失联限制', '响应期限小时', '工具总范围', '安全类', '披露敏感模式', '会审讨论', '岗位闲置天数'];
+const RUNTIME_DEFAULT_KEYS = ['介入度', '失联限制', '响应期限小时', '工具总范围', '安全类', '披露敏感模式', '会审讨论', '岗位闲置天数', '复核免审'];
 
 /**
  * 会审讨论段的预算默认值（W2 规格 2026-10-09）。
@@ -84,6 +136,16 @@ const ALWAYS_INVARIANTS = '宪章 不可违背原则（§3 永不 + §12 约束�
 export class PolicyEngine {
   /** @type {Promise<boolean>|null} in-flight reload 的共享 Promise（并发合并为一次全量加载）。 */
   #inFlightReload = null;
+
+  /**
+   * 受控父判的重入闸（v2 条目20 · 不越授，2026-10-18）。
+   *
+   * 为什么是**实例私有字段**而不是 `context` 里的一个键：父判是「成员不得超出委派者权限面」
+   * 的闸，若闸的开合由调用方传进来的 context 决定，模型侧任何能构造 context 的路径都能
+   * 一次传参把闸关掉（上一版我用 `context.面求值` 旁路真实身份，就是这么错的）。
+   * 私有字段只看「本次判定是否已经在父判里」，与入参无关 ⇒ 模型关不掉。
+   */
+  #父判中 = false;
 
   /**
    * R05（审查 2026-10-16）：在飞重载期间又有 reload() 进来时置位，在飞轮结束再补读一轮——
@@ -245,20 +307,20 @@ export class PolicyEngine {
     let identity = null;
     /** @type {number|null} */
     let identityMtime = null;
-    let 一致 = false;
-    for (let attempt = 0; attempt < 5 && !一致; attempt += 1) {
-      const 读前 = await mtimeMsOrNull(identityFile);
-      identity = await this.#loadIdentity();
-      identityMtime = await mtimeMsOrNull(identityFile);
-      一致 = 读前 === identityMtime;
-    }
-    if (!一致) {
-      // 5 轮仍在撕裂 = 档案正被高频连续写。如实降级：发布最后一轮读到的正文，mtime 记
-      // 读后值——撕裂期间的写入若改了 mtime，decide 的快速路下一跳就会看到差异再触发
-      // reload。只 warn 不失败：把「正在被写」当「引擎坏」fail-closed，反而挡住写入方收尾。
-      console.warn?.('[dsh-mind] 身份档案连续 5 轮读取都在变动：快照按最后一次读取发布，decide 的 mtime 快速路会兜住后续变化。');
-    }
     try {
+      let 一致 = false;
+      for (let attempt = 0; attempt < 5 && !一致; attempt += 1) {
+        const 读前 = await mtimeMsOrNull(identityFile);
+        identity = await this.#loadIdentity();
+        identityMtime = await mtimeMsOrNull(identityFile);
+        一致 = 读前 === identityMtime;
+      }
+      if (!一致) {
+        // 5 轮仍在撕裂 = 档案正被高频连续写。如实降级：发布最后一轮读到的正文，mtime 记
+        // 读后值——撕裂期间的写入若改了 mtime，decide 的快速路下一跳就会看到差异再触发
+        // reload。只 warn 不失败：把「正在被写」当「引擎坏」fail-closed，反而挡住写入方收尾。
+        console.warn?.('[dsh-mind] 身份档案连续 5 轮读取都在变动：快照按最后一次读取发布，decide 的 mtime 快速路会兜住后续变化。');
+      }
       const { rules, digests } = await this.#loadRules();
       const { defaults, defaults来源, 忽略的默认值键 } = await this.#loadDefaults();
       const establishment = await this.#loadEstablishment();
@@ -372,7 +434,20 @@ export class PolicyEngine {
     // 写入「顺便重载」（报告实证：写逐条审批后当前策略仍按零参与 allow、显式 reload 才变）。
     // 现在比对全部依赖的签名（同样只做 stat，不重读不解析），任一变动即在本次判定前重载。
     // 引擎不健康时的行为不变：下面的 !healthy 分支照旧 fail-closed（拒绝 + 告警入账）。
-    await this.refreshIfStale();
+    // P1-03（全面审查 2026-10-17）：refreshIfStale 自身抛错（坏 identity/规则件）时，
+    // decide 的契约是「永不抛错，只返回结论」。修前它在 try 外 ⇒ 坏档让 decide 抛原始
+    // 异常，故障告警不入账、state.ok 留旧值（探针假绿）。这里把刷新失败收敛成
+    // fail-closed 的引擎不健康状态，下面的 !healthy 分支统一走 Fault + 告警入账。
+    try {
+      await this.refreshIfStale();
+    } catch (error) {
+      this.state = {
+        ...this.state,
+        ok: false,
+        error: `授权依赖刷新失败：${error instanceof Error ? error.message : String(error)}`,
+        at: this.clock.iso(),
+      };
+    }
     if (!this.healthy) {
       const fault = new Fault('POLICY_NOT_LOADED', `策略引擎不健康：${this.state.error ?? '未知原因'}`).toDecision();
       await this.#auditFault(input, fault);
@@ -387,7 +462,7 @@ export class PolicyEngine {
           对象: { id: input.target?.id ?? null, kind: input.target?.kind ?? '未知' },
           依据: verdict.rule,
           结果: verdict.verdict === 'confirm' ? '需确认' : '拒绝',
-          详情: { action: input.action, reason: verdict.reason, requireAuthority: verdict.requireAuthority },
+          详情: { action: input.action, reason: verdict.reason, requireAuthority: verdict.requireAuthority, ...(verdict.detail ?? {}) },
         });
       }
       return verdict;
@@ -471,7 +546,10 @@ export class PolicyEngine {
       return { ok: false, reason: '该任务节点负责人名单为空（解析失败 / 手工编辑 / 旧数据）：为防越权，空名单按「无人有任务内全权」处理，由 Lead 先把负责人补齐' };
     }
     // ① 实例 id 直配（既有路径，行为不变：按实例派的节点仍精确到实例）。
-    if (!名单.includes(subject.id)) {
+    // v2（条目11）：负责人保留岗位名时，**已绑实例**同样是「任务内全权」的凭据——
+    // 绑定记的是「此刻是谁在干」，与负责人（这一岗归谁）是两件事。
+    const 绑定实例 = (task.绑定 ?? []).map((b) => b?.实例).filter(Boolean);
+    if (!名单.includes(subject.id) && !绑定实例.includes(subject.id)) {
       // ② 缺口4（主权者批准 2026-10-12）：直配不中，经身份档案把实例解析成岗位再比。
       //    成员主体刻意不带 roleId（src/subject.js A 修——岗位由 registry_assign 落在档案），
       //    「按岗名派发」全靠这条路承重；解析**只信档案真源**：不在册 / 不在岗 ⇒ 不产出岗位；
@@ -596,8 +674,39 @@ export class PolicyEngine {
 
   /** @returns {string} 当前介入度档位 */
   intervention() {
-    const level = this.state.defaults?.介入度 ?? '零参与';
-    return INTERVENTION.includes(level) ? level : '零参与';
+    const level = this.state.defaults?.介入度 ?? '放权';
+    return INTERVENTION.includes(level) ? level : '放权';
+  }
+
+  /**
+   * 复核免审全局开关（v2 口述收敛 2026-10-18 条目5）：true ⇒ Lead/主权者可对节点
+   * 登记复核豁免（review_exempt），false（默认）⇒ 豁免动作一律拒。
+   * 加载期已校验布尔（坏值引擎不健康、写全拒），这里只读生效值。
+   * @returns {boolean}
+   */
+  reviewExemptAllowed() {
+    return this.state.defaults?.复核免审 === true;
+  }
+
+  /**
+   * 预判：这一笔写在当前档位下会不会被介入度拦下（**只读、不落账、不消耗放行**）。
+   *
+   * 为什么动作层需要它：宏动作（member_spawn / 多候选 settle）有多个受管步骤、且 host
+   * 创建子等副作用在中间。批准必须发生在**任何副作用之前**，所以动作层要在执行前把
+   * 整份步骤计划摊出来、逐条问「会被拦吗」；有一步会拦 ⇒ 整单挂起等主权者批一份完整计划。
+   * 判据与 `#preGrantBoundary` 同一份（预审只看写死的高风险清单，审批全拦，主权者不拦）。
+   *
+   * @param {{ subject: object, action: string, target: object, context?: object }} spec
+   * @returns {boolean}
+   */
+  会挂起({ subject, action, target, context = {} }) {
+    if (subject?.kind === '主权者') return false;
+    if (String(action ?? '') === 'read') return false;
+    if (target?.authority && target.authority !== '自治') return false;
+    const level = this.intervention();
+    if (level === '审批') return true;
+    if (level === '预审') return this.#预审高风险(String(action), target, context);
+    return false;
   }
 
   // ── 判定本体 ────────────────────────────────────────────────────────────────
@@ -620,9 +729,10 @@ export class PolicyEngine {
       });
     }
     // 身份档案接入判定（§12.2：身份停用/删除时判定必须有确定答案）。
-    // 只查 成员/复核者：它们的权来自注册表里的**实例**，封存即失权；
-    // 主权者/出厂作者/系统/Lead 是结构性身份，不挂在实例账上。
-    if (subject.kind === '成员' || subject.kind === '复核者') {
+    // 只查成员：它的权来自注册表里的**实例**，封存即失权（复核员岗实例同样是成员
+    // 主体 + roleId=复核员，也在此列）；主权者/出厂作者/系统/Lead 是结构性身份，
+    // 不挂在实例账上。
+    if (subject.kind === '成员') {
       const 状态 = identityStatus(this, subject.id);
       if (状态.status !== '在岗') {
         return deny('宪章 身份停用 = 最严（§12.2）', 状态.reason, {
@@ -638,8 +748,59 @@ export class PolicyEngine {
       });
     }
 
+    // v2 条目10/20 最终统一凭证闸（2026-10-18 裁决）：**Lead 与成员的所有新写**都要求
+    // 相应凭证齐备——不是只自治档（身份版本凭证不能被某一档 grant 旁路），也不是只 Lead。
+    // 三条边界：
+    //  ① **所有写档**，但**只读一律保留**（诊断与恢复：status / workbench / audit_tail /
+    //     task_criteria 在同样的坏状态下必须还能读出来，读域规则不变）；
+    //  ② 写动作 fail-closed：没记录 / 非在岗 / 缺卡版本 / 成员缺委派归属 都拒，拒因精确；
+    //  ③ 受控父判里的委派者走同一个闸（父凭证不齐 ⇒ 子也写不了）。
+    // 历史实例：不判死（在岗事实照旧），但**只读**——「过去合法」不换「今后可写」。
+    const 凭证闸 = this.#凭证闸(subject, action);
+    if (凭证闸) return 凭证闸;
+
     const invariant = this.#invariants(subject, action, target, context);
     if (invariant) return invariant;
+
+    // 会审参与实例的写面（v2 条目18/20 · 补修I 的绑定落到判定面）：真实登记在册、带
+    // `会审绑定` 的成员只允许**本场**会审的作答/讨论受限写；其它业务写 / 派活 / 能力发布
+    // 一律拒。位置刻意在**受控父判之前**：父判的「介入度 confirm」会先一步把业务写变成
+    // 「挂起等批」，而绑定边界是确定拒绝——「全拒」不能被降级成「等人批」。
+    // 三个事实都取身份档案（可信 registry），不由模型 context 自报：
+    //  - 绑定的会审 id / 项目；
+    //  - 本次 target 必须就是那场会审（id+项目），action 必须是 write；
+    //  - `context.会审` 只能用来确认服务层正在处理**同一场**且名单里有本人（服务层折出的视图）。
+    // 「预给参与者原任务权限不改」：这里只收紧，不动任何既有任务/岗位权限。
+    if (subject.kind === '成员' && action !== 'read') {
+      const 会审绑定 = this.state.identity?.members?.[subject.id]?.会审绑定 ?? null;
+      if (会审绑定) {
+        const 会审视图 = context?.会审 ?? null;
+        const 本场事实 = typeof 会审绑定.会审 === 'string' && Boolean(会审绑定.会审)
+          && String(target.project ?? '') === String(会审绑定.项目 ?? '')
+          && String(会审视图?.id ?? '') === 会审绑定.会审
+          && Array.isArray(会审视图?.参与者) && 会审视图.参与者.includes(subject.id);
+        const 本场受限写 = 本场事实 && (
+          (action === 'write' && target?.kind === '会审' && String(target.id ?? '') === 会审绑定.会审)
+          || (action === 'create' && target?.kind === '消息' && authority === '只增'
+            && context.会审消息 === true && 会审视图.状态 === '讨论中'
+            && 线程等价键(String(context.会审线程 ?? '')) === 线程等价键(`${COUNCIL_THREAD_PREFIX}${会审绑定.会审}`))
+        );
+        if (!本场受限写) {
+          return deny('会审参与实例 · 只允许本场作答/讨论的受限写（补修I）', `实例 ${subject.id} 带会审绑定（${会审绑定.会审}）：它的写面只有本场会审的作答/讨论；本次 ${action} 的目标 ${target?.kind ?? '?'}/${target?.id ?? '?'} 不在本场受限写内。`, {
+            requireAuthority: 'Lead',
+            howToChange: '会审参与实例不能做业务写 / 派活 / 能力发布；需要干活由 Lead 另起任务实例（member_spawn），会审结束后实例退役。',
+            detail: { 会审绑定, 本次: { action, kind: target?.kind ?? null, id: target?.id ?? null, project: target?.project ?? null } },
+          });
+        }
+      }
+    }
+
+    // v2 条目20 · 不越授（受控父判）：成员写动作必须在**委派者**的权限面之内。
+    // 位置刻意放在不变式之后、拒名单/失联/边界/授权块之前：
+    //  - 在不变式之后 ⇒ 结构性拒绝（如「成员不得建卡」）仍以它自己的拒因说话，不被父判抢走；
+    //  - 在授权块之前 ⇒ 一条「只给成员」的 grant 不能把子实例抬到父都做不到的格子里。
+    const 父判 = this.#受控父判(subject, action, target, context);
+    if (父判) return 父判;
 
     const write = action !== 'read';
     if (write && this.#isDenied(subject, target)) {
@@ -660,9 +821,17 @@ export class PolicyEngine {
       });
     }
 
-    // 顺序很重要：不变式 → 法律件的显式授权块 → 内置的三档默认。
-    // 内置档位是**出厂默认文本**，主权者改过的 权限矩阵.md 是同一部法律的现行版本，
-    // 所以它必须先于默认生效；而宪章不变式在它之前，任何法律都翻不动。
+    // P1-05（全面审查 2026-10-17）：复核者只读与介入度 confirm 属于结构性边界，必须先于
+    // 授权块求值。修前 grant 分支在 #tierRule 之前 return，一条 allow grant 就能绕过
+    // 「逐条审批」与「复核者不写」——而权限矩阵明写顺序相反。这里前移的是**边界**，
+    // 不是三档默认：无匹配时仍由 #tierRule 兜底。
+    const 边界 = this.#preGrantBoundary(subject, action, target, authority, write, context);
+    if (边界) return 边界;
+
+    // 顺序很重要：不变式 → 拒名单 → 失联 → 复核者只读/介入度边界（#preGrantBoundary）
+    // → 法律件的显式授权块 → 其余三档默认。内置档位是**出厂默认文本**，主权者改过的
+    // 权限矩阵.md 是同一部法律的现行版本，所以授权块先于其余默认生效；但复核者只读与
+    // 介入度 confirm 是结构性边界，必须在授权块之前（否则一条 allow grant 就能绕过）。
     const grant = this.#grantRule(subject, action, authority, target);
     if (grant) {
       // 宪章档不许被授权块翻转（2026-10-13 审查 P1-3 收尾）：权限矩阵.md 自陈「本文不能
@@ -710,6 +879,95 @@ export class PolicyEngine {
   }
 
   /**
+   * 统一实例凭证闸（v2 条目10/20 · 2026-10-18 最终裁决）：**Lead 与成员的所有新写**都要
+   * 相应凭证齐备。要求：
+   *  - Lead：在册在岗 + 钉住的卡版本摘要；
+   *  - 成员：在册在岗 + 钉住的卡版本摘要 + **委派归属**（`委派者.id`）。
+   *
+   * 三条边界（都是被否过的方案的替代）：
+   *  ① **所有写档**，不按授权档开洞——身份版本凭证不能被某一档 grant 旁路；
+   *     **只读一律保留**（诊断/恢复通道：status ∕ workbench ∕ audit_tail ∕ task_criteria，
+   *     读域规则不变）；
+   *  ② 历史实例：**不判死**（在岗事实照旧、孤儿回收仍走代次判据），但**只读**——
+   *     「过去合法」不换「今后可写」；要恢复写权走 `registry.assign` 的**迁移补登**
+   *     （补缺的卡版本 / 委派归属，保留出生与登记时间，审计单列）；
+   *  ③ 受控父判里的委派者也走这一个闸（父凭证不齐 ⇒ 子也写不了）。
+   *
+   * @param {object} subject @param {string} action
+   * @returns {object|null} 拒绝结论；通过 / 不适用 ⇒ null
+   */
+  #凭证闸(subject, action) {
+    if (action === 'read') return null;
+    if (subject.kind !== 'Lead' && subject.kind !== '成员') return null; // 主权者/出厂作者/系统走各自天然凭证
+    const member = this.state.identity?.members?.[subject.id];
+    const 谁 = subject.kind === 'Lead' ? 'Lead 实例' : '成员实例';
+    if (!member) {
+      return deny(`v2 条目10 · ${谁}写需在册记录（fail-closed）`, `${谁} ${subject.id} 不在身份档案里：版本与在岗事实都查不到 ⇒ 写一律拒。只读诊断（status / workbench / audit_tail）不受影响。`, {
+        requireAuthority: '机制',
+        howToChange: '由 Lead 走 registry.assign 登记（成员）；Lead 由宿主入口按真实会话事实出生登记。不接受自报登记。',
+        detail: { 实例: subject.id, 种类: subject.kind },
+      });
+    }
+    if (member.status !== '在岗') {
+      return deny(`v2 条目10 · ${谁}不在岗（写 fail-closed）`, `${谁} ${subject.id} 当前状态为 ${member.status ?? '状态缺失'}：封存/停用的实例没有写权，复岗走 registry_restore（显式还原，有留痕），不由写路径自动复活。`, {
+        requireAuthority: 'Lead',
+        howToChange: '由主权者或 Lead 走 registry_restore 复岗后再写；只读诊断不受影响。',
+        detail: { 实例: subject.id, 状态: member.status ?? null },
+      });
+    }
+    // 补修J（2026-10-18 独立审计 · 第一处缺口）：**卡类型必须与实例真实主体一致**。
+    // 修前这一闸只看「在岗 + 有摘要」，于是一个 kind=Lead 的根会话只要档案里背着
+    // 一张成员卡（插件工程 / 复核员…）照样过写前闸——成员卡的规则面被当成 Lead 的用。
+    // 判据单源：岗位 → 主体种类的映射只有 subjectKindForRole 一处，与不越授 / 不自授同尺。
+    // 受控父判里的委派者走同一个 #evaluate ⇒ 父已降岗（档案岗位变成成员岗）时，
+    // 即便它当初以 Lead 身份记下 `委派者.kind`，也在这里被拒，不能借原 kind 当 Lead。
+    const 岗位 = typeof member.岗位 === 'string' && member.岗位 ? member.岗位 : null;
+    if (!岗位) {
+      return deny(`v2 条目10 · ${谁}档案岗位缺失（写 fail-closed）`, `${谁} ${subject.id} 的档案记录没有岗位：实例权限只来自岗位，没有岗位就没有可核的卡类型与规则面，写一律拒。只读诊断不受影响。`, {
+        requireAuthority: 'Lead',
+        howToChange: '由 Lead 走 registry.assign 登记到真实岗位（补登/换岗走正路），再重试。',
+        detail: { 实例: subject.id },
+      });
+    }
+    const 岗位种类 = subjectKindForRole(岗位);
+    if (岗位种类 !== subject.kind) {
+      return deny(`v2 条目10 · ${谁}主体种类与档案岗位不符（写 fail-closed）`, `${谁} ${subject.id} 以「${subject.kind}」身份执行 ${action}，但档案登记岗位是「${岗位}」（该岗位对应「${岗位种类}」）：卡类型必须与实例真实主体一致——根会话拿成员卡不能当 Lead，成员实例也不能借 Lead 卡。只读诊断（status / workbench / audit_tail）不受影响。`, {
+        requireAuthority: '机制',
+        howToChange: 'Lead 实例由宿主入口按真实会话事实出生登记；成员岗位由 Lead 派活登记。岗位对不上走 seal → assign 换岗正路，不接受自报换卡。',
+        detail: { 实例: subject.id, 档案岗位: 岗位, 声称种类: subject.kind, 岗位对应种类: 岗位种类 },
+      });
+    }
+    if (!member.卡版本?.摘要) {
+      return deny(`v2 条目10 · ${谁}未钉卡版本（写 fail-closed）`, `${谁} ${subject.id} 的记录上没有钉住的卡版本摘要：规则面无法回答「凭哪一版」，写一律拒。`, {
+        requireAuthority: '机制',
+        howToChange: '由 Lead 走 registry.assign 做迁移补登（补当前卡版本，保留出生/登记时间，审计单列）；不由写路径自动补钉假装成功。只读诊断不受影响。',
+        detail: { 实例: subject.id, 缺: '卡版本' },
+      });
+    }
+    if (subject.kind === '成员' && !member.委派者?.id) {
+      return deny('v2 条目20 · 成员缺委派归属（写 fail-closed）', `成员实例 ${subject.id} 的记录上没有委派者：父判无从进行，写一律拒（历史遗留不是新写的永久豁免）。`, {
+        requireAuthority: 'Lead',
+        howToChange: '由 Lead 走 registry.assign 做迁移补登（补当前委派归属）；成员不得自补。只读诊断不受影响。',
+        detail: { 实例: subject.id, 缺: '委派归属' },
+      });
+    }
+    // 补修J（2026-10-18 独立审计 · 第二处缺口）：**摘要字符串 != 凭证**。修前这一闸
+    // 只查 `member.卡版本.摘要` 非空——任意一个 sha256 形状的字符串都能当凭证，快照
+    // 里的正文 / 派生段 / 能力引用从未被告闸核对过。现在按真实内容验：岗位对齐、
+    // 由声明版本 + 正文重算摘要、段与能力引用由正文重派生。坏证据不默用（写拒），
+    // 也不在这里修/覆写（那是证据，处置走人工 + registry.assign 重新钉版）。
+    const 卡面 = readVerifiedCardSnapshot(this.layout.cardSnapshot(member.卡版本.摘要), { 钉: member.卡版本, 期望岗位: 岗位 });
+    if (!卡面.ok) {
+      return deny(`v2 条目10 · ${谁}钉住的卡快照校验失败（写 fail-closed）`, `${谁} ${subject.id} 钉住的卡版本 ${String(member.卡版本.摘要).slice(0, 12)}… 内容校验不过：${卡面.原因}。摘要字符串本身不构成凭证——正文、派生段与能力引用必须能被同一把尺验回；坏证据不默用。只读诊断不受影响。`, {
+        requireAuthority: '机制',
+        howToChange: '由 Lead 走 registry.assign 重新钉当前卡（内容寻址快照会写新摘要）；不要手改快照（那是证据）；确需重建时先移走坏文件留档。',
+        detail: { 实例: subject.id, 卡版本: member.卡版本.摘要 },
+      });
+    }
+    return null;
+  }
+
+  /**
    * 第一层：宪章不变式。任何法律都改不动，因为它们是「组织给自己发合格证」这类
    * 结构性失效的唯一防线。
    */
@@ -735,12 +993,17 @@ export class PolicyEngine {
       }
     }
     // §3.5「成员自扩权 / 再起成员」的准确边界：禁的是**给自己或别人扩权**，
-    // 不是「成员不许产生任何对象」——成员把自己的作答与知识记下来是本职。 
-    const 建卡或扩权 = action === 'create' && ['身份', '规则'].includes(target.kind);
+    // 不是「成员不许产生任何对象」——成员把自己的作答与知识记下来是本职。
+    // v2（口述收敛 2026-10-18 条目15）：**成员实例任务内也不得改能力库 / 角色卡引用**——
+    // 「任务内全权」管的是任务产物（作答 / 经历 / 产出物），不是组织的可复用能力面与身份面。
+    // 修前 `能力` 不在名单里，capability_publish 一路透传租务内的成员就真发出去了
+    // （「成员不得直接写知识」那条同源缺口）。知识晋升走记忆类（类=知识）不受本闸管辖。
+    const 建卡或扩权 = (action === 'create' && ['身份', '规则', '能力'].includes(target.kind))
+      || (['write', 'delete'].includes(action) && ['身份', '规则', '能力'].includes(target.kind));
     if (subject.kind === '成员' && (建卡或扩权 || ['dispatch', 'propose', 'approve'].includes(action))) {
-      return deny('宪章 §3.5 成员自扩权 / 再起成员', `成员不得执行 ${action}：建卡、派活与提案都属于 Lead。`, {
+      return deny('宪章 §3.5 成员自扩权 / 再起成员', `成员不得执行 ${action}（${target.kind ?? '未知'}）：建卡、改能力库 / 角色卡、派活与提案都属于 Lead（v2 条目15：任务内也不得改能力库与角色卡引用）。`, {
         requireAuthority: 'Lead',
-        howToChange: '由 Lead 执行该动作；成员只能在自己的任务节点内干活并留下作答与知识。',
+        howToChange: '由 Lead 执行该动作；成员只能在自己的任务节点内干活并留下作答与知识——值得蒸馏的点写进交卷的「知识候选」，由结账时 Lead 逐条判。',
       });
     }
     // 结账是 Lead 的收尾权（W3 批3）：它把节点收进终态**并**归档作答（归档后成员读不到），
@@ -752,6 +1015,17 @@ export class PolicyEngine {
         howToChange: '由 Lead 执行 task_settle；若结论有问题，先走复核（review）再决定采纳或打回。',
       });
     }
+    // ── v2 口述收敛 2026-10-18（条目8/20）：三条结构性不变式 ────────────────────
+    // 位置刻意放在 `#invariants` 里：它先于 `#grantRule` 求值 ⇒ 权限矩阵.md 里写一条
+    // allow 也翻不过它们（授权块只能收紧方向，不能给这三条开口子）。
+    // 服务层不再各写一份同名判据（registry.assign 里那份岗位名黑名单已删——判据抄在
+    // 哪个入口里，就只有那个入口受保护，且两份一定会漂）。
+    const 机制 = this.#机制不变式(subject, action, target, context, authority, write);
+    if (机制) return 机制;
+    const 自授 = this.#不自授(subject, action, target, context);
+    if (自授) return 自授;
+    const 越授 = this.#不越授(subject, action, target, context);
+    if (越授) return 越授;
     if (authority === '只增' && ['write', 'delete', 'publish'].includes(action)) {
       return deny('宪章 §7 只增（主权者也不能改，只能追加更正）', `对象 ${target.id} 是只增账目，${action} 不被允许。`, {
         requireAuthority: '宪章',
@@ -796,29 +1070,367 @@ export class PolicyEngine {
     return null;
   }
 
-  /** 第二层：三档门槛（立宪 / 立法 / 自治），唯一分界线是「你定的 > 组织定的」。 */
-  #tierRule(subject, action, target, authority, context) {
-    if (subject.kind === '复核者') {
-      // §2「只读数，不改，不参与提案」的准确边界：**不许改被验对象**。
-      // 它属于法律档而不是宪章不变式 —— 复核者卡的「身份 + 权限 + 判据」段本就是法律，
-      // 主权者改 权限矩阵.md 时应当能改到它；宪章不变式（不自批、不删除）在更前面拦着。
-      //
-      // §8 同时要求复核者输出三态结论 —— 结论是只增证据，不是对被验对象的改动，
-      // 所以 review 与 read 放行，experiment 只在沙箱区放行，其余写动作一律拒绝。
+  // ── v2 口述收敛 2026-10-18 不变式（条目8 / 条目20） ──────────────────────────
+
+  /**
+   * 条目8：**系统只做封闭清单内的机制动作**。
+   *
+   * 修前的事实：`#tierRule` 的自治档最后一行是 `return allow(...)`——落在那里的非成员主体
+   * 一律放行，`kind:'系统'` 因此是一条万能写权限后门（谁能拼出这个主体，谁就有全权）。
+   * 本条把它收窄成：系统写动作必须声明清单内的「机制动作」，且动作 / 授权档 / 目标类
+   * 三元组与清单项逐项相等。清单住在 `src/mechanism.js`（唯一一份）。
+   *
+   * 三条边界如实写清：
+   *  ① **只读写面**：只读投影（bus.summary 等）用系统主体，读不构成扩权，不收；
+   *  ② **不豁免失联冻结与介入度审批**：本条只判「是不是机制动作」，之后 presence 闸与
+   *     `#preGrantBoundary` 照常求值——机制维护不是「主权者不在也能改治理」的许可证；
+   *  ③ **主体来源必须可信**：模型面只有 `agentSubject(exec)`（宿主会话事实）一条路，
+   *     `args.role` / `args.实例` 自报在 runAction 入口即拒（见 lib/actions.js）。
+   *     所以「清单封闭」+「入口唯一」合起来才成立；少一条就有穿闸口子（有回归钉着）。
+   *
+   * @param {object} subject @param {string} action @param {object} target @param {object} context
+   * @param {string} authority @param {boolean} write
+   */
+  #机制不变式(subject, action, target, context, authority, write) {
+    if (subject.kind !== '系统') return null;
+    if (!write) return null;
+    if (subject.id !== MECHANISM_SUBJECT.id) {
+      return deny('v2 条目8 · 系统主体唯一形状', `系统主体的 id 必须是「${MECHANISM_SUBJECT.id}」（收到 ${subject.id}）：机制动作要在账上与任何实例 id 分得开，换一个 id 就是换一个万能身份。`, {
+        requireAuthority: '宪章',
+        howToChange: `机制代码用 src/mechanism.js 的 MECHANISM_SUBJECT / 机制主体() 构造系统主体，不要自拼 id。`,
+      });
+    }
+    const 机制名 = context?.机制动作;
+    if (!机制名) {
+      return deny('v2 条目8 · 系统只做机制动作（封闭清单）', `系统主体发起写动作 ${action}（${authority} 档 / ${target.kind ?? '未知'}）却没有声明「机制动作」：系统不是任意写权限的后门，清单外的系统写一律拒。`, {
+        requireAuthority: '宪章',
+        howToChange: `由机制代码传 context.机制动作（清单：${MECHANISM_NAMES.join(' / ')}）；人 / 组织的写请改用真实主体执行。`,
+      });
+    }
+    if (!mechanismAllows(机制名, action, authority, target.kind)) {
+      return deny('v2 条目8 · 机制动作越出封闭清单', `机制「${机制名}」不覆盖 ${action} / ${authority} 档 / ${target.kind ?? '未知'}：清单项是固定的三元组，换动作、换档、换目标类都算开新权限。`, {
+        requireAuthority: '宪章',
+        howToChange: `用清单内的机制名与其固定三元组（见 src/mechanism.js）；确有新机制动作 ⇒ 由主权者扩清单并补回归。`,
+      });
+    }
+    return null;
+  }
+
+  /**
+   * 条目20：**不自授**——主体不得给自己扩权。
+   *
+   * 判的是**扩张集合**，不是「不许登记自己」（修前 registry 里那条按名字的黑名单既误拒
+   * 幂等登记、又只挡得住冒充 Lead 这一种形态）。扩张集合由服务层用同一份比较实现算出
+   * （`registry.扩张集合`），经 `context.扩张集合` 传进来：
+   *  - `[]`（同权限 / 幂等登记）⇒ 放行，**不写盘也不记审计**（幂等路径本来就这样）；
+   *  - 非空 ⇒ 拒，并把扩张项列给调用方；
+   *  - **缺席 ⇒ 拒**（fail-closed）：无法证明「这不是扩权」时不许放行——
+   *    「拿不到上游范围就放行」正是要堵的那条路。
+   *
+   * 为什么不在这里自己算：算扩张要读岗位卡（IO）与现职档案，而本方法是同步判定本体；
+   * 硬算就得在这里复制一份 `canTouch` —— 两份判据一定漂。比较函数放注册表层（有真源），
+   * 判定结构放这里（grant 翻不过来），两边各管一段。
+   */
+  #不自授(subject, action, target, context) {
+    if (!['create', 'write'].includes(action)) return null;
+    if (target.kind !== '身份') return null;
+    if (String(target.id) !== String(subject.id)) return null;
+    // 主权者写自己的档案不构成「扩权」（它已在最高处）；系统已被 #机制不变式 收口。
+    if (['主权者', '系统'].includes(subject.kind)) return null;
+    const 扩张 = context?.扩张集合;
+    if (!Array.isArray(扩张)) {
+      return deny('v2 条目20 · 不自授（扩张集合不可判）', `主体 ${subject.id} 正在写自己的身份记录（${action}），但本次调用没有携带「扩张集合」判定：拿不出「权限没有变大」的证据，就按扩权处理（fail-closed）。`, {
+        requireAuthority: '宪章',
+        howToChange: '由服务层（registry）用同一份扩张集合比较算出前后权限面差异放进 context.扩张集合；同权限的幂等登记得到空集，照样放行。',
+      });
+    }
+    if (扩张.length > 0) {
+      return deny('v2 条目20 · 不自授', `主体 ${subject.id} 给自己的身份记录带来 ${扩张.length} 项扩张：${扩张.slice(0, 5).join('、')}${扩张.length > 5 ? '…' : ''}。主体不得给自己扩权（宪章⑤的推广）。`, {
+        requireAuthority: 'Lead',
+        howToChange: '扩权由别人执行：岗位登记由 Lead（成员岗）或主权者发起；同权限的重复登记不受影响（幂等放行）。',
+        detail: { 扩张集合: 扩张.slice(0, 20) },
+      });
+    }
+    return null;
+  }
+
+  /**
+   * 条目20：**不越授**——Lead 派活的写域 / 工具不得超出自身范围。
+   *
+   * ⚠️ **本方法的覆盖边界（如实登记，不写成「已完成」）**：
+   *  ① **主体种类**（已落）：派活造出的主体不得与 Lead 同级或更高。这一格不需要枚举：
+   *     岗位 → 主体种类是封闭映射（`subjectKindForRole`），种类里本就含「包含关系」。
+   *  ② **写域子集**（**未落，缺口已报**）：本组织目前**没有**「任务写域」这种真凭证——
+   *     任务节点只有描述 / 判据（自由文本）与负责人，`target` 上的 authority/kind 说的是
+   *     **这次调用**的目标，不是「派出去的活可以在哪些格子里写」。没有真凭证就判不出子集，
+   *     所以这里**不判**，也绝不拿两个自造模板冒充「全部写域」（那会把同种类不同岗位 /
+   *     不同项目的差异一起丢掉，得到的是虚假通过）。最小字段方案已交 Lead 定：
+   *     任务节点声明封闭的 `写域`（目标类 × 授权档）并在派发时随判据一起冻结，
+   *     派活时逐项用同一次判定求 Lead 自身是否可行（一项一次判定，不枚举矩阵）。
+   *  ③ **工具面**（机制性成立）：工具总范围是**进程级**配置（宿主 guard 对任何主体同一份），
+   *     派活拿不到、也扩不了工具面；因此「给成员额外工具」只能来自调用方多传一个工具范围
+   *     参数——那属于「拿不到上游工具范围却扩张」，member_spawn 侧直接响亮拒（见 lib/actions.js）。
+   *
+   * 结论：①③ 承重，② 是缺口。判据只落能承重的部分，剩下的报缺口等字段——这是本方法
+   * 刻意不做的事，别在别处补一个看起来像的。
+   */
+  #不越授(subject, action, target, context) {
+    if (subject.kind !== 'Lead') return null;
+    const 排兵写 = action === 'write' && target.kind === '任务'
+      && (context?.节点操作 === 'reassign' || (context?.节点操作 === 'bind' && context?.实例绑定 === true));
+    if (!['create', 'dispatch'].includes(action) && !排兵写) return null;
+    const 被派 = this.#被派主体(subject, action, target, context);
+    if (!被派.ok) {
+      return deny('v2 条目20 · 不越授（范围不可判）', 被派.reason, {
+        requireAuthority: 'Lead',
+        howToChange: '先让被派主体可判：登记实例（registry_assign）或按岗位名派给该岗在岗实例，再派活；拿不到上游范围时不放行。',
+      });
+    }
+    const 同级或更高 = 被派.rows.filter((row) => row.自领 !== true && 职权级(row.kind) >= 职权级('Lead'));
+    if (同级或更高.length > 0) {
+      return deny('v2 条目20 · 不越授', `Lead 派活不得造出平级或更高的主体：${同级或更高.map((r) => `${r.名}（${r.kind}）`).join('、')} 不在 Lead 的范围之内（Lead 派活的写域不得包含 Lead / 主权者 / 出厂作者）。`, {
+        requireAuthority: '主权者',
+        howToChange: 'Lead 只派成员岗位卡（集体L3）；需要 Lead 级主体的实例由机制（系统）在会话出生时登记，主权者级由主权者本人执行。',
+        detail: { 被派: 被派.rows.map((r) => ({ 名: r.名, kind: r.kind })) },
+      });
+    }
+    // ② 写域子集：没有真凭证 ⇒ 不判（**不**用模拟面冒充）。调用方若显式声明了要扩张写域，
+    // 那就是「拿不到上游范围却扩张」——按 fail-closed 拒，而不是放行。
+    const 写域 = context?.写域 ?? null;
+    if (写域 !== null) {
+      return deny('v2 条目20 · 不越授（写域扩张无上游范围可核）', `本次调用声明了任务写域 ${JSON.stringify(写域)}，但本部署尚无「任务写域」字段可与之对照：拿不到上游范围就扩张 = 越授，按最严拒（不猜全集、不放行）。`, {
+        requireAuthority: 'Lead',
+        howToChange: '任务写域字段落地前，派活不要声明写域扩张；字段落地后按其封闭清单逐项核对。',
+        detail: { 写域 },
+      });
+    }
+    return null;
+  }
+
+  /**
+   * 条目20 · 不越授的**受控父判**（2026-10-18 专批）。
+   *
+   * 一句话：**成员写动作必须在它的委派者权限面之内**——用同一次真实的 `action / target /
+   * context`，只把主体换成委派者再判一次。
+   *
+   * 为什么是这个形状（三条都是被否过的方案的替代）：
+   *  - 不枚举 ACTIONS × 四档 × 目标类，也不造「两格模拟模板」：那测的是我**猜**的权限矩阵，
+   *    与真实判定会漂；
+   *  - 不新增授权对象：委派者就记在实例绑定里（`registry.assign` 落 `委派者 {id, kind, 卡版本}`），
+   *    天然载体已经够用；
+   *  - 闸用**实例私有字段** `#父判中`，不由 `context` 开合 ⇒ 模型侧构造入参也关不掉。
+   *
+   * 三条语义：
+   *  ① 父判 **deny** ⇒ 子也 deny（派活不能派自己没有的权）；
+   *  ② 父判 **confirm** ⇒ 子也 confirm（**确认门槛必须传播**：子不能凭自己的 allow 绕过
+   *     委派者那边需要的主权者放行）；
+   *  ③ 只判一次、不递归：父判期间再次进入直接跳过 ⇒ 链长恒为 1，不会从子判里长出孙授权。
+   *
+   * 边界（如实）：
+   *  - 只判**成员**、只判**写**动作；读面由作用域规则管（读不构成扩权）；
+   *  - **历史实例没有 `委派者` 记录** ⇒ 不做父判（与「未钉卡版本」同类历史缺口，记为残余）；
+   *  - 委派者查不到 / 不在岗：父判会按自己的规则给出确定答案（查不到 = 最严），不是「跳过」。
+   */
+  #受控父判(subject, action, target, context) {
+    if (subject.kind !== '成员') return null;
+    if (action === 'read') return null;
+    if (this.#父判中) return null;
+    const 委派者 = this.state.identity?.members?.[subject.id]?.委派者 ?? null;
+    if (!委派者?.id) return null; // 历史实例：没有父记录 ⇒ 明确残余，不猜
+    const 父 = {
+      id: String(委派者.id),
+      kind: String(委派者.kind ?? '未知'),
+      ...(委派者.卡版本 ? { 卡版本: String(委派者.卡版本) } : {}),
+    };
+    this.#父判中 = true;
+    let 结论;
+    try {
+      结论 = this.#evaluate({ subject: 父, action, target, context });
+    } finally {
+      this.#父判中 = false;
+    }
+    if (结论.verdict === 'deny') {
+      return deny('v2 条目20 · 不越授（受控父判）', `委派者 ${父.id}（${父.kind}）在该动作 / 目标上没有这个权（${结论.rule}）：派活不能派自己都没有的权，子实例不得超出委派者的权限面。`, {
+        requireAuthority: 结论.requireAuthority ?? 'Lead',
+        howToChange: '让有该权的身份执行；或由主权者给委派者补授权后重试（授权只能加在委派者那一层，不能只给子实例）。',
+        detail: { 委派者: 父.id, 父判规则: 结论.rule, 父判理由: 结论.reason },
+      });
+    }
+    if (结论.verdict === 'confirm') {
+      // 校准（2026-10-18 · Lead 真链反例）：父判的 confirm 可能只是「介入度」这一道。
+      // 若本次子写对得上主权者已批准的计划步，就不再把**同一真实父**的重复确认传播下去
+      // ——否则子请求的批准会被父的同一 confirm 卡死。父判只 peek、不消费（真正的子判定点
+      // 才消费那一步）。父 deny / 故障 / 其它类 confirm 照旧传播；父卡失效会先落到 deny 路径。
+      if (/^法律 介入度 · /.test(String(结论.rule ?? '')) && 本次放行可匹配(subject, action, target, context)) {
+        return null;
+      }
+      return confirm('v2 条目20 · 不越授（父判确认门槛传播）', `该动作在委派者 ${父.id} 那里要先经主权者放行（${结论.rule}）：子实例不能凭自己的 allow 绕过这道确认门槛。`, {
+        requireAuthority: 结论.requireAuthority ?? '主权者',
+        howToChange: '先按委派者那条路径完成放行，再由子实例重试；或把本次动作改由委派者自己执行。',
+        detail: { 委派者: 父.id, 父判规则: 结论.rule, 父判理由: 结论.reason },
+      });
+    }
+    return null;
+  }
+
+  /**
+   * 派活的**被派主体**解析：谁来接这份活、它是什么主体种类。
+   *
+   * 实例登记读声明岗位；派发、实例绑定与改派读任务图在账本锁内生成的真实候选节点。
+   * 岗位名 Lead 不等于当前实例：只有该岗实际绑定全是本人且档案对齐才是自执行。
+   * 绑定也逐项判，防止先自领派发再加绑或改派，把外派藏在负责人岗位名后面。
+   * 其余形态不产出被派主体（例如写岗位卡文档：那是改卡，不是派活）。
+   *
+   * @returns {{ok: true, rows: Array<{kind: string, 名: string, 自领?: boolean}>} | {ok: false, reason: string}}
+   */
+  #被派主体(subject, action, target, context) {
+    if (action === 'create') {
+      if (target.kind !== '身份' || context?.身份操作 !== '实例') return { ok: true, rows: [] };
+      // 给自己登记自己的记录不是「派活」，是「自己写自己」——那一格归 `#不自授` 判，
+      // 不在这里按种类拦（否则「同权限的幂等登记放行」永远走不到）。
+      if (String(target.id) === String(subject.id)) return { ok: true, rows: [] };
+      const 岗位 = typeof target.岗位 === 'string' ? target.岗位.trim() : '';
+      // 没声明岗位 = 没有「被派给谁」的声明可判（不是「范围未知」）。真实登记入口
+      // `registry.assign` 强制要求岗位、空岗位直接抛，所以这条不构成绕道；
+      // 这里放行是为了让 policy_check 之类的预检不被无关的缺席字段打成假红。
+      if (!岗位) return { ok: true, rows: [] };
+      return { ok: true, rows: [{ kind: subjectKindForRole(岗位), 名: `岗位 ${岗位}` }] };
+    }
+    const 负责人 = normalizeList(context?.task?.负责人 ?? target.负责人 ?? []);
+    if (负责人.length === 0) return { ok: true, rows: [] };
+    const 绑定 = context?.task?.绑定 ?? [];
+    const Lead绑定 = 绑定.filter((b) => b?.岗位 === 'Lead');
+    const 本人自领岗 = Lead绑定.length > 0 && Lead绑定.every((b) => b.实例 === subject.id)
+      && this.#档案岗位Of(subject.id) === 'Lead';
+    const rows = [];
+    for (const id of 负责人) {
+      if (id === String(subject.id) || (id === 'Lead' && 本人自领岗)) {
+        rows.push({ kind: 'Lead', 名: `自领 ${id}`, 自领: true });
+        continue;
+      }
+      const 岗位 = this.#岗位Of(id);
+      // 查不到在岗岗位 ⇒ 这里不做范围判断（座次归任务图派发闸）；能查到就必须判。
+      if (!岗位) continue;
+      rows.push({ kind: subjectKindForRole(岗位), 名: `${id}@${岗位}` });
+    }
+    for (const b of 绑定) {
+      const 档案岗位 = this.#档案岗位Of(b?.实例);
+      // 旧绑定可能已封存或变岗；声明与现档任一指向高权都不能被低权那一边掩盖。
+      for (const 岗位 of new Set([b?.岗位, 档案岗位].filter(Boolean))) {
+        rows.push({ kind: subjectKindForRole(岗位), 名: `绑定 ${b?.实例}@${岗位}`,
+          自领: b?.实例 === subject.id && b?.岗位 === 'Lead' && 档案岗位 === 'Lead' });
+      }
+    }
+    return { ok: true, rows };
+  }
+
+  /** 实例 id 或岗位名 → 在岗岗位名（判据面 = 身份档案真源，与 scopeOf 同一份）。 */
+  #岗位Of(id) {
+    const 直 = this.#档案岗位Of(id);
+    if (直) return 直;
+    for (const member of Object.values(this.state.identity?.members ?? {})) {
+      if (member?.status === '在岗' && member?.岗位 === id) return id;
+    }
+    return null;
+  }
+
+  /**
+   * 授权块之前的结构性边界（P1-05 · 全面审查 2026-10-17；v2 复核者降级 2026-10-18）。
+   *
+   * 单一实现：复核员岗只读 / 实验沙箱、以及介入度对自治写的 confirm——这两条原在
+   * `#tierRule` 里，但 tier 在 grant 之后 ⇒ allow grant 可绕过。现在前移到 grant 之前；
+   * `#tierRule` 不再重复判它们（否则同一条边界有两份实现）。
+   *
+   * v2（口述收敛 2026-10-18 条目1）：复核员是普通岗位卡，不再是主体类——
+   * 边界按**岗位名**（subject.roleId）判，与主体种类脱钩。
+   */
+  #preGrantBoundary(subject, action, target, authority, write, context) {
+    if (subject.roleId === '复核员') {
+      // v2 条目11（W7）：复核实例有**自己的复核任务节点**（绑在它名下），要能对自己的节点
+      // 走受限生命周期（开工 → 交卷报告）。这不是按 role 全局豁免：判据是「这个节点绑定里
+      // 有我这个实例」，没有绑定就一步也不放。被复核的业务节点负责人仍是执行者——
+      // 复核实例不占那个位置（否则与冲突排除自相矛盾）。
+      const 我绑的节点 = (context?.task?.绑定 ?? []).some((b) => String(b?.实例) === String(subject.id));
+      // 判据读 `context.节点操作`（不是 action）：所有节点写都走同一个 action='write' 的判定点，
+      // 「这次是开工还是交卷」由任务图的 #checkWrite 标注传进来——少了这一位，就只能按 role
+      // 全局豁免（那是错的），等于把整类写动作一起放开。
+      const 节点操作 = String(context?.节点操作 ?? '');
+      const 受限生命周期 = 我绑的节点 && ['start', 'submit'].includes(节点操作);
+      // 「只读数，不改，不参与提案」的准确边界：不许改被验对象；结论是只增证据。
       if (action === 'experiment') {
         if (target.sandbox !== true) {
-          return deny('§2 复核者需要落盘的实验走沙箱区', '复核者的落盘实验必须落在沙箱区：单独授权、不进持久状态、任务结束即清。', {
+          return deny('复核员岗 · 需要落盘的实验走沙箱区', '复核员的落盘实验必须落在沙箱区：单独授权、不进持久状态、任务结束即清。', {
             requireAuthority: '主权者',
             howToChange: '把实验放进沙箱区（target.sandbox = true），或改由成员在任务内执行。',
           });
         }
-      } else if (!['read', 'review'].includes(action)) {
-        return deny('法律 复核者只读数，不改，不参与提案（§2）', `复核者不得执行写动作 ${action}：它不改被验对象，也不派活、不提案。`, {
+      } else if (!['read', 'review'].includes(action) && !受限生命周期) {
+        return deny('复核员岗 · 只读数，不改，不参与提案（按岗位名判定）', `复核员不得执行写动作 ${action}：它不改被验对象，也不派活、不提案${我绑的节点 ? '' : '（本节点没有绑定该复核实例，受限生命周期也不放行）'}。`, {
           requireAuthority: '主权者',
           howToChange: '复核结论经 review 落账（只增证据）；需要改动由 Lead 按结论执行。',
         });
       }
     }
+    // 会审参与实例的写面边界已前移到 #evaluate（受控父判之前）：业务写要"确定拒绝"，
+    // 不能被父判的介入度 confirm 降级成"挂起等批"；这里是复核者只读与介入度边界。
+    // 介入度只影响自治档（§4）：立宪/立法/否决/撤回不受影响；主权者不受影响。
+    // v2（口述收敛 2026-10-18 条目14/17/24）：三档——放权=自治写直接落盘留痕；
+    // 预审=高风险清单动作（写死，见 #预审高风险）挂起等主权者放行，低风险直落；
+    // 审批=每条自治写都等放行。被拦的写不落地：decide() 把 confirm 记入审计
+    // （策略拒绝 · 需确认 · detail.介入挂起），工作台「待你决定」从那里投影。
+    if (write && authority === '自治' && subject.kind !== '主权者') {
+      const level = this.intervention();
+      const 会挂起 = level === '审批' || (level === '预审' && this.#预审高风险(action, target, context));
+      if (会挂起) {
+        // v2 条目14/17（2026-10-18 补修F）：主权者「逐请求」放行后，原申请者按**冻结请求**
+        // 重放。这里只解除介入度这一道 confirm 门，而且必须对上**步骤计划里的某一步**
+        // （底层的 动作+目标 kind；新建对象的步不认 id，既有对象认 id；每步按次数限量）。
+        // 宏动作名（task_create / member_spawn / task_settle）从不参与匹配——它与底层策略
+        // 动作名不同，拿宏名匹配会永远对不上、死循环。其余硬闸（不变式/拒名单/失联/
+        // 复核员只读/父域/硬拒）在此之前已判完，审批不能绕过它们；放行上下文不进持久状态。
+        const 放行匹配 = 本次放行匹配(subject, action, target, context);
+        if (放行匹配) {
+          return allow(
+            '法律 介入度 · 已批准放行（§4/v2 条目14/17）',
+            `本部署介入度为「${level}」：该自治写对上主权者已批准的步骤计划（请求 ${放行匹配.请求id} · 第 ${放行匹配.序} 步${放行匹配.说明 ? `：${放行匹配.说明}` : ''}）${放行匹配.重复 ? '（同一次业务写的重复检查，不再消耗）' : ''}，本次按冻结请求重放；其余硬闸照判。`,
+          );
+        }
+        if (level === '预审') {
+          return confirm('法律 介入度 · 预审（§4）', '本部署介入度为「预审」：高风险自治写（改岗位卡 / 发布能力 / 物理删除记忆 / 改设置）先停在「待你决定」，主权者放行后才落盘。', {
+            requireAuthority: '主权者',
+            howToChange: '放行 = 主权者本人处置该写；或把 部署.json 介入度改为「放权」后重试原动作。本次请求已挂起，工作台「待你决定」可见。',
+            detail: { 介入挂起: true, 档位: '预审', 动作: action, 目标: 目标摘要(target) },
+          });
+        }
+        return confirm('法律 介入度 · 审批（§4）', '本部署介入度为「审批」：每条自治写都先停在「待你决定」，主权者放行后才落盘。', {
+          requireAuthority: '主权者',
+          howToChange: '放行 = 主权者本人处置该写；或把 部署.json 介入度改为「放权 / 预审」后重试原动作。本次请求已挂起，工作台「待你决定」可见。',
+          detail: { 介入挂起: true, 档位: '审批', 动作: action, 目标: 目标摘要(target) },
+        });
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 预审档「高风险」= 按动作类型写死的清单（v2 口述收敛 2026-10-18 条目24）：
+   * 改岗位卡 / 发布能力 / 物理删除记忆 / 改设置。清单写死，好判好审；要扩清单 = 改设置（主权者动作）。
+   * 身份档里「实例登记」（registry_assign 起实例）不算改卡——它是派活的常规一步，
+   * 由服务层在 context.身份操作 里自证；写/新建**卡文档**（store.write）才算改岗位卡。
+   */
+  #预审高风险(action, target, context) {
+    if (!target) return false;
+    if (target.kind === '身份' && (action === 'write' || (action === 'create' && context?.身份操作 !== '实例'))) return true;
+    if (target.kind === '能力' && (action === 'create' || action === 'write')) return true;
+    if (target.kind === '记忆' && action === 'write' && context?.状态 === '物理删除') return true;
+    if (target.kind === '设置' && (action === 'create' || action === 'write')) return true;
+    return false;
+  }
+
+  /** 其余三档默认（立宪 / 立法 / 自治）：结构性边界与授权块之后才轮到它。 */
+  #tierRule(subject, action, target, authority, context) {
+    // 复核者只读边界已前移到 #preGrantBoundary（P1-05）：tier 不再重复判，
+    // 否则同一条边界会有两份实现（且 grant 仍能抢先）。
     if (authority === '宪章') {
       if (subject.kind === '主权者') return allow('法律 权限矩阵 · 宪章档', '宪章由主权者主导并确定。');
       if (subject.kind === 'Lead' && action === 'draft') {
@@ -858,36 +1470,40 @@ export class PolicyEngine {
     }
     if (authority === '自治') {
       if (subject.kind === '主权者') return allow('法律 权限矩阵 · 自治档', '主权者随时可介入自治档。');
-      if (subject.kind === '成员') {
+      if (subject.kind === '成员' && subject.roleId !== '复核员') {
+        // v2（条目18）：会审退出任务图后会审答案没有任务上下文可挂——会审参与者的
+        // 作答/发言权按「在 context.会审.参与者 名单里」判（名单由 CouncilService 从
+        // 自己的事件流折出来，不信自报）。不在名单 ⇒ 落到下面的「任务外无」照样拒。
+        if (target.kind === '会审') {
+          const 会审 = context.会审 ?? null;
+          if (action !== 'read' && !(会审 && (会审.参与者 ?? []).includes(subject.id))) {
+            return deny('法律 权限矩阵 · 自治档（会审名单外无）', `成员 ${subject.id} 不在会审 ${target.id ?? ''} 的参与者名单里：会审作答/发言只限被点名的参与者。`, {
+              requireAuthority: 'Lead',
+              howToChange: '会审参与者由 Lead 在发起时点名；要参与请 Lead 发起时把你列入参与者。',
+            });
+          }
+          return allow('法律 权限矩阵 · 自治档（会审参与者）', '会审参与者在名单内：作答/发言放行（类型闸/预算闸在服务层）。');
+        }
         // 「任务外无」管的是**权**，不是**读**：成员读自己岗位的知识与能力是干活的前提。
+        // 复核员岗（roleId=复核员）跳过本闸：它的全部边界已由 #preGrantBoundary 按岗位名
+        // 收紧为只读+review，且复核本就不挂在任务负责人名单上（scopeOf 会把它恒拒）。
         const scoped = this.scopeOf(subject, context.task ?? target.task ?? null);
         if (!scoped.ok && action !== 'read') return deny('法律 权限矩阵 · 自治档（任务外无）', scoped.reason, {
           requireAuthority: 'Lead',
           howToChange: '在本次调用的入参里声明任务上下文（带上你名下任务节点的 id，如 memory_write / memory_lifecycle 传「任务」）；名下没有已派发/执行中的节点时，由 Lead 先派发。',
         });
       }
-      const level = this.intervention();
-      if (level === '变更预审') {
-        return confirm('法律 介入度 · 变更预审（§4）', `本部署介入度为「变更预审」：自治变更需主权者预审。`, {
-          requireAuthority: '主权者',
-          howToChange: '由主权者预审后放行，或把介入度调回「零参与 / 事后抽检」。',
-        });
-      }
-      if (level === '逐条审批') {
-        return confirm('法律 介入度 · 逐条审批（§4）', '本部署介入度为「逐条审批」：每条自治变更都要主权者点头。', {
-          requireAuthority: '主权者',
-          howToChange: '由主权者逐条批准。',
-        });
-      }
+      // 介入度 confirm 已前移到 #preGrantBoundary（P1-05）：走到这里的自治写只剩
+      // 放权档（或预审档的低风险动作）——直落、留痕、事后可查可否决。
       return allow(
-        level === '事后抽检' ? '法律 介入度 · 事后抽检（§4）' : '法律 介入度 · 零参与（§4）',
-        level === '事后抽检' ? '自治变更放行，事后抽检，留痕必须完整。' : '自治档由组织自决，主权者默认不参与。',
+        '法律 介入度 · 放权（§4）',
+        '自治档由组织自决，主权者默认不参与；留痕必须完整，事后可查可否决。',
       );
     }
     return null;
   }
 
-  /** 第三层：法律件里的机器可读授权块。 */
+  /** 授权块：在复核者/介入度边界之后、其余三档默认之前生效。 */
   #grantRule(subject, action, authority, target) {
     for (const grant of this.grants) {
       if (grant.subject !== subject.kind) continue;
@@ -996,7 +1612,7 @@ export class PolicyEngine {
    */
   async #loadDefaults() {
     // 兜底 72 只写一份：引用 `src/kernel/time.js` 的常量（两处字面量迟早会漂）。
-    const merged = { 介入度: '零参与', 失联限制: true, 响应期限小时: BUILTIN_RESPONSE_DEADLINE_HOURS, 工具总范围: '全部', 安全类: [], 会审讨论: { ...DEFAULT_DEBATE_BUDGET }, 岗位闲置天数: DEFAULT_ROLE_IDLE_DAYS };
+    const merged = { 介入度: '放权', 失联限制: true, 响应期限小时: BUILTIN_RESPONSE_DEADLINE_HOURS, 工具总范围: '全部', 安全类: [], 会审讨论: { ...DEFAULT_DEBATE_BUDGET }, 岗位闲置天数: DEFAULT_ROLE_IDLE_DAYS, 复核免审: false };
     /** 生效值来自哪一层（'出厂' | '私有' | '内置兜底'）—— 「改了不生效」要能一眼看出源。 */
     const 来源 = Object.fromEntries(Object.keys(merged).map((键) => [键, '内置兜底']));
     /** 被剔除的文档键（只留名字，不留正文：正文正是它不该进运行态的原因）。 */
@@ -1077,6 +1693,13 @@ export class PolicyEngine {
       throw new Error(`岗位闲置天数 非法：${JSON.stringify(merged.岗位闲置天数)}（来源：${来源.岗位闲置天数}）。要 ≥0 的整数（天数；0 = 不判闲置）。修好对应文件后重载即恢复。`);
     }
 
+    // 复核免审（v2 口述收敛 2026-10-18 条目5）：复核豁免从「逐案授权引用」改为
+    // 部署级全局开关。只认布尔——坏值响亮抛错（与介入度同一把尺）：静默回退 false
+    // 会把主权者写下的「开」无视掉，静默回退 true 更坏（整条复核线被悄悄关掉）。
+    if (typeof merged.复核免审 !== 'boolean') {
+      throw new Error(`复核免审 非法：${JSON.stringify(merged.复核免审)}（来源：${来源.复核免审}）。只认 true / false。修好对应文件后重载即恢复。`);
+    }
+
     return { defaults: merged, defaults来源: 来源, 忽略的默认值键: [...忽略键].sort() };
   }
 
@@ -1126,9 +1749,25 @@ function deny(rule, reason, options = {}) {
 function allow(rule, reason) {
   return { verdict: 'allow', rule, reason, requireAuthority: '无', howToChange: '' };
 }
-/** @param {string} rule @param {string} reason @param {{requireAuthority?:string, howToChange?:string}} [options] */
+/** @param {string} rule @param {string} reason @param {{requireAuthority?:string, howToChange?:string, detail?:object}} [options] */
 function confirm(rule, reason, options = {}) {
-  return { verdict: 'confirm', rule, reason, requireAuthority: options.requireAuthority ?? '主权者', howToChange: options.howToChange ?? '' };
+  return { verdict: 'confirm', rule, reason, requireAuthority: options.requireAuthority ?? '主权者', howToChange: options.howToChange ?? '', ...(options.detail ? { detail: options.detail } : {}) };
+}
+
+/**
+ * 介入挂起时随 confirm 一起带出的目标位：动作层据此登记「介入请求」（谁是对象、哪一代）。
+ * 只留判定用到的四个标签，不抄正文（请求体可能含跨项目敏感资料）。
+ * @param {object|null|undefined} target
+ * @returns {{id: string|null, kind: string|null, authority: string|null, zone: string|null}|null}
+ */
+function 目标摘要(target) {
+  if (!target) return null;
+  return {
+    id: target.id ?? null,
+    kind: target.kind ?? null,
+    authority: target.authority ?? null,
+    zone: target.zone ?? null,
+  };
 }
 
 /**

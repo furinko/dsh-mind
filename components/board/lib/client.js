@@ -337,6 +337,8 @@ window.__ModuleLoader__.load({
      * 下面的解析 / 失败形状 / 回读判据**一个字都不用改**，换的只是"怎么把请求发出去"。
      */
     var ROUTE_PRESENCE = '/plugins/dsh-mind/presence';
+    // v2 条目14/17：主权者逐请求放行的读数/决议端点（仅同源 + 宿主 Connection 认证可达）。
+    var ROUTE_INTERVENTION = '/plugins/dsh-mind/intervention';
     var ROUTE_DELEGATION = '/plugins/dsh-mind/delegation';
     var ROUTE_WORKBENCH = '/plugins/dsh-mind/workbench';
     /** 上一次已知快照：取不到投影时仍然有东西可看。 */
@@ -640,65 +642,44 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 一次会审 → 渲染用的形状。
+     * 一次会审 → 渲染用的形状（v2 口述收敛 2026-10-18 条目18：会审退出任务图）。
      *
-     * 揭名判据**只在这里判一次**：未交齐就把成员 id 直接丢掉。放进渲染层，
-     * 等于给「将来某个分支忘了判断」留一道泄露人格的缝（§10 未交齐 = 讨论保持锁定）。
+     * 数据源是 `council.list()` 折出的**会审存档**：
+     * id / 问题 / 状态 / 参与者 / 来源会话 / 轮次 / 答案 / 分歧清单 / 结论 / 零分歧 / 时间。
+     * 盲评遮罩已在服务层做过（作答中参与者读到的是 `{成员:'成员 X', 结论:null}`）——
+     * 这里**只搬、不判**，绝不拿旧任务图的 揭名/独立答案/讨论 字段去猜（那些键 v2 已不存在）。
      */
     function reviewRow(row) {
       var r = obj(row) || {};
-      var 交 = obj(firstOf(r, ['交卷', '进度'])) || {};
-      var 已交 = numOf(firstOf(交, ['已交', 'submitted']));
-      var 应交 = numOf(firstOf(交, ['应交', 'expected']));
-      var 齐 = boolOf(firstOf(交, ['齐', 'complete']));
-      // 没给「齐」就自己算：应交看负责人人数，已交看独立答案数（与投影同一判据）。
-      if (齐 === null) 齐 = 应交 !== null && 应交 > 0 && 已交 !== null && 已交 >= 应交;
-      var 揭名 = boolOf(firstOf(r, ['揭名', 'revealed']));
-      if (揭名 === null) 揭名 = 齐 === true; // 缺省从严：只有确知交齐才揭名
+      var 遮 = boolOf(firstOf(r, ['盲评遮罩'])) === true;
       return {
-        节点: line(firstOf(r, ['节点', 'id']), ''),
-        描述: line(firstOf(r, ['描述', '标题']), ''),
-        模式: line(firstOf(r, ['模式', 'mode']), ''),
-        揭名: 揭名 === true,
-        交卷: { 已交: 已交 === null ? 0 : 已交, 应交: 应交 === null ? 0 : 应交, 齐: 齐 === true },
-        独立答案: arr(firstOf(r, ['独立答案', '答案'])).map(function (answer, index) {
+        id: line(firstOf(r, ['id', '会审']), ''),
+        问题: line(firstOf(r, ['问题', '描述', '标题']), ''),
+        状态: line(firstOf(r, ['状态', 'state']), '未知'),
+        参与者: arr(firstOf(r, ['参与者', 'participants'])).map(refText).filter(Boolean),
+        来源会话: line(firstOf(r, ['来源会话', '会话']), ''),
+        // 轮次是存档给的 `已用/上限` 字符串（刚发起时为 `0/2`）；原样画，不自己算。
+        轮次: line(firstOf(r, ['轮次', 'round']), ''),
+        盲评遮罩: 遮,
+        答案: arr(firstOf(r, ['答案'])).map(function (answer, index) {
           var a = obj(answer) || {};
           return {
-            盲标: line(firstOf(a, ['盲标', 'blind']), '成员 ' + String.fromCharCode(65 + index)),
-            成员: 揭名 === true ? line(firstOf(a, ['成员', 'member'])) : '',
-            结论: line(firstOf(a, ['结论', 'conclusion']), '（无结论）'),
+            // 遮罩期投影把「成员」换成了盲标；揭名后同一字段是真成员 id。两者都按投影画的画。
+            成员: line(firstOf(a, ['成员', 'member']), 遮 ? '成员 ' + String.fromCharCode(65 + index) : ''),
+            // 遮罩期结论/结论层/反例面都是 null/[]：没有内容就一个字都不画（不补假占位）。
+            结论: line(firstOf(a, ['结论', 'conclusion']), ''),
+            结论层: line(firstOf(a, ['结论层']), ''),
             反例面: arr(a.反例面).map(refText).filter(Boolean),
-            产出物引用: arr(a.产出物引用).map(refText).filter(Boolean),
           };
         }),
         分歧清单: arr(firstOf(r, ['分歧清单', '分歧'])).map(refText).filter(Boolean),
-        反例面: arr(firstOf(r, ['反例面'])).map(refText).filter(Boolean),
-        零分歧: boolOf(firstOf(r, ['零分歧', 'zeroDivergence'])) === true,
-        零分歧依据: line(firstOf(r, ['零分歧依据', '依据']), ''),
-        复核三态: line(firstOf(r, ['复核三态', '三态']), ''),
-        复核者: line(firstOf(r, ['复核者', 'reviewer']), ''),
-        // ⑮ 强制反对者（2026-10-10）：开启讨论时系统指定的那位。投影**没有讨论段就不给**
-        // 这个键（并行分担等），所以这里兜底成空串 ⇒ 渲染层「有值才画」，一个字都不多写。
-        强制反对者: line(firstOf(r, ['强制反对者', 'dissenter']), ''),
-        // W2 会审讨论段（2026-10-09）：投影给什么渲染什么——没有讨论段（并行分担等）
-        // 就是 null，界面一个字都不多画。
-        讨论: debateView(firstOf(r, ['讨论', 'debate'])),
-      };
-    }
-
-    /** 讨论小节 → 渲染形状；没开讨论返回 null（并行分担全程不带这个字段）。 */
-    function debateView(raw) {
-      var d = obj(raw);
-      if (!d) return null;
-      return {
-        状态: line(firstOf(d, ['状态', 'state']), '未知'),
-        轮次: line(firstOf(d, ['轮次', 'round']), ''),
-        本轮消息数: line(firstOf(d, ['本轮消息数', 'roundMessages']), ''),
-        可收敛: boolOf(firstOf(d, ['可收敛', 'convergable'])) === true,
-        可收敛说明: line(firstOf(d, ['可收敛说明', 'convergeHint']), ''),
-        讨论未收敛: boolOf(firstOf(d, ['讨论未收敛', 'unconverged'])) === true,
-        复核时讨论未收敛: boolOf(firstOf(d, ['复核时讨论未收敛'])) === true,
-        表态消息id: line(firstOf(d, ['表态消息id', 'closingMessage']), ''),
+        结论: line(firstOf(r, ['结论', 'conclusion']), ''),
+        // 零分歧：存档是布尔（已收敛时才有意义）。保留原值，渲染层按状态判三态；
+        // 未收敛时绝不许把它画成「存在分歧」——那是替投影断言一个它没给的事实。
+        零分歧: firstOf(r, ['零分歧', 'zeroDivergence']),
+        创建于: line(firstOf(r, ['创建于']), ''),
+        解锁于: line(firstOf(r, ['解锁于']), ''),
+        收敛于: line(firstOf(r, ['收敛于']), ''),
       };
     }
 
@@ -718,17 +699,7 @@ window.__ModuleLoader__.load({
       var text = (已交 === null ? '—' : String(已交)) + '/' + (应交 === null ? '—' : String(应交));
       return text + (box.齐 === true ? ' 齐' : ' 未齐');
     }
-    /**
-     * 复核三态 → 三个互不相同的视觉档位。
-     * `未验` 明确不是通过：它拿灰底虚线，绝不借到通过的绿（§9 未验 ≠ 通过且不计打回）。
-     */
-    function verdictOf(value) {
-      var text = line(value).trim();
-      if (text === '过' || text === '通过' || text === 'pass') return { 文本: '过', 类: 'dshmind-verdictPass' };
-      if (text === '不过' || text === '不通过' || text === 'fail') return { 文本: '不过', 类: 'dshmind-verdictFail' };
-      if (text === '未验') return { 文本: '未验', 类: 'dshmind-verdictUnverified' };
-      return { 文本: text || '未复核', 类: 'dshmind-verdictNone' };
-    }
+
     /** 三种审计档位各有一个类名：分级要在版面上看得见，不只是文字。 */
     function auditClass(row) {
       var grade = auditGrade(row);
@@ -1721,6 +1692,23 @@ window.__ModuleLoader__.load({
       'color:var(--dsw-alias-label-caption,#8b93a7)}',
       '.dshmind-set__mono{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Menlo,monospace);',
       'overflow-wrap:anywhere}',
+      // ── 2026-10-17 设置页优化批（视觉/交互收口）──
+      // 态点：设置页**自己**的点。原来复用看板的 `.dshmind-dot`，可那条规则住在看板子树的
+      // <style> 里 —— 看板没挂载时设置页的点**没有尺寸**（截图实测：右栏只剩文字没有点）。
+      '.dshmind-set__dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex:0 0 auto}',
+      // 分区边界：失联保险与 Lead 调度授权是两块业务，要有看得见的分隔与标题层级
+      // （原来 h3 与 h2 同尺同样式、紧跟页脚，两区挤成一团）。
+      '.dshmind-set__section{margin-top:26px;padding-top:18px;border-top:1px solid var(--dsw-alias-border-l2,#d3dcea)}',
+      '.dshmind-set__subtitle{margin:0 0 2px;font-size:13.5px;line-height:20px;font-weight:600;',
+      'color:var(--dsw-alias-label-primary,#1a2233)}',
+      // 长文本字段行：标题与输入框**上下**排，输入框吃满行宽 —— 右栏定宽会被 flex 挤到截断
+      // （实测「对话 2026-10-16」在 340px 右栏里显示不全）。
+      '.dshmind-set__row--field{flex-direction:column;align-items:stretch;gap:6px}',
+      '.dshmind-set__row--field .dshmind-set__control{width:100%}',
+      // ⚠️ 必须排在 `.dshmind-set__number{width:112px}` **之后**（同权重后写的赢）。
+      '.dshmind-set__text{width:100%;max-width:420px}',
+      // 页脚里的「关闭」钮靠右（与左侧的命令/设置文件信息分开）。
+      '.dshmind-set__foot .dshmind-set__btn{margin-left:auto}',
     ].join('');
 
     /** 注入设置页样式的 `<style>` 标记（判重用），与宿主里 `installStyle` 的做法同源。 */
@@ -1958,7 +1946,7 @@ window.__ModuleLoader__.load({
     function 状态区(ctx) {
       var 待你决定 = ctx.待你决定 || [];
       var 探针 = ctx.view && obj(ctx.view.状态条) ? obj(ctx.view.状态条.探针) : null;
-      var 挂待决 = (ctx.tasks || []).filter(function (n) { return n.待决原因 && n.状态 !== '待决'; });
+      var 挂待决 = (ctx.tasks || []).filter(function (n) { return n.只读历史 !== true && n.待决原因 && n.状态 !== '待决'; });
       var 卡 = [];
       if (!待你决定.length) {
         卡.push(h('div', { key: 'clear', className: 'dshmind-attnClear' }, [
@@ -2190,18 +2178,22 @@ window.__ModuleLoader__.load({
         ]));
       }
       if (ctx.会审 && ctx.会审.length) {
-        var 过 = 0, 不过 = 0, 未验 = 0, 未知 = 0;
+        // v2（条目18）：会审是独立咨询，不再有「复核三态」。分布改按会审自己的状态机报——
+        // 作答中（等答案）/ 已解锁 / 讨论中 / 已收敛（存档）。
+        var 作答中 = 0, 解锁 = 0, 讨论中 = 0, 收敛 = 0, 其他 = 0;
         ctx.会审.forEach(function (r) {
-          if (r.复核三态 === '过') 过 += 1;
-          else if (r.复核三态 === '不过') 不过 += 1;
-          else if (r.复核三态 === '未验') 未验 += 1;
-          else 未知 += 1;
+          if (r.状态 === '作答中') 作答中 += 1;
+          else if (r.状态 === '已解锁') 解锁 += 1;
+          else if (r.状态 === '讨论中') 讨论中 += 1;
+          else if (r.状态 === '已收敛') 收敛 += 1;
+          else 其他 += 1;
         });
-        卡.push(可视化卡('会审复核结论', '共 ' + ctx.会审.length + ' 场', [
-          { 名: '过', 值: 过, 色: '#3fb27f' },
-          { 名: '不过', 值: 不过, 色: '#e5534b' },
-          { 名: '未验', 值: 未验, 色: '#7d8590' },
-          { 名: '未出结论', 值: 未知, 色: '#adb2b8' },
+        卡.push(可视化卡('会审状态分布', '共 ' + ctx.会审.length + ' 场', [
+          { 名: '作答中', 值: 作答中, 色: '#d4a053' },
+          { 名: '已解锁', 值: 解锁, 色: '#5b8def' },
+          { 名: '讨论中', 值: 讨论中, 色: '#4bb8c8' },
+          { 名: '已收敛', 值: 收敛, 色: '#3fb27f' },
+          { 名: '未知', 值: 其他, 色: '#adb2b8' },
         ]));
       }
       if (!砖.length && !卡.length) return null;
@@ -3001,12 +2993,19 @@ window.__ModuleLoader__.load({
      * @returns {Promise<{ok:true, 请求:object, 写回应:object, 回读:object} | {ok:false, error:string, 请求:object}>}
      */
     function writePresence(spec) {
-      var 请求 = { 开关: spec.开关 === undefined ? null : spec.开关, 小时: spec.小时 === undefined ? null : spec.小时 };
-      // body 里**只放本次真要改的键**：`开关=是` 单独一次写不许顺手把 `小时` 也写一遍
+      var 请求 = {
+        开关: spec.开关 === undefined ? null : spec.开关,
+        小时: spec.小时 === undefined ? null : spec.小时,
+        介入度: spec.介入度 === undefined ? null : spec.介入度,
+        复核免审: spec.复核免审 === undefined ? null : spec.复核免审,
+      };
+      // body 里**只放本次真要改的键**：`开关=是` 单独一次写不许顺手把别的键也写一遍
       // （那会把「只改一个键」变成"替人做主改了另一个"）。
       var body = {};
       if (请求.开关 !== null) body.开关 = 请求.开关;
       if (请求.小时 !== null) body.小时 = 请求.小时;
+      if (请求.介入度 !== null) body.介入度 = 请求.介入度;
+      if (请求.复核免审 !== null) body.复核免审 = 请求.复核免审;
       return runCommand(spec.ctx, spec.sessionId, { method: 'POST', path: ROUTE_PRESENCE, body: body }).then(function (out) {
         if (!out.ok) return { ok: false, error: out.error, 请求: 请求 };
         // 写成功也**必须回读**：写请求的返回值是「它说它做了什么」，回读才是「盘上现在是什么」。
@@ -3028,6 +3027,15 @@ window.__ModuleLoader__.load({
       if (请求.小时 !== null) {
         var 实际小时 = numOf(读数.生效响应期限小时);
         if (实际小时 !== 请求.小时) 差.push('小时 请求 ' + 请求.小时 + ' / 回读 ' + (实际小时 === null ? '读不出' : 实际小时));
+      }
+      if (请求.介入度 !== null) {
+        var 实际档 = line(obj(读数) && 读数.介入度, '读不出');
+        if (实际档 !== 请求.介入度) 差.push('介入度 请求 ' + 请求.介入度 + ' / 回读 ' + 实际档);
+      }
+      if (请求.复核免审 !== null) {
+        var 实际免审 = boolOf(obj(读数) && 读数.复核免审);
+        var 免审文本 = 实际免审 === null ? '读不出' : (实际免审 ? '是' : '否');
+        if (免审文本 !== (请求.复核免审 ? '是' : '否')) 差.push('复核免审 请求 ' + (请求.复核免审 ? '是' : '否') + ' / 回读 ' + 免审文本);
       }
       return 差.length ? '没写进去：回读与请求不一致（' + 差.join('；') + '）' : '';
     }
@@ -3157,6 +3165,9 @@ window.__ModuleLoader__.load({
     var 调度store = { 快照: { phase: 'reading', data: null, error: '' }, 订阅者: [] };
     var 投影store = { 快照: EMPTY, 订阅者: [] };
     var 设置store = { 快照: { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' }, 订阅者: [] };
+    /** 待批准清单（v2 条目14/17）：状态机投影由域服务给，前端只读、只发批准/拒绝/撤销。 */
+    var 审批页已访问 = false;
+    var 审批store = { 快照: { phase: 'reading', 清单: [], error: '', 忙: '', 提示: '' }, 订阅者: [] };
     /**
      * 会审折叠态（优化批③）：看板唯一的 UI 状态——照 `投影store` 同款「模块级 store + 组件订阅」，
      * **不挂 useEffect**（设计债⑩：这个宿主给插件的 effect 可能是空实现，取数如此，UI 状态也如此）。
@@ -3195,6 +3206,7 @@ window.__ModuleLoader__.load({
     var 投影序号 = 序号器();
     var 设置序号 = 序号器();
     var 调度序号 = 序号器();
+    var 审批序号 = 序号器();
     /**
      * 投影变更签名（2026-10-14 审查 P2-23）：轮询 3s 一拍，**数据没变就不重渲染**——
      * 修前每拍都全量 发通知（7 页 reconcile）+ writeCache 大 JSON.stringify，投影变大后
@@ -3728,9 +3740,64 @@ window.__ModuleLoader__.load({
       });
     }
 
+    /**
+     * 拉一次「待批准」清单（设置页打开后才轮询）。响应里的 `待决` 是域服务的状态机投影：
+     * 状态、完整请求、每一步预览都在里面；**只读**，决议走 `决定审批`。
+     */
+    function 刷新审批() {
+      if (!审批页已访问) return Promise.resolve();
+      var ctx = activeCtx;
+      var 号 = 审批序号.取号();
+      var 旧 = 审批store.快照;
+      return new Promise(function (resolve) {
+        var session = { id: '' };
+        try { session = resolveSessionId(ctx); } catch (error) { session = { id: '' }; }
+        if (!session.id) { resolve(); return; }
+        runCommand(ctx, session.id, { method: 'GET', path: ROUTE_INTERVENTION }).then(function (out) {
+          if (!审批序号.该用(号)) { resolve(); return; }
+          if (!out.ok) {
+            发通知(审批store, Object.assign({}, 旧, { phase: 'error', 清单: [], error: out.error, 忙: '' }));
+            resolve();
+            return;
+          }
+          发通知(审批store, Object.assign({}, 旧, {
+            phase: 'live',
+            清单: arr(obj(out.value) && out.value.待决),
+            error: '',
+            忙: '',
+          }));
+          resolve();
+        }, function (error) {
+          if (!审批序号.该用(号)) { resolve(); return; }
+          发通知(审批store, Object.assign({}, 旧, { phase: 'error', 清单: [], error: '读取待批准失败：' + line(error && error.message, String(error)), 忙: '' }));
+          resolve();
+        });
+      });
+    }
+
+    /** 主权者决策（批准 / 拒绝 / 撤销）：走同源路由 → `intervention` 域服务。 */
+    function 决定审批(请求id, 决定) {
+      var ctx = activeCtx;
+      var session = { id: '' };
+      try { session = resolveSessionId(ctx); } catch (error) { session = { id: '' }; }
+      if (!session.id) {
+        发通知(审批store, Object.assign({}, 审批store.快照, { 提示: '没写进去：定位不到会话 id。' }));
+        return;
+      }
+      发通知(审批store, Object.assign({}, 审批store.快照, { 忙: 请求id, 提示: '' }));
+      runCommand(ctx, session.id, { method: 'POST', path: ROUTE_INTERVENTION, body: { 请求id: 请求id, 决定: 决定 } }).then(function (out) {
+        if (!out.ok) {
+          发通知(审批store, Object.assign({}, 审批store.快照, { 忙: '', 提示: '没写进去：宿主拒绝（' + out.error + '）' }));
+          return;
+        }
+        发通知(审批store, Object.assign({}, 审批store.快照, { 忙: '', 提示: '已提交「' + 决定 + '」；状态以回读为准。' }));
+        刷新审批();
+      });
+    }
+
     /** 立刻拉一次（两个页面都刷）。给"手动刷新"按钮与 effect 增强用。 */
     function 立即刷新() {
-      return Promise.all([刷新投影(), 刷新设置(), 刷新调度()]);
+      return Promise.all([刷新投影(), 刷新设置(), 刷新调度(), 刷新审批()]);
     }
 
     /**
@@ -3901,13 +3968,12 @@ window.__ModuleLoader__.load({
                 gate && gate.错误 ? h('span', { key: 'e' }, gate.错误) : null,
               ].filter(Boolean)), gateAlarm),
               // 介入度：**只显示当前生效的那一档**（一个值）。
-              // 旧版画成 4 个 chip（零参与 / 事后抽检 / 变更预审 / 逐条审批），选中那个上色 ——
-              // 那是**只读投影**，4 个看着能点的小方块会让人以为能点（Batch 8 主人提的第 4 条）。
-              // 现在：一个值 + 旁边一句"（四档之一）"，不带边框、不带背景、不带光标、不可聚焦。
+              // v2（2026-10-18）：四档砍成三档（放权 / 预审 / 审批），「事后抽检」退役。
+              // 保持只读投影的纪律：一个值 + 一句注记，不带边框、不带背景、不带光标、不可聚焦。
               readout('介入度档位', null, bar
                 ? h('span', { className: 'dshmind-valueLine' }, [
                     h('span', { key: 'v' }, bar.介入度),
-                    h('span', { key: 'h', className: 'dshmind-valueNote' }, '四档之一（只读）'),
+                    h('span', { key: 'h', className: 'dshmind-valueNote' }, '三档之一（只读）'),
                   ])
                 : null),
               // 失联那一格四态四样。**`已关闭` 绝不许给绿点**：开关被关掉不是「主权者一直在」，
@@ -3992,84 +4058,85 @@ window.__ModuleLoader__.load({
               "mind {action:'task_pending', id:'task-…', 待决类型:'升级差异', 描述:'两条路都可行，等主权者拍板'}"),
         ),
 
-        // ② 会审（§10 反趋同）：交齐才揭名 · 全票一致是异常
-        section(2, '会审', '§10 · 未交齐不揭名 · 零分歧是异常信号',
+        // ② 会审（v2 条目18：与会话绑定的独立功能 · 存档形状）
+        section(2, '会审', '§10 · 盲评提交后解锁 · 零分歧是异常信号',
           会审.length ? 会审.length + ' 场' : '',
           view && 会审.length
             ? h('div', { className: 'dshmind-reviews' }, 会审.slice(0, REVIEW_LIMIT).map(function (row, index) {
-                var verdict = verdictOf(row.复核三态);
-                // ③ 折叠的键与 article 的 key 同源：id 稳定在节点 id（缺时才退回序号占位）。
-                var 会审id = line(row.节点, 'review-' + index);
-                // 描述全文 + 默认折叠（2026-10-12 主权者口径「要全文 + 默认折叠」）：
-                // 标题位先给 3 行预告；点「展开全文」在**卡片内**另起一块铺开全文（不塞 title、
-                // 不丢字）。折叠为纯显示动作，零请求（同「独立答案」折叠的先例）。
-                var 会审描述 = line(row.描述 || row.节点, '未命名会审');
-                var 会审描述长 = 会审描述.length > 80;
+                // ③ 折叠的键与 article 的 key 同源：id 稳定在会审 id（缺时才退回序号占位）。
+                var 会审id = line(row.id, 'review-' + index);
+                // 问题全文 + 默认折叠（2026-10-12 主权者口径「要全文 + 默认折叠」）：
+                // 标题位先给 3 行预告；点「展开全文」在**卡片内**另起一块铺开全文（不丢字）。
+                var 会审问题 = line(row.问题 || row.id, '未命名会审');
+                var 会审问题长 = 会审问题.length > 80;
                 var 会审折 = 描述折叠(会审id);
+                // 状态四档各一色：作答中=等答案（WARN）、已解锁/讨论中=进行（BRAND）、
+                // 已收敛=完成（GREEN）、未知=灰。颜色只是辅助，文字恒在。
+                var 状态色 = row.状态 === '已收敛' ? GREEN
+                  : row.状态 === '作答中' ? WARN
+                  : row.状态 === '已解锁' || row.状态 === '讨论中' ? BRAND
+                  : GREY;
                 return h('article', { key: 会审id, className: 'dshmind-review' }, [
-                  // ① 身份行：左＝交卷徽章 + 模式 + 复核三态，右＝节点 id（设计稿解剖，与任务卡同一套）
+                  // ① 身份行：左＝状态徽章 + 参与者数 + 轮次，右＝会审 id（与任务卡同一套解剖）
                   h('div', { key: 'top', className: 'dshmind-reviewTop' }, [
                     h('span', {
-                      key: 'p',
+                      key: 's',
                       className: 'dshmind-badge',
                       style: {
-                        color: row.交卷.齐 ? GREEN : WARN,
-                        borderColor: row.交卷.齐 ? GREEN : WARN,
+                        color: 状态色,
+                        borderColor: 状态色,
                         background: 'var(--dsw-alias-bg-layer-1,#fff)',
                       },
-                    }, '交卷 ' + progressText(row.交卷)),
-                    row.模式 ? h('span', { key: 'm', className: 'dshmind-chip' }, row.模式) : null,
-                    // 复核三态各占一个类名：`未验` 必须与「过」在版面上就分得开。
-                    h('span', { key: 'v', className: 'dshmind-verdict ' + verdict.类 },
-                      '复核 ' + verdict.文本 + (row.复核者 ? ' · ' + row.复核者 : '')),
+                    }, row.状态),
+                    h('span', { key: 'p', className: 'dshmind-chip' }, '参与者 ' + row.参与者.length),
+                    row.轮次 ? h('span', { key: 'r', className: 'dshmind-chip' }, '轮次 ' + row.轮次) : null,
                     h('span', { key: 'id', className: 'dshmind-cardMeta' },
                       h('span', { key: 'i', className: 'dshmind-cardId', title: 会审id }, 会审id)),
                   ].filter(Boolean)),
-                  // ② 描述（长的 3 行钳位 + 展开钮）
+                  // ② 问题（长的 3 行钳位 + 展开钮）
                   h('span', {
                     key: 't',
-                    className: 'dshmind-nodeTitle dshmind-nodeTitleFull' + (会审描述长 && 会审折 ? ' dshmind-nodeTitleClamped' : ''),
-                  }, 会审描述),
-                  // 描述折叠（2026-10-12）：长的才给钮；短的（如一行摘要）不必多一个控件。
-                  // 展开态全文**另起一块**（不进 reviewTop 那个 flex 行，免得和徽章挤在一起）。
-                  // 纯显示动作、零请求，与「独立答案」折叠同款。
-                  会审描述长
+                    className: 'dshmind-nodeTitle dshmind-nodeTitleFull' + (会审问题长 && 会审折 ? ' dshmind-nodeTitleClamped' : ''),
+                  }, 会审问题),
+                  // 问题折叠：长的才给钮；展开态全文**另起一块**（不进 reviewTop 那个 flex 行）。
+                  // 纯显示动作、零请求，与「答案」折叠同款。
+                  会审问题长
                     ? h('button', {
                         key: 'desctog', type: 'button', className: 'dshmind-descToggle',
                         onClick: function () { 切描述折叠(会审id); },
-                        title: 会审折 ? '展开描述全文' : '收起描述',
-                      }, (会审折 ? '▸ 展开全文（' + 会审描述.length + ' 字）' : '▾ 收起描述'))
+                        title: 会审折 ? '展开问题全文' : '收起问题',
+                      }, (会审折 ? '▸ 展开全文（' + 会审问题.length + ' 字）' : '▾ 收起问题'))
                     : null,
-                  会审描述长 && !会审折
-                    ? h('div', { key: 'descfull', className: 'dshmind-nodeTitleOpen' }, 会审描述)
+                  会审问题长 && !会审折
+                    ? h('div', { key: 'descfull', className: 'dshmind-nodeTitleOpen' }, 会审问题)
                     : null,
-                  // 未交齐 = 讨论保持锁定：明说锁着，并且下面只可能出现盲标（成员 id 在归一化时就丢了）。
-                  row.揭名 === false
-                    ? h('div', { key: 'lock', className: 'dshmind-lock' }, '🔒 未交齐，讨论保持锁定：此处只显示盲标，交齐后揭名')
+                  // 盲评中明说锁着：遮罩在服务层做过，这里只报事实——不自己再判一次揭名。
+                  row.盲评遮罩
+                    ? h('div', { key: 'lock', className: 'dshmind-lock' }, '🔒 盲评中：全员交齐并解锁前，此处只显示盲标；揭名后显示成员与结论')
                     : null,
-                  // 优化批③：独立答案可折叠——多场会审时答案区不再把面板撑爆。
-                  // 默认**首场展开、其余一行摘要**（摘要只给盲标，不出成员 id——揭名口径不因折叠放宽）；
+                  // ③ 答案可折叠——多场会审时答案区不再把面板撑爆。
+                  // 默认**首场展开、其余一行摘要**（摘要只给成员/盲标标签，不出结论）；
                   // 切换走 onClick（先例：页头「刷新」），状态住模块级 界面store，不挂 useEffect（设计债⑩）。
-                  row.独立答案.length
+                  row.答案.length
                     ? h('div', { key: 'answersWrap' }, [
                         h('button', {
                           key: 'tog', type: 'button', className: 'dshmind-toggle',
                           onClick: function () { 切会审折叠(会审id, index !== 0); },
-                          title: 会审折叠(会审id, index !== 0) ? '展开独立答案' : '收起独立答案',
-                        }, (会审折叠(会审id, index !== 0) ? '▸' : '▾') + ' 独立答案 ' + row.独立答案.length + ' 份'
-                          + (会审折叠(会审id, index !== 0) ? '（展开看全文与反例面）' : '')),
+                          title: 会审折叠(会审id, index !== 0) ? '展开答案' : '收起答案',
+                        }, (会审折叠(会审id, index !== 0) ? '▸' : '▾') + ' 答案 ' + row.答案.length + ' 份'
+                          + (会审折叠(会审id, index !== 0) ? '（展开看结论与反例面）' : '')),
                         会审折叠(会审id, index !== 0)
                           ? h('div', { key: 'sum', className: 'dshmind-answerSummary' },
-                              '盲标：' + (row.独立答案.map(function (answer) { return line(answer.盲标); }).filter(Boolean).join('、') || '（无）'))
-                          : h('div', { key: 'ans', className: 'dshmind-answers' }, row.独立答案.map(function (answer, i) {
+                              '成员：' + (row.答案.map(function (answer) { return line(answer.成员); }).filter(Boolean).join('、') || '（无）'))
+                          : h('div', { key: 'ans', className: 'dshmind-answers' }, row.答案.map(function (answer, i) {
                               return h('div', { key: 'a' + i, className: 'dshmind-answer' }, [
                                 h('div', { key: 'h', className: 'dshmind-answerHead' }, [
                                   h('span', { key: 'b', className: 'dshmind-badge', style: {
                                     color: BRAND, borderColor: BRAND, background: 'var(--dsw-alias-bg-layer-1,#fff)',
-                                  } }, answer.盲标),
-                                  answer.成员 ? h('span', { key: 'm', className: 'dshmind-chip dshmind-mono', title: answer.成员 }, answer.成员) : null,
+                                  } }, answer.成员),
+                                  answer.结论层 ? h('span', { key: 'l', className: 'dshmind-chip dshmind-mono', title: answer.结论层 }, answer.结论层) : null,
                                 ].filter(Boolean)),
-                                h('div', { key: 'c', className: 'dshmind-answerBody' }, answer.结论),
+                                answer.结论 ? h('div', { key: 'c', className: 'dshmind-answerBody' }, answer.结论) : null,
                                 answer.反例面.length
                                   ? h('div', { key: 'x', className: 'dshmind-counter' }, '反例面：' + answer.反例面.join('；'))
                                   : null,
@@ -4077,47 +4144,58 @@ window.__ModuleLoader__.load({
                             })),
                       ])
                     : null,
+                  // 盲评期不列参与者 id：那张卡上只许出现盲标（成员 id 在这一阶段一个都不出）。
+                  row.参与者.length && !row.盲评遮罩
+                    ? h('div', { key: 'who', className: 'dshmind-counter' }, '参与者：' + row.参与者.join('、'))
+                    : null,
                   row.分歧清单.length
                     ? h('div', { key: 'div', className: 'dshmind-divergence' }, '分歧清单：' + row.分歧清单.join('；'))
                     : null,
-                  row.反例面.length
-                    ? h('div', { key: 'cnt', className: 'dshmind-counter' }, '反例面：' + row.反例面.join('；'))
+                  row.结论
+                    ? h('div', { key: 'concl', className: 'dshmind-consensus' }, '结论：' + row.结论)
                     : null,
                   // 零分歧 === true 是**警报**，不是好话：§10 里全票一致意味着趋同，要交人工抽检。
-                  h('div', { key: 'zero', className: row.零分歧 ? 'dshmind-anomaly' : 'dshmind-consensus' },
-                    (row.零分歧 ? '⚠ 零分歧（全票一致）—— §10：这是趋同异常信号，应转人工抽检' : '存在分歧（正常）')
-                      + (row.零分歧依据 ? ' · 依据：' + row.零分歧依据 : '')),
-                  // W2 会审讨论段：状态 · 轮次 · 本轮预算 · 可收敛提示。讨论未收敛而复核已过
-                  // 是「Lead 不收敛」的可见信号——软约束不拦 review，但面板必须喊出来。
-                  row.讨论
-                    ? h('div', {
-                        key: 'debate',
-                        className: row.讨论.讨论未收敛 ? 'dshmind-lock' : 'dshmind-consensus',
-                      }, (row.讨论.状态 === '讨论中'
-                        ? '💬 讨论：进行中 · 轮次 ' + (row.讨论.轮次 || '-') + ' · 本轮 ' + (row.讨论.本轮消息数 || '-')
-                          + (row.讨论.可收敛 ? ' · 可收敛' : '')
-                          + (row.讨论.讨论未收敛 ? ' · 讨论未收敛' : '')
-                          + (row.讨论.复核时讨论未收敛 ? '（复核已过而讨论未收敛——软约束，不拦复核但在此标注）' : '')
-                        : '💬 讨论：已收敛' + (row.讨论.表态消息id ? ' · 末位表态 ' + row.讨论.表态消息id : ''))
-                        // ⑮ 强制反对者（2026-10-10）：**有值才画**——没指定出来（空串）时
-                        // 这一句整个不出现，不给「强制反对者：—」这种空壳读数。
-                        + (row.强制反对者 ? ' · 强制反对者：' + row.强制反对者 : '')
-                        + (row.讨论.可收敛说明 ? ' · ' + row.讨论.可收敛说明 : ''))
+                  // 存档给的是布尔；只有已收敛才有判定意义。未收敛时明说「未判定」——
+                  // 绝不许把 false 画成「存在分歧」：那是在替投影断言一个它还没给出的结论。
+                  (function () {
+                    if (row.状态 !== '已收敛') {
+                      return h('div', { key: 'zero', className: 'dshmind-consensus' },
+                        '零分歧：未判定（会审未收敛）');
+                    }
+                    if (row.零分歧 === true) {
+                      return h('div', { key: 'zero', className: 'dshmind-anomaly' },
+                        '⚠ 零分歧（全票一致）—— §10：这是趋同异常信号，应转人工抽检');
+                    }
+                    return h('div', { key: 'zero', className: 'dshmind-consensus' }, '存在分歧（正常）');
+                  })(),
+                  row.状态 === '讨论中'
+                    ? h('div', { key: 'disc', className: 'dshmind-consensus' }, '💬 讨论进行中（Lead 显式开启）')
+                    : null,
+                  // 存档来源与时间：只搬存档字段，不补造。
+                  row.来源会话
+                    ? h('div', { key: 'src', className: 'dshmind-counter' }, '来源会话：' + row.来源会话)
+                    : null,
+                  (row.创建于 || row.收敛于)
+                    ? h('div', { key: 'at', className: 'dshmind-counter' },
+                        '创建 ' + (row.创建于 || '—')
+                          + (row.解锁于 ? ' · 解锁 ' + row.解锁于 : '')
+                          + (row.收敛于 ? ' · 收敛 ' + row.收敛于 : ''))
                     : null,
                 ].filter(Boolean));
               }))
-            : emptyGuide('没有进行中的会审', '会审在成员交卷复核时产生（建卡见 §3）',
-              "mind {action:'task_submit', id:'task-…', 结论:'交卷结论一句话', 反例面:'为推翻它试过什么'}"),
+            : emptyGuide('没有进行中的会审', '会审是与会话绑定的独立咨询：Lead 发起 → 参与者盲评作答 → 交齐解锁 → 收敛存档',
+              "mind {action:'debate_open', 问题:'要收敛的问题', 参与者:'member-a,member-b'}"),
         ),
 
         // ③ 任务图
-        section(3, '任务图', '状态权威 · 判据派发后冻结', tasks.length ? tasks.length + ' 节点' : '',
+        section(3, '任务图', '状态权威 · 判据派发后冻结' + (view && obj(view.任务) && typeof view.任务.只读历史数 === 'number' ? ' · 只读历史 ' + view.任务.只读历史数 + ' · 现行未结账 ' + (typeof view.任务.现行未结账数 === 'number' ? view.任务.现行未结账数 : '—') : ''), tasks.length ? tasks.length + ' 节点' : '',
           [
             tasks.length
             ? h('div', { className: 'dshmind-nodes' },
                 tasks.slice(0, TASK_LIMIT).map(function (task, index) {
                   var rejects = numOf(task.打回次数) || 0;
-                  var pending = isPending(task);
+                  var 只读历史 = task.只读历史 === true;
+                  var pending = !只读历史 && isPending(task);
                   var frozen = criteriaFrozen(task);
                   var owners = arr(task.负责人).map(refText).filter(Boolean);
                   var criteria = arr(task.判据).map(refText).filter(Boolean);
@@ -4125,7 +4203,7 @@ window.__ModuleLoader__.load({
                   // 判活（派活闭环 2026-10-15）：投影在「已派发/执行中」窗口给的未见活动名单。
                   // 有名单才画徽章（空数组 = 查过且没有，不是缺陷，不画）；字段缺席 = 宿主没给，同样不画。
                   var 无活动 = arr(task.负责人无活动).filter(Boolean);
-                  var cls = 'dshmind-node' + (pending ? ' dshmind-nodePending' : '') + (rejects >= 2 ? ' dshmind-nodeEscalated' : '');
+                  var cls = 'dshmind-node' + (pending ? ' dshmind-nodePending' : '') + (!只读历史 && rejects >= 2 ? ' dshmind-nodeEscalated' : '');
                   // hasOwnProperty 挡原型链键（'constructor'/'toString' 等字面量查表会返回 truthy 函数，
                   // 绕过「查表 miss ⇒ 保灰」）——坏值不许因为继承属性画出彩色（失联「值不合法」同族口径）。
                   var 徽色 = Object.prototype.hasOwnProperty.call(状态徽章色, task.状态) ? 状态徽章色[task.状态] : null;
@@ -4151,6 +4229,7 @@ window.__ModuleLoader__.load({
                           color: 'var(--dsw-alias-label-secondary,#61666b)',
                         },
                       }, line(task.状态, '未知')),
+                      只读历史 ? h('span', { key: 'history', className: 'dshmind-badge', title: line(task.写入说明, '旧会审仅保留历史，不改不迁移。') }, '只读历史') : null,
                       h('span', { key: 'id', className: 'dshmind-cardId', title: 任务id }, 任务id),
                       h('span', { key: 'meta', className: 'dshmind-cardMeta' }, [
                         h('span', { key: 'o' }, '负责人 ' + (owners.length ? owners.join('、') : '未指派')),
@@ -4187,14 +4266,14 @@ window.__ModuleLoader__.load({
                       }, criteria.length ? criteria.join('；') : '（缺失 —— 建节点时必填）'),
                     ]),
                     h('div', { key: 'b', className: 'dshmind-chips' }, [
-                      frozen ? badge('判据冻结') : badge('判据可改', 'warn'),
+                      只读历史 ? badge('历史判据 · 只读') : frozen ? badge('判据冻结') : badge('判据可改', 'warn'),
                       pending ? badge('待决项', 'warn') : null,
-                      无活动.length ? badge(无活动.length + ' 位负责人未见活动', 'warn') : null,
-                      rejects >= 2 ? badge('打回 ' + rejects + ' 次 · 升级主权者', 'red') : null,
-                      task.升级 ? badge('升级：' + line(task.升级), 'red') : null,
+                      !只读历史 && 无活动.length ? badge(无活动.length + ' 位负责人未见活动', 'warn') : null,
+                      !只读历史 && rejects >= 2 ? badge('打回 ' + rejects + ' 次 · 升级主权者', 'red') : null,
+                      !只读历史 && task.升级 ? badge('升级：' + line(task.升级), 'red') : null,
                       outputs.length ? h('span', { key: 'a', className: 'dshmind-meta' }, '产物 ' + outputs.length + ' 项') : null,
                     ].filter(Boolean)),
-                    task.待决原因 ? h('div', { key: 'w', className: 'dshmind-decideWhy' }, '待决原因：' + line(task.待决原因)) : null,
+                    task.待决原因 ? h('div', { key: 'w', className: 'dshmind-decideWhy' }, (只读历史 ? '历史待决说明（只读）：' : '待决原因：') + line(task.待决原因)) : null,
                     outputs.length
                       ? h('div', { key: 'chips', className: 'dshmind-chips' },
                           outputs.slice(0, 4).map(function (ref, i) {
@@ -4447,6 +4526,38 @@ window.__ModuleLoader__.load({
 
     // ── 设置页：心智设置（`settings.section`）────────────────────────────────
     /**
+     * 一行：左「标题 + 说明」，右控件 —— 与官方设置页其它分区同一套排法。
+     * 传 `null` 当控件时不产生右栏（**不留空容器**：空块在版面上是"渲染坏了"的样子）。
+     *
+     * 纯渲染帮手（不碰状态），所以挂在**模块级**：定义在组件体内会每渲染重建一遍，
+     * 而且失联保险区与调度授权区两处都要用 —— 单源，各调各的。
+     *
+     * `变体` 目前只认 `'field'`：长文本字段行 —— 标题与输入框**上下排**、输入框吃满行宽
+     * （右栏定宽会被 flex 挤到截断，2026-10-17 截图实测）。
+     */
+    function 设置行(key, 标题, 说明, 控件, 变体) {
+      return h('div', { key: key, className: 'dshmind-set__row' + (变体 === 'field' ? ' dshmind-set__row--field' : '') }, [
+        h('div', { key: 't', className: 'dshmind-set__texts' }, [
+          h('div', { key: 'l', className: 'dshmind-set__label' }, 标题),
+          说明 ? h('div', { key: 'h', className: 'dshmind-set__hint' }, 说明) : null,
+        ].filter(Boolean)),
+        控件 ? h('div', { key: 'c', className: 'dshmind-set__control' }, 控件) : null,
+      ].filter(Boolean));
+    }
+    /** 只读读数行：值是文字，没有控件（也不产生空的右侧栏）。与 `设置行` 同排法。 */
+    function 设置读数行(key, 标题, 说明, 值节点) {
+      return h('div', { key: key, className: 'dshmind-set__row' }, [
+        h('div', { key: 't', className: 'dshmind-set__texts' }, [
+          h('div', { key: 'l', className: 'dshmind-set__label' }, 标题),
+          说明 ? h('div', { key: 'h', className: 'dshmind-set__hint' }, 说明) : null,
+        ].filter(Boolean)),
+        h('div', { key: 'c', className: 'dshmind-set__control' }, [
+          h('span', { key: 'v', className: 'dshmind-set__value' }, 值节点),
+        ]),
+      ]);
+    }
+
+    /**
      * 官方设置页里的「心智设置」分区。
      *
      * 为什么单开一页而不塞回看板：**看板面板 ≠ 设置页**。
@@ -4465,9 +4576,13 @@ window.__ModuleLoader__.load({
       // ⚠️ 读数来自**模块级 store**（由 `apply` 的裸 setInterval 轮询喂），**不来自 effect**：
       // 这个宿主的 `useEffect` 很可能是空实现 ⇒ 挂在它上面的取数永远不会跑。
       var snap = useStore(设置store);
+      var 审批快照 = useStore(审批store);
+      // ══ 调度授权区：订阅 / 草稿 / 保存链 ══
       调度页已访问 = true;
+      审批页已访问 = true;
       var 调度快照 = useStore(调度store);
       useEffect(function () { 刷新调度(); }, []);
+      useEffect(function () { 刷新审批(); }, []);
       var 调度表态 = useState({ mode: 'explicit-user', projects: '', authorizationRef: '', fingerprint: '' });
       var 调度表 = 调度表态[0];
       var 设调度表 = 调度表态[1];
@@ -4534,8 +4649,9 @@ window.__ModuleLoader__.load({
           设调度提示({ saving: false, text: text, ok: ok });
         });
       }
+      // ══ 失联保险区：草稿 / 回读同步 / 保存链 ══
       // 表单草稿：**独立于读数**——回读一来就覆盖输入框，人正在打的字会被吃掉。
-      var 表 = useState({ 开关: '是', 小时: '72' });
+      var 表 = useState({ 开关: '是', 小时: '72', 介入度: '放权', 复核免审: '否' });
       var form = 表[0];
       var setForm = 表[1];
       /** 「提示 / 保存中」是**组件本地**状态（交互结果，不该被轮询抹掉）。 */
@@ -4553,20 +4669,28 @@ window.__ModuleLoader__.load({
       // render-phase derived-state 模式（同组件、守卫收敛 `键 !== 同步.键` ⇒ 最多多渲染
       // 一轮，不会死循环；effect 版会晚一帧闪旧值）。别「修」成 effect。
       var 读 = snap.读数;
-      var 上次同步 = useState({ 键: '', 开关: '是', 小时: '72' });
+      var 上次同步 = useState({ 键: '', 开关: '是', 小时: '72', 介入度: '放权', 复核免审: '否' });
       var 同步 = 上次同步[0];
       var set同步 = 上次同步[1];
       if (读 && !人改过) {
         var 开 = 开关态Of(读);
         var 时 = numOf(读.生效响应期限小时);
-        var 键 = String(开) + '/' + String(时);
+        var 档 = line(obj(读) && 读.介入度, '') || '放权';
+        var 免 = boolOf(obj(读) && 读.复核免审) === true ? '是' : '否';
+        var 键 = String(开) + '/' + String(时) + '/' + 档 + '/' + 免;
         if (键 !== 同步.键) {
-          set同步({ 键: 键, 开关: 开 === false ? '否' : '是', 小时: 时 === null ? '' : String(时) });
-          setForm({ 开关: 开 === false ? '否' : '是', 小时: 时 === null ? '' : String(时) });
+          set同步({ 键: 键, 开关: 开 === false ? '否' : '是', 小时: 时 === null ? '' : String(时), 介入度: 档, 复核免审: 免 });
+          setForm({ 开关: 开 === false ? '否' : '是', 小时: 时 === null ? '' : String(时), 介入度: 档, 复核免审: 免 });
         }
       }
 
       function 保存() {
+        // 未接入时没有回读真源：框里的值只是硬编码草稿，拿它去写等于"替盘上瞎编"。
+        // 按钮已禁用，这道守的是 Enter 键那条旁路。
+        if (!snap.读数) {
+          set提示({ 保存中: false, 提示: '没写进去：还没读到当前设置（未接入），先「重新读取」。', 提示调: 'warn' });
+          return;
+        }
         var ctx = activeCtx;
         var session = resolveSessionId(ctx);
         if (!session.id) {
@@ -4596,8 +4720,27 @@ window.__ModuleLoader__.load({
           set提示({ 保存中: false, 提示: '没写进去：失联限制 只接受「是 / 否」。', 提示调: 'warn' });
           return;
         }
+        var 介入度 = String(form.介入度 || '');
+        if (['放权', '预审', '审批'].indexOf(介入度) < 0) {
+          set提示({ 保存中: false, 提示: '没写进去：介入度 只接受 放权 / 预审 / 审批。', 提示调: 'warn' });
+          return;
+        }
+        if (form.复核免审 !== '是' && form.复核免审 !== '否') {
+          set提示({ 保存中: false, 提示: '没写进去：复核免审 只接受「是 / 否」。', 提示调: 'warn' });
+          return;
+        }
+        // 只在**人改了这一项**时才写：不把部署原本没写过的键（生效值来自出厂层）顺手写进私有层。
+        var 读档 = line(obj(读) && 读.介入度, '') || '放权';
+        var 读免 = boolOf(obj(读) && 读.复核免审) === true;
         set提示({ 保存中: true, 提示: '', 提示调: 'warn' });
-        writePresence({ ctx: ctx, sessionId: session.id, 开关: form.开关, 小时: 小时 }).then(function (out) {
+        writePresence({
+          ctx: ctx,
+          sessionId: session.id,
+          开关: form.开关,
+          小时: 小时,
+          介入度: 介入度 !== 读档 ? 介入度 : undefined,
+          复核免审: (form.复核免审 === '是') !== 读免 ? (form.复核免审 === '是') : undefined,
+        }).then(function (out) {
           if (!out.ok) {
             // 拒绝也要**照旧显示盘上现在是什么**（走 store 的最近一次读数），并明说没写进去。
             set提示({ 保存中: false, 提示: '没写进去：宿主拒绝了（' + out.error + '）', 提示调: 'warn' });
@@ -4621,36 +4764,11 @@ window.__ModuleLoader__.load({
         });
       }
 
+      // ══ 失联保险区（渲染件） ══
       var 值不合法 = !!读 && boolOf(读.值不合法) === true;
       // 设置页的读数是**对象** ⇒ 在这里一次性归一成四态（别再各处 `失联态Of(读)`）。
       var 设置四态 = 读数对象四态(读);
       var 未接入 = !读;
-
-      /**
-       * 一行：左「标题 + 说明」，右控件 —— 与官方设置页其它分区同一套排法。
-       * 传 `null` 当控件时不产生右栏（**不留空容器**：空块在版面上是"渲染坏了"的样子）。
-       */
-      function 行(key, 标题, 说明, 控件) {
-        return h('div', { key: key, className: 'dshmind-set__row' }, [
-          h('div', { key: 't', className: 'dshmind-set__texts' }, [
-            h('div', { key: 'l', className: 'dshmind-set__label' }, 标题),
-            说明 ? h('div', { key: 'h', className: 'dshmind-set__hint' }, 说明) : null,
-          ].filter(Boolean)),
-          控件 ? h('div', { key: 'c', className: 'dshmind-set__control' }, 控件) : null,
-        ].filter(Boolean));
-      }
-      /** 只读读数行：值是文字，没有控件（也不产生空的右侧栏）。 */
-      function 读数行(key, 标题, 说明, 值节点) {
-        return h('div', { key: key, className: 'dshmind-set__row' }, [
-          h('div', { key: 't', className: 'dshmind-set__texts' }, [
-            h('div', { key: 'l', className: 'dshmind-set__label' }, 标题),
-            说明 ? h('div', { key: 'h', className: 'dshmind-set__hint' }, 说明) : null,
-          ].filter(Boolean)),
-          h('div', { key: 'c', className: 'dshmind-set__control' }, [
-            h('span', { key: 'v', className: 'dshmind-set__value' }, 值节点),
-          ]),
-        ]);
-      }
 
       // 四态 → 人话 + 点色（设置页读的是**读数对象**，走 `读数对象四态`）。
       var 态文本 = 设置四态 === '已关闭' ? '已关闭 · 不判定失联'
@@ -4696,15 +4814,15 @@ window.__ModuleLoader__.load({
         : null;
 
       // 有读数才渲染读数与表单：没读数时不留空块（空块在版面上就是"坏了"）。
+      // 读数只留「当前生效值」一行：附注里已含开关/期限/来源/当前态，
+      // 原来的「来源」行是同一份信息的第二次排版（层序说明挪进顶部 lede）。
       var 读数块 = 读
         ? h('div', { key: 'rows', className: 'dshmind-set__rows' }, [
-            读数行('now', '当前生效值', 读数附注(读), [
-              dot(态色),
+            设置读数行('now', '当前生效值', 读数附注(读), [
+              // 设置页自己的点（`dshmind-set__dot`）：看板那条 `.dshmind-dot` 规则
+              // 住在看板子树的 <style> 里，看板没挂载时它对设置页不存在。
+              h('span', { key: 'dot', className: 'dshmind-set__dot', style: { background: 态色 } }),
               h('span', { key: 'v' }, 态文本),
-            ]),
-            读数行('src', '来源', '生效值由哪一层给：私有 ＞ 出厂 ＞ 内置兜底', [
-              h('span', { key: 'v', className: 'dshmind-set__mono' },
-                '期限 ' + line(读.响应期限小时来源, '未知') + ' · 开关 ' + line(读.失联限制来源, '未知')),
             ]),
           ].filter(Boolean))
         : null;
@@ -4718,65 +4836,112 @@ window.__ModuleLoader__.load({
         : null;
 
       // 表单：一个开关 + 一个数字 + 保存。控件一律带类名（不许裸默认样式）。
+      // 未接入（含"正在读"）时表单**禁用**：没有回读真源，框里只是硬编码草稿，
+      // 让人继续编它会像"盘上就是这样"（误导）；「重新读取」是唯一该亮的操作。
+      var 表单禁用 = 未接入 || 提示.保存中 === true;
+      // P1-11（全面审查 2026-10-17）：未接入时不许把写死的初值（是/72）画成读数。
+      // 控件已禁用，但显示仍是「一组像真读数的设置值」——I1 只修了写、没修显示。
+      // 未接入 ⇒ 控件给空值 + 「未读到」占位；真值只在有回读时出现。
+      var 显示开关 = 未接入 ? '' : form.开关;
+      var 显示小时 = 未接入 ? '' : form.小时;
       var 表单块 = h('div', { key: 'rows2', className: 'dshmind-set__rows' }, [
-        行('sw', '失联保险', '关掉后不再判定失联（机制停用会被如实记录）', [
+        设置行('sw', '失联保险', '关掉后不再判定失联（机制停用会被如实记录）', [
           h('select', {
             key: 'sel', className: 'dshmind-set__select',
             'aria-label': '失联保险',
-            value: form.开关,
+            value: 显示开关,
+            disabled: 表单禁用,
             onChange: function (event) {
               var next = event && event.target ? String(event.target.value) : '是';
               set人改过(true); // 2026-10-14 审查 P1-10：人碰过 ⇒ 轮询回读不许再刷掉表单
-              setForm({ 开关: next === '否' ? '否' : '是', 小时: form.小时 });
+              setForm({ 开关: next === '否' ? '否' : '是', 小时: form.小时, 介入度: form.介入度, 复核免审: form.复核免审 });
             },
           }, [
+            ...(未接入 ? [h('option', { key: 'x', value: '' }, '未读到（未接入）')] : []),
             h('option', { key: 'y', value: '是' }, '是（开启）'),
             h('option', { key: 'n', value: '否' }, '否（关闭）'),
           ]),
         ]),
-        行('hrs', '响应期限小时', '自最后一次交互起超过这个时长未响应 ⇒ 自动标记失联', [
+        设置行('hrs', '响应期限小时', '自最后一次交互起超过这个时长未响应 ⇒ 自动标记失联', [
           h('input', {
             key: 'inp', className: 'dshmind-set__number',
             type: 'number', min: 1, step: 1,
             'aria-label': '响应期限小时',
-            placeholder: '1 ~ 876000',
-            value: form.小时,
+            placeholder: 未接入 ? '未读到（未接入）' : '1 ~ 876000',
+            value: 显示小时,
+            disabled: 表单禁用,
             onChange: function (event) {
               set人改过(true); // 2026-10-14 审查 P1-10：同上，人碰过就不再被回读覆盖
-              setForm({ 开关: form.开关, 小时: event && event.target ? String(event.target.value) : '' });
+              setForm({ 开关: form.开关, 小时: event && event.target ? String(event.target.value) : '', 介入度: form.介入度, 复核免审: form.复核免审 });
             },
             onKeyDown: function (event) {
               if (event && event.key === 'Enter') 保存();
             },
           }),
         ]),
+        // v2 条目14/17：介入度三档 + 复核免审全局开关（设置项的语义见条目14/17/24）。
+        设置行('intervention', '介入度', '放权=自治写直落留痕；预审=四类高风险（改岗位卡/发布能力/物理删除记忆/改设置）等主权者放行；审批=每条自治写都等放行', [
+          h('select', {
+            key: 'sel', className: 'dshmind-set__select',
+            'aria-label': '介入度',
+            value: 未接入 ? '' : form.介入度,
+            disabled: 表单禁用,
+            onChange: function (event) {
+              set人改过(true);
+              setForm({ 开关: form.开关, 小时: form.小时, 介入度: event && event.target ? String(event.target.value) : '放权', 复核免审: form.复核免审 });
+            },
+          }, [
+            ...(未接入 ? [h('option', { key: 'x', value: '' }, '未读到（未接入）')] : []),
+            h('option', { key: 'f', value: '放权' }, '放权'),
+            h('option', { key: 'p', value: '预审' }, '预审'),
+            h('option', { key: 'a', value: '审批' }, '审批'),
+          ]),
+        ]),
+        设置行('exempt', '复核免审', '全局开关：允许 Lead 对节点登记复核豁免（不按任务风险分档）', [
+          h('select', {
+            key: 'sel', className: 'dshmind-set__select',
+            'aria-label': '复核免审',
+            value: 未接入 ? '' : form.复核免审,
+            disabled: 表单禁用,
+            onChange: function (event) {
+              set人改过(true);
+              setForm({ 开关: form.开关, 小时: form.小时, 介入度: form.介入度, 复核免审: event && event.target && event.target.value === '是' ? '是' : '否' });
+            },
+          }, [
+            ...(未接入 ? [h('option', { key: 'x', value: '' }, '未读到（未接入）')] : []),
+            h('option', { key: 'n', value: '否' }, '否（默认）'),
+            h('option', { key: 'y', value: '是' }, '是（允许豁免）'),
+          ]),
+        ]),
       ]);
 
-      var 调度块 = h('section', { key: 'delegation', 'data-dshmind': 'delegation-settings' }, [
-        h('h3', { key: 'h', className: 'dshmind-set__title' }, 'Lead 调度授权'),
+      var 调度块 = h('section', { key: 'delegation', 'data-dshmind': 'delegation-settings', className: 'dshmind-set__section' }, [
+        h('h3', { key: 'h', className: 'dshmind-set__subtitle' }, 'Lead 调度授权'),
         h('p', { key: 'scope', className: 'dshmind-set__lede' }, '写入当前 profile 的部署级授权，仅影响以后新派工的准入与后续提示词；撤回不会终止已有成员。'),
         h('p', { key: 'boundary', className: 'dshmind-set__hint' }, '仅人侧设置入口提供写入，模型工具不提供改授权动作；本机 shell 与凭据的隔离仍由宿主权限负责。'),
         !调度读数 ? h('div', { key: 'error', className: 'dshmind-set__notice' }, 调度快照.phase === 'reading' ? '正在读取调度授权…' : '调度设置未接入：' + 调度快照.error) : null,
         调度读数 ? h('div', { key: 'readings', className: 'dshmind-set__rows' }, [
-          读数行('delegation-current', '当前运行授权', '预览项目 ' + line(调度读数.runtime.project, '未知'), (调度读数.runtime.mode === 'lead-discretion' ? 'Lead 按需选择' : '仅用户点名') + ' · ' + (调度读数.runtime.disposed ? '已卸载' : 调度读数.application && 调度读数.application.state === 'confirmed' ? '盘面与运行一致' : '运行应用未确认')),
-          读数行('delegation-source', '授权真源', '不另存组织私有配置', 调度读数.persistence.source),
-          读数行('delegation-fingerprint', '盘面 / 运行指纹', '保存后必须重新 GET 两面核对，提示词实际应用仍待下一轮验证', 调度读数.persistence.fingerprint.slice(0, 12) + ' / ' + 调度读数.runtime.fingerprint.slice(0, 12)),
+          设置读数行('delegation-current', '当前运行授权', '预览项目 ' + line(调度读数.runtime.project, '未知'), (调度读数.runtime.mode === 'lead-discretion' ? 'Lead 按需选择' : '仅用户点名') + ' · ' + (调度读数.runtime.disposed ? '已卸载' : 调度读数.application && 调度读数.application.state === 'confirmed' ? '盘面与运行一致' : '运行应用未确认')),
+          设置读数行('delegation-source', '授权真源', '不另存组织私有配置', 调度读数.persistence.source),
+          设置读数行('delegation-fingerprint', '盘面 / 运行指纹', '保存后必须重新 GET 两面核对，提示词实际应用仍待下一轮验证', 调度读数.persistence.fingerprint.slice(0, 12) + ' / ' + 调度读数.runtime.fingerprint.slice(0, 12)),
         ]) : null,
         h('div', { key: 'fields', className: 'dshmind-set__rows' }, [
-          行('delegation-mode', '调度模式', '仅用户点名 = 官方默认，不是强制终止或禁用所有成员', h('select', {
+          设置行('delegation-mode', '调度模式', '仅用户点名 = 官方默认，不是强制终止或禁用所有成员', h('select', {
             className: 'dshmind-set__select', 'aria-label': '调度模式', value: 调度表.mode, disabled: 调度提示.saving || !调度读数,
             onChange: function (event) { 改调度表('mode', event.target.value); },
           }, [h('option', { value: 'explicit-user' }, '仅用户点名（官方默认）'), h('option', { value: 'lead-discretion' }, 'Lead 按需选择')])),
-          行('delegation-projects', '授权项目', '项目键用逗号分隔；* 表示所有项目', h('input', {
-            type: 'text', className: 'dshmind-set__number', style: { width: 340, maxWidth: '100%' }, 'aria-label': '授权项目',
+          设置行('delegation-projects', '授权项目', '项目键用逗号分隔；* 表示所有项目', h('input', {
+            type: 'text', className: 'dshmind-set__number dshmind-set__text', 'aria-label': '授权项目',
             value: 调度表.projects, disabled: 调度提示.saving || !调度读数,
             onChange: function (event) { 改调度表('projects', event.target.value); },
-          })),
-          行('delegation-ref', '授权依据', '由部署者填写或确认，不由模型从记忆补造', h('input', {
-            type: 'text', className: 'dshmind-set__number', style: { width: 340, maxWidth: '100%' }, 'aria-label': '授权依据',
+            onKeyDown: function (event) { if (event && event.key === 'Enter') 保存调度(false); },
+          }), 'field'),
+          设置行('delegation-ref', '授权依据', '由部署者填写或确认，不由模型从记忆补造', h('input', {
+            type: 'text', className: 'dshmind-set__number dshmind-set__text', 'aria-label': '授权依据',
             value: 调度表.authorizationRef, disabled: 调度提示.saving || !调度读数,
             onChange: function (event) { 改调度表('authorizationRef', event.target.value); },
-          })),
+            onKeyDown: function (event) { if (event && event.key === 'Enter') 保存调度(false); },
+          }), 'field'),
         ]),
         String(调度表.projects).split(/[,，\s]+/).indexOf('*') >= 0 ? h('div', { key: 'global', className: 'dshmind-set__notice' }, '⚠ 全项目授权：* 会命中当前 profile 下的所有项目。') : null,
         h('div', { key: 'actions', className: 'dshmind-set__actions' }, [
@@ -4793,47 +4958,94 @@ window.__ModuleLoader__.load({
         调度提示.text ? h('div', { key: 'receipt', role: 'status', className: 'dshmind-set__toast ' + (调度提示.ok ? 'dshmind-set__toast--ok' : 'dshmind-set__toast--warn') }, 调度提示.text) : null,
       ]);
 
+      // ══ 组装 ══
+      // 顺序：标题 → 说明 → 失联保险区（未接入提示 → 表单 → 操作 → 回执 → 坏值 → 读数）→ 调度授权区 → 页脚。
+      var 操作块 = h('div', { key: 'acts', className: 'dshmind-set__actions' }, [
+        h('button', {
+          key: 'save', type: 'button', className: 'dshmind-set__btn dshmind-set__btn--primary',
+          disabled: 表单禁用,
+          onClick: function () { 保存(); },
+        }, 提示.保存中 ? '保存中…' : '保存'),
+        h('button', {
+          key: 'read', type: 'button', className: 'dshmind-set__btn',
+          onClick: function () { 立即刷新(); },
+        }, '重新读取'),
+      ].filter(Boolean));
+
+      // 写失败 / 回读不一致：**明说没写进去**，绝不许显示成功。
+      var 提示块 = 提示.提示
+        ? h('div', {
+            key: 'toast',
+            className: 'dshmind-set__toast ' + (提示.提示调 === 'ok' ? 'dshmind-set__toast--ok' : 'dshmind-set__toast--warn'),
+          }, 提示.提示)
+        : null;
+
+      var 页脚块 = h('div', { key: 'foot', className: 'dshmind-set__foot' }, [
+        h('span', { key: 'c' }, '命令 ' + PRESENCE_COMMAND),
+        snap.设置文件 ? h('span', { key: 'f', className: 'dshmind-set__mono' }, '设置文件 ' + snap.设置文件) : null,
+        // 「关闭」是整页的动作，收在页脚右端 —— 原来它停在失联保险区的操作行里，
+        // 页面中段就出现一个"结束"钮，而它后面还有整个调度授权区。
+        close
+          ? h('button', { key: 'close', type: 'button', className: 'dshmind-set__btn', onClick: function () { close(); } }, '关闭')
+          : null,
+      ].filter(Boolean));
+
+      /** 失联保险区的渲染件汇总（纯装配，顺序即版面顺序）。 */
+      function 失联保险区() {
+        return [未接入块, 表单块, 操作块, 提示块, 坏值块, 读数块].filter(Boolean);
+      }
+
+      /** 一条待批准请求：完整请求正文 + 每一步真正要写什么的预览 + 决议按钮。 */
+      function 审批卡(项) {
+        var 可批 = 项.状态 === '待放行' || 项.状态 === '失败';
+        var 可撤 = 项.状态 === '已批准待重放' || 项.状态 === '占用未报告';
+        var 忙 = 审批快照.忙 === 项.请求id;
+        var 步骤串 = arr(项.步骤).map(function (步) {
+          var 目标 = stepTargetText(步);
+          return '第 ' + 步.序 + ' 步 · ' + line(步.动作, '?') + ' ' + 目标
+            + (line(步.说明, '') ? ' · ' + line(步.说明, '') : '')
+            + (步.预览 ? ' · ' + JSON.stringify(步.预览) : '');
+        }).join('\n');
+        return h('div', { key: 'iv-' + 项.请求id, className: 'dshmind-set__rows' }, [
+          h('div', { key: 'head', className: 'dshmind-set__hint' },
+            '状态「' + line(项.状态, '?') + '」 · 主体 ' + line(obj(项.原主体) && 项.原主体.id, '?')
+            + ' · 动作 ' + line(项.动作, '?') + ' · 目标 ' + stepTargetText({ 目标: 项.目标 })
+            + ' · 档位 ' + line(项.档位, '?')),
+          h('code', { key: 'id', className: 'dshmind-set__mono' }, '请求 ' + 项.请求id),
+          h('pre', { key: 'body', className: 'dshmind-set__mono' }, JSON.stringify(项.完整请求 || {}, null, 2)),
+          步骤串 ? h('pre', { key: 'steps', className: 'dshmind-set__mono' }, 步骤串) : null,
+          (可批 || 可撤) ? h('div', { key: 'act', className: 'dshmind-set__actions' }, [
+            可批 ? h('button', { key: 'ok', type: 'button', className: 'dshmind-set__btn dshmind-set__btn--primary', disabled: 忙, onClick: function () { 决定审批(项.请求id, '批准'); } }, 忙 ? '提交中…' : '批准') : null,
+            可批 ? h('button', { key: 'no', type: 'button', className: 'dshmind-set__btn', disabled: 忙, onClick: function () { 决定审批(项.请求id, '拒绝'); } }, '拒绝') : null,
+            可撤 ? h('button', { key: 'rev', type: 'button', className: 'dshmind-set__btn', disabled: 忙, onClick: function () { 决定审批(项.请求id, '撤销'); } }, '撤销') : null,
+          ].filter(Boolean)) : null,
+        ]);
+      }
+
+      /** 步骤/目标的统一展示：新对象不显示「/null」，也不假装有 id。 */
+      function stepTargetText(步) {
+        var 目标 = obj(步 && 步.目标) || {};
+        return line(目标.kind, '?') + (目标.新 === true ? '（新对象）' : '/' + line(目标.id, '?'));
+      }
+
+      var 待审块 = h('section', { key: 'approvals', 'data-dshmind': 'intervention-approvals', className: 'dshmind-set__section' }, [
+        h('h3', { key: 'h', className: 'dshmind-set__subtitle' }, '待批准（主权者逐请求放行）'),
+        h('p', { key: 'lede', className: 'dshmind-set__lede' }, '预审/审批档拦下的写停在这里：先看完整请求与每一步真正要写什么，再批准/拒绝。批准只解除介入度这一道门；硬拒/失联/复核只读照判。'),
+        h('p', { key: 'hint', className: 'dshmind-set__hint' }, '完整正文只在私有请求记录里（账本只留摘要与内容指纹）；页面上看到的就是主权者批准前应看的全部内容。'),
+        ...(arr(审批快照.清单).length
+          ? arr(审批快照.清单).map(function (项) { return 审批卡(项); })
+          : [h('div', { key: 'empty', className: 'dshmind-set__notice' }, 审批快照.phase === 'reading' ? '正在读取待批准…' : (审批快照.error ? '读取待批准失败：' + 审批快照.error : '当前没有待批准的写。'))]),
+        审批快照.提示 ? h('div', { key: 'tip', className: 'dshmind-set__notice' }, 审批快照.提示) : null,
+      ].filter(Boolean));
+
       return h('section', { className: 'dshmind-set__' }, [
         h('h2', { key: 'h', className: 'dshmind-set__title' }, '心智'),
         h('p', { key: 's', className: 'dshmind-set__lede' },
-          '失联限制与响应期限：写入本部署的私有设置，随时可关。'),
-
-        // 顺序：标题 → 说明 → 表单 → 操作。未接入提示紧凑地插在说明之后。
-        未接入块,
-
-        表单块,
-
-        h('div', { key: 'acts', className: 'dshmind-set__actions' }, [
-          h('button', {
-            key: 'save', type: 'button', className: 'dshmind-set__btn dshmind-set__btn--primary',
-            disabled: 提示.保存中 === true,
-            onClick: function () { 保存(); },
-          }, 提示.保存中 ? '保存中…' : '保存'),
-          h('button', {
-            key: 'read', type: 'button', className: 'dshmind-set__btn',
-            onClick: function () { 立即刷新(); },
-          }, '重新读取'),
-          close
-            ? h('button', { key: 'close', type: 'button', className: 'dshmind-set__btn', onClick: function () { close(); } }, '关闭')
-            : null,
-        ].filter(Boolean)),
-
-        // 写失败 / 回读不一致：**明说没写进去**，绝不许显示成功。
-        提示.提示
-          ? h('div', {
-              key: 'toast',
-              className: 'dshmind-set__toast ' + (提示.提示调 === 'ok' ? 'dshmind-set__toast--ok' : 'dshmind-set__toast--warn'),
-            }, 提示.提示)
-          : null,
-
-        坏值块,
-        读数块,
-
-        h('div', { key: 'foot', className: 'dshmind-set__foot' }, [
-          h('span', { key: 'c' }, '命令 ' + PRESENCE_COMMAND),
-          snap.设置文件 ? h('span', { key: 'f', className: 'dshmind-set__mono' }, '设置文件 ' + snap.设置文件) : null,
-        ].filter(Boolean)),
+          '失联限制与响应期限：写入本部署的私有设置，随时可关；生效值层序：私有 ＞ 出厂 ＞ 内置兜底。'),
+        失联保险区(),
         调度块,
+        未接入 ? null : 待审块,
+        页脚块,
       ].filter(Boolean));
     }
 

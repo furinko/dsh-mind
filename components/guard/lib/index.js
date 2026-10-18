@@ -62,9 +62,9 @@ export async function apply(ctx, config = {}) {
     // 开机自检：探针每次启动跑一遍并留快照。
     // 「回滚到全绿的最近一版」需要连续的历史，不跑就没有历史可回。
     void org.probes
-      .run({ 机制版本: 'boot', subject: { id: 'system', kind: '系统' } })
+      .run({ subject: { id: 'system', kind: '系统' } })
       .then((result) => {
-        logger.info?.(`[dsh-mind] 开机自检：${result.全绿 ? '四道探针全绿' : `见红 ${result.见红.length} 项（${result.见红.map((r) => r.探针).join('、')}）`}`);
+        logger.info?.(`[dsh-mind] 开机自检：${result.全绿 ? '四道探针全绿' : `见红 ${result.见红.length} 项（${result.见红.map((r) => r.探针).join('、')}）；${result.回滚?.原因 ?? '未提供定位读数'}`}；代码身份=${result.机制版本 ?? '不可确定'}`);
       })
       .catch((error) => logger.warn?.(`[dsh-mind] 开机自检失败：${error instanceof Error ? error.message : String(error)}`));
   }
@@ -106,7 +106,7 @@ function guardTool({ org }) {
       properties: {
         action: { type: 'string', enum: ACTIONS, description: '要执行的动作' },
         // 机制版本不接自报（2026-10-12 评审 P1-8）：快照是回滚目标的唯一来源，
-        // 自报标签 = 回滚目标投毒；版本恒由探针声明文件现算。
+        // 自报标签 = 回滚目标投毒；版本只取实际包代码身份。
         对象: { type: 'string', description: 'upgrade_compare 要比对的对象 id' },
         安全类: { type: 'boolean', description: 'upgrade_compare 是否按安全类强制替换' },
         id: { type: 'string', description: '挂起项 id（upgrade_resolve / upgrade_withdraw）' },
@@ -197,7 +197,7 @@ async function runGuardAction(org, args, subject) {
     case 'probe_run':
       return { 探针: await org.probes.run({ subject }) };
     case 'probe_health':
-      return { 健康: await org.probes.evaluateHealth(), 影响面: await org.probes.impactStatement({ 机制版本: 'current' }) };
+      return { 健康: await org.probes.evaluateHealth(), 影响面: await org.probes.impactStatement() };
     case 'probe_rollback':
       return { 回滚: await org.probes.autoRollback() };
     case 'upgrade_compare':

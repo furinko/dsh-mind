@@ -16,10 +16,36 @@
 import { appendLines, listFiles, readJsonl, serializeByKey, withLock } from './kernel/fsx.js';
 import { InvalidBody, Denied, Fault } from './kernel/errors.js';
 import { randomUUID } from 'node:crypto';
-import { 全员已交 } from './tasks.js';
+import { 线程等价键 } from './paths.js';
+import { 是只读旧会审 } from './tasks.js';
 
 /** 消息类型（§9 接口契约里 `类型` 的取值面）。 */
 export const MESSAGE_TYPES = ['派活', '交卷', '复核结论', '分歧', '广播', '表态', '提问', '答复', '系统'];
+
+/**
+ * 系统消息 → 机制名（v2 口述收敛 2026-10-18 条目8）。
+ *
+ * 为什么判在总线这一处、而不让调用方传机制名：机制名是**闸的标签**，让被放行方自己填
+ * 就等于让它自己选闸（模型面更容易——多一个入参就多一条自报通道）。
+ * 总线手里已有三件真实事实（发件人恒取主体 id、类型、保留字规则），判定只读它们：
+ *  - `类型='系统'`：`send()` 上方已硬性只许系统主体发，而系统类型的唯一生产者是
+ *    `council.round` 的换轮边界（`[debate-round]` 前缀，预算闸按它切轮）⇒ 轮边界；
+ *  - `类型='广播'` + 发件 `system`：唯一生产者是 `bus.unlock` 的齐卷解锁广播 ⇒ 会审解锁；
+ *  - 其余（含任何非系统主体）⇒ 不填，策略引擎对系统写按 fail-closed 拒。
+ *
+ * 刻意不解析正文前缀来认边界：内容可被伪造，而 `类型` + 发件是**机制写进去的**字段
+ * （发件尤其不许自报，见上方 send 的收口注释）。
+ *
+ * @param {string} 类型
+ * @param {string} 发件
+ * @returns {object} 策略判定上下文（只有系统消息才带 `机制动作`）
+ */
+function 机制上下文(类型, 发件) {
+  if (发件 !== 'system') return {};
+  if (类型 === '系统') return { 机制动作: '轮边界' };
+  if (类型 === '广播') return { 机制动作: '会审解锁' };
+  return {};
+}
 
 /**
  * `summary()` 每个线程默认给多少条最新消息（2026-10-12 主权者口径「默认收起、展开看全部」）。
@@ -48,7 +74,7 @@ export class MessageBus {
   /**
    * 投递一条消息（可能暂不投递、可能延后表态）。
    *
-   * @param {{ subject: object, 项目: string, 线程: string, 发件: string, 收件: string|string[], 类型: string, 内容: string, 暂不投递?: boolean, 延后?: boolean, 引用?: string, 锁内闸?: () => Promise<void> }} message
+   * @param {{ subject: object, 项目: string, 线程: string, 发件: string, 收件: string|string[], 类型: string, 内容: string, 暂不投递?: boolean, 延后?: boolean, 引用?: string, 会审?: object, 锁内闸?: () => Promise<void> }} message
    *   `锁内闸`（2026-10-14 审查 P2-11）：在线程写锁内、appendLines 之前跑的复检回调——
    *   「读-判-写」类判定（讨论预算闸）的权威一检。抛错即拒写。withLock 是文件锁不可
    *   重入，调用方不能自己先拿锁再调 send，闸只能以回调形式进来。
@@ -80,6 +106,26 @@ export class MessageBus {
         },
       );
     }
+    // v2 条目18 补修（2026-10-18）· 旧独立会审封写（**服务层**，不只动作层）：
+    // 线程命中一个 模式=独立会审 的历史任务节点 ⇒ 恒拒。旧会审的答案与讨论子态已退役为
+    // 只读历史；`bus_send` / `bus.send` 直写（以及已退役的解锁广播）都必须在这一层被拦住，
+    // 否则换一个调用点就绕过了动作层的闸。历史账本一字不动，fold 照旧可读。
+    if (this.tasks) {
+      const 键 = 线程等价键(message.线程);
+      const 旧节点 = (await this.tasks.list({ 项目: message.项目 })).find(
+        (n) => 是只读旧会审(n) && (n.id === message.线程 || 线程等价键(n.id) === 键),
+      );
+      if (旧节点) {
+        throw new Denied(
+          '旧独立会审 · 写入口已封闭（v2 条目18）',
+          `线程 ${message.线程} 属于历史独立会审节点 ${旧节点.id}：会审已退出任务图，旧节点的答案与讨论子态是**只读历史**，任何写入（含总线直写）都不再落线。`,
+          {
+            howToChange: '新会审走 debate_open / debate_answer / debate_say（council 服务，独立存档）；旧账只读，不改不迁移。',
+            detail: { 线程: message.线程, 节点: 旧节点.id, 模式: 旧节点.模式 ?? null },
+          },
+        );
+      }
+    }
 
     // R08（审查 2026-10-16）：消息 ID 必须 opaque 且唯一。修前 `objectId('消息', 线程/发件/正文前24字, at)`
     // 把发件人与正文前缀编进 id——盲评遮罩只换字段、id 原样外泄（审查实证：遮罩后 id 仍含
@@ -91,7 +137,10 @@ export class MessageBus {
       subject: message.subject,
       action: 'create',
       target: this.#写入目标(id, message.项目),
-      context: {},
+      // 会审真发言还会追加只增消息；把服务折出的会审事实传给同一策略，不给咨询实例通用总线写权。
+      // 模型 bus_send 不转发 会审/锁内闸；JSON 也不能伪造预算复检函数。
+      context: { ...机制上下文(类型, 发件), ...(message.会审 && typeof message.锁内闸 === 'function'
+        ? { 会审: message.会审, 会审线程: message.线程, 会审消息: true } : {}) },
     });
     const 状态 = message.暂不投递 === true ? '暂不投递' : '已投递';
     // F4（设计评审 2026-10-15）：在 withLock 外套 serializeByKey（同 key = 线程账本文件）。
@@ -330,71 +379,26 @@ export class MessageBus {
   }
 
   /**
-   * 会审解锁（§9 两处边界写死之一）。
-   * 任务图报「全员已交」才解锁并广播；没交齐就只能等——这条边界不允许被绕过。
-   * #9（设计评审 2026-10-15）：注入了任务图时还要求 节点.模式 === '独立会审'（与
-   * debate_open 同口径）——并行分担节点交齐不触发「会审解锁」广播。
+   * 会审解锁 —— **已退役（v2 口述收敛 2026-10-18 条目18 的补修）**。
    *
-   * @param {{ subject: object, 项目: string, 线程: string, 全员已交: boolean, 参与者?: string[], 内容?: string }} spec
-   * @returns {Promise<{ 解锁: boolean, 广播: string|null, 原因: string }>}
+   * 退役理由：会审退出任务图，成为与会话绑定的独立功能（`src/council.js` 的
+   * `unlock` / `debate_unlock` 动作），旧任务图「独立会审」节点只读留档。
+   * 保留这个方法名只为**响亮失败**：任何内部调用点若还接在这里，必须立刻知道
+   * 「这只手没有了」，而不是静默退回自报布尔再往旧线程落一条 system 广播。
+   * 历史账本一字不动，历史 fold 照旧可读。
+   *
+   * @param {{ 节点?: string, 线程?: string }} [spec]
+   * @returns {Promise<never>}
    */
-  async unlock(spec) {
-    // 齐卷判定从任务图重算（2026-10-13 审查 P2-4）：修前完全信调用方布尔 `全员已交`——
-    // 动作层已重算，但服务面任何新调用者接上即绕过。注入了 tasks 就必须给 节点 id 现算
-    // （全员已交() 是齐卷判据的唯一源，与遮罩/讨论开启同一把尺）；未注入 tasks 的独立用法
-    // 才退回自报布尔，并在原因里如实标注口径。
-    let 齐 = spec.全员已交 === true;
-    // 未注入 tasks 的独立用法：模式无从验起，口径如实标注（#9 的诚实边界——
-    // 动作面 bus_unlock 恒注入 tasks，真实部署不走这条兜底）。
-    let 口径 = '调用方自报（未注入任务图，无法重算；模式亦未验）';
-    if (this.tasks) {
-      if (!spec.节点) throw new InvalidBody('unlock 需要 节点（任务节点 id）：齐卷判定从任务图独立答案重算，不收自报布尔。', { missing: ['节点'] });
-      const node = await this.tasks.get(spec.节点, { 项目: spec.项目 });
-      if (!node) throw new InvalidBody(`没有这个任务节点：${spec.节点}（项目 ${spec.项目}）`);
-      // #9（设计评审 2026-10-15）· 模式闸：会审解锁只属独立会审（与 debate_open 同口径）。
-      // 修前只判 全员已交 不查模式 ⇒ 并行分担节点交齐也触发「会审解锁」广播——并行分担
-      // 没有盲评环节，「全员已交，现在可以亮出彼此的答案」对它是语义错配的系统消息
-      // （单人节点默认无模式的 P2-13 修后，这类节点同样不该吃到会审广播）。
-      if (node.模式 !== '独立会审') {
-        throw new Denied(
-          '会审解锁 · 只属独立会审（§10）',
-          `节点 ${spec.节点} 的模式是「${node.模式 ?? '未声明'}」：会审解锁广播（全员已交后亮出彼此答案）只属独立会审；并行分担/单人节点没有盲评环节，交齐即复核，不需要「解锁」。`,
-          {
-            howToChange: '独立会审节点交齐后自动满足本判据；并行分担节点直接走复核（review），不要调 bus_unlock。',
-            detail: { 节点: spec.节点, 模式: node.模式 ?? null },
-          },
-        );
-      }
-      齐 = 全员已交(node);
-      口径 = `任务图重算（状态=${node.状态}，答案 ${(node.独立答案 ?? []).length}/${(node.负责人 ?? []).length}）`;
-    }
-    if (!齐) {
-      return { 解锁: false, 广播: null, 原因: `任务图未报「全员已交」（${口径}），会审保持锁定（提交后解锁）。` };
-    }
-    // 幂等下沉服务层（2026-10-14 审查 P3）：修前幂等只在动作层（actions.js bus_unlock），
-    // 任何直调服务层的新调用者都会重复广播。判据与动作层同源：线程里已有 system 的「广播」。
-    const 既有 = await this.readRaw({ 项目: spec.项目, 线程: spec.线程 });
-    if ((既有 ?? []).some((m) => m.类型 === '广播' && m.发件 === 'system')) {
-      return { 解锁: true, 广播: null, 原因: '该线程已解锁过（幂等）：解锁广播一个节点只发一次，不重复落线。' };
-    }
-    const broadcast = await this.send({
-      subject: { id: 'system', kind: '系统' },
-      项目: spec.项目,
-      线程: spec.线程,
-      发件: 'system',
-      收件: spec.参与者 ?? [],
-      类型: '广播',
-      内容: spec.内容 ?? '全员已交，会审解锁：现在可以亮出彼此的答案。',
-    });
-    await this.audit.append({
-      动作: '状态变更',
-      主体: spec.subject,
-      对象: { id: spec.线程, kind: '线程' },
-      依据: '§9 边界写死：会审解锁 = 任务图报「全员已交」',
-      结果: '解锁并广播',
-      项目: spec.项目,
-    });
-    return { 解锁: true, 广播: broadcast.id, 原因: '全员已交' };
+  async unlock(spec = {}) {
+    throw new Denied(
+      '会审解锁 · bus_unlock 已退役（v2 条目18）',
+      '会审已退出任务图：「全员已交后亮出彼此答案」只属于会话绑定的新会审（debate_unlock / src/council.js）。旧独立会审节点是**只读历史**，本入口对任何节点恒拒，不落任何广播。',
+      {
+        howToChange: '新会审用 debate_unlock（id=会审 id）；旧账只读，不改不迁移。',
+        detail: { 节点: spec?.节点 ?? null, 线程: spec?.线程 ?? null },
+      },
+    );
   }
 
   /**

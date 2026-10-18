@@ -16,6 +16,9 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { InvalidBody } from './kernel/errors.js';
 
+/** 会审讨论的真实线程前缀；服务落线与策略边界共用，避免同义键漂移。 */
+export const COUNCIL_THREAD_PREFIX = '会审-';
+
 /**
  * 路径片段校验：项目键 / 线程 / 对象 id / 岗位 这类**入口可控**的字符串，
  * 进 `join` 之前必须过这一关——`project="../../x"` 一行就能让账本与审计追加落到私有区外面。
@@ -103,6 +106,7 @@ export const DIR = {
   升级: '升级',
   版本历史: '版本历史',
   身份档案: '身份档案',
+  卡快照: '卡快照',
 };
 
 /** 记忆四类（§7「记忆服务的四类」）。 */
@@ -118,7 +122,10 @@ export const RULE_FILES = [
 ];
 
 /** 出厂侧的基础岗位卡（§14.1）。 */
-export const ROLE_CARD_FILES = ['_模板.md', '复核员.md', '插件工程.md', '文档整理.md', '记忆整理.md'];
+// v2（口述收敛 2026-10-18 条目9/10）：Lead 也是一张普通岗位卡（岗位唯一、多会话实例），
+// 登记进清单才会被 preflight / 安装核对逐项校验——清单外的卡「存在但不被校验」，
+// 一张坏卡就能带着病让引擎跑起来（§3.6 装不齐就是 fail-closed）。
+export const ROLE_CARD_FILES = ['_模板.md', 'Lead.md', '复核员.md', '插件工程.md', '文档整理.md', '记忆整理.md'];
 
 /**
  * 出厂默认值（§14.1 `defaults/`）：介入度 / 响应期限 / 工具总范围 / 安全类探针。
@@ -216,6 +223,16 @@ export class Layout {
     return this.private(DIR.基础设施, DIR.任务图, assertPathSegment(project, '项目'), '.tasks.lock');
   }
 
+  /** 会审存档（v2 条目18）：`任务图/<项目>/councils.jsonl`——与任务图同目录的独立事件流。 */
+  councilLog(project) {
+    return this.private(DIR.基础设施, DIR.任务图, assertPathSegment(project, '项目'), 'councils.jsonl');
+  }
+
+  /** 会审账本的锁。 */
+  councilLock(project) {
+    return this.private(DIR.基础设施, DIR.任务图, assertPathSegment(project, '项目'), '.councils.lock');
+  }
+
   /** 消息总线目录：`消息总线/<项目>/`。 */
   busDir(project) {
     return this.private(DIR.基础设施, DIR.消息总线, assertPathSegment(project, '项目'));
@@ -268,6 +285,26 @@ export class Layout {
 
   identityLock() {
     return this.private(DIR.身份档案, '.identity.lock');
+  }
+
+  /**
+   * 岗位卡的**内容寻址快照**（v2 口述收敛 2026-10-18 条目10）。
+   *
+   * 为什么要有它：条目10 要求实例「启动钉 cardVersion」，且理由之一就是**规则不半途变脸**。
+   * 只在实例上存一个摘要，只能事后对账，钉不住任何东西——卡文件一改，运行中实例的规则面
+   * 照样跟着变。快照把「启动那一刻的生效正文」按内容哈希落成不可变文件：
+   * 同摘要必同内容 ⇒ 写一次即可，永不覆盖；实例只认自己那份，改卡只产生**新**摘要，
+   * 不会静默改变已出生实例的判定面。
+   *
+   * 摘要即文件名 ⇒ 内容寻址：不需要额外的版本号映射表（那种表一定会漂）。
+   * 存的是**生效文档**（私有同名段覆盖出厂后的结果），不是两区原文——否则「哪份生效」
+   * 又要在这里再判一次，与 `get()` 的口径分叉。
+   *
+   * @param {string} 摘要 sha256 hex（`digest(声明版本 + 生效正文)`）
+   * @returns {string}
+   */
+  cardSnapshot(摘要) {
+    return this.private(DIR.身份档案, DIR.卡快照, `${assertPathSegment(摘要, '卡版本摘要')}.json`);
   }
 
   /** 部署偏好（私有区的覆盖层）。 */

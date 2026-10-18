@@ -264,8 +264,14 @@ export class AuditLog {
 
   /** 锚文件出现的月份（R14：孤立锚＝锚在而日志不在——从日志枚举里看不见的那部分）。 */
   async #anchorMonths() {
-    const files = await listFiles(this.layout.auditDir(), { recursive: false, filter: (n) => /^audit-\d{4}-\d{2}\.anchor\.json$/.test(n) || /\.anchor\.json$/.test(n) });
-    return [...new Set(files.map((f) => f.replace(/^audit-/, '').replace(/\.anchor\.json$/, '')))].filter((m) => /^\d{4}-\d{2}$/.test(m));
+    // P1-08（全面审查 2026-10-17）：修前枚举 `audit-YYYY-MM.anchor.json`，而
+    // Layout.auditAnchor 实际写 `.anchor-YYYY-MM.json`（前导点、词序不同）——锚月集恒空，
+    // 「只有锚、没有日志」的月份在 verify 里假绿。现行命名 + 旧命名都认；写入仍只有
+    // Layout.auditAnchor 一处，避免再出现第三个名字。
+    const 现行 = /^\.anchor-(\d{4}-\d{2})\.json$/;
+    const 旧 = /^audit-(\d{4}-\d{2})\.anchor\.json$/;
+    const files = await listFiles(this.layout.auditDir(), { recursive: false, filter: (n) => 现行.test(n) || 旧.test(n) });
+    return [...new Set(files.map((f) => (现行.exec(f) ?? 旧.exec(f))?.[1]).filter(Boolean))];
   }
 
   /**
@@ -669,7 +675,7 @@ export class AuditLog {
 /**
  * 主体规范化：审计记录的 `主体` 必须是一等对象，不许退化成裸字符串。
  * @param {string|object} actor
- * @returns {{ id: string, kind: string, roleId?: string, generation?: number }}
+ * @returns {{ id: string, kind: string, roleId?: string, generation?: number, 卡版本?: string }}
  */
 function normalizeActor(actor) {
   if (actor && typeof actor === 'object') {
@@ -681,6 +687,11 @@ function normalizeActor(actor) {
       kind: String(actor.kind ?? '未知'),
       ...(actor.roleId ? { roleId: String(actor.roleId) } : {}),
       ...(actor.generation !== undefined ? { generation: Number(actor.generation) } : {}),
+      // v2 口述收敛 2026-10-18 条目10：实例钉住的**卡版本摘要**随主体进账。
+      // 为什么在审计层统一补：账要能回答「它当时凭的是哪一版岗位卡」，而这一位属于
+      // **主体形状**、不属于任何单个动作——每个 service 各记一遍必然漏。
+      // 只有调用方在主体上带了它才落（runAction 单点补，见 src/subject.js 的 钉版主体）。
+      ...(actor.卡版本 ? { 卡版本: String(actor.卡版本) } : {}),
     };
   }
   return { id: String(actor ?? 'unknown'), kind: '未知' };

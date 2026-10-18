@@ -9,6 +9,7 @@
  */
 import { ensureDirPath, exists, listDirs, listFiles } from './kernel/fsx.js';
 import { dirname } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { Clock } from './kernel/time.js';
 import { defaultLayout, DIR } from './paths.js';
 import { AuditLog, 审计尾默认条数 } from './audit.js';
@@ -22,7 +23,11 @@ import { RoleRegistry } from './registry.js';
 import { UpgradeManager } from './upgrade.js';
 import { ProbeRunner } from './probes.js';
 import { ReviewProtocol } from './review.js';
-import { DebateService } from './debate.js';
+import { CouncilService } from './council.js';
+// v2 条目14/17（2026-10-18 补修F）：介入度待决的请求/决议/一次性放行 —— 域服务单源，
+// 动作层、人侧路由、工作台三个消费者只读它，不各写一套状态机。
+import { InterventionService } from './intervention.js';
+import { Denied } from './kernel/errors.js';
 import { projectWorkbench, sliceForViewer } from './workbench.js';
 
 /** 默认项目键。名字即目录名（§14.4-5）。 */
@@ -32,7 +37,7 @@ export class Org {
   /**
    * @param {{ layout: import('./paths.js').Layout, clock: Clock, audit: AuditLog, policy: PolicyEngine, store: ObjectStore,
    *           tasks: TaskGraph, bus: MessageBus, memory: MemoryService, capability: CapabilityLibrary, registry: RoleRegistry,
-   *           upgrade: UpgradeManager, probes: ProbeRunner, review: ReviewProtocol,
+   *           upgrade: UpgradeManager, probes: ProbeRunner, review: ReviewProtocol, intervention: InterventionService,
    *           project: string, logger?: object }} parts
    */
   constructor(parts) {
@@ -70,9 +75,33 @@ export class Org {
     // registry 注入 review（2026-10-14 · 池化排班）：提名路由（池内派单/池外待决）要按
     // 「在册在岗复核员」分池——身份档案是唯一事实源，与 debate 候选池同一条接线纪律。
     const review = new ReviewProtocol({ layout, policy, audit, clock, tasks, bus, registry, random: spec.random });
-    // registry 也注入 debate（⑮ 强制反对者·2026-10-10）：开启讨论时要按「身份档案成员」
-    // 算候选池，而「在岗/封存」的唯一事实源就是角色注册表——不许在 debate 里再读一遍身份档案。
-    const debate = new DebateService({ layout, policy, audit, clock, tasks, bus, review, registry });
+    // v2（条目18/19）：会审退出任务图，换成会话绑定的 CouncilService——自己的事件流
+    // （councils.jsonl）、自己的状态机；bus 只承载讨论消息；registry 核参与者在册在岗。
+    const council = new CouncilService({ layout, policy, audit, clock, bus, registry });
+    // 介入度待决（v2 条目14/17/20/24）：只消费策略引擎与人侧入口的事实，自己不改规则。
+    // 卡版本/目标代用于「旧批准失效」判定——读不到就返回 null（不猜通过，重放侧另有一道）。
+    const intervention = new InterventionService({
+      layout,
+      clock,
+      audit,
+      policy,
+      registry,
+      卡版本Of: async (id) => (await registry.identity()).members?.[String(id ?? '')]?.卡版本?.摘要 ?? null,
+      目标代Of: async ({ id, kind, 项目 }) => {
+        const 目标 = String(id ?? '');
+        if (!目标) return null;
+        if (kind === '任务') return (await tasks.get(目标, { 项目 }))?.代 ?? null;
+        // 文档类对象（岗位卡/能力/知识）的「代」= 文本版本号：改过就是新目标。
+        if (['身份', '能力', '知识'].includes(kind)) {
+          try {
+            return (await store.read(String(kind), 目标, {}))?.meta?.version ?? null;
+          } catch {
+            return null;
+          }
+        }
+        return null;
+      },
+    });
 
     const org = new Org({
       layout,
@@ -88,19 +117,29 @@ export class Org {
       upgrade,
       probes,
       review,
-      debate,
+      council,
+      intervention,
       project: spec.project ?? DEFAULT_PROJECT,
       logger: spec.logger ?? console,
     });
-    await org.bootstrap();
+    await org.bootstrap({ 代次: spec.代次 });
     return org;
   }
 
   /**
    * 引导私有区。幂等：已有的东西一律不动。
-   * @returns {Promise<{已引导: boolean, 新建目录: string[], 上基线: string|null}>}
+   *
+   * v2（口述收敛 2026-10-18 条目10/12）新增两步，顺序有讲究：
+   *  ① `recordBoot` 先记本进程代次——它是判孤儿的事实源，必须在任何实例判定之前落定；
+   *  ② `orphanSweep` 只按**可靠进程代次**判死（同代=活、异代查 pid、无代次=未判定），
+   *     判得死的标封存；**绝不碰任务图**（未完成交卷的节点不会被回收动作推进成成功态）。
+   * 两步都只在每个进程第一次装配时发生一次（`shareOrg` 是每进程单例）——
+   * 「某 Lead 首次动作就把所有其他会话实例封存」这种形态在结构上不可能出现。
+   *
+   * @param {{ 代次?: {代: string, pid: number, 于: string} }} [spec]
+   * @returns {Promise<{已引导: boolean, 新建目录: string[], 上基线: string|null, 孤儿回收?: object}>}
    */
-  async bootstrap() {
+  async bootstrap(spec = {}) {
     const dirs = [
       dirname(this.layout.rulePath('宪章', '私有')),
       dirname(this.layout.rulePath('协作协议', '私有')),
@@ -131,14 +170,22 @@ export class Org {
     if (!(await exists(this.layout.identityFile()))) {
       await this.registry.markInteraction({ 来源: '部署引导' });
     }
-    await this.registry.sync();
+    // v2 条目12：进程代次 + 孤儿回收（判据与「不猜死」的口径住在 registry.orphanSweep）。
+    const 代次 = spec.代次 ?? { 代: `anon-${randomUUID()}`, pid: process.pid, 于: this.clock.iso() };
+    await this.registry.recordBoot(代次);
+    const 孤儿回收 = await this.registry.orphanSweep({ 代次 });
+    // 索引的生命周期投影要用「实例最近活动于」：口径的**唯一实现**是下面的 计实例活动
+    // （与工作台同一份），由装配点算好交给 registry，不在注册表里再写一遍。
+    const identity = await this.registry.identity();
+    const 节点 = (await this.tasks.snapshot({ 项目: this.project })).节点;
+    await this.registry.sync({ 活动: await 计实例活动(this.audit, identity, 节点) });
 
     let 上基线 = null;
     if (!(await exists(this.layout.baselineFile()))) {
       上基线 = (await this.upgrade.stamp({ 版本: '1.0.0' })).版本;
     }
 
-    this.boot = { 已引导: true, 新建目录, 上基线 };
+    this.boot = { 已引导: true, 新建目录, 上基线, 孤儿回收, 代次 };
     // 引导会新增身份档案，而策略引擎在引导前就已加载过：不重载的话，
     // 引擎眼里的「最后一次交互」仍是 null，于是失联会从第一天起冻住自治档。
     await this.policy.reload();
@@ -153,27 +200,42 @@ export class Org {
    */
   async workbench(spec = {}) {
     const 项目 = spec.项目 ?? this.project;
+    const identity = await this.registry.identity();
+    const 参与实例 = spec.读者?.kind === '成员' ? identity.members?.[spec.读者.id] : null;
+    const 咨询 = 参与实例?.会审绑定;
+    if (咨询 !== undefined && 咨询 !== null) {
+      if (参与实例.status !== '在岗' || typeof 咨询 !== 'object' || 咨询.项目 !== 项目 || !咨询.会审) {
+        throw new Denied('会审参与实例 · 工作台读域不可用', '咨询实例仅能查看自己绑定项目/会审；未知绑定或封存实例不得扩大读域。');
+      }
+      // 答案仍走 Council 唯一遮罩；咨询读面不夹带任务、审计、其他会审和跨项目目录。
+      const 存档 = await this.council.list({ 项目, 读者: { ...spec.读者, roleId: 参与实例.岗位 } });
+      return projectWorkbench({ 项目, 会审存档: 存档.filter((x) => x.id === 咨询.会审), 生成于: this.clock.iso() });
+    }
     const snapshot = await this.tasks.snapshot({ 项目 });
     const views = await this.#views(项目, spec.审计条数 ?? 审计尾默认条数);
     const 健康 = await this.probes.evaluateHealth();
     const 最近一次 = await this.probes.latest();
-    // 会审讨论段（W2）：有「讨论」子状态的节点，把它线程（=节点id）的当前消息
-    // 喂给纯投影——投影自己算 本轮消息数/可收敛提示，本层只取数（readRaw：内部读，
-    // 过闸与留痕属于编排动作，不属于投影取数）。
-    const 讨论消息 = {};
-    for (const n of snapshot.节点) {
-      if (n.讨论) 讨论消息[n.id] = await this.bus.readRaw({ 项目, 线程: n.id });
-    }
     // ⑦（2026-10-11）：消息总线投影——全部线程的规模 + 最新消息 + 未投递数。
-    // summary 内部走 readRaw（免审计，设计债③）：与 讨论消息 同一条投影取数口径。
+    // summary 内部走 readRaw（免审计，设计债③）：投影取数不过闸不入账。
     const 线程汇总 = await this.bus.summary({ 项目 });
-    // 判活读数（派活闭环 2026-10-15）：身份档案只读一次，喂 实例计数 / 岗位闲置 / 实例活动 三块。
-    const identity = await this.registry.identity();
+    // 身份档案沿用入口已读取的同一份，三块规模读数不另采一代。
+    // ㉔读面收口（设计债 2026-10-17）：会话派生成员不带 roleId——先解析读者再取会审
+    // 存档，盲评遮罩（council.list 按读者遮）才有正确口径。
+    let 读者 = spec.读者;
+    if (读者?.kind === '成员' && !读者.roleId) {
+      const member = identity?.members?.[读者.id];
+      if (member?.status === '在岗' && typeof member.岗位 === 'string' && member.岗位) {
+        读者 = { ...读者, roleId: member.岗位 };
+      }
+    }
+    // v2（条目18）：会审页数据源 = 会审自己的存档账本（旧任务图讨论段原地只读不迁移）。
+    const 会审存档 = await this.council.list({ 项目, 读者 });
     const view = projectWorkbench({
       项目,
       节点: snapshot.节点,
       审计尾: views.审计尾,
       升级挂起: views.升级挂起,
+      介入挂起: views.介入挂起,
       // 四盏灯取最近一次真实运行的快照；没有跑过就老实显示「未跑过」。
       // 不现场重跑：否则它就不是「从已有记录重算的投影」了。
       探针: { ...健康, 结果: 最近一次?.结果 ?? [], 于: 最近一次?.于 ?? null, 机制版本: 最近一次?.机制版本 ?? null },
@@ -181,7 +243,7 @@ export class Org {
       // 让「面板要读的那个键」在输入里就存在（只靠投影那一侧的兜底太隐蔽，见 workbench.js 的注释）。
       策略: { ...this.policy.describe(), 错误: this.policy.state.error, 介入度: this.policy.intervention(), 失联: this.policy.presence() },
       记忆: await this.memory.activity({ 项目 }),
-      讨论消息,
+      会审存档,
       线程: 线程汇总,
       // 项目清单（2026-10-11，主权者指令「修」）：面板的 `?project=` 只有宿主能定，
       // 而客户端的 fetch 不带项目键 ⇒ 退回默认项目；组织全部活账在别的项目下时，
@@ -205,18 +267,7 @@ export class Org {
       实例活动: await 计实例活动(this.audit, identity, snapshot.节点),
       生成于: this.clock.iso(),
     });
-    // ㉔读面收口（设计债 2026-10-17）：会话派生成员不带 roleId（㉑ A 修：岗位只落在档案），
-    // 而 sliceForViewer 按 id/roleId 字面比对 ⇒ 按岗位名合法派发（派发闸② · scopeOf②缺口4）
-    // 的成员「能写不能看」。写面与读面同一口径：在册且在岗 ⇒ 档案岗位（同一份 identity
-    // 读数，不新增 IO）。解析只喂**读者副本**，主体链对账（actions.js）与响应的 主体 字段
-    // 一律不受影响；复核员岗成员在动作入口已被解析成复核者主体（R02），到不了这一支。
-    let 读者 = spec.读者;
-    if (读者?.kind === '成员' && !读者.roleId) {
-      const member = identity?.members?.[读者.id];
-      if (member?.status === '在岗' && typeof member.岗位 === 'string' && member.岗位) {
-        读者 = { ...读者, roleId: member.岗位 };
-      }
-    }
+    // （读者已在上面解析过——会审盲评遮罩与切片共用同一口径。）
     return 读者 ? sliceForViewer(view, 读者) : view;
   }
 
@@ -298,9 +349,15 @@ export class Org {
   /** @param {string} 项目 @param {number} 审计条数 */
   async #views(项目, 审计条数) {
     const 升级挂起 = (await this.upgrade.pending()).filter((p) => !p.已裁决 && !p.已撤回);
+    const 全账 = await this.audit.read({});
+    // 介入待决（v2 口述收敛 2026-10-18 条目14/17）：状态机在域服务里单源（请求/决议/占用/
+    // 完成/失败 + 档位/卡版本/目标代失效），这里只取当前项目的那一片——不再从「策略拒绝」
+    // 行去重出一个恒报「待放行」的影子清单。
+    const 介入挂起 = await this.intervention.投影({ 项目 });
     return {
-      审计尾: (await this.audit.read({})).slice(-审计条数),
+      审计尾: 全账.slice(-审计条数),
       升级挂起,
+      介入挂起,
     };
   }
 
@@ -369,8 +426,9 @@ export class Org {
 /**
  * 把 DSH 世界的身份映射成组织世界的主体。
  *
- * 约定（可被宿主覆盖）：根会话的执行者是 Lead；带岗位标记的子会话是成员；
- * 复核员岗位映射成复核者。**未知一律不给「系统」这种万能身份** ——
+ * 约定（可被宿主覆盖）：根会话的执行者是 Lead；带岗位标记的子会话是成员
+ * （复核员岗也是成员主体——v2 口述收敛 2026-10-18：复核者退出主体清单，
+ * 其只读边界由策略引擎按 roleId=复核员 判）。**未知一律不给「系统」这种万能身份** ——
  * §12.2 要求身份不明时判定有确定答案，而答案是"最严"。
  *
  * @param {{ 岗位?: string, 实例?: string, 根会话?: boolean }} spec
@@ -378,9 +436,8 @@ export class Org {
  */
 export function subjectFor(spec) {
   const 实例 = spec.实例 ?? spec.岗位 ?? 'unknown';
-  // 岗位先于根会话标记：带岗位的会话就是该岗位的成员/复核者，
+  // 岗位先于根会话标记：带岗位的会话就是该岗位的成员，
   // 不能因为「宿主把根会话标记也传了」就被回填成 Lead（B3：成员 kind 构造不出来）。
-  if (spec.岗位 === '复核员') return { id: 实例, kind: '复核者', roleId: '复核员' };
   if (spec.岗位 === 'Lead') return { id: 实例 === 'unknown' ? 'lead' : 实例, kind: 'Lead', roleId: 'Lead' };
   if (spec.岗位) return { id: 实例, kind: '成员', roleId: spec.岗位 };
   if (spec.根会话 === true) return { id: 实例 === 'unknown' ? 'lead' : 实例, kind: 'Lead', roleId: 'Lead' };

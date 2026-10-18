@@ -8,21 +8,23 @@
  * 不能改结论」，所以 `recordDisagreement()` 只会追加一条 Lead 的意见，
  * 而复核结论本身是只增的。
  */
-import { Denied, Fault, InvalidBody } from './kernel/errors.js';
+import { Denied, InvalidBody } from './kernel/errors.js';
 import { 全员已交 } from './tasks.js';
 
 /** 复核三态（§8）。 */
 export const VERDICTS = ['过', '不过', '未验'];
 
-/** 一岗多人的两种模式（§10 表）。 */
-export const MULTI_MODES = ['并行分担', '独立会审'];
+// （v2 · 2026-10-18 条目18/19：MULTI_MODES、pickDissenter/#usedDissenters、declareMode
+//  随「独立会审退出任务图 + 强制反对者砍 + 模式字段删」一并移除；盲评/零分歧的
+//  纯函数（盲标分配 / judgeZeroDivergence）保留，由 council.js 复用。）
 
 export class ReviewProtocol {
   /**
-   * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock, tasks?: object, bus?: object, registry?: object, random?: () => number }} spec
-   *   tasks / bus / registry 由依赖注入：本协议只编排，不自己实现任务图、总线与注册表。
-   *   `registry`（2026-10-14 · 池化排班）用于读「在册在岗复核员」池——与 debate 的
-   *   候选池同源（身份档案是唯一事实源），不在这里再读一遍文件。
+   * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock, tasks?: object, bus?: object, random?: () => number }} spec
+   *   tasks / bus 由依赖注入：本协议只编排，不自己实现任务图与总线。
+   *   （v2 · 2026-10-18：复核者降级为普通岗位卡后，提名/池/轮派与任命机制整体移除，
+   *   registry 注入随之撤掉——复核员由 Lead 按任务 member_spawn 手动起实例，
+   *   独立性由 tasks.review 的冲突排除硬规则承担。）
    */
   constructor(spec) {
     this.layout = spec.layout;
@@ -31,110 +33,7 @@ export class ReviewProtocol {
     this.clock = spec.clock;
     this.tasks = spec.tasks;
     this.bus = spec.bus;
-    this.registry = spec.registry ?? null;
-    this.random = spec.random ?? Math.random;
-  }
-
-  /**
-   * 提名/派单复核者（G1 · 交接件 2026-10-14；2026-10-14 晚 · 主权者批准池化排班扩成路由）。
-   *
-   * 修前形状（本方法的旧实现）：只往审计链落一条「已提名」——不进任务图、不产生待决项，
-   * 没有状态机，且从未接进动作面（lib/actions.js 里没有入口），等于不存在；Lead 实际
-   * 只能发一条总线消息（本机实测 seq 478 那条提名连收件人都是空的）。
-   *
-   * 现在是**路由器**（同一件事一个入口，两个出口）：
-   *  - **池内**（候选＝在册在岗复核员）⇒ tasks.assignReview：派单不是任命，不进待决；
-   *  - **池外**（其他候选）⇒ tasks.nominateReview：新任命，挂待决等主权者；
-   *  - **缺省候选** ⇒ 从池内**轮派**：账上活动最旧的优先（无活动视为最旧——正是
-   *    最该被用起来的），排除本节点交卷人（§3.4 由任务图再守一道）。
-   *    轮派判据与 registry_list 的活动读数同一条取数口径（审计链现算，不新增存储）。
-   *
-   * @param {{ subject: object, 节点: string, 实例?: string, 理由?: string, 项目: string }} spec
-   */
-  async nominate(spec) {
-    if (!this.tasks) {
-      throw new Fault('NOMINATE_NO_TASKS', '提名要进任务图，但装配时没把任务图接进复核协议（org.js 的接线问题，不是调用问题）。');
-    }
-    if (!spec.节点) throw new InvalidBody('提名需要「节点」（被提请复核的任务节点 id）：提名落在被复核的节点上，不是凭空登记一个人。', { missing: ['节点'] });
-    const 池 = await this.#在岗复核员();
-    let 候选 = String(spec.实例 ?? '').trim();
-    if (!候选) {
-      候选 = await this.#轮派(池, spec);
-    }
-    if (池.includes(候选)) {
-      return this.tasks.assignReview(spec.节点, { subject: spec.subject, 项目: spec.项目, 候选, 原因: spec.理由 ?? '' });
-    }
-    return this.tasks.nominateReview(spec.节点, { subject: spec.subject, 项目: spec.项目, 候选, 原因: spec.理由 ?? '' });
-  }
-
-  /** 在册在岗复核员（身份档案唯一事实源；registry 未注入 ⇒ 空池）。 @returns {Promise<string[]>} */
-  async #在岗复核员() {
-    if (!this.registry?.identity) return [];
-    const members = (await this.registry.identity()).members ?? {};
-    return Object.keys(members).filter((id) => id !== 'undefined' && members[id]?.岗位 === '复核员' && members[id]?.status === '在岗');
-  }
-
-  /**
-   * 轮派：账上活动最旧的在岗复核员（活动读数与 registry_list 同口径）。
-   * 无活动的排最前（在册却从未/最久没动 ⇒ 最该轮到；也让「从未活动」成为可观察的排班信号）。
-   * 排除本节点交卷人（§3.4——被排到也得回避，换下一位）。
-   * 池空或全员需回避 ⇒ 响亮拒（宁缺毋滥：派单不许变成自审的通道）。
-   * @param {string[]} 池
-   * @param {{ 节点: string, 项目: string }} spec
-   * @returns {Promise<string>}
-   */
-  async #轮派(池, spec) {
-    if (池.length === 0) {
-      throw new InvalidBody('池内没有在册在岗的复核员可派：先由主权者任命（registry_assign 带授权引用），再派单。', { missing: ['候选'] });
-    }
-    const node = await this.tasks.get(spec.节点, { 项目: spec.项目 });
-    const 交卷人 = new Set((node?.独立答案 ?? []).map((a) => String(a.成员)));
-    /** @type {Map<string, {最近活动于: string|null, 活动条数: number}>} */
-    const 活动 = new Map(池.map((id) => [id, { 最近活动于: null, 活动条数: 0 }]));
-    for (const row of await this.audit.read({})) {
-      const 桶 = 活动.get(String(row.主体?.id ?? '').trim());
-      if (!桶) continue;
-      桶.活动条数 += 1;
-      if (String(row.时间) > String(桶.最近活动于 ?? '')) 桶.最近活动于 = String(row.时间);
-    }
-    const 可派 = 池
-      .filter((id) => !交卷人.has(id))
-      .sort((a, b) => String(活动.get(a).最近活动于 ?? '').localeCompare(String(活动.get(b).最近活动于 ?? '')) || 活动.get(a).活动条数 - 活动.get(b).活动条数 || a.localeCompare(b));
-    if (可派.length === 0) {
-      throw new Denied('任务图 · 池内复核员全数回避（§3.4 提审分离）', `节点 ${spec.节点} 的交卷人覆盖了池内全部在岗复核员：派单不许变成自审的通道。`, {
-        howToChange: '由主权者任命新的复核员（registry_assign 带授权引用），或对本节点走豁免（review_exempt 带授权引用）。',
-      });
-    }
-    return 可派[0];
-  }
-
-  /**
-   * 任命复核者。只有主权者能任命——**被制衡者不得单独任命制衡者**（§2）。
-   *
-   * 任命的持久化属于角色注册表（身份档案），本协议只负责判定与留痕；
-   * 这样「谁能改复核者卡」与「谁在岗」不会出现两个事实源。
-   *
-   * @param {{ subject: object, 实例: string, 项目?: string }} spec
-   */
-  async appoint(spec) {
-    // proposerId = 被任命的实例（2026-10-14 审查 P1-9）：approve 的宪章不变式要求提案人
-    // 可知，修前 context 缺 proposerId ⇒ 任命必然被「提案人必须可知」恒拒（登记的 API
-    // 实际不可用）。任命里受益者就是「提案人」——自己任命自己 = 提案者自批，照拒。
-    await this.policy.check({
-      subject: spec.subject,
-      action: 'approve',
-      target: { id: spec.实例, kind: '身份', authority: '法律', zone: '私有', domain: '个体', project: spec.项目 ?? null },
-      context: { 任命复核者: true, proposerId: spec.实例 },
-    });
-    await this.audit.append({
-      动作: '状态变更',
-      主体: spec.subject,
-      对象: { id: spec.实例, kind: '复核者' },
-      依据: '§2 复核者卡的 身份+权限+判据 段属法律，由主权者改',
-      结果: '已任命',
-      项目: spec.项目 ?? null,
-    });
-    return { 实例: spec.实例, 状态: '已任命', 依据: '主权者确认' };
+    // random 曾仅供 pickDissenter（强制反对者）；v2 条目19 砍掉后这里不再留随机源。
   }
 
   /**
@@ -217,82 +116,6 @@ export class ReviewProtocol {
       详情: { 理由: spec.理由 },
     });
     return { 节点: spec.节点, 已记录: true, 结论未改动: true, 理由: spec.理由 };
-  }
-
-  /**
-   * 强制反对者：系统随机指定一名**未参与**成员，且**不重复**（§10）。
-   *
-   * 「不重复」的依据是审计日志里过去指定的记录——不引入第二个存储。
-   *
-   * @param {{ 项目: string, 节点?: string, 参与者: string[], 候选: string[] }} spec
-   * @returns {Promise<{ 反对者: string, 依据: string, 已用过: string[] }>}
-   */
-  /**
-   * @param {{ 项目: string, 节点?: string, 参与者: string[], 候选: string[], 只选不记?: boolean }} spec
-   *   `只选不记`（2026-10-13 审查 P1-12）：编排层（debate.open）先把「选谁」拿到手，
-   *   等任务图事件 debate_opened 成功落线后再补记审计——修前先记后开，开启失败会把
-   *   该候选永久烧掉（#usedDissenters 读的是审计，事件没落、名字先耗）。
-   * @returns {Promise<{ 反对者: string, 依据: string, 已用过: string[] }>}
-   */
-  async pickDissenter(spec) {
-    const 参与者 = new Set(spec.参与者 ?? []);
-    const 已用过 = await this.#usedDissenters(spec.节点 ?? null);
-    const pool = (spec.候选 ?? []).filter((id) => !参与者.has(id) && !已用过.includes(id));
-    if (pool.length === 0) {
-      return { 反对者: '', 依据: '没有可用的未参与成员：强制反对者不可重复，宁缺毋滥。', 已用过 };
-    }
-    const 反对者 = pool[Math.floor(this.random() * pool.length) % pool.length];
-    if (spec.只选不记 === true) {
-      // 依据文案与默认路径逐字相同（外部契约不变）：只是审计行由编排层在开启成功后补记。
-      return { 反对者, 依据: '系统随机指定一名未参与成员，且不重复', 已用过: [...已用过, 反对者] };
-    }
-    await this.audit.append({
-      动作: '状态变更',
-      主体: { id: 'system', kind: '系统' },
-      对象: { id: spec.节点 ?? spec.项目, kind: '会审' },
-      依据: '§10 反趋同 · 强制反对者',
-      结果: `指定 ${反对者}`,
-      项目: spec.项目,
-      详情: { 强制反对者: 反对者, 节点: spec.节点 ?? null, 不用过: 已用过 },
-    });
-    return { 反对者, 依据: '系统随机指定一名未参与成员，且不重复', 已用过: [...已用过, 反对者] };
-  }
-
-  /**
-   * 一岗多人必须显式声明模式（§10）。声明之后共享面与产出面都被写死在返回值里，
-   * 因为这两列才是「独立会审」与「并行分担」的真正区别。
-   *
-   * @param {{ subject: object, 节点: string, 项目: string, 模式: string, 成员?: string[] }} spec
-   */
-  async declareMode(spec) {
-    if (!MULTI_MODES.includes(spec.模式)) {
-      throw new InvalidBody(`一岗多人必须显式声明模式：${MULTI_MODES.join(' / ')}。`, { missing: ['模式'] });
-    }
-    // 服务层授权闸（2026-10-14 审查 P2-5）：声明模式决定共享面与产出面，是写动作，
-    // 必须过唯一判定点——修前零闸（当前未接线，接线即洞）。
-    await this.policy.check({
-      subject: spec.subject,
-      action: 'write',
-      target: { id: spec.节点, kind: '任务', authority: '自治', zone: '私有', project: spec.项目 ?? null },
-      context: {},
-    });
-    const 独立 = spec.模式 === '独立会审';
-    await this.audit.append({
-      动作: '状态变更',
-      主体: spec.subject,
-      对象: { id: spec.节点, kind: '任务' },
-      依据: '§10 一岗多人必须显式声明模式',
-      结果: spec.模式,
-      项目: spec.项目,
-      详情: { 成员: spec.成员 ?? [] },
-    });
-    return {
-      节点: spec.节点,
-      模式: spec.模式,
-      互相可见: 独立 ? '交卷前不能' : '能',
-      共享: 独立 ? '只共享岗位知识与能力' : '中间结果',
-      产出: 独立 ? 'N 份独立答案 + 分歧清单' : '合起来的成果',
-    };
   }
 
   /**
@@ -491,15 +314,6 @@ export class ReviewProtocol {
       项目: spec.项目,
     });
     return { 授权: true, 落点: `沙箱/${spec.项目}`, 实验: spec.实验, 清理: '任务结束即清' };
-  }
-
-  /** @param {string|null} 节点 */
-  async #usedDissenters(节点) {
-    const rows = await this.audit.read({});
-    return rows
-      .filter((row) => row.动作 === '状态变更' && row.详情?.强制反对者)
-      .filter((row) => (节点 ? row.详情?.节点 === 节点 : true))
-      .map((row) => row.详情.强制反对者);
   }
 }
 

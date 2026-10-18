@@ -11,16 +11,20 @@
  * 本文件**不 import 任何 `@deepseek-ai/*`**：profile 安装的插件不保证能解析
  * 出厂包，而一个 import 失败会让整棵插件树起不来。所有能力都通过 `ctx` 服务拿。
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, basename, join, resolve as resolvePath, sep } from 'node:path';
 import { shareOrg } from '../../../src/runtime.js';
 import { subjectFor, DEFAULT_PROJECT } from '../../../src/org.js';
 import { kernelFactoryRoot } from '../../../src/paths.js';
 import { agentSubject } from '../../../src/subject.js';
-import { describeFailure, InvalidBody } from '../../../src/kernel/errors.js';
+import { readInstanceSnapshot } from '../../../src/instance-snapshot.js';
+import { describeFailure, Denied, InvalidBody } from '../../../src/kernel/errors.js';
 import { atomicWrite, stripBom } from '../../../src/kernel/fsx.js';
-import { ACTIONS, runAction } from '../../../lib/actions.js';
+import { ACTIONS, READ_ONLY_ACTIONS, 是写动作, runAction, 会审参与动作闸 } from '../../../lib/actions.js';
+// 复核读域单源（v2 条目6）：guard 是同步的 ⇒ 直接同步读任务账本 + fold，不另造一套范围判据。
+import { fold } from '../../../src/tasks.js';
+import { 复核读域 } from '../../../src/review-scope.js';
 // 看板尾长单源（设计评审 #17 · 2026-10-15）：装配期喂给看板包的「40」改引常量（值不变）。
 import { 看板审计尾条数 } from '../../../src/audit.js';
 // 单源（2026-10-11 schema 口径修缮）：类型 参数描述里的消息类型枚举从 bus.js 的
@@ -99,7 +103,8 @@ export async function apply(ctx, config = {}) {
   }
   try {
     // 单调闸：只读部署偏好，不读路径，不接受任何人的「通融」。
-    ctx.tools.guard((exec) => 闸判定(exec, 项目));
+    // v2 条目6/7 补修：同一个 guard 里先判**复核员角色边界**（见 闸判定），不新注册平行 guard。
+    ctx.tools.guard((exec) => 闸判定(exec, 项目, { org, ctx }));
     闸回执.范围闸 = { registered: true, error: null };
     await atomicWrite(org.layout.guardReceiptFile(), `${JSON.stringify(闸回执, null, 2)}\n`);
   } catch (error) {
@@ -136,7 +141,10 @@ export async function apply(ctx, config = {}) {
       // 那类 preset 不在本授权的兼容范围（delegation_status 读数里如实标注）。
       撤销器.push(ctx.on('system-prompt/assemble', async (assembly, context, next) => {
         const out = await next();
-        return delegation.assemble(out, { project: 项目键(context?.agent, 项目), isTeam: 是Team成员(ctx, context?.agent) });
+        const 已接调度 = delegation.assemble(out, { project: 项目键(context?.agent, 项目), isTeam: 是Team成员(ctx, context?.agent) });
+        // v2 条目10（W7 实证）：Root 实例在**首个真实组织上下文装配前**出生/钉版，并把
+        // 它钉住的那版 Lead 规程注入；子会话/伪 Lead 形状不在此列（agentSubject 判）。
+        return 注入Lead已钉规程(已接调度, context?.agent, org, logger);
       }, { prepend: true }));
       调度接线回执.promptRegistered = true;
     } catch (error) {
@@ -188,11 +196,11 @@ export async function apply(ctx, config = {}) {
 
   // 主面（工具）**不吞异常**：注册不上就等于这个组件没生效，
   // 让宿主如实报出装载失败，而不是留下一个「看起来装好了」的假象。
-  ctx.tools.register(mindTool({ org, 项目, 项目键: (exec) => 项目键(exec?.agent, 项目), 宿主服务 }));
+  ctx.tools.register(mindTool({ org, 项目, 项目键: (exec) => 项目键(exec?.agent, 项目), 宿主服务, logger }));
 
   ctx.inject?.(['commands'], (scoped) => {
     try {
-      scoped.commands.register(mindCommand({ org, 项目, 项目键: (agent) => 项目键(agent, 项目), 宿主服务 }));
+      scoped.commands.register(mindCommand({ org, 项目, 项目键: (agent) => 项目键(agent, 项目), 宿主服务, logger }));
     } catch (error) {
       logger.warn?.(`[dsh-mind] 注册 /mind 命令失败：${error instanceof Error ? error.message : String(error)}`);
     }
@@ -266,7 +274,7 @@ export function degradedTool(error) {
  * 返回 JSON 文本，于是模型与工作台读的是同一份字节。
  * @param {{ org: object, 项目: string, 项目键: (exec: object) => string, 宿主服务?: (exec: object) => object }} spec
  */
-function mindTool({ org, 项目, 项目键, 宿主服务 }) {
+function mindTool({ org, 项目, 项目键, 宿主服务, logger }) {
   return {
     name: 'mind',
     description: [
@@ -281,7 +289,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务 }) {
         action: { type: 'string', enum: ACTIONS, description: '要执行的动作' },
         project: { type: 'string', description: '项目键；省略则用当前项目' },
         role: { type: 'string', description: '以哪个岗位身份执行（Lead / 复核员 / 成员岗位名）' },
-        实例: { type: 'string', description: '岗位实例 id；省略则按岗位推断' },
+        实例: { type: 'string', description: 'registry_assign / task_bind 的实例 id（必填；省略会被拒，不再按岗位推断）' },
         id: { type: 'string', description: '对象 id（任务节点 / 记忆条目 / 挂起项 / 能力名——capability_read 按 id 读，不读 名）' },
         // 描述/原因 的分工按动作实际消费面写（设计评审 F2b 普查 · 2026-10-15）：task_pending
         // 的 handler 读的是 原因（服务层 markPending 的 待决原因），不读 描述——修前 描述
@@ -290,15 +298,23 @@ function mindTool({ org, 项目, 项目键, 宿主服务 }) {
         负责人: { type: 'string', description: '负责人 id 或多个用逗号分隔（task_create 建 / task_reassign 改派——改派仅 Lead、仅待派发/已派发）' },
         判据: { type: 'string', description: '验收标准；多个用逗号分隔。任务必填，派发后冻结' },
         依赖: { type: 'string' },
-        模式: { type: 'string', enum: ['并行分担', '独立会审'], description: '一岗多人必须显式声明' },
-        三态: { type: 'string', enum: ['过', '不过', '未验'], description: '复核结论；未验 ≠ 通过且不计打回' },
+        复核对象: { type: 'string', description: '复核任务的显式被验目标（节点 id 列表，task_create / task_bind，多个用逗号分隔或 JSON 数组）。它不是依赖：依赖是「先做谁」，复核对象是「验哪一单」——绝不借用 依赖 表达复核对象（依赖须前置已采纳，会让复核闭环死锁）' },
+        问题: { type: 'string', description: '会审要收敛的问题（debate_open，v2 条目18）；参与者用「参与者」或「参与岗位」参数点名' },
+        参与者: { type: 'string', description: '会审参与者 id，多个用逗号分隔（debate_open）：被点名的在册在岗实例独立作答；预给实例不改原任务权' },
+        参与岗位: { type: 'string', description: '会审受管参与实例的岗位名，多个用逗号分隔（debate_open）：每个元素创建一个真实受管咨询实例（可重复同一岗位 = N 个实例）' },
+        资料: { type: 'string', description: '会审参与实例的唯一只读文件根：发起者给的绝对路径（文件/目录），多个用逗号分隔（debate_open）；不提供则参与实例不能读文件' },
+        三态: { type: 'string', enum: ['过', '不过', '未验'], description: '复核结论；未验 ≠ 通过且不计打回。「过」只出可引用票、不自动采纳（补修K）：采纳另走 task_accept' },
+        票: { type: 'string', description: '复核票 id（task_accept 引用）：task_review 回执与工作台「待采纳」给出的 rv-N（reviewed 事件 seq）。免审采纳与历史确认不带票；票后若有新交卷/新产出物挂载则作废' },
+        理由: { type: 'string', description: '理由（task_disagree：Lead 的不同意意见；只进审计，不改复核三态/冻结判据）' },
         分歧清单: { type: 'string' },
         反例面: { type: 'string' },
+        知识候选: { type: 'string', description: '交卷附的知识候选（task_submit，v2 条目15）：值得蒸馏成知识的点，多个用逗号分隔或 JSON 数组。成员不得直接写知识——候选随卷入账，结账时 Lead 逐条判' },
+        记忆处置: { type: 'string', description: 'task_settle 必填（v2 条目16）：{候选键:"晋升"|"留账本"|"丢弃"} 的 JSON 对象；「晋升」也可写成 {处置:"晋升",岗位?,标题?,内容?}（可选蒸馏覆盖，缺省按来源绑定岗位/现有正文推导）。无候选传 {} 明示。晋升会真实产出知识条目（id 见节点.记忆晋升），任一条失败则不结账（不留假结账）' },
+        命名空间: { type: 'string', enum: ['通用'], description: 'memory_write 的存储命名空间：「通用」= 项目无关知识的公共命名空间，不是另一个项目（执行项目仍是当前会话项目，成员跨项目闸不变）。目前只收「知识」；Lead 写入须带依据，披露检查照跑' },
         结论: { type: 'string', description: '交卷结论（task_submit）；会审按人留，谁交卷记谁那份' },
         结论层: { type: 'string', description: '结论的结构化标签（task_submit，会审时必填）：一句话给结论定性归类，如「方案A」「可修」「不采纳」。§10 零分歧判据比的是它而不是结论全文——措辞漂不了的判据才成立；不写则退化为全文逐字比对（两份独立答案几乎不会逐字同，报警永不触发）' },
         决定: { type: 'string', description: '待决项的裁决内容（task_resolve）' },
         复核者: { type: 'string', description: '复核结论归属的复核者 id（task_review）；省略取主体' },
-        候选: { type: 'string', description: '复核者实例 id（review_nominate）。在册在岗 ⇒ 池内派单（不进待决）；池外 ⇒ 新任命提名（挂待决等主权者）；省略 ⇒ 从在册复核员按账上活动轮派。提名≠任命：池外任命仍由主权者经 registry_assign 带授权引用执行' },
         待决类型: { type: 'string', description: '待决类型（task_pending）；省略取「升级差异」' },
         产出物引用: { type: 'string' },
         类: { type: 'string', enum: ['知识', '经历', '偏好', '作答'] },
@@ -306,10 +322,10 @@ function mindTool({ org, 项目, 项目键, 宿主服务 }) {
         version: { type: 'number', description: 'store_rollback 的回滚目标版本号（正整数）' },
         内容: { type: 'string', description: '正文内容（bus_send 的消息正文 / memory_write 的条目内容）' },
         来源: { type: 'string', description: '怎么知道的；记忆写入必填（谁记的默认取主体）' },
-        来源引用: { type: 'string', description: '证据/来源对象 id，多个用逗号分隔（契约A 血缘）；know-/exp-/pref-/answ- 查账本、task- 查任务图、artifact- 本批不校验，悬空拒写' },
-        任务: { type: 'string', description: '任务节点 id（memory_write / memory_lifecycle / capability_publish 的成员调用必填：声明本次写入归属的任务上下文——「任务内全权」靠它判定；策略引擎仍按节点负责人名单比对，传别人的节点照拒）' },
-        授权引用: { type: 'string', description: '主权者授权依据 id（audit_correct 必填：决议 / 任务节点 id；registry_assign 目标岗=复核员时必填；member_spawn 岗位=复核员时必填——起执行体前预检并透传给登记闸；review_exempt 必填——豁免复核是主权者决定，空授权默认拒；原样进链接受复核）' },
-        岗位: { type: 'string' },
+        来源引用: { type: 'string', description: '证据/来源对象 id，多个用逗号分隔（契约A 血缘）；know-/exp-/pref-/answ- 查账本、task- 查任务图、artifact- 本批不校验，悬空拒写。记忆整理岗写知识（受限晋升）必须恰好带 1 个 task-* 且该任务已被合法采纳（同项目）' },
+        任务: { type: 'string', description: '任务节点 id（memory_write / memory_lifecycle / capability_publish 的成员调用必填：声明本次写入归属的任务上下文——「任务内全权」靠它判定；策略引擎仍按节点负责人名单比对，传别人的节点照拒）。记忆整理岗写知识时= 绑着你的执行中任务' },
+        授权引用: { type: 'string', description: '主权者授权依据 id（audit_correct 必填：决议 / 任务节点 id；原样进链接受复核。v2 起复核员任命/复核豁免不再用授权引用——复核员是普通岗位卡，豁免走部署设置「复核免审」开关）' },
+        岗位: { type: 'string', description: '岗位名（registry_assign / memory_* / capability_* / member_spawn）；记忆写入时 = 知识双标签的岗位标签（受限晋升必填：这条知识对哪个岗位可召回，不是整理它的人）；member_spawn 时须已有岗位卡' },
         标签: { type: 'string' },
         文本: { type: 'string', description: '检索查询词' },
         显式: { type: 'boolean', description: '检索时是否显式包含归档作答' },
@@ -319,11 +335,14 @@ function mindTool({ org, 项目, 项目键, 宿主服务 }) {
         敏感: { type: 'boolean', description: 'op=purge 时显式声明「这是敏感数据」；声明会进审计，不声明只有主权者能物理删除' },
         披露豁免: { type: 'boolean', description: 'op=promote 时 Lead 显式豁免披露机械检查（仅 Lead 可用）；豁免与命中的敏感模式名会一起进审计' },
         新条目: { type: 'string' },
-        原因: { type: 'string', description: '原因/理由（task_pending 待决原因 / registry_seal / registry_revoke / review_nominate 提名理由 / review_exempt 豁免原因）' },
+        原因: { type: 'string', description: '原因/理由（task_pending 待决原因 / registry_seal / registry_revoke / review_exempt 豁免原因）' },
         名: { type: 'string', description: '能力名（capability_resolve 检索 / capability_publish 发布；capability_read 不读名、只读 id）' },
         正文: { type: 'string', description: '能力卡正文（capability_publish）' },
         适用岗位: { type: 'string' },
-        依据: { type: 'string' },
+        依据: { type: 'string', description: '依据（task_accept 可选：采纳说明随 accepted 事件入账；采纳资格不靠自报——服务层按票/免审/历史确认判）' },
+        // v2 条目14/17（2026-10-18 补修F）：主权者逐请求放行后，原申请者带这个引用重试
+        // 原动作——执行的是冻结请求（参数与步骤计划都按原样），不是这次的复述参数。
+        审批引用: { type: 'string', description: '介入请求 id（v2 条目14/17）：写动作被介入度挂起后，主权者在设置页「待审批」批准，原申请者带 审批引用=<请求id> 重试原动作。执行的是冻结请求；参数/计划与记录不一致、已执行过、已失效都会拒' },
         线程: { type: 'string', description: '线程名（bus_send / bus_read）' },
         发件: { type: 'string', description: '已忽略（W2 安全修复）：发件人恒为真实主体 id，自报无效——冒充发件人是伪造轮边界的第一步' },
         收件: { type: 'string', description: '收件人，多个用逗号分隔' },
@@ -339,10 +358,12 @@ function mindTool({ org, 项目, 项目键, 宿主服务 }) {
         审计条数: { type: 'number' },
         limit: { type: 'number', description: '返回条数上限（memory_query 的命中 / bus_read / audit_tail）' },
         条数上限: { type: 'number', description: 'memory_query 返回 条目 的回传条数上限（默认 50；超出截断并附 条目截断: true 与总数）' },
-        方式: { type: 'string', enum: ['team', 'subagent'], description: 'member_spawn 的执行体：持久团队成员（team）或普通持续子会话（subagent）；直接执行不调该动作' },
-        岗位: { type: 'string', description: 'member_spawn 登记的岗位名（须已有岗位卡）' },
+        方式: { type: 'string', enum: ['team', 'subagent'], description: 'member_spawn / debate_open 的执行体：持久团队成员（team）或普通持续子会话（subagent）；直接执行不调该动作' },
         节点: { type: 'string', description: 'member_spawn 绑定的任务节点 id（须待派发且已定判据）' },
         任务书: { type: 'string', description: 'member_spawn 的开工任务书（判据与岗位要点由机制自动附上）' },
+        模型供应商: { type: 'string', description: 'member_spawn / debate_open 可选模型路由：LLM 供应商 id（须与 模型 成对给出；仅 方式=subagent 支持；缺省继承父路由，与既往行为一致）' },
+        模型: { type: 'string', description: 'member_spawn / debate_open 可选模型路由：模型 id（须与 模型供应商 成对；宿主目录是 advisory，不合法路由由宿主在创建时响亮拒，不静默回落）' },
+        推理档: { type: 'string', description: 'member_spawn / debate_open 可选：推理档位（随模型路由生效；换了路由不给别人，子会话用所选模型的默认档）' },
       },
       required: ['action'],
       additionalProperties: false,
@@ -352,10 +373,10 @@ function mindTool({ org, 项目, 项目键, 宿主服务 }) {
       render: (_args, value) => [{ type: 'text', text: value }],
     },
     // 只有只读动作允许并发：写动作会把「读-改-写」排成一队，避免并发自伤。
-    // `probe_health` 曾在这张表里（W3 批3 清掉）：它是**安全类组件**的工具名，
-    // 不属于本工具的动作面（`ACTIONS` 里没有它）——留在这里是一条永远匹配不上的死条目，
-    // 读的人会以为「探针巡检在这个工具上是并发安全的」。
-    isConcurrencySafe: (args) => ['status', 'workbench', 'memory_query', 'memory_lineage', 'capability_list', 'capability_resolve', 'capability_read', 'bus_read', 'audit_tail', 'audit_verify', 'registry_list', 'registry_can', 'upgrade_pending', 'policy_check', 'delegation_status', 'member_list', 'task_criteria'].includes(args?.action),    async execute(args, exec) {
+    // 读写分类的**单源**在 lib/actions.js 的 READ_ONLY_ACTIONS（Lead 钉版闸共用同一张表），
+    // 这里不另抄一份——两处各写一张表，迟早一侧放行一侧拒。
+    isConcurrencySafe: (args) => READ_ONLY_ACTIONS.includes(args?.action),
+    async execute(args, exec) {
       const 主体 = agentSubject(exec);
       try {
         // 项目键省略时取**当前工作区目录名**（§14.4-5：目录名即项目键）——
@@ -366,7 +387,29 @@ function mindTool({ org, 项目, 项目键, 宿主服务 }) {
         // （`runAction` 会回落到 `subjectFor({根会话: subject?.kind === 'Lead'})`，
         // 而那个回落本身又受「自报的 args.role」影响）。本轮实测过这个半成品形态：
         // 子会话 `agentSubject` 算出成员、`runAction` 收到的却是 Lead（两处读数都在回报里）。
-        return JSON.stringify({ 成功: true, ...(await runAction({ org, 项目: 本次项目, subject: 主体, 主体, args: normalizeArgs(args), ...(宿主服务 ? { 宿主: 宿主服务(exec) } : {}) })) }, null, 1);
+        // v2 条目9/10：Lead 实例随主会话出生——**落在这里**（真实 exec 的会话事实），
+        // 不在路由面/任意 Lead 形状上自动生造（那是「设置页」这类伪实例的来源）。
+        const 登记 = await 钉Lead实例(org, 主体, logger);
+        // v2 条目10（W5 审计反例收口）：内核入口不再「warn 后继续」——模型面的 Lead 自治写
+        // 必须钉版真就绪；诊断读（status / workbench / audit_tail …）照旧放行并带读数。
+        // 分类与 runAction / isConcurrencySafe 共用 READ_ONLY_ACTIONS 这一张表。
+        const 本次入参 = normalizeArgs(args);
+        if (主体.kind === 'Lead' && 是写动作(本次入参.action) && 登记?.就绪 !== true) {
+          throw new Denied(
+            'v2 条目10 · Lead 自治写前钉版未就绪（内核入口）',
+            `Lead 实例 ${主体.id} 的出生/钉版读数未就绪：${登记?.原因 ?? '内核没拿到就绪读数（unknown ⇒ 按未就绪处理）'}。模型面的自治写不做「先写后补钉」——写动作 fail-closed；status / workbench / audit 等诊断读仍可用。`,
+            {
+              requireAuthority: '主权者/Lead',
+              howToChange: '先由主权者/Lead 修好 Lead 岗位卡与身份档案（在岗 + 钉版快照可读），或重新登记 Lead 实例；诊断用 status / workbench / audit_tail。',
+              detail: { 实例: 主体.id, 动作: 本次入参.action, 写动作: true, 就绪读数: 登记 ?? null },
+            },
+          );
+        }
+        return JSON.stringify({
+          成功: true,
+          ...(登记 && 登记.就绪 === false ? { 实例登记: 登记 } : {}),
+          ...(await runAction({ org, 项目: 本次项目, subject: 主体, 主体, args: 本次入参, ...(宿主服务 ? { 宿主: 宿主服务(exec) } : {}) })),
+        }, null, 1);
       } catch (error) {
         return JSON.stringify({ 成功: false, ...describeFailure(error) }, null, 1);
       }
@@ -401,11 +444,16 @@ function mindCommand(spec) {
         const action = ALIASES[head] ?? head;
         const args = 解析参数(rest.join(' '));
         const 主体 = agentSubject({ agent });
+        // v2 条目9/10：同一条出生路径（命令面也是真实 agent 的会话事实）。
+        const 登记 = await 钉Lead实例(spec.org, 主体, spec.logger);
         // `面: 'command'` 是**人侧**的标记：命令面专属动作（如改设置的 `presence`）
         // 只在这一面可达，`mind` 工具的 enum 里没有它们（模型没有这只手）。
         // `主体` 一起显式传下去：账上要记**敲这条命令的那个人**，不许归并成一个泛化的 lead。
-        const result = await runAction({ org: spec.org, 项目: args.project ?? 本次项目, subject: 主体, 主体, args: { ...args, action }, 面: 'command', ...(spec.宿主服务 ? { 宿主: spec.宿主服务(agent) } : {}) });
-        return { kind: 'success', text: JSON.stringify({ 成功: true, ...result }, null, 1) };
+        // P1-12（全面审查 2026-10-17）：宿主服务束读 `exec.agent`；命令面手里只有 agent 本身，
+        // 修前把 agent 当 exec 传 ⇒ 宿主.agent 恒 null，/mind member_* 全抛 NO_AGENT。
+        // 两个面统一成 exec 形状：命令面显式包成 { agent }（无工具调用的 signal）。
+        const result = await runAction({ org: spec.org, 项目: args.project ?? 本次项目, subject: 主体, 主体, args: { ...args, action }, 面: 'command', ...(spec.宿主服务 ? { 宿主: spec.宿主服务({ agent }) } : {}) });
+        return { kind: 'success', text: JSON.stringify({ 成功: true, ...(登记 && 登记.就绪 === false ? { 实例登记: 登记 } : {}), ...result }, null, 1) };
       } catch (error) {
         return { kind: 'error', text: JSON.stringify({ 成功: false, ...describeFailure(error) }, null, 1) };
       }
@@ -489,13 +537,23 @@ function 解析参数(raw) {
  * **单调**的——任何后来的监听者都无法把它的拒绝翻回放行。pre-execute 是可重排的瀑布，
  * 用它做闸就等于 §12.1 说的 fail-open。
  *
+ * **顺序（v2 条目6/7 补修）**：复核员的角色边界**先于**工具总范围求值。修前
+ * `ENVELOPE_STATE.状态 === '未配置'` 直接 return，任何没配工具范围的部署里，
+ * 复核员就能用普通文件工具直读私有区原始账本——角色闸不许被「范围未配置」旁路。
+ *
  * @param {any} exec
  * @param {string} 项目
- * @returns {string|undefined} 返回字符串即拒绝
+ * @param {{ org?: object, ctx?: any }} [deps]
+ * @returns {string|undefined} 返回字符串即拒绝（**同步**，绝不返回 Promise）
  */
-function 闸判定(exec, 项目) {
+function 闸判定(exec, 项目, deps = {}) {
   const 工具 = exec?.name;
   if (!工具) return undefined;
+  // 补修I：会审参与实例的**闭名单**先于复核员/范围闸；有绑定即由它收口（预给参与者无绑定⇒不收紧）。
+  const 咨询 = 咨询参与工具闸(exec, 项目, deps);
+  if (咨询?.拒 !== undefined) return 咨询.拒;
+  const 角色拒 = 咨询?.命中 ? undefined : 复核员工具闸(exec, 项目, deps);
+  if (角色拒 !== undefined) return 角色拒;
   if (ENVELOPE_STATE.状态 === '未配置') return undefined;
   if (ENVELOPE_STATE.状态 === '故障') {
     return `[dsh-mind] 工具范围闸故障：${ENVELOPE_STATE.错误}。按 fail-closed 拒绝全部工具调用（§12.1 闸不许 fail-open）。修复 mind/集体L2-共享基础设施/defaults/工具总范围.json 后重试。`;
@@ -519,6 +577,295 @@ function 闸判定(exec, 项目) {
   // 本来就不经过这道闸；这里的放行只影响模型侧的工具调用。
   void 项目;
   return undefined;
+}
+
+/** 会审实例无任务写域：闭名单只留问答、规范读取、明确资料与派发者报告。 */
+const 咨询只读工具 = new Set(['read', 'read_image', 'glob', 'grep', 'skill', 'mind']);
+
+function 咨询参与工具闸(exec, 项目, deps) {
+  const 主体 = agentSubject(exec);
+  if (主体?.kind !== '成员' || !主体.id) return { 命中: false };
+  const 快照 = readInstanceSnapshot(deps.org?.layout?.identityFile?.());
+  // 无法识别成员时仍交原身份闸拒绝，不把未知快照折成普通成员。
+  if (!快照.ok) return { 命中: false };
+  const member = 快照.成员?.[主体.id];
+  const 绑定 = member?.会审绑定;
+  if (!绑定) return { 命中: false };
+  const 拒 = (理由) => ({ 命中: true, 拒: `[dsh-mind] 会审参与实例工具闸 · ${理由}` });
+  // 故障上报先于钉卡/绑定就绪检查，但收件人仍只由真实委派父与宿主父会话判定。
+  if (exec.name === 'send_message') {
+    if (快照.成员?.[member.委派者id]?.岗位 !== 'Lead') return 拒('报告通道没有可信的派发 Lead，unknown ⇒ 拒。');
+    return { 命中: true, 拒: 成员报告通道(exec, 快照, member) };
+  }
+  if (member.就绪 !== true || member.岗位 === '复核员' || member.岗位 === 'Lead') {
+    return 拒(`实例未就绪：${member.未就绪原因 ?? '咨询实例不是普通成员岗'}；仅可向派发 Lead 报告。`);
+  }
+  if (绑定.无效 || 绑定.来源会话 !== member.委派者id) return 拒(`绑定不可用（${绑定.无效 ?? '来源会话与真实委派者冲突'}），unknown ⇒ 拒；请报告派发 Lead。`);
+  const 当前目录 = 会话工作目录(exec, deps);
+  const 当前项目 = 当前目录 ? basename(当前目录) : 项目键(exec.agent, 项目);
+  if (当前项目 !== 绑定.项目) return 拒(`会话项目 ${当前项目} 不是绑定项目 ${绑定.项目}，目录变化不扩大咨询权限。`);
+  if (!咨询只读工具.has(exec.name)) return 拒(`工具「${exec.name}」不在咨询只读闭名单；写文件、子进程、再派活、能力发布及未知工具一律拒。`);
+  if (exec.name === 'mind') {
+    try { 会审参与动作闸({ subject: 主体, args: exec.arguments, 绑定, 项目: 当前项目 }); }
+    catch (error) { return 拒(错误消息(error)); }
+    return { 命中: true };
+  }
+  if (exec.name === 'skill') return { 命中: true };
+  return { 命中: true, 拒: 咨询读路径(exec, deps, 绑定) };
+}
+
+function 咨询读路径(exec, deps, 绑定) {
+  const 参数 = exec.arguments;
+  const 搜索 = exec.name === 'glob' || exec.name === 'grep';
+  let 路径 = 搜索 ? 参数?.path : 参数?.file_path;
+  const 基准 = 会话工作目录(exec, deps);
+  if (搜索 && 路径 === undefined) 路径 = 基准;
+  const 拒 = (原因) => `[dsh-mind] 会审参与实例读路径 · ${原因}`;
+  if (typeof 路径 !== 'string' || !路径.trim()) return 拒('缺少真实 arguments 路径或当前工作目录，unknown ⇒ 拒。');
+  if (!isAbsolute(路径) && !基准) return 拒('相对路径没有当前工作目录，unknown ⇒ 拒。');
+  let 目标;
+  try { 目标 = 规范路径(realpathSync(isAbsolute(路径) ? 路径 : resolvePath(基准, 路径))); }
+  catch { return 拒('目标路径不存在或无法 realpath，unknown ⇒ 拒。'); }
+  const 私有根 = deps.org?.layout?.privateRoot;
+  if (!私有根) return 拒('私有区位置不可判定，unknown ⇒ 拒。');
+  const 私有 = 规范路径(私有根);
+  if (在目录内(目标, 私有) || (搜索 && 在目录内(私有, 目标))) return 拒('私有区原始账本禁止直读，也不得从父目录递归搜索；请报告 Lead。');
+  const 根 = (绑定.资料 ?? []).filter((x) => typeof x === 'string' && isAbsolute(x))
+    .map((x) => process.platform === 'win32' ? resolvePath(x).toLowerCase() : resolvePath(x))
+    .filter((x) => {
+      try { return 规范路径(realpathSync(x)) === x; } catch { return false; }
+    });
+  return 根.some((x) => 在目录内(目标, x)) ? undefined : 拒('目标不在本场会审明确授权的资料根内；没有资料不等于整个工作区可读。');
+}
+
+/**
+ * 复核员的只读工具闭名单（v2 条目6/7 · 2026-10-18）。
+ *
+ * 为什么是**闭名单**：`write/edit/pwsh/bash/创建/未知执行类` 的正确集合是「除下面这些
+ * 之外的一切」——开名单会把未来新增的工具默认放给复核员（漏一个就是一条写侧门）。
+ * `mind` / `mind_guard` 由本体按动作判（写全拒、读按复核读域）；`skill` 是只读规范。
+ */
+const 复核只读工具 = new Set(['read', 'glob', 'grep', 'read_image', 'skill', 'mind', 'mind_guard']);
+
+/** 与条目10 同一把尺：用真实会话事实（根会话=Lead，子会话=成员），不认自报。 */
+function 复核员工具闸(exec, 项目, deps) {
+  const 工具 = exec?.name;
+  const 主体 = agentSubject(exec);
+  if (主体?.kind !== '成员' || !主体.id) return undefined;
+  // 读取函数不依赖热更前已缓存的 Registry 对象是否已有新方法。
+  const 快照 = readInstanceSnapshot(deps.org?.layout?.identityFile?.());
+  if (快照?.ok !== true) {
+    // parse / 形状失败 ⇒ **不得当空表放行**（7f8 的同步接口合同）。
+    return `[dsh-mind] 工具闸 · 身份档案同步快照不可用，无法确认复核员只读边界（unknown ⇒ 拒，不拿空表放行）：${快照.原因 ?? '未知原因'}。`;
+  }
+  const member = 快照.成员?.[主体.id];
+  if (!member || member.状态 !== '在岗' || !member.岗位) {
+    return `[dsh-mind] 工具闸 · 成员身份未就绪：${主体.id} ${member ? `状态为 ${member.状态 ?? '缺失'}、岗位 ${member.岗位 ?? '缺失'}` : '没有在册记录'}。未知/封存实例不能因无法识别复核岗位而获得通用工具权限，请交回 Lead 诊断。`;
+  }
+  if (member.岗位 !== '复核员') return undefined;
+  // 报告通道（唯一放行的非只读工具）：只允许发给**派发它的 Lead**，不是全局放行
+  // send_message（否则复核员可唤醒任意成员/再派活）。见 成员报告通道()。
+  if (工具 === 'send_message') return 成员报告通道(exec, 快照, member);
+  if (!复核只读工具.has(工具)) {
+    return `[dsh-mind] 复核员只读数（v2 条目7）：工具「${工具}」不在只读闭名单内（write / edit / pwsh / bash / 创建 / 未知执行类一律拒）。需要改被验对象请把结论交给 Lead，由 Lead 落笔。`;
+  }
+  if (工具 === 'mind' || 工具 === 'mind_guard' || 工具 === 'skill') return undefined;
+  // 读域判据要岗位位（档案里已确认是复核员）：补上 roleId，仍走 review-scope 同一函数。
+  const 读数 = 复核读路径(exec, { ...deps, 项目, 主体: { ...主体, roleId: member.岗位 } });
+  if (读数.拒) return 读数.拒;
+  return undefined;
+}
+
+/**
+ * 复核员的**报告通道**（v2 条目6 补修）：`send_message` 只许发给派发它的 Lead。
+ *
+ * 官方有两个真实变体：子代理用 `agent_id`，Root/Team 用 `target`。这里**同一函数**同时认
+ * 这两个当前已核字段（不写成 `agent_id ?? target` 的目标置换）：
+ *  - 至少提供一个；提供的每一个都必须是字符串且指向**同一个**可信派发 Lead；
+ *  - `lead` 别名与派发父的真实 ID 等价（同一 Lead 的两种写法），合并后必须唯一；
+ *  - 任一字段指别成员/别角色、两字段冲突、出现 `message`/`agent_id`/`target` 之外的
+ *    未知收件类参数、缺字段或空串 ⇒ 全拒（不让未知收件参数偷偷进 body）。
+ *
+ * 可信派发关系 = 身份快照 `委派者id`（Lead 正规登记落下）+ 宿主父会话
+ * （`header.parentSession` / `parentSessionId`；拿不到不用 header.cwd 猜）。两者都像 Lead
+ * 但指向不同实例 ⇒ 无法唯一判定，按 fail-closed 拒。
+ * 只回报、不改被验对象；不是业务提案动作的豁免（其他写工具仍全拒）。
+ *
+ * @returns {string|undefined} 拒因或放行（undefined）
+ */
+function 成员报告通道(exec, 快照, member) {
+  const 参数 = exec?.arguments;
+  if (!参数 || typeof 参数 !== 'object' || Array.isArray(参数)) {
+    return '[dsh-mind] 成员报告通道 · send_message 的 arguments 缺失或形状不合法（unknown ⇒ 拒）。';
+  }
+  const 允许键 = new Set(['message', 'agent_id', 'target']);
+  const 未知键 = Object.keys(参数).filter((键) => !允许键.has(键));
+  if (未知键.length > 0) {
+    return `[dsh-mind] 成员报告通道 · 不认识的收件/透传参数：${未知键.join('、')}。只允许 message + agent_id/target（官方两个真实变体）；未知参数不许偷偷进 body。`;
+  }
+  const 提供 = ['agent_id', 'target'].filter((键) => 参数[键] !== undefined);
+  if (提供.length === 0) {
+    return '[dsh-mind] 成员报告通道 · 缺少收件字段：至少给 agent_id 或 target 之一（unknown ⇒ 拒），且只能指向派发你的 Lead。';
+  }
+  for (const 键 of 提供) {
+    const 值 = 参数[键];
+    if (typeof 值 !== 'string' || !值.trim()) {
+      return `[dsh-mind] 成员报告通道 · ${键} 必须是非空字符串（unknown ⇒ 拒）。`;
+    }
+  }
+  // 可信派发 Lead：委派者 id（必须是 Lead 实例/别名）与宿主父会话。
+  const 候选 = [];
+  const 委派者id = typeof member?.委派者id === 'string' ? member.委派者id : null;
+  if (委派者id && (委派者id === 'lead' || 快照.成员?.[委派者id]?.岗位 === 'Lead')) 候选.push(委派者id);
+  const 头 = exec?.agent?.session?.header ?? {};
+  const 父会话 = typeof 头.parentSession === 'string'
+    ? 头.parentSession
+    : (头.parentSession?.id ?? (typeof 头.parentSessionId === 'string' ? 头.parentSessionId : null));
+  if (typeof 父会话 === 'string' && 父会话) 候选.push(父会话);
+  const 唯一 = [...new Set(候选)];
+  if (唯一.length === 0) {
+    return '[dsh-mind] 成员报告通道 · 没有可信的派发 Lead/父会话（缺父归属或档案坏）：不能发消息；请把结果放进交卷，或让 Lead 先正规登记复核实例。';
+  }
+  if (唯一.length > 1) {
+    return `[dsh-mind] 成员报告通道 · 父归属（${委派者id ?? '无'}）与宿主父会话（${父会话 ?? '无'}）指向不同 Lead，无法唯一判定派发者（fail-closed）：请交回 Lead 核档案。`;
+  }
+  const 派发 = 唯一[0];
+  const 允许别名 = 派发 === 'lead' || 快照.成员?.[派发]?.岗位 === 'Lead';
+  const 归一 = (值) => (值 === 派发 || (允许别名 && 值 === 'lead') ? 派发 : null);
+  for (const 键 of 提供) {
+    if (归一(参数[键]) === null) {
+      return `[dsh-mind] 成员报告通道 · ${键}「${参数[键]}」不是派发你的 Lead（${派发}${允许别名 ? ' / lead' : ''}）：不能唤醒其他成员、不能改派活对象。`;
+    }
+  }
+  return undefined;
+}
+
+/** 会话当前工作目录：官方 `workingDirectory.get(session)` 是已提交的绝对路径，优先用它。 */
+function 会话工作目录(exec, deps) {
+  try {
+    const 服务 = (typeof deps.ctx?.get === 'function' ? deps.ctx.get('workingDirectory') : null) ?? deps.ctx?.workingDirectory;
+    const 目录 = 服务?.get?.(exec?.agent?.session);
+    if (typeof 目录 === 'string' && 目录.trim()) return 目录;
+  } catch { /* 服务未装载：退回会话头 */ }
+  // 不把 header.cwd 当唯一真源（目录可变）；只有服务拿不到时才作为 fallback。
+  const 头目录 = exec?.agent?.session?.header?.cwd;
+  return typeof 头目录 === 'string' && 头目录.trim() ? 头目录 : null;
+}
+
+/** 规范化 + realpath（处理 junction / symlink / `..`；Windows 大小写不敏感）。 */
+function 规范路径(路径) {
+  const 绝对 = resolvePath(路径);
+  let 真 = 绝对;
+  try { 真 = realpathSync(绝对); } catch { /* 不存在的路径按词法判：写入类本就已被闭名单拦掉 */ }
+  return process.platform === 'win32' ? 真.toLowerCase() : 真;
+}
+
+/** 目标是否在根目录内（按路径段比较，前缀相同的兄弟目录不算）。 */
+function 在目录内(目标, 根) {
+  return 目标 === 根 || 目标.startsWith(`${根}${sep}`) || 目标.startsWith(`${根}/`);
+}
+
+/**
+ * 复核员读路径判定：真实 `exec.arguments` 的 file_path/path（官方 L3259-64 冻结的是
+ * `exec.arguments`，不是 `exec.input`），**缺关键读数按 unknown 拒**。
+ *
+ * 私有区（任务图/审计/身份/记忆/总线原始账本）优先拒：路径先 realpath 再比较，
+ * 大小写 / 相对 / `..` / junction / symlink 都折到同一个真实路径上，不比字面串。
+ * 其余只允许任务项目源码（会话已提交工作目录）内的读；产物请走明确引用。
+ *
+ * @returns {{ 拒?: string }}
+ */
+function 复核读路径(exec, deps) {
+  const 工具 = exec?.name;
+  const 参数 = exec?.arguments;
+  let 目标 = 工具 === 'read' || 工具 === 'read_image' ? 参数?.file_path : 参数?.path;
+  if (目标 === undefined || 目标 === null || String(目标).trim() === '') {
+    if (工具 === 'glob' || 工具 === 'grep') {
+      // 官方 fs-search：未传 path ⇒ 搜索根 = 当前工作目录（已提交的那个）。
+      目标 = 会话工作目录(exec, deps);
+      if (!目标) {
+        return { 拒: `[dsh-mind] 复核员读路径 · 工具「${工具}」未传 path 且取不到当前工作目录（unknown ⇒ 拒，不从 header.cwd 猜）：请显式带 path，或用 mind 的只读动作。` };
+      }
+    } else {
+      return { 拒: `[dsh-mind] 复核员读路径 · 工具「${工具}」缺少 arguments.file_path（unknown ⇒ 拒）：请在 exec.arguments 里给出要读的文件路径。` };
+    }
+  }
+  if (typeof 目标 !== 'string') {
+    return { 拒: `[dsh-mind] 复核员读路径 · 「${工具}」的路径参数不是字符串（unknown ⇒ 拒）。` };
+  }
+  const 基准 = 会话工作目录(exec, deps);
+  const 绝对 = /^[A-Za-z]:[\\/]/.test(目标) || 目标.startsWith('/') ? 目标 : (基准 ? resolvePath(基准, 目标) : null);
+  if (!绝对) {
+    return { 拒: `[dsh-mind] 复核员读路径 · 相对路径「${目标}」没有可用的当前工作目录（unknown ⇒ 拒）。` };
+  }
+  const 规范目标 = 规范路径(绝对);
+  const 私有根 = deps.org?.layout?.privateRoot;
+  if (私有根) {
+    const 规范私有 = 规范路径(私有根);
+    const 递归搜索 = 工具 === 'glob' || 工具 === 'grep';
+    if (在目录内(规范目标, 规范私有) || (递归搜索 && 在目录内(规范私有, 规范目标))) {
+      return { 拒: '[dsh-mind] 复核员读路径 · 私有区原始任务/审计/身份/记忆/总线文件禁止直读或从其父目录递归搜索（v2 条目6/7）：请改用 mind 的 scoped 动作——workbench / task_criteria / memory_query / audit_tail / bus_read，它们按复核读域裁剪。' };
+    }
+  }
+  if (!基准) {
+    // 相对参数的解析基准只能来自 workingDirectory.get（官方语义）；拿不到就 unknown 拒。
+    return { 拒: `[dsh-mind] 复核员读路径 · 相对路径「${目标}」没有可用的当前工作目录（unknown ⇒ 拒）：请先确保会话工作目录可读，或用绝对路径 + 合法产出引用。` };
+  }
+  // **授权读根 = 本复核任务/目标上的显式产出引用**（文件或目录），不是整台机器、也不是整个工作区。
+  // 引用必须是**绝对路径且真实存在**；散文式 / 相对路径 / 不存在的引用一律不猜（无效即不作为根）。
+  const 授权 = 复核授权读根(exec, deps);
+  if (授权.拒) return 授权;
+  if (!授权.根.some((根) => 在目录内(规范目标, 根))) {
+    return {
+      拒: `[dsh-mind] 复核员读路径 · 「${目标}」不在本复核任务的授权产出引用范围内（目录变化不扩大授权）：请 Lead 在复核任务上 attach 明确源码目录/产物文件（产出物引用，绝对路径），或改用 mind 的 scoped 动作（workbench / task_criteria / memory_query / audit_tail / bus_read）。`,
+    };
+  }
+  return {};
+}
+
+/**
+ * 复核员的授权读根：从**任务图真实绑定**同步现算，不依赖会话 cwd 作为授权面。
+ *
+ * 口径：复核读域（已绑定复核任务 → 显式复核对象）里每个节点的 `产出物引用`；
+ * 只认**绝对路径且真实存在**的引用（文件或目录）——散文 / id / 相对路径不猜。
+ * 私有组织根（raw 账本）始终由调用方先拒，这里不参与。
+ *
+ * @returns {{ 根?: string[], 拒?: string }}
+ */
+function 复核授权读根(exec, deps) {
+  const org = deps.org;
+  if (!org?.layout?.taskLog) return { 拒: '[dsh-mind] 复核员读路径 · 任务图接口不可用，无法确认授权产出引用（unknown ⇒ 拒）。' };
+  // 项目键 = **已提交工作目录**的目录名（§14.4-5 目录名即项目键）；拿不到才退回配置默认。
+  // 不用 header.cwd 当唯一真源（目录可变），也不把「目录变了」变成授权扩张——授权仍来自该
+  // 项目任务图上的真实绑定。
+  const 提交目录 = 会话工作目录(exec, deps);
+  const 项目名 = 提交目录 ? basename(提交目录) : 项目键(exec?.agent, deps.项目 ?? DEFAULT_PROJECT);
+  let rows;
+  try {
+    const 文本 = readFileSync(org.layout.taskLog(项目名), 'utf8');
+    rows = 文本.trim() === '' ? [] : 文本.trim().split(/\r?\n/).map((line) => JSON.parse(line));
+  } catch (error) {
+    return { 拒: `[dsh-mind] 复核员读路径 · 读不到项目 ${项目名} 的任务账本（unknown ⇒ 拒，不拿「没读到」当「没有引用」）：${error instanceof Error ? error.message : String(error)}。若尚无复核任务/授权产出引用，请 Lead 先建复核任务并 attach 源码目录/产物文件（授权产出引用，绝对路径）。` };
+  }
+  const 节点 = [...fold(rows).values()];
+  const 域 = 复核读域({ 节点, 主体: deps.主体 ?? agentSubject(exec), 项目: 项目名 });
+  if (!域.限定) return { 拒: '[dsh-mind] 复核员读路径 · 主体不是已登记的复核员岗（unknown ⇒ 拒）。' };
+  const 根 = new Set();
+  for (const node of 节点) {
+    if (!域.集合.has(String(node.id))) continue;
+    // 只认 Lead/主权者通过 task_attach(读根=true) 明确授予的 `复核读根`；
+    // 成员自报的 产出物引用（交付物）不授予文件读权限——避免成员自授权扩读域。
+    for (const 引用 of node.复核读根 ?? []) {
+      if (typeof 引用 !== 'string' || !isAbsolute(引用)) continue;
+      try { 根.add(规范路径(realpathSync(引用))); } catch { /* 不存在 / 读不到 ⇒ 不作为授权根 */ }
+    }
+  }
+  if (根.size === 0) {
+    return {
+      拒: `[dsh-mind] 复核员读路径 · 本复核任务没有可用的授权产出引用（复核任务 ${域.复核任务.length} 个 / 复核对象 ${域.复核对象.length} 个）：不能默认把工作区或整台机器授给复核员。请 Lead 在复核任务上 attach 源码目录/产物文件（产出物引用，绝对路径）。`,
+    };
+  }
+  return { 根: [...根] };
 }
 
 /** 读一次工具总范围；读不出来就诚实地标成「未配置」或「故障」。 */
@@ -664,7 +1011,9 @@ function 挂审计(ctx, org, logger) {
         .append({
           动作: '工具调用成功',
           // 汇总条目的主体同样取真实会话（此前恒记 Lead：轮汇总与失败记录一样会张冠李戴）。
-          主体: agentSubject({ agent: { session: payload?.session ?? (payload?.sessionId ? { id: payload.sessionId } : undefined) } }),
+          // P2-04（全面审查 2026-10-17）：主体与轮键必须同源——宿主用 agent 形状发
+          // turn/end 时，轮键取到了成员会话，主体却回落到 Lead。这里复用轮键的同一优先级。
+          主体: agentSubject({ agent: payload?.agent ?? { session: payload?.session ?? (payload?.sessionId ? { id: payload.sessionId } : undefined) } }),
           对象: { id: key, kind: '轮' },
           依据: '轮定义：一次任务实例从派发到交卷的一次执行段；成功的工具调用按轮汇总',
           结果: `成功 ${bucket.成功} / 失败 ${bucket.失败}`,
@@ -680,16 +1029,30 @@ function 挂审计(ctx, org, logger) {
 
 /**
  * 主权者交互：自最后一次交互起超过响应期限未响应 ⇒ 系统自动标记失联。
- * 任何一次交互即解除——所以这里只要看到用户消息就落一次时间戳。
+ *
+ * **只认真正的人类消息**（2026-10-18 条目13 审计实证）：宿主 journal 里
+ * `agent-message` / `subagent-settled` / `runtime-context` / `compact-checkpoint` /
+ * `skill-catalog` 等也全是 `user/message`。修前只看事件类型 ⇒ 系统自己的自动回报
+ * 会给自己续失联时钟，「失联」永远不会到。
+ *
+ * 可信判据来自宿主写的事实：`event.data.source.kind === 'user'` **且带 `rpcId`**
+ * （真实人消息由用户的 RPC 发起）。未知 / 缺来源 / 其它 kind 一律**不续命**；
+ * 不从正文猜（正文可伪造，来源字段是宿主写的）。事件包装 `event` / `event.event`
+ * 两种形状都认（按实际宿主日志兼容）。
+ *
  * @param {any} ctx @param {any} org @param {any} logger
  */
 function 挂主权者交互(ctx, org, logger) {
   ctx.on('session/event', (session, event) => {
     try {
-      const type = event?.type ?? event?.event?.type;
-      if (type !== 'user/message') return;
+      // 包装兼容：宿主有的版本直接给事件、有的包在 event.event 里。
+      const ev = event?.type ? event : event?.event;
+      if (ev?.type !== 'user/message') return;
+      const source = ev?.data?.source ?? null;
+      // 唯一可信口径：source.kind === 'user' 且 rpcId 非空。缺一即不续命（fail-closed）。
+      if (source?.kind !== 'user' || typeof source?.rpcId !== 'string' || source.rpcId === '') return;
       // 来源必带（设计评审 #7 · 2026-10-15）：markInteraction 的来源白名单闸——「宿主事件」
-      // 就是本挂钩（宿主的用户消息），缺席/名单外会被服务层 fail-closed 拒。
+      // 就是本挂钩（宿主的**人类**用户消息），缺席/名单外会被服务层 fail-closed 拒。
       org.registry.markInteraction({ 来源: '宿主事件' }).catch((error) => logger.warn?.(`[dsh-mind] 记录主权者交互失败：${error.message}`));
     } catch {
       // 事件形状变了不该影响会话；失联判定还有 `/mind sovereign_interaction`（命令面专属）兜底。
@@ -758,7 +1121,7 @@ function 组织说明(org) {
     // 实际操作另一个。静态句子只教解析规则，不替会话猜项目。
     '项目键：省略 project 参数时取会话工作区目录名（§14.4-5 目录名即项目键）。',
     '身份约定：根会话执行者 = Lead（可派活、可建卡、可汇总验收）；复核者只读数、不改、不提案；成员任务内全权、任务外无。',
-    '派活流程：接需求→定判据（写不出判据就不开工）→查岗位（有需要即建卡/改卡）→Lead 按需选择直接执行或 member_spawn 委派（方式=team/subagent＋岗位＋节点＋任务书；机制完成待命握手→registry_assign 登记→绑定节点→装载岗位与判据→发开工消息）→复核→采纳/打回→落记忆→结账。',
+    '派活流程：接需求→定判据（写不出判据就不开工）→查岗位（有需要即建卡/改卡）→Lead 按需选择直接执行或 member_spawn 委派（方式=team/subagent＋岗位＋节点＋任务书；机制完成 registry_assign 登记→绑定节点→装载岗位与判据→发开工消息，不等待成员确认）→复核→采纳/打回→落记忆→结账。',
     '纪律：写操作一律先过策略引擎；被拒绝时结果里会带「哪条规则 + 改它要什么授权」，照着改，不要绕。',
     '按需拉取：需要组织状态时调 `mind` 的 status / workbench；需要知识时调 memory_query；需要技能规程时调 capability_list。不要假设历史会出现在上下文里。',
     '留痕是自治的门槛：无留痕的自治变更 = 无效。',
@@ -771,7 +1134,96 @@ function 组织说明(org) {
  * 本文件顶部 import 它；既有调用点（:224/:262/:268/:458/:487 一带）一字未改。
  */
 
-/** 把工具入参里的逗号串与 JSON 串规整成动作表要的形状。 */
+/**
+ * Lead 实例随主会话出生（v2 口述收敛 2026-10-18 条目9/10）的**唯一调用点实现**：
+ * 工具面与命令面各调一次，判据与落点都在 `registry.ensureLeadInstance()`。
+ *
+ * 三条边界（2026-10-18 W5 审计反例后收紧）：
+ *  - 只对**真实会话事实派生的 Lead 主体**生效（`agentSubject` 的产物）。路由面主体是
+ *    `{id:'设置页', kind:'Lead'}`——伪实例，不在这里出生（它直接调 runAction，绕过本函数）。
+ *  - **不再「warn 后继续」**：返回的就绪读数是模型面自治写的写前闸输入（已封存 / 未钉版 /
+ *    快照读不到 / unknown 一律未就绪）。读动作仍可用并带诊断读数。
+ *  - 幂等：已有记录（任何岗位）一律不动——不复活封存、不自动补钉；由写前快照校验与
+ *    registry_restore 的正路处理。
+ *
+ * @param {object} org
+ * @param {object} 主体 `agentSubject` 的产物
+ * @param {object} logger
+ * @returns {Promise<{已登记: boolean, 就绪: boolean, 卡版本?: string|null, 原因?: string}|null>} 非 Lead ⇒ null
+ */
+async function 钉Lead实例(org, 主体, logger) {
+  if (主体?.kind !== 'Lead') return null;
+  try {
+    const 读数 = await org.registry.ensureLeadInstance({ 实例: 主体.id, 代次: org.boot?.代次 });
+    // 就绪 = 有登记事实 + 明确就绪 + 有卡版本摘要。缺关键位（unknown）按**未就绪**处理：
+    // 写前闸不许「少一个字段就默认 ready」。
+    const 就绪 = 读数?.已登记 === true && 读数?.就绪 === true && Boolean(读数?.卡版本);
+    if (!就绪) logger?.warn?.(`[dsh-mind] Lead 实例钉版未就绪（模型面自治写将 fail-closed）：${读数?.原因 ?? '没有可判就绪读数'}（实例 ${主体.id}）`);
+    return { ...读数, 就绪, ...(就绪 ? {} : { 原因: 读数?.原因 ?? '没有可判就绪读数（unknown ⇒ 未就绪）' }) };
+  } catch (error) {
+    const 原因 = error instanceof Error ? error.message : String(error);
+    logger?.warn?.(`[dsh-mind] Lead 实例钉版失败（模型面自治写将 fail-closed）：${原因}`);
+    return { 已登记: false, 就绪: false, 卡版本: null, 原因 };
+  }
+}
+
+/**
+ * 把**该 Root 实例已钉住的 Lead 规程**注入组织上下文（v2 条目10 · W7 实证补修）。
+ *
+ * 时机：`system-prompt/assemble` 里、首个真实模型组织上下文装配之前。出生/钉版走
+ * **同一个真实宿主事实入口**（`钉Lead实例` → `ensureLeadInstance`），只对真实根 Agent；
+ * 子会话（成员）/设置页等伪 Lead 形状不会到这里，也不从 args 推身份。
+ *
+ * 失败语义：读卡/钉版失败**不假成功**——不注入任何「看起来是规程」的正文，只显式标
+ * 「未就绪 + 自治写已 fail-closed、诊断读可用」；不抛错，避免整轮会话起不来。
+ * 运行中实例的规程来自钉住快照（`cardOf.段`），后续改现行卡不会换脸。
+ *
+ * @param {object} assembly
+ * @param {any} agent 宿主装配上下文里的真实 Agent
+ * @param {object} org
+ * @param {any} logger
+ */
+async function 注入Lead已钉规程(assembly, agent, org, logger) {
+  try {
+    if (!assembly || typeof assembly !== 'object' || !Array.isArray(assembly.sections)) return assembly;
+    // 只认**真实 Agent**（有 session.id 的宿主会话事实）：没有会话 id 的任意 Lead 形状
+    // （如设置页路由主体）不在这里造人；子会话由 agentSubject 判成成员后跳过。
+    const 会话id = agent?.session?.id;
+    if (typeof 会话id !== 'string' || !会话id.trim()) return assembly;
+    const 主体 = agentSubject({ agent });
+    if (主体?.kind !== 'Lead' || !主体.id) return assembly;
+    const 登记 = await 钉Lead实例(org, 主体, logger);
+    let 段文本;
+    if (登记?.就绪 !== true) {
+      段文本 = [
+        '【Lead 岗位规程 · 未就绪】',
+        `实例 ${主体.id} 的岗位卡钉版未就绪（${登记?.原因 ?? 'unknown'}）：自治写已按 fail-closed 拒绝；`,
+        '只读诊断（status / workbench / audit_tail / task_criteria）仍可用。请先由主权者修好 Lead 岗位卡与身份档案。',
+      ].join('\n');
+    } else {
+      const 钉 = await org.registry.cardOf(主体.id);
+      const 段 = 钉?.段 ?? {};
+      // 卡解析出的段键是 `个体L0` / `个体L1`；旧接口/别处可能带段名，两种形状都认。
+      const 取段 = (...键) => 键.map((k) => 段?.[k]).find((v) => typeof v === 'string' && v.trim()) ?? '';
+      const L0 = String(取段('个体L0', '个体L0 · 身份核心', '个体L0 · 身份核心（锁定）', '个体L0 · 身份')).trim();
+      const L1 = String(取段('个体L1', '个体L1 · 规则')).trim();
+      const 能力 = (钉?.能力引用 ?? []).join('、');
+      段文本 = [
+        `【Lead 岗位规程 · 已钉卡版本 ${(钉?.卡版本?.摘要 ?? '').slice(0, 12) || '未知'}】`,
+        ...(L0 ? [`个体L0 · 身份核心：${L0}`] : []),
+        ...(L1 ? [`个体L1 · 规则：${L1}`] : []),
+        `个体L2 · 能力引用（只引用，不内嵌正文）：${能力 || '（无）'}`,
+        '运行中实例以本钉住版本为准；现行卡后续改动不会替换这些规程。',
+      ].join('\n');
+    }
+    const 既有 = assembly.sections.find((section) => section?.name === 'mind:lead-pinned-rules');
+    if (既有) return { ...assembly, sections: assembly.sections.map((s) => (s === 既有 ? { ...s, text: 段文本 } : s)) };
+    return { ...assembly, sections: [...assembly.sections, { name: 'mind:lead-pinned-rules', text: 段文本 }] };
+  } catch (error) {
+    logger?.warn?.(`[dsh-mind] Lead 已钉规程注入失败（不假成功，也不炸整轮）：${错误消息(error)}`);
+    return assembly;
+  }
+}
 
 /** 布尔型参数白名单（与上方 schema 的 type:'boolean' 一一对应）。 */
 const BOOLEAN_ARGS = new Set(['显式', '含失效', '全量', '敏感', '披露豁免', '暂不投递', '延后', '未投递']);
@@ -786,7 +1238,7 @@ function normalizeArgs(args) {
     if (out[key] === 'true') out[key] = true;
     else if (out[key] === 'false') out[key] = false;
   }
-  for (const key of ['负责人', '判据', '依赖', '分歧清单', '反例面', '产出物引用', '适用岗位', '收件', '标签', '来源引用']) {
+  for (const key of ['负责人', '判据', '依赖', '复核对象', '分歧清单', '反例面', '产出物引用', '适用岗位', '收件', '标签', '来源引用', '知识候选', '参与者']) {
     const value = out[key];
     if (typeof value === 'string') {
       if (value.trim().startsWith('[')) {
@@ -817,6 +1269,18 @@ function normalizeArgs(args) {
       // 坏串不许静默落成 []（2026-10-12 评审 P2-2）：零分歧检查读空气 ⇒ 「零分歧」假绿。
       throw new InvalidBody('结论集 不是合法 JSON：解析失败不许静默当空集（空集与坏串是两回事）。', {
         detail: { 期望形状: '[{"成员":"member-a","结论":"...","反例面":["..."]}]' },
+      });
+    }
+  }
+  // 记忆处置（task_settle · v2 条目16）：{候选键: "晋升"|"留账本"|"丢弃"} 的对象映射。
+  // 字符串形态按 JSON 解析；坏串响亮拒，不静默当空声明（空对象 {} 是「无候选需处置」的
+  // 合法明示，坏串不是）。
+  if (typeof out.记忆处置 === 'string') {
+    try {
+      out.记忆处置 = JSON.parse(out.记忆处置);
+    } catch {
+      throw new InvalidBody('记忆处置 不是合法 JSON：解析失败不许静默当空声明（空声明与坏串是两回事）。', {
+        detail: { 期望形状: '{"know-xxx":"晋升","候选/member-a/0":"留账本"}' },
       });
     }
   }

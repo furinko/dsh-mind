@@ -39,6 +39,9 @@ export const 端点表 = Object.freeze({
   workbench: `${路由前缀}/workbench`,
   ping: `${路由前缀}/ping`,
   delegation: `${路由前缀}/delegation`,
+  // v2 条目14/17（2026-10-18 补修F）：介入度待决清单与主权者逐请求决议。
+  // 与调度授权同一档：读/写都要求宿主 Connection 认证，不退回无头本机通道。
+  intervention: `${路由前缀}/intervention`,
 });
 
 /** 组件名（ping 自检与被审计的「谁在服务」都用它）。 */
@@ -299,9 +302,9 @@ function 当前ISO(org) {
 
 /**
  * `/plugins/dsh-mind/presence`：GET 读、POST 写（body 只认 `{开关?, 小时?}`）。
- * @param {{ org: object, 项目: string }} spec
+ * @param {{ org: object, 项目: string, ctx?: object }} spec
  */
-export function presence路由({ org, 项目 }) {
+export function presence路由({ org, 项目, ctx }) {
   return async function presence端点(req, res) {
     const 方法 = String(req?.method ?? 'GET').toUpperCase();
     if (方法 === 'GET' || 方法 === 'HEAD') {
@@ -323,6 +326,17 @@ export function presence路由({ org, 项目 }) {
         记同源拒绝('presence·写', req, 判写.为什么);
         return 回拒绝(res, 403, '写入被拒：' + 判写.为什么 + '。收到：' + 指纹串(req), '从本机页面用 fetch 提交 JSON。');
       }
+      // P1-06（全面审查 2026-10-17）：读投影的无头本机取舍不自动延伸到**写**。
+      // 写失联限制/响应期限是主权者级设置，必须与 delegation 写路由同一套宿主 Connection
+      // 认证；认证缺席即不可用，绝不回退到只靠回环 + 缺 Fetch Metadata 的写栅栏。
+      const connection = ctx?.get?.('connection');
+      if (!connection || typeof connection.requestRejection !== 'function') {
+        return 回JSON(res, 503, { 成功: false, 结果: '不可用', 理由: '宿主 Connection 认证不可用；presence 写入口不会退回无认证通道。' });
+      }
+      const rejection = connection.requestRejection(req);
+      if (rejection !== undefined) {
+        return 回JSON(res, rejection === 401 ? 401 : 403, { 成功: false, 结果: '拒绝', 理由: '宿主拒绝此请求：presence 写需要已认证的同源浏览器设置入口。' });
+      }
       let 原文;
       try {
         原文 = await 读请求体(req);
@@ -341,10 +355,13 @@ export function presence路由({ org, 项目 }) {
         回JSON(res, 400, { 成功: false, 结果: '结构不合规', 理由: '请求体必须是一个 JSON 对象，例如 {"小时":168}。', 缺什么: [] });
         return;
       }
-      // **只认这两个键**：body 里别的字段一律不进 args（否则浏览器这一侧会比命令面更宽）。
+      // **只认设置键**：body 里别的字段一律不进 args（否则浏览器这一侧会比命令面更宽）。
       const 参数 = {};
       if (Object.hasOwn(载荷, '开关')) 参数.开关 = 载荷.开关;
       if (Object.hasOwn(载荷, '小时')) 参数.小时 = 载荷.小时;
+      // v2 条目14/17：介入度三档 + 复核免审全局开关（与命令面同一份设置入口）。
+      if (Object.hasOwn(载荷, '介入度')) 参数.介入度 = 载荷.介入度;
+      if (Object.hasOwn(载荷, '复核免审')) 参数.复核免审 = 载荷.复核免审;
       try {
         回JSON(res, 200, await presence包({ org, 项目, 参数 }));
       } catch (error) {
@@ -409,6 +426,90 @@ export function ping路由({ org, ctx }) {
       ...(无头通道.读 + 无头通道.写 > 0 ? { 本机通道: { ...无头通道 } } : {}),
       时间: 当前ISO(org),
     });
+  };
+}
+
+/**
+ * `/plugins/dsh-mind/intervention`：GET 读介入度待决清单、POST 落主权者逐请求决议。
+ *
+ * 三条纪律：
+ *  1. **读也不退回无头通道**：清单里有「谁要对什么做什么」，与调度授权同一档，
+ *     要求宿主 Connection 认证（比 presence 的只读投影更严——那是公开读数，这是待决事项）。
+ *  2. **body 只认三个键**：`{请求id, 决定, 理由}`。任何 subject/kind/role/面 都不进调用；
+ *     主权者主体由 `org.intervention` 内部构造（模型参数永远造不出这个身份）。
+ *  3. **不代理任意动作**：它只做「读清单 / 落决议」，不跑原写动作；重放由原申请者
+ *     带 `审批引用` 发起，审批不能替申请人执行。
+ *
+ * @param {{ org: object, 项目: string, ctx?: object }} spec
+ */
+export function intervention路由({ org, 项目, ctx }) {
+  return async function intervention端点(req, res) {
+    const 方法 = String(req?.method ?? 'GET').toUpperCase();
+    if (!['GET', 'POST', 'PUT'].includes(方法)) return 回方法不对(res, 方法, 'GET（读）或 POST（写）');
+    // 认证闸前置于同源栅栏：两者都要过，任一缺席即不可用（不退回更宽的通道）。
+    const connection = ctx?.get?.('connection');
+    if (!connection || typeof connection.requestRejection !== 'function') {
+      return 回JSON(res, 503, { 成功: false, 结果: '不可用', 理由: '宿主 Connection 认证不可用；介入审批入口不会退回无认证通道。' });
+    }
+    const rejection = connection.requestRejection(req);
+    if (rejection !== undefined) {
+      return 回JSON(res, rejection === 401 ? 401 : 403, { 成功: false, 结果: '拒绝', 理由: '宿主拒绝此请求：介入审批需要已认证的同源浏览器设置入口。' });
+    }
+    if (方法 === 'GET') {
+      const 判读 = 读栅栏(req);
+      if (!判读.ok) {
+        记同源拒绝('intervention·读', req, 判读.为什么);
+        return 回拒绝(res, 403, '读取被拒：' + 判读.为什么 + '。收到：' + 指纹串(req), '从本机页面访问该端点。');
+      }
+      try {
+        回JSON(res, 200, { 成功: true, action: 'intervention', 项目: 取项目(req, 项目), 待决: await org.intervention.人侧待决({ 项目: 取项目(req, 项目) }) });
+      } catch (error) {
+        回失败(res, error);
+      }
+      return;
+    }
+    const 判写 = 写栅栏(req);
+    if (!判写.ok) {
+      记同源拒绝('intervention·写', req, 判写.为什么);
+      return 回拒绝(res, 403, '写入被拒：' + 判写.为什么 + '。收到：' + 指纹串(req), '从本机页面用 fetch 提交 JSON。');
+    }
+    let 原文;
+    try {
+      原文 = await 读请求体(req);
+    } catch (error) {
+      回JSON(res, 413, { 成功: false, 结果: '结构不合规', 理由: `请求体读不出来：${error instanceof Error ? error.message : String(error)}`, 缺什么: [] });
+      return;
+    }
+    let 载荷;
+    try {
+      载荷 = 原文.trim() === '' ? {} : JSON.parse(原文);
+    } catch (error) {
+      回JSON(res, 400, { 成功: false, 结果: '结构不合规', 理由: `请求体不是合法 JSON：${error instanceof Error ? error.message : String(error)}`, 缺什么: [] });
+      return;
+    }
+    if (!载荷 || typeof 载荷 !== 'object' || Array.isArray(载荷)) {
+      回JSON(res, 400, { 成功: false, 结果: '结构不合规', 理由: '请求体必须是一个 JSON 对象，例如 {"请求id":"…","决定":"批准"}。', 缺什么: [] });
+      return;
+    }
+    // 只认三个键：body 里别的字段一律不进调用（主体由服务内部构造，不接受声明）。
+    const 参数 = {};
+    if (Object.hasOwn(载荷, '请求id')) 参数.请求id = 载荷.请求id;
+    if (Object.hasOwn(载荷, '决定')) 参数.决定 = 载荷.决定;
+    if (Object.hasOwn(载荷, '理由')) 参数.理由 = 载荷.理由;
+    try {
+      回JSON(res, 200, {
+        成功: true,
+        ...(await org.intervention.人侧决议({
+          ...参数,
+          通道: '设置页',
+          认证: '宿主 Connection 已认证（同源浏览器设置入口）',
+          // 不按 query 项目收窄：请求 id 是含项目的指纹，跨项目决议由主权者自己做主。
+          项目: null,
+        })),
+      });
+    } catch (error) {
+      回失败(res, error);
+    }
   };
 }
 
@@ -507,10 +608,11 @@ export function 挂同源路由(spec) {
       if (!ws || typeof ws.register !== 'function') return false;
       const 新挂 = [];
       try {
-        新挂.push(ws.register({ kind: 'exact', path: 端点表.presence, handler: presence路由({ org, 项目 }) }));
+        新挂.push(ws.register({ kind: 'exact', path: 端点表.presence, handler: presence路由({ org, 项目, ctx }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.workbench, handler: workbench路由({ org, 项目 }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.ping, handler: ping路由({ org, ctx }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.delegation, handler: delegation路由({ ctx, settings: spec.调度设置 }) }));
+        新挂.push(ws.register({ kind: 'exact', path: 端点表.intervention, handler: intervention路由({ org, 项目, ctx }) }));
       } catch (error) {
         // 挂到一半失败：把已挂的撤掉，别在宿主的注册表里留半个我们。
         for (const 撤 of 新挂) {
@@ -558,7 +660,7 @@ export function 挂同源路由(spec) {
           logger.warn?.(
             `[dsh-mind] 同源路由放弃挂载：轮询 ${次数} 次（${间隔毫秒}ms/次）都没挂上。`
             + (最近错误 ? ` 最后一次注册失败：${最近错误}。` : ' 原因：一直没拿到 webServer。')
-            + ` 未注册的端点：${端点表.presence}（设置页读写）、${端点表.workbench}（看板投影）、${端点表.ping}（自检）、${端点表.delegation}（调度授权设置）。`
+            + ` 未注册的端点：${端点表.presence}（设置页读写）、${端点表.workbench}（看板投影）、${端点表.ping}（自检）、${端点表.delegation}（调度授权设置）、${端点表.intervention}（介入度待决与决议）。`
             + ` 影响面：工作台面板与设置页将保持空白/读取中，命令面（/mind）不受影响。`,
           );
         }
@@ -566,5 +668,5 @@ export function 挂同源路由(spec) {
     }, 间隔毫秒);
     if (typeof 定时器.unref === 'function') 定时器.unref();
     return 收尾;
-  }, 'dsh-mind: 同源路由（presence / workbench / ping / delegation）');
+  }, 'dsh-mind: 同源路由（presence / workbench / ping / delegation / intervention）');
 }

@@ -182,7 +182,7 @@ async function 检查(profileDir) {
   if (!deps.includes(BUNDLE)) 失败.push(`dependencies 缺 ${BUNDLE}（装了吗？）`);
   else 通过.push(`dependencies 有 ${BUNDLE}（${profile.dependencies[BUNDLE]}）`);
   const bundles = profile.dsh?.profile?.bundles ?? [];
-  if (!bundles.includes(BUNDLE)) 失败.push(`dsh.profile.bundles 缺 ${BUNDLE} —— 官方安装器装完会自动补；缺了就是卡没挂上`);
+  if (!bundles.includes(BUNDLE)) 失败.push(`dsh.profile.bundles 缺 ${BUNDLE} —— 官方安装器装完会自动补；缺了就是卡没挂上（DSH 0.2.1 起装载器只按 bundles 清单应用 bundle patch，运行时升级后常见丢失：用插件管理器重新启用即可）`);
   else 通过.push(`bundles 含 ${BUNDLE}`);
 
   const 包目录 = join(profileDir, 'node_modules', BUNDLE);

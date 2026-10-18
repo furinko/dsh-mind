@@ -247,8 +247,20 @@ function parseRoles(text) {
     .filter(Boolean);
 }
 
-/** @param {string} text */
-function parseRefs(text) {  return String(text)
+/**
+ * 能力 / 经验引用的一行一项解析（岗位卡「个体L2/个体L3」段的标准读法）。
+ *
+ * 为什么导出：`src/card-credential.js` 校验卡快照时要把段重派生成引用列表——它原本
+ * 从 registry 抄了一份同形实现，修后统一到这里（同一段正文的分词口径只能有一处，
+ * 否则「读卡时怎么拆」与「验快照时怎么拆」会漂）。语义与修前逐字一致：
+ * 以换行 / 逗号 / 中文逗号 / 顿号 / 分号（含全角）分隔，去掉行首项目符号与反引号，
+ * 过滤空项与以 `#` 开头的注释行；**不去重、不改序**（顺序是卡上的原文顺序）。
+ *
+ * @param {string} text 段正文
+ * @returns {string[]}
+ */
+export function parseRefs(text) {
+  return String(text)
     .split(/[\n,，、;；]+/)
     .map((s) => s.replace(/^[-*•\d.\s`]+/, '').replace(/`/g, '').trim())
     .filter((s) => s && !s.startsWith('#'));

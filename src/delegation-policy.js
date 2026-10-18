@@ -5,13 +5,18 @@ import { createHash } from 'node:crypto';
 import { Denied, Fault, InvalidBody } from './kernel/errors.js';
 import { assertPathSegment } from './paths.js';
 
-const OFFICIAL_TEAM_OPENER = 'Agent Teams is available in this session, but create teammates only when the user explicitly asks to use Agent Teams or teammates.';
+// 上游契约锚（2026-10-17 换代核对）：当前构建的官方 team:policy 真实文本出自
+// app.asar → dsh-experimental-tool-agent-team/lib/index.js 的 teamPolicy()。
+// 上游把旧的授权闸句（"…but create teammates only when the user explicitly asks…"）
+// 整句删除——新文本是纯协作纪律（写域 / FS_STALE_VERSION / 消息语义），没有要替换的闸门句。
+// 锚取首行+次段开头：够长能咬住所认的契约，上游再漂移即硬拒（fail-closed，不静默适配）。
+const OFFICIAL_TEAM_OPENER = 'Agent Teams is available in this session\n\nThe Team Lead and all teammates share the same working directory and filesystem.';
 const CREATION_TOOLS = new Set(['spawn_teammate', 'subagent', 'subagent_fork', 'role_spawn', 'workflow']);
 
 /** 唯一授权判据；不负责猜测任务是否值得委派，那是 Lead 的职责。 */
 export class DelegationPolicy {
   /** 部署与运行自检共用的代次标记，不以心跳计数冒充版本。 */
-  static generation = 'mind-delegation-v1';
+  static generation = 'mind-delegation-v2';
 
   /**
    * @param {{mode?: 'explicit-user'|'lead-discretion', projects?: string[], authorizationRef?: string}} [config]
@@ -114,12 +119,20 @@ export class DelegationPolicy {
     const header = [
       `[${DelegationPolicy.generation}] The deployment owner explicitly authorizes the Team Lead to choose direct execution, ordinary subagents, or Agent Teams according to task needs in project ${JSON.stringify(project)}.`,
       'Delegation is optional: do not create agents merely to parallelize. Use mind member_spawn for governed delegation; it registers the actual instance, binds a task with acceptance criteria, loads role instructions, and only then sends the work.',
-      'Only the Lead chooses and initiates delegation. Members and reviewers cannot create further agents or grant themselves authority. Reviewer appointments still require the existing sovereign authorization.',
+      // v2（口述收敛 2026-10-18 条目1/3）：复核员是**普通岗位卡**，不再需要主权者任命授权——
+      // Lead 按任务用 member_spawn 起复核实例即完成就位，独立性由复核时的冲突排除
+      // （交卷人 / 负责人不得复核本任务）与机制附上的冻结判据承担。
+      // 修前这句写的是 "Reviewer appointments still require the existing sovereign authorization"，
+      // 与真源冲突：一句提示词就是一次「任命授权」闸的复活（且模型会照做）。
+      'Only the Lead chooses and initiates delegation. Members and reviewers cannot create further agents or grant themselves authority. Reviewers are ordinary role cards: the Lead spawns a review instance per task like any other member, and independence is enforced by conflict exclusion (whoever submitted or owns the work must not review it) plus the criteria frozen by the mechanism, not by any appointment authorization.',
       'Use mind member_message and member_stop for organization-managed instances; Team names and ordinary child session ids are different addresses. The organization task graph remains the business-state authority; the Team task board is an execution mirror, not a second acceptance authority.',
     ].join('\n');
+    // 拼接形态换代（2026-10-17）：旧契约是「换掉授权闸句、保留尾巴」；上游删掉闸句后，
+    // 改为组织授权头**前置**、官方全文逐字保留——不删不改不加相反指令（上游已不再说
+    // 「仅用户明确要求才可创建」，组织纪律是部署者附加约束，与上游文本无冲突）。
     return {
       ...assembly,
-      sections: sections.map((section) => section === team[0] ? { ...section, text: header + original.slice(OFFICIAL_TEAM_OPENER.length) } : section),
+      sections: sections.map((section) => section === team[0] ? { ...section, text: header + '\n\n' + original } : section),
     };
   }
 

@@ -16,9 +16,14 @@ import { InvalidBody, Denied, Fault } from './kernel/errors.js';
 import { objectId } from './kernel/ids.js';
 import { buildIndex, formatMiss, search } from './retrieval.js';
 import { DIR, MEMORY_KINDS } from './paths.js';
+import { 记忆条目在读域 } from './review-scope.js';
+// 「已被合法采纳」的唯一判据住在任务图（补修K 字段合同），晋升面直接复用、不另抄状态判断。
+// 任务图的 fold 是纯函数、tasks.js 不反向依赖记忆服务 ⇒ 无环；import 真加载（不是形状桩）。
+import { fold as foldTaskEvents, 已被合法采纳 } from './tasks.js';
 
 /** 归档后可读的角色（§7 表）。 */
-const ANSWER_READERS = ['主权者', 'Lead', '复核者'];
+// v2（2026-10-18）：复核者退出主体类，复核员岗实例按 roleId 放行（两处消费点各自判）。
+const ANSWER_READERS = ['主权者', 'Lead'];
 
 /**
  * remember 内部通道记号（2026-10-13 审查 P1-11）：`派生自` / `同锁追加` 只许 overturn
@@ -189,9 +194,9 @@ export class MemoryService {
     // 是 overturn 的内部参数——修前 remember 签名照收、零校验，任何调用方传 `派生自` 即可
     // 伪造「谁推翻谁」的血缘事实，传 `同锁追加` 函数可向账本追加任意构造行。
     // 现在凭模块内 Symbol 记号放行 overturn 自己，其余一律响亮拒。
-    if ((input.派生自 !== undefined || input.同锁追加 !== undefined) && input[内部通道] !== true) {
-      throw new InvalidBody('派生自 / 同锁追加 是记忆服务的内部通道（推翻替换链与伴随落账），不接受外部传入：血缘是「谁推翻谁」的事实，不是自报项。', {
-        detail: { 收到的内部键: [input.派生自 !== undefined ? '派生自' : null, input.同锁追加 !== undefined ? '同锁追加' : null].filter(Boolean) },
+    if ((input.派生自 !== undefined || input.同锁追加 !== undefined || input.幂等键 !== undefined) && input[内部通道] !== true) {
+      throw new InvalidBody('派生自 / 同锁追加 / 幂等键 是记忆服务的内部通道（推翻替换链、伴随落账与受限晋升去重），不接受外部传入：血缘与「这次晋升是否已产过」都是机制事实，不是自报项。', {
+        detail: { 收到的内部键: [input.派生自 !== undefined ? '派生自' : null, input.同锁追加 !== undefined ? '同锁追加' : null, input.幂等键 !== undefined ? '幂等键' : null].filter(Boolean) },
       });
     }
     if (!MEMORY_KINDS.includes(kind)) {
@@ -209,8 +214,9 @@ export class MemoryService {
     if (!text) throw new InvalidBody('记忆内容为空：空条目会污染检索面。');
 
     const 项目 = input.项目 ?? null;
+    const 通用 = 项目 === '通用';
     if (kind === '知识' && !项目) {
-      throw new InvalidBody('知识必须恒打项目标签：它产生于某个项目。');
+      throw new InvalidBody('知识必须恒打项目标签：它产生于某个项目。项目无关的知识显式传 项目=「通用」（v2 条目22 的通用命名空间）。');
     }
     if (kind === '作答' && !项目) {
       throw new InvalidBody('作答必须有项目归属：它是某个项目里的一次作答。');
@@ -220,14 +226,37 @@ export class MemoryService {
     const 来源引用 = normalizeRefs(input.来源引用);
     if (来源引用.length > 0) await this.#verifyRefs(来源引用);
 
-    const scope = kind === '经历' || kind === '偏好' ? DIR.跨项目 : 项目;
-    const target = memoryTarget(kind, scope, 项目);
+    // v2 条目22：「通用」命名空间 = 项目无关知识的合法住所，落在跨项目账（与经历/偏好
+    // 同一本账），省掉晋升仪式、不省检查——写入闸与知识同款：披露机械检查照跑、入审计。
+    const scope = kind === '经历' || kind === '偏好' || 通用 ? DIR.跨项目 : 项目;
+    const target = memoryTarget(kind, scope, 通用 ? '通用' : 项目);
+    // 顺序有意（v2 条目15/16 · 补修E）：先让策略引擎按岗位名说结构性边界——复核员岗
+    // 「只读数，不改」必须先于服务层「成员不得写知识」说话，拒绝理由才归到正确的规则上；
+    // 走完这一道，服务层再拦「成员直写知识」（记忆整理也只能走 promoteFromAdopted）。
     await this.policy.check({
       subject: input.subject,
       action: 'create',
       target,
-      context: { task: input.任务 ?? null, 类: kind },
+      // 介入度写入身份（v2 条目14/17 · 补修F）：同一账本目标的多次真实写（如一次结账的
+      // 多条知识晋升）必须靠稳定标签区分；幂等键天然唯一，且同一次业务写的锁外/锁内
+      // 复判会用同一个键。没有幂等键的普通写入不需要标签（各自有独立的目标语义）。
+      context: { task: input.任务 ?? null, 类: kind, ...(input.幂等键 ? { 介入写: `知识:${input.幂等键}` } : {}) },
     });
+    // v2（口述收敛 2026-10-18 条目15/16 · 补修E）：知识 = 晋升动作。
+    // 成员实例**没有**直写知识的通道——受限晋升的唯一入口是 promoteFromAdopted
+    // （已采纳来源 + 双标签 + 真实绑定执行中任务，见那里）；这里再拦一次绕道直写，
+    // 保证「服务层直调」也过同一道闸（复核员已在上面的策略闸被拒，不靠这里的豁免）。
+    if (kind === '知识' && input.subject?.kind === '成员' && input[内部通道] !== true) {
+      throw new Denied('v2 · 知识是晋升动作（条目15）', '成员实例不得直接写「知识」类记忆：普通成员只提交知识候选；记忆整理岗也只能按「已采纳来源」执行受限晋升（promoteFromAdopted），不能自由落笔。', {
+        requireAuthority: 'Lead',
+        howToChange: '普通成员：把内容写成本任务的「经历」并在交卷附知识候选，由 Lead 在结账的记忆处置里逐条判。记忆整理岗：走受限晋升（来源=同项目已采纳任务），见 promoteFromAdopted。',
+      });
+    }
+    if (通用) {
+      // 通用直写 = 生下来就在跨项目面：披露闸与跨项目晋升同一把尺（同一私有方法）。
+      // 写入被拒时条目尚无 id，审计对象用占位名（拒的是企图，条目没出生）。
+      await this.#披露闸({ id: '知识/通用（写入前）', 项目: '通用', 标题: input.标题 ?? text.slice(0, 40), 内容: text, 标签: input.标签 ?? [] }, { subject: input.subject, 披露豁免: input.披露豁免 }, '通用直写');
+    }
 
     // id 的种子**不许含正文**。id 会进每一条审计记录的 `对象.id`，而审计只增、
     // 连主权者也只能追加更正 ⇒ 正文一旦折进 id，物理删除就永远删不干净
@@ -249,16 +278,24 @@ export class MemoryService {
         // 派生自 折 null），新行写明空值也写键，读的人不用猜「缺键是不是丢了」。
         来源引用,
         派生自: typeof input.派生自 === 'string' && input.派生自 ? input.派生自 : null,
+        // v2 条目22：跨项目写（Lead 写别的项目/通用）的「合理」落在依据上——事后可判。
+        依据: typeof input.依据 === 'string' && input.依据.trim() ? input.依据.trim() : null,
         归属: scope,
         项目,
-        // 知识：项目标签恒打；岗位标签默认不打（由 Lead 判定「这条跨项目可复用」后追加）。
-        岗位: kind === '知识' ? null : (input.岗位 ?? null),
+        // v2 条目15：知识 = 岗位 + 项目双标签——岗位在写入时就能打（受限晋升必填，
+        // 让适用岗位真的可召回）；旧口径「默认不打、晋升时追加」只对跨项目晋升副本生效。
+        岗位: input.岗位 ?? null,
+        // v2 条目16（补修E）：受限晋升的幂等键随条目留痕，重试时据此认回同一条产物。
+        ...(typeof input.幂等键 === 'string' && input.幂等键 ? { 幂等键: input.幂等键 } : {}),
         标签: input.标签 ?? [],
         状态: '有效',
         记于: this.clock.iso(),
         轮: input.轮 ?? null,
       }),
       同锁追加: input.同锁追加, // 内部通道（overturn 双行同锁）；外部调用方不传
+      // v2 条目16（补修E）：权限晋升的幂等闸——同一幂等键只产一条知识；业务参数
+      // （岗位/内容/标题）变了则拒，不许拿旧产物冒充本次内容。
+      ...(typeof input.幂等键 === 'string' && input.幂等键 ? { 幂等键: input.幂等键, 幂等比对: { 岗位: input.岗位 ?? null, 内容: text, 标题: input.标题 ?? text.slice(0, 40) } } : {}),
       // R10（审查 2026-10-16 · 提交点 fence）：带引用的写在最终落线点复验引用——锁外
       // 那次校验与本次提交之间完成的 purge（状态行已入账、源行已抹）在这里必被 fold
       // 视图看见：悬空/待删除引用 ⇒ 本条不落线。审查实证的并发窗口就此关闭。
@@ -269,11 +306,94 @@ export class MemoryService {
       主体: input.subject,
       对象: { id: row.id, kind: '知识' === kind ? '知识' : kind },
       依据: '记忆服务：写入必带谁记的 + 怎么知道的',
-      结果: `记入${scope}`,
-      项目,
-      详情: { 类: kind, 来源: 来源.怎么知道 },
+      结果: row.幂等命中 ? '幂等命中（未重复落行）' : `记入${scope}`,
+      项目: 通用 ? '通用' : 项目,
+      详情: { 类: kind, 来源: 来源.怎么知道, ...(input.依据 ? { 依据: input.依据 } : {}), ...(input.幂等键 ? { 幂等键: input.幂等键 } : {}) },
     });
-    return { id: row.id, 类: kind, 归属: scope, 账本: file, 项目, 岗位: row.岗位 };
+    return { id: row.id, 类: kind, 归属: scope, 账本: file, 项目, 岗位: row.岗位, ...(row.幂等命中 ? { 幂等命中: true } : {}) };
+  }
+
+  /**
+   * 契约C 披露机械检查闸（单源）：跨项目晋升（promoteCrossProject）与「通用」直写
+   * （remember 的 项目=「通用」，v2 条目22）共用同一套语义——
+   * 命中敏感模式 / 超长未全检 ⇒ Denied + 「披露拦截」入账（只记模式名，不抄原文）；
+   * 披露豁免是 Lead 专属参数（越权使用同样拦并入账）；Lead 显式豁免 ⇒ 放行但留痕。
+   * R11（审查 2026-10-16）：截断即 fail-closed——未检查的尾部不得视为通过。
+   *
+   * @param {{ id: string, 项目: string|null, 标题?: string, 内容?: string, 标签?: string[] }} entry 被检对象（写入前场景给占位 id）
+   * @param {{ subject: object, 披露豁免?: boolean }} spec
+   * @param {string} 场景 文案锚（如 '跨项目晋升' / '通用直写'）
+   * @returns {Promise<{命中模式: string[], 已截断: boolean}|null>} 豁免放行时的留痕；未触发豁免为 null
+   */
+  async #披露闸(entry, spec, 场景) {
+    const { 命中, 已截断 } = this.#disclosureHits(entry);
+    if (命中.length === 0 && !已截断) return null;
+    const 命中模式 = 命中.map((h) => h.名);
+    if (spec.披露豁免 === true && spec.subject?.kind !== 'Lead') {
+      // 骑手①（契约C 补强 2026-10-09）：披露拦截也入账——「有人试过扩散敏感内容
+      // 被拦」是安全信号，不入账的话复核者永远看不到这次企图。只记模式名，不抄原文。
+      await this.audit.append({
+        动作: '披露拦截',
+        主体: spec.subject,
+        对象: { id: entry.id, kind: '知识' },
+        依据: '契约C 补强：豁免越权使用（披露豁免仅 Lead）',
+        结果: '拒绝',
+        项目: entry.项目,
+        详情: { 命中模式, 已截断, 拒绝类型: '豁免越权', 场景 },
+      });
+      throw new Denied(
+        '法律 披露豁免仅 Lead（契约C 2026-10-09）',
+        `披露豁免是 Lead 专属参数：${spec.subject?.kind ?? '未知'} 不得使用。命中模式：${命中模式.join('、')}${已截断 ? '；且输入超长未全检' : ''}。`,
+        {
+          requireAuthority: 'Lead',
+          howToChange: '由 Lead 核实该条知识确属可披露后，以 Lead 身份带 披露豁免=true 执行。',
+          detail: { 命中模式, 已截断 },
+        },
+      );
+    }
+    if (spec.披露豁免 !== true && 已截断) {
+      await this.audit.append({
+        动作: '披露拦截',
+        主体: spec.subject,
+        对象: { id: entry.id, kind: '知识' },
+        依据: '契约C：超长输入未全检（fail-closed）',
+        结果: '拒绝',
+        项目: entry.项目,
+        详情: { 拒绝类型: '超长未全检', 检查上限: 20_000, 场景 },
+      });
+      throw new Denied(
+        '法律 知识披露机械检查 · 超长输入未全检（fail-closed）',
+        `该条知识的被检面超过机械检查上限（20,000 字符）：检查只覆盖前缀，而扩散复制全文——未检查的尾部不得视为通过。`,
+        {
+          requireAuthority: 'Lead',
+          howToChange: '两条路：① 改写/拆分条目到上限内再试；② Lead 通读全文核实确属可披露后带 披露豁免=true 重试（豁免与「超长」事实一起进审计）。',
+          detail: { 检查上限: 20_000 },
+        },
+      );
+    }
+    if (spec.披露豁免 !== true && 命中.length > 0) {
+      // 骑手①：同上——命中被拒入账（主体 + 命中模式名，不抄敏感原文）。
+      await this.audit.append({
+        动作: '披露拦截',
+        主体: spec.subject,
+        对象: { id: entry.id, kind: '知识' },
+        依据: '契约C 补强：披露机械检查命中，未带豁免',
+        结果: '拒绝',
+        项目: entry.项目,
+        详情: { 命中模式, 拒绝类型: '命中未豁免', 场景 },
+      });
+      throw new Denied(
+        '法律 知识披露机械检查（契约C 2026-10-09）',
+        `该条知识的标题/内容/标签命中敏感模式：${命中模式.join('、')}。${场景}会把这条知识扩散到产生它的项目之外。`,
+        {
+          requireAuthority: 'Lead',
+          howToChange: '两条路：① 先改写条目去掉敏感内容（或让产生它的项目继续私有持有）再试；② Lead 核实确属可披露后带 披露豁免=true 重试——豁免与命中模式会一起进审计。',
+          detail: { 命中模式 },
+        },
+      );
+    }
+    // Lead 显式豁免：放行，但「越过披露闸」这件事必须与命中模式一起留痕（调用方入账）。
+    return { 命中模式, 已截断 };
   }
 
   /**
@@ -285,6 +405,7 @@ export class MemoryService {
    * 命中即拒（Denied 指向豁免面），只有 Lead 的**显式豁免**能放行——豁免与命中模式
    * 一起进审计（`披露豁免`，全记）。清单：出厂默认 `DEFAULT_DISCLOSURE_PATTERNS`，
    * 私有 `部署.json` 的 `披露敏感模式` 整体覆盖（非法正则在策略引擎加载期已响亮抛错）。
+   * 闸本体在 #披露闸（跨项目晋升与「通用」直写共用）。
    *
    * @param {string} id
    * @param {{ subject: object, 岗位: string, 理由: string, 披露豁免?: boolean }} spec
@@ -294,6 +415,12 @@ export class MemoryService {
     const entry = await this.#folded(id);
     if (!entry) throw new InvalidBody(`没有这条记忆：${id}`);
     if (entry.类 !== '知识') throw new InvalidBody('只有知识可以打岗位标签；经历/偏好/作答不跨项目。');
+    // P2（全面审查 2026-10-17）：岗位标签是跨项目知识的「对谁可复用」边界，不能为空。
+    // 修前动作层/schema 都允许省略岗位 ⇒ 副本无标签，其他项目默认召回直接命中。
+    const 岗位 = typeof spec.岗位 === 'string' ? spec.岗位.trim() : '';
+    if (!岗位) {
+      throw new InvalidBody('跨项目晋升必须带「岗位」：没有岗位标签的知识会扩散到所有项目的默认召回面。', { missing: ['岗位'] });
+    }
     // 被否的知识不许扩散（2026-10-12 评审 P1-7）：修前这里只看「存在 + 类=知识」，
     // 一条已失效/被推翻的知识照样晋升到跨项目面——召回面否掉的东西从侧门出去了。
     // 判据与 query 的默认召回面同源（是否已被否 · 唯一源），口径不许分叉。
@@ -314,94 +441,23 @@ export class MemoryService {
     // 幂等闸（2026-10-14 审查 P1-8）：同 id 只能晋升一次。修前二次晋升（换岗位）照样
     // 往跨项目账追一条副本行，而 mergeEntryRows 在两行都带岗位时保留先读到的那份——
     // 第二次晋升静默无效，审计却照记「追加岗位标签 B」：审计与账本脱节 = 假留痕。
-    if (entry.岗位) {
+    // v2 条目15（补修E）：项目内知识生下来就可能带岗位双标签，所以判据不能再看
+    // `entry.岗位`（那会把所有新知识误判成「已晋升」），改看跨项目账上是否已有同 id 副本。
+    const 跨项目副本 = (await this.#rows(this.layout.memoryLog(DIR.跨项目, '知识')))
+      .some((row) => row?.id === id && !isStateRow(row));
+    if (跨项目副本) {
       throw new Denied(
         '记忆处置表 · 不许重复晋升（幂等闸）',
-        `条目 ${id} 已带岗位标签「${entry.岗位}」：同一条知识只能晋升到跨项目面一次。重复晋升会在账上落一条永远不生效的副本行，而审计照记——账本与审计脱节。`,
+        `条目 ${id} 在跨项目账上已有副本：同一条知识只能晋升到跨项目面一次。重复晋升会在账上落一条永远不生效的副本行，而审计照记——账本与审计脱节。`,
         { howToChange: '要换岗位标签：先推翻/失效跨项目副本再以新条目晋升；要扩散的是内容本身，就新开一条带正确岗位的条目。' },
       );
     }
 
     // ── 契约C 披露机械检查：标题 + 内容 + 标签 三个面一起过 ──────────────────
     // 顺序在 policy.check 之后：先由唯一判定点确认「这个主体有权晋升」，
-    // 再由这道内容闸拦「这段文本值不值得扩散」。命中拒绝记「披露拦截」审计
-    // （骑手① 2026-10-09：拦截企图是安全信号）；豁免放行另记「披露豁免」。
-    // R11（审查 2026-10-16）：机械检查只查截断前缀（正则执行时间随输入长度放大），
-    // 而晋升复制的是**全文**——修前 20k 之后的正文等于免检扩散（审查实证：凭据词藏在
-    // 23,401 字符处，无豁免照样跨项目命中）。修法：截断即 fail-closed——尾部未检查
-    // 不得视为通过；要么改写/拆分到检查上限内，要么 Lead 核实全文后显式豁免（进审计）。
-    const { 命中, 已截断 } = this.#disclosureHits(entry);
-    let 豁免留痕 = null;
-    if (命中.length > 0 || 已截断) {
-      const 命中模式 = 命中.map((h) => h.名);
-      if (spec.披露豁免 === true && spec.subject?.kind !== 'Lead') {
-        // 骑手①（契约C 补强 2026-10-09）：披露拦截也入账——「有人试过扩散敏感内容
-        // 被拦」是安全信号，不入账的话复核者永远看不到这次企图。只记模式名，不抄原文。
-        await this.audit.append({
-          动作: '披露拦截',
-          主体: spec.subject,
-          对象: { id, kind: '知识' },
-          依据: '契约C 补强：豁免越权使用（披露豁免仅 Lead）',
-          结果: '拒绝',
-          项目: entry.项目,
-          详情: { 命中模式, 已截断, 拒绝类型: '豁免越权' },
-        });
-        throw new Denied(
-          '法律 披露豁免仅 Lead（契约C 2026-10-09）',
-          `披露豁免是 Lead 专属参数：${spec.subject?.kind ?? '未知'} 不得使用。命中模式：${命中模式.join('、')}${已截断 ? '；且输入超长未全检' : ''}。`,
-          {
-            requireAuthority: 'Lead',
-            howToChange: '由 Lead 核实该条知识确属可披露后，以 Lead 身份带 披露豁免=true 执行晋升。',
-            detail: { 命中模式, 已截断 },
-          },
-        );
-      }
-      if (spec.披露豁免 !== true && 已截断) {
-        await this.audit.append({
-          动作: '披露拦截',
-          主体: spec.subject,
-          对象: { id, kind: '知识' },
-          依据: '契约C：超长输入未全检（fail-closed）',
-          结果: '拒绝',
-          项目: entry.项目,
-          详情: { 拒绝类型: '超长未全检', 检查上限: 20_000 },
-        });
-        throw new Denied(
-          '法律 知识晋升披露机械检查 · 超长输入未全检（fail-closed）',
-          `该条知识的被检面超过机械检查上限（20,000 字符）：检查只覆盖前缀，而晋升复制全文——未检查的尾部不得视为通过。`,
-          {
-            requireAuthority: 'Lead',
-            howToChange: '两条路：① 改写/拆分条目到上限内再晋升；② Lead 通读全文核实确属可披露后带 披露豁免=true 重试（豁免与「超长」事实一起进审计）。',
-            detail: { 检查上限: 20_000 },
-          },
-        );
-      }
-      if (spec.披露豁免 !== true && 命中.length > 0) {
-        // 骑手①：同上——命中被拒入账（主体 + 命中模式名，不抄敏感原文）。
-        await this.audit.append({
-          动作: '披露拦截',
-          主体: spec.subject,
-          对象: { id, kind: '知识' },
-          依据: '契约C 补强：披露机械检查命中，未带豁免',
-          结果: '拒绝',
-          项目: entry.项目,
-          详情: { 命中模式, 拒绝类型: '命中未豁免' },
-        });
-        throw new Denied(
-          '法律 知识晋升披露机械检查（契约C 2026-10-09）',
-          `该条知识的标题/内容/标签命中敏感模式：${命中模式.join('、')}。跨项目晋升会把这条知识扩散到产生它的项目之外。`,
-          {
-            requireAuthority: 'Lead',
-            howToChange: '两条路：① 先改写条目去掉敏感内容（或让产生它的项目继续私有持有）再晋升；② Lead 核实确属可披露后带 披露豁免=true 重试——豁免与命中模式会一起进审计。',
-            detail: { 命中模式 },
-          },
-        );
-      }
-      // Lead 显式豁免：放行，但「越过披露闸」这件事必须与命中模式一起留痕。
-      // 审计只记模式名，不抄命中片段——把敏感原文再抄进账本等于二次披露。
-      // 留痕挂在局部变量上（不用实例字段：并发晋升两个条目会互相覆盖）。
-      豁免留痕 = { 命中模式, 已截断 };
-    }
+    // 再由这道内容闸拦「这段文本值不值得扩散」。闸本体抽为 #披露闸（单源：
+    // 跨项目晋升与「通用」直写共用同一套命中/截断/豁免语义）。
+    const 豁免留痕 = await this.#披露闸(entry, spec, '跨项目晋升');
 
     // 双份留痕：本项目那份保留原样，跨项目那份追一条同 id 的条目，
     // 这样「它产生于本项目」与「它对本岗位可复用」两个事实都在。
@@ -413,7 +469,7 @@ export class MemoryService {
       {
         ...条目原件,
         归属: DIR.跨项目,
-        岗位: spec.岗位,
+        岗位,
         追加: undefined,
         记于: entry.记于,
         跨项目判定: { 由: spec.subject?.id ?? 'unknown', 理由: spec.理由, 于: this.clock.iso() },
@@ -427,19 +483,163 @@ export class MemoryService {
         依据: '契约C（2026-10-09）：Lead 显式豁免披露机械检查，放行跨项目晋升',
         结果: `豁免放行（${豁免留痕.已截断 ? '超长未全检' : ''}${豁免留痕.命中模式.length ? `命中 ${豁免留痕.命中模式.join('、')}` : '无命中'}）`,
         项目: entry.项目,
-        详情: { 命中模式: 豁免留痕.命中模式, 已截断: 豁免留痕.已截断, 岗位: spec.岗位, 理由: spec.理由 },
+        详情: { 命中模式: 豁免留痕.命中模式, 已截断: 豁免留痕.已截断, 岗位, 理由: spec.理由 },
       });
     }
     await this.audit.append({
       动作: '状态变更',
       主体: spec.subject,
       对象: { id, kind: '知识' },
-      依据: '知识标签写入规则：岗位标签默认不打，Lead 判定可复用后追加',
-      结果: `追加岗位标签 ${spec.岗位}`,
+      依据: '知识标签写入规则：Lead 判定跨项目可复用后追加岗位标签（v2 条目15：项目内知识也可在晋升时带岗位标签）',
+      结果: `追加岗位标签 ${岗位}`,
       项目: entry.项目,
       详情: { 理由: spec.理由 },
     });
-    return { id, 岗位: spec.岗位 };
+    return { id, 岗位 };
+  }
+
+  /**
+   * 受限晋升（v2 口述收敛 2026-10-18 条目15/16 · 补修E）：把「已采纳来源」蒸馏成真实知识条目。
+   *
+   * 为什么要有这个方法：`task_settle` 的「晋升」处置此前只把字符串记进结账事件——账上写着
+   * 晋升、知识库里却没有产物（假结账）。现在结账的每一条「晋升」、以及记忆整理岗的受限晋升，
+   * 都走这一个写入口：**真实落条目 + 可回溯来源引用 + 审计**。
+   *
+   * 五道条件（缺一即拒，全部在落笔之前判）：
+   *  ① 主体：Lead / 主权者 / **真实登记在岗的**记忆整理岗实例（自报 roleId 不算——查身份档案）；
+   *  ② 来源：`晋升.来源任务` 必须真实存在且「已被合法采纳」（唯一判据复用 tasks.js，
+   *     不在这里另抄状态字符串判断）；
+   *  ③ 同项目：来源任务项目 = 本次执行项目；知识存储项目 =「通用」时是**公共命名空间**，
+   *     不是另一个真实项目（执行项目与存储命名空间分开表达，不给成员跨项目开侧门）；
+   *  ④ 双标签：岗位（适用岗位）+ 项目；岗位为空的知识会扩散到所有岗位的召回面；
+   *  ⑤ 成员路径：必须带「执行任务」= 绑着本实例、处于「执行中」的自身任务（任务内全权）。
+   *
+   * 幂等（v2 条目16）：幂等键 = `来源项目|来源任务|候选键`。跨项目账/通用账会聚多个项目，
+   * 光靠任务 id + 候选键会串成果，所以来源项目必须进键。同键重试返回旧条目、不重复产知识；
+   * 但业务参数（岗位/内容/标题）变了就拒——旧产物不许冒充本次内容。
+   *
+   * @param {{ subject: object, 项目: string, 岗位: string, 内容: string, 标题?: string, 来源?: string|object,
+   *           来源引用?: string|string[], 依据?: string, 标签?: string[], 任务?: object|null,
+   *           晋升: { 来源任务: string, 候选键: string, 执行任务?: string } }} spec
+   * @returns {Promise<{ id: string, 项目: string, 岗位: string, 来源任务: string, 幂等键: string, 幂等命中: boolean }>}
+   */
+  async promoteFromAdopted(spec = {}) {
+    const subject = spec.subject;
+    const 项目 = String(spec.项目 ?? '').trim();
+    const 岗位 = typeof spec.岗位 === 'string' ? spec.岗位.trim() : '';
+    const 内容 = String(spec.内容 ?? '').trim();
+    const 晋升 = spec.晋升 ?? {};
+    const 来源任务 = String(晋升.来源任务 ?? '').trim();
+    const 候选键 = String(晋升.候选键 ?? '').trim();
+    const 执行任务 = String(晋升.执行任务 ?? '').trim();
+
+    if (!['Lead', '主权者', '成员'].includes(subject?.kind)) {
+      throw new Denied('v2 条目15 · 受限晋升只给 Lead / 主权者 / 记忆整理岗', `${subject?.kind ?? '未知'} 不能晋升知识：未验收的产出不进组织知识。`, {
+        requireAuthority: 'Lead',
+        howToChange: '普通成员只提交知识候选；由 Lead 在结账记忆处置里晋升，或由真实登记的记忆整理岗按已采纳来源蒸馏。',
+      });
+    }
+    if (subject.kind === '成员') {
+      const 档案 = this.#档案成员(subject.id);
+      if (!档案 || 档案.status !== '在岗' || 档案.岗位 !== '记忆整理') {
+        throw new Denied('v2 条目15 · 受限晋升仅限真实登记的记忆整理岗', `实例 ${subject.id} 的档案${档案 ? `岗位为「${档案.岗位 ?? '缺失'}」、状态「${档案.status ?? '缺失'}」` : '里没有登记'}：记忆整理是普通成员岗，但自报岗位不算——晋升权只给真实登记的记忆整理实例。`, {
+          requireAuthority: 'Lead',
+          howToChange: '普通成员只提交知识候选；由 Lead 在执行结账时晋升，或由 Lead 派一个记忆整理岗实例走受限晋升。',
+          detail: { 实例: subject.id, 档案岗位: 档案?.岗位 ?? null, 状态: 档案?.status ?? null },
+        });
+      }
+    }
+    if (!项目) throw new InvalidBody('受限晋升必须指明存储项目 / 命名空间（知识双标签之一）。', { missing: ['项目'] });
+    if (!岗位) throw new InvalidBody('受限晋升必须带「适用岗位」（知识双标签之二）：没有岗位标签的知识会扩散到所有岗位的默认召回面。', { missing: ['岗位'] });
+    if (!内容) throw new InvalidBody('受限晋升内容为空：空知识会污染检索面。');
+    if (!来源任务) throw new InvalidBody('受限晋升必须指明「来源任务」：知识来自哪一个已采纳的任务节点。', { missing: ['来源任务'] });
+    if (!候选键) throw new InvalidBody('受限晋升必须带「候选键」：它进幂等键，重试时据此认回同一条产物。', { missing: ['候选键'] });
+
+    // 源任务：存在性 + 合法采纳（唯一判据住 tasks.js）。
+    const 源处 = await this.#findTask(来源任务);
+    if (!源处) {
+      throw new InvalidBody(`悬空来源任务：任务图里没有 ${来源任务}（晋升的来源必须是真实存在的任务节点，fail-closed）。`, { detail: { 来源任务 } });
+    }
+    if (!已被合法采纳(源处.节点)) {
+      throw new Denied('v2 条目15/16 · 源任务未被合法采纳，不得晋升', `任务 ${来源任务} 当前状态「${源处.节点.状态 ?? '未知'}」（采纳依据：${源处.节点.采纳?.依据 ?? '无'}，需Lead确认：${源处.节点.需Lead确认 === true ? '是' : '否'}）：未验收的产出不进组织知识。`, {
+        requireAuthority: 'Lead',
+        howToChange: '先走完复核 → Lead 采纳（task_accept 引用真票）；或等 Lead 确认旧账采纳后再晋升。',
+        detail: { 来源任务, 状态: 源处.节点.状态 ?? null, 采纳: 源处.节点.采纳 ?? null, 需Lead确认: 源处.节点.需Lead确认 === true },
+      });
+    }
+
+    // 项目边界：成员只在「自己的执行项目」里晋升；存储命名空间可以显式是「通用」，
+    // 但来源任务仍必须在执行项目内——通用是公共命名空间，不是跨项目侧门。
+    let 执行项目 = 源处.项目;
+    if (subject.kind === '成员') {
+      if (!执行任务) {
+        throw new Denied('记忆整理岗受限晋升必须声明「任务」（你被绑定的执行中任务）', '记忆整理是成员岗：晋升必须在自己的任务内（任务内全权、任务外无），且该任务必须绑着你这个实例。', {
+          requireAuthority: 'Lead',
+          howToChange: '在入参里带「任务」= 你名下已派发且处于执行中的节点 id。',
+        });
+      }
+      const 执行处 = await this.#findTask(执行任务);
+      if (!执行处) throw new InvalidBody(`「任务」指的任务节点不存在：${执行任务}。`, { detail: { 任务: 执行任务 } });
+      const 绑定 = (执行处.节点.绑定 ?? []).some((b) => String(b?.实例 ?? '') === String(subject.id));
+      if (!绑定) {
+        throw new Denied('记忆整理岗受限晋升 · 任务没绑定本实例', `任务 ${执行任务} 的绑定里没有实例 ${subject.id}：真实绑定是「任务内全权」的凭据（负责人写的岗位名不算）。`, {
+          requireAuthority: 'Lead',
+          howToChange: '由 Lead 先把这个实例 bind 到该节点（task_bind 实例=你），再晋升。',
+          detail: { 任务: 执行任务, 绑定: 执行处.节点.绑定 ?? [] },
+        });
+      }
+      if (String(执行处.节点.状态) !== '执行中') {
+        throw new Denied('记忆整理岗受限晋升 · 任务不在执行中', `任务 ${执行任务} 当前状态为「${执行处.节点.状态 ?? '未知'}」：记忆整理只在执行中的自身任务里晋升（任务授权随收口终止）。`, {
+          requireAuthority: 'Lead',
+          howToChange: '在任务执行中完成晋升；已交卷/已采纳/已结账的任务不能再充当晋升凭据。',
+          detail: { 任务: 执行任务, 状态: 执行处.节点.状态 ?? null },
+        });
+      }
+      执行项目 = 执行处.项目;
+    }
+    if (String(源处.项目) !== String(执行项目)) {
+      throw new Denied('v2 条目15/16 · 晋升来源必须与执行项目同项目', `来源任务 ${来源任务} 属于项目「${源处.项目}」，而本次晋升发生在项目「${执行项目}」：成员实例禁止跨项目；Lead 要跨项目扩散请在目标项目显式执行（走 memory_lifecycle op=promote + 披露检查）。`, {
+        requireAuthority: 'Lead',
+        howToChange: '在来源任务所在项目里执行晋升；跨项目扩散走 memory_lifecycle op=promote（Lead + 披露检查）。',
+        detail: { 来源任务项目: 源处.项目, 执行项目 },
+      });
+    }
+    if (项目 !== '通用' && String(项目) !== String(源处.项目)) {
+      throw new InvalidBody(`知识存储项目「${项目}」与来源项目「${源处.项目}」不一致：项目内知识只能落在产生它的项目；项目无关的公共知识显式写命名空间「通用」。`, { detail: { 项目, 来源项目: 源处.项目 } });
+    }
+
+    const 标题 = typeof spec.标题 === 'string' && spec.标题.trim() ? spec.标题.trim() : 内容.slice(0, 40);
+    const 来源引用 = normalizeRefs(spec.来源引用);
+    // 幂等键带来源项目：跨项目账 / 通用账会聚多个项目，光靠任务 id + 候选键会串成果。
+    const 幂等键 = `${源处.项目}|${来源任务}|${候选键}`;
+    const row = await this.remember({
+      subject,
+      类: '知识',
+      内容,
+      标题,
+      来源: spec.来源 ?? { 谁: subject?.id, 怎么知道: `已采纳来源：任务 ${来源任务}（候选 ${候选键}）` },
+      项目,
+      岗位,
+      依据: spec.依据,
+      标签: spec.标签,
+      来源引用,
+      // 策略引擎的任务上下文：成员路径必须带（任务内全权）；Lead 路径带结算节点也无害。
+      任务: spec.任务 ?? null,
+      幂等键,
+      [内部通道]: true,
+    });
+    await this.audit.append({
+      动作: '知识晋升',
+      主体: subject,
+      // 对象记来源任务（不是知识 id）：审计读域按「同项目 + 对象命中复核对象」裁剪，
+      // 对象写任务才让正牌复核实例看得见这次晋升；知识 id 在详情里。
+      对象: { id: 来源任务, kind: '任务' },
+      依据: 'v2 条目15/16：已采纳来源蒸馏晋升（源任务必须合法采纳；披露 / 审计同款）',
+      结果: row.幂等命中 ? '幂等命中（未重复产知识）' : '晋升',
+      项目: 源处.项目,
+      详情: { 知识: row.id, 存储项目: 项目, 岗位, 候选键, 来源任务, 来源项目: 源处.项目, 来源引用, 幂等命中: row.幂等命中 === true },
+    });
+    return { id: row.id, 归属: row.归属, 项目, 岗位, 来源任务, 幂等键, 幂等命中: row.幂等命中 === true };
   }
 
   /**
@@ -452,8 +652,10 @@ export class MemoryService {
    * 读者可见性（归档作答）仍由 `读者` 承担，判定（能不能查）由 `subject` 承担。
    * 放行条目按「一次调用一条」入账（档位「记汇总」），不随命中条数膨胀。
    *
-   * @param {{ subject: object, 类?: string[], 项目?: string, 岗位?: string, 文本?: string, 显式?: boolean, 含失效?: boolean, 读者?: object, limit?: number, 条数上限?: number }} query
+   * @param {{ subject: object, 类?: string[], 项目?: string, 岗位?: string, 文本?: string, 显式?: boolean, 含失效?: boolean, 读者?: object, 读域?: object, limit?: number, 条数上限?: number }} query
    *   `limit` 管 `命中` 条数；`条数上限` 管 `条目` 回传条数（默认 50，超出截断并标注）。
+   *   `读域` 是 `review-scope.复核读域()` 的产物：复核员岗只召回「同一项目 + 来源引用与
+   *   读域有交集」的条目（不是 role 全量、不凭会话 cwd 跨库猜）；其它主体传 null/省略。
    * @returns {Promise<{ 命中: object[], 口径: object, 条目: object[], 说明?: string }>}
    */
   async query(query = {}) {
@@ -498,12 +700,27 @@ export class MemoryService {
       // 「显式:true 但不传读者」会让整道检查静默跳过（fail-open）。
       if (entry.类 === '作答' && entry.归档 === true) {
         if (query.显式 !== true) continue;
-        if (!query.读者 || !ANSWER_READERS.includes(query.读者.kind)) continue;
+        if (!query.读者 || !(ANSWER_READERS.includes(query.读者.kind) || query.读者.roleId === '复核员')) continue;
       }
       if (query.项目 && entry.类 === '知识' && entry.项目 && entry.项目 !== query.项目 && entry.归属 !== DIR.跨项目) continue;
       if (query.岗位 && entry.岗位 && entry.岗位 !== query.岗位) continue;
       visible.push(entry);
     }
+
+    // v2（条目4/6 补修 · 复核读域）：复核员岗的检索面按「已绑定复核任务 → 显式复核对象」
+    // 的**结构化血缘**限定（同项目 + 来源引用命中读域），不是 role 全量，也不凭会话 cwd
+    // 去别的项目账本里猜。装在 visible 之后、召回之前：口径与命中数都基于裁剪后的可见集，
+    // 读数不说谎；被裁掉的条数单独报，不静默。
+    let 读域排除 = 0;
+    if (query.读域?.限定 === true) {
+      const 保留 = visible.filter((entry) => 记忆条目在读域(entry, query.读域));
+      读域排除 = visible.length - 保留.length;
+      visible.length = 0;
+      visible.push(...保留);
+    }
+    const 读域说明 = query.读域?.限定 === true
+      ? `检索面按复核读域限定（${query.读域.说明}）：本任务读域之外的条目${读域排除 > 0 ? `另有 ${读域排除} 条被排除` : '为 0 条'}。`
+      : '';
 
     // 「当前有效视图」：失效与被推翻的条目**不进召回**，但**仍留在 `条目` 里**供追溯——
     // 调用方要看到「这条存在过、已经被否掉」，而不是让它悄悄消失（§7 追加状态的本意）。
@@ -530,6 +747,8 @@ export class MemoryService {
       失效条目数: 撤回.filter((e) => !被隔离(e)).length,
       隔离条目数: 撤回.filter(被隔离).length,
       排除失效: query.含失效 === true ? 0 : 撤回.length,
+      // v2 条目4/6：复核读域裁掉多少条（只报数，条目与敏感内容不进读数）。
+      ...(query.读域?.限定 === true ? { 复核读域排除: 读域排除 } : {}),
     };
 
     // `条目` 的回传预算：全量 visible 可能把整个账本塞进一次回复
@@ -550,6 +769,7 @@ export class MemoryService {
         ? `另有 ${撤回.length} 条已失效/被推翻/待删除/已隔离的条目按「当前有效视图」未进召回${口径数.隔离条目数 > 0 ? `（其中 ${口径数.隔离条目数} 条因源对象物理删除被血缘隔离）` : ''}；要看它们请带 含失效: true。`
         : '';
       const 说明 = [
+        ...(读域说明 ? [读域说明] : []),
         ...(条目截断 ? [`条目 共 ${visible.length} 条，超出上限 ${条数上限}，只回传账本序最后 ${条数上限} 条（按账本顺序，非按记于时间排序）；带 条数上限 可调。`] : []),
         ...(视图说明 ? [视图说明] : []),
         ...(query.显式 === true ? ['已显式包含归档作答。'] : []),
@@ -567,7 +787,10 @@ export class MemoryService {
     // 索引缓存（2026-10-13 第四批）：键 = 账本合成签名 + 过滤口径。索引只取决于
     // 「哪些文档进入检索面」，与查询词无关 ⇒ 同一口径下反复检索（看板展开、连续问）
     // 只建一次。5000 行实测：每次重建 351 ms → 命中后只剩一次 search。
-    const 索引键 = `${await this.#签名们(账本文件)}|${JSON.stringify([wanted, query.项目 ?? null, query.岗位 ?? null, query.含失效 === true, query.显式 === true, query.读者?.kind ?? null])}`;
+    // 索引缓存键必须带**读域指纹**：复核员与普通成员即便 读者.kind 相同，可见集也不同；
+    // 漏掉这一维会让先到的读者把索引借给后到的读者（遮罩被缓存旁路）。
+    const 读域指纹 = query.读域?.限定 === true ? `复核:${[...query.读域.集合].sort().join(',')}` : '无';
+    const 索引键 = `${await this.#签名们(账本文件)}|${JSON.stringify([wanted, query.项目 ?? null, query.岗位 ?? null, query.含失效 === true, query.显式 === true, query.读者?.kind ?? null, 读域指纹])}`;
     let index = this.#indexCache.get(索引键);
     if (!index) {
       // 用户标签进检索索引（2026-10-14 审查 P2-19）：修前 标签 只塞 [类, 岗位]——
@@ -586,6 +809,7 @@ export class MemoryService {
     // 账本侧的可见条数走 `条目数`——同名覆盖会让 `formatMiss` 的「候选文档数」虚高（W3 批2）。
     result.口径 = { ...result.口径, ...口径数 };
     if (result.命中.length === 0) result.说明 = formatMiss(result.口径);
+    if (读域说明) result.说明 = [result.说明, 读域说明].filter(Boolean).join(' ');
     if (撤回.length > 0 && query.含失效 !== true) {
       // 「0 命中」与「有材料但被当前有效视图挡住」是两件事，不许折成同一句话。
       // 隔离条目单独点名拉回办法（契约A）：被隔离的条目要看也是带 含失效: true。
@@ -762,6 +986,16 @@ export class MemoryService {
       context: { id, 状态: '物理删除' },
     });
 
+    // P1-01（全面审查 2026-10-17）：物理删除是「不可逆 + 无重试路」的动作，审计必须
+    // **意图先行**。修前先抹内容、最后才写「不可逆操作」——抹除后审计失败 ⇒ 内容已永久
+    // 消失、账上 0 行、重试报「没有这条记忆」。现在先把覆盖账本算出来（只读），
+    // 再落一条「不可逆操作意图」；意图落不下去就不动盘。
+    const 覆盖 = [];
+    for (const scope of [DIR.跨项目, ...(await this.#projectScopes())]) {
+      const file = this.layout.memoryLog(scope, entry.类);
+      if (await exists(file)) 覆盖.push({ scope, file });
+    }
+
     // ── ① 血缘阻断：先算下游闭包（此刻源条目还在账上，索引完整），再逐条隔离 ──────
     const 下游 = await this.#downstreamClosure(id);
     const 隔离行 = [];
@@ -781,6 +1015,17 @@ export class MemoryService {
         },
       });
     }
+    // 意图先行：清理覆盖与初始下游闭包先入账。后续任一步失败，账上至少能回答
+    // 「谁在什么时候、以什么理由、准备抹哪些账、会波及哪些下游」；完成行在末尾。
+    await this.audit.append({
+      动作: '不可逆操作意图',
+      主体: spec.subject,
+      对象: { id, kind: entry.类 },
+      依据: 敏感 ? '记忆处置表：敏感数据' : '记忆处置表：主权者明确要求',
+      结果: `意图：物理删除 ${id}（覆盖 ${覆盖.length} 本账；初始下游隔离 ${下游.length} 条）`,
+      项目: entry.项目,
+      详情: { 理由: spec.理由, 类: entry.类, 清理覆盖: 覆盖.map((x) => x.file), 下游隔离: 下游.map((x) => x.id) },
+    });
     // 源对象自身的「待删除」状态行：物理抹除只抹 条目行（按 id 过滤），状态行留在账上
     // 作为「这里发生过一次物理删除」的只增留痕。
     await this.#appendLedger(this.layout.memoryLog(entry.归属, entry.类), [
@@ -798,11 +1043,6 @@ export class MemoryService {
     // 所以物理删除必须扫**所有**出现过它的账本——只删 `归属` 那一本，
     // 另一本会留下全文副本，而审计却写着「内容已抹掉」：那是一句假话。
     // 漏删的那本正是「原文禁读、副本仍可读」的空窗（评审稿 §C8 明令禁止）。
-    const 覆盖 = [];
-    for (const scope of [DIR.跨项目, ...(await this.#projectScopes())]) {
-      const file = this.layout.memoryLog(scope, entry.类);
-      if (await exists(file)) 覆盖.push({ scope, file });
-    }
     for (const { file } of 覆盖) {
       await withLock(`${file}.lock`, async () => {
         const text = (await readTextOrNull(file)) ?? '';
@@ -875,7 +1115,8 @@ export class MemoryService {
       subject: spec.subject,
       action: 'write',
       target: memoryTarget('作答', spec.项目, spec.项目),
-      context: { id: spec.任务 ?? null, 状态: '归档' },
+      // 一次结账只归档一次；标签把「同一任务的重试」与「另一任务的归档」区分开。
+      context: { id: spec.任务 ?? null, 状态: '归档', 介入写: `记忆:归档:${spec.任务 ?? spec.项目}` },
     });
     // 读与追加在**同一把锁内**（设计债⑦：修前锁外读、`#appendLedger` 锁内写——中间窗口里
     // 并发的交卷/结账不会被归档，漏的那条永远没人补）；候选集从 `fold` 出的**当前视图**滤
@@ -914,7 +1155,7 @@ export class MemoryService {
     const entry = await this.#folded(id);
     if (!entry) return { 可读: false, 原因: '没有这条记忆' };
     if (entry.类 !== '作答' || entry.归档 !== true) return { 可读: true, 原因: '未归档条目对所有在编主体可读' };
-    if (ANSWER_READERS.includes(spec.读者?.kind)) return { 可读: true, 原因: `${spec.读者.kind} 在归档后仍可读（会审分歧清单必须对复核者可见）` };
+    if (ANSWER_READERS.includes(spec.读者?.kind) || spec.读者?.roleId === '复核员') return { 可读: true, 原因: `${spec.读者.kind}${spec.读者.roleId === '复核员' ? '/复核员' : ''} 在归档后仍可读（会审分歧清单必须对复核员可见）` };
     return { 可读: false, 原因: `${spec.读者?.kind ?? '未知主体'} 不可读归档作答；自动检索也不进默认面` };
   }
 
@@ -986,6 +1227,25 @@ export class MemoryService {
       }
     }
     return { 窗口天: 天, 起点, 存量合计, 新增合计, 按类, 晋升 };
+  }
+
+  /**
+   * 结账候选（v2 口述收敛 2026-10-18 条目16）：本任务挂账的「经历」条目清单——
+   * task_settle 把它列给 Lead 逐条判（晋升/留账本/丢弃）。只读投影，不入账
+   * （与 activity 同口径：结账是轮询前的取数，入账会灌爆审计链）。
+   * 口径：归属项目的、来源引用里挂着本任务节点的、当前仍「有效」的经历条目。
+   * v2 补修E：带上 内容/岗位 ——「晋升」要真的蒸馏成知识条目，结账面需要正文与适用岗位；
+   * 拒绝详情里的候选清单只挑 键/类/标题（不把正文灌进错误响应）。
+   * @param {{ 项目: string, 任务: string }} query
+   * @returns {Promise<Array<{ id: string, 标题: string, 类: string, 内容: string, 岗位: string|null }>>}
+   */
+  async settleCandidates(query) {
+    const rows = await this.#rows(this.layout.memoryLog(DIR.跨项目, '经历'));
+    return fold(rows)
+      .filter((entry) => entry.项目 === query.项目
+        && entry.状态 === '有效'
+        && (entry.来源引用 ?? []).includes(query.任务))
+      .map((entry) => ({ id: entry.id, 标题: entry.标题, 类: entry.类, 内容: entry.内容 ?? '', 岗位: entry.岗位 ?? null }));
   }
 
   // ── 内部 ────────────────────────────────────────────────────────────────────
@@ -1074,13 +1334,34 @@ export class MemoryService {
    * @returns {Promise<boolean>}
    */
   async #taskExists(taskId) {
-    const { listFiles } = await import('./kernel/fsx.js');
+    return Boolean(await this.#findTask(taskId));
+  }
+
+  /**
+   * 按 id 找任务节点**并带它所在的项目**（跨全部项目查）。晋升面要判「来源与执行同项目」，
+   * 只回答「存在与否」不够；折叠复用任务图自己的 fold（单一真源，不在这里另写事件语义）。
+   * @param {string} id
+   * @returns {Promise<{ 项目: string, 节点: object }|null>}
+   */
+  async #findTask(id) {
+    const 目标 = String(id ?? '');
+    if (!目标) return null;
     const root = this.layout.private(DIR.基础设施, DIR.任务图);
-    for (const rel of await listFiles(root, { recursive: true, filter: (n) => n.endsWith('tasks.jsonl') })) {
-      const rows = await readJsonl(`${root}/${rel}`);
-      if (rows.some((row) => row?.id === taskId)) return true;
+    for (const 项目 of await listDirs(root)) {
+      const rows = await readJsonl(this.layout.taskLog(项目));
+      const 节点 = foldTaskEvents(rows).get(目标);
+      if (节点) return { 项目, 节点 };
     }
-    return false;
+    return null;
+  }
+
+  /**
+   * 身份档案里的成员记录（晋升权判据的权威源：自报 roleId 不算真实岗位）。
+   * @param {string} id
+   * @returns {{岗位?: string, status?: string}|null}
+   */
+  #档案成员(id) {
+    return this.policy.state?.identity?.members?.[String(id ?? '')] ?? null;
   }
 
   /**
@@ -1171,16 +1452,36 @@ export class MemoryService {
    * 复验读的是 fold 视图（不取锁），在本锁内执行无重入风险。
    *
    * @param {string} file 账本文件
-   * @param {{ kind: string, seed: string, build: (id: string) => object, 同锁追加?: (row: object) => object[], 提交点检查?: () => Promise<void> }} spec
+   * @param {{ kind: string, seed: string, build: (id: string) => object, 同锁追加?: (row: object) => object[], 提交点检查?: () => Promise<void>, 幂等键?: string, 幂等比对?: object }} spec
    *   `同锁追加`（2026-10-12 评审 P3）：与新条目**同一把锁、同一次 appendLines** 落账的
    *   伴随行（如 overturn 的「推翻」状态行）——双行同窗口，不留「新条目在、状态行没落上」
    *   的撕裂态。`提交点检查`（R10）：锁内落线前的最终一道校验，拒绝则本条不落线。
+   *   `幂等键`（v2 条目16 · 补修E）：锁内按它查同账本既有条目——命中即返回旧行（重试
+   *   不重复产知识）；同时核对 `幂等比对` 的业务参数，参数变了就拒（旧产物不能冒充本次
+   *   内容）。查重与落线在同一把锁内，多实例并发重试也只产一条。
    * @returns {Promise<object>} 实际落线的行
    */
   async #appendEntry(file, spec) {
     return withLock(`${file}.lock`, async () => {
       // 锁内必须重读真源（fresh）：id 查重建立在锁内看到的行上，缓存可能落后于别的进程。
       const rows = await readJsonl(file);
+      if (typeof spec.幂等键 === 'string' && spec.幂等键) {
+        const 既有 = rows.find((row) => row?.幂等键 === spec.幂等键 && typeof row?.id === 'string' && !isStateRow(row));
+        if (既有) {
+          const 不符 = Object.entries(spec.幂等比对 ?? {}).filter(([键, 值]) => String(既有[键] ?? '') !== String(值 ?? ''));
+          if (不符.length > 0) {
+            throw new Denied(
+              'v2 条目16 · 晋升幂等键已存在但业务参数不同',
+              `幂等键「${spec.幂等键}」已产出过知识 ${既有.id}，但本次的 ${不符.map(([键]) => 键).join('、')} 与账上那条不一致：不能拿旧知识冒充本次内容，也不能在同一幂等键下落第二条。`,
+              {
+                howToChange: '若本次内容确已不同：先推翻旧条目（overturn）再以新内容晋升；若只是笔误：按账上已有参数重试（幂等命中不会重复产知识）。',
+                detail: { 幂等键: spec.幂等键, 既有: 既有.id, 不符的键: 不符.map(([键]) => 键) },
+              },
+            );
+          }
+          return { ...既有, 幂等命中: true };
+        }
+      }
       const 已用 = new Set(rows.map((row) => row?.id).filter((id) => typeof id === 'string'));
       let id = objectId(spec.kind, spec.seed, { at: this.#nextStamp() });
       while (已用.has(id)) id = objectId(spec.kind, spec.seed, { at: this.#nextStamp() });
@@ -1252,7 +1553,8 @@ export class MemoryService {
       subject: spec.subject,
       action: 'write',
       target: memoryTarget(entry.类, entry.归属, entry.项目),
-      context: { id, 状态, task: spec.任务 ?? null },
+      // 同一账本目标的多次状态写（一次结账里丢弃多条经历）靠条目 id 区分写入身份。
+      context: { id, 状态, task: spec.任务 ?? null, 介入写: `记忆:${状态}:${id}` },
     });
     await this.#appendLedger(this.layout.memoryLog(entry.归属, entry.类), [
       { id: objectId('账目', `${id}:${状态}`, { at: this.clock.ms() }), 指向: id, 追加: 状态, 追于: this.clock.iso(), 依据: spec.原因, 主体: spec.subject, ...extra },

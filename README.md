@@ -1,6 +1,8 @@
 # dsh-mind · 心智 · 数字组织
 
-《心智 · 数字组织设计 v1.5》的**可执行实现**。**一张插件卡，三个组件**。
+《心智 · 数字组织设计 **v2.0**》的可执行实现。**一张插件卡，三个组件**。
+
+> **本轮恢复范围已有实现、门禁与真实宿主链证据。** 工具入口、审批失败清理、Lead真自执行和本人判据读面已补修；会审已实际走到收敛停封。最终采纳以组织任务图为权威，详细范围、独立票与未验边界见[本轮审查跟踪](<docs/技术规格/代码审查报告-m56ik-2026-10-18.md>)，不宣称穷尽全部环境或所有越权入口。
 
 > 设计文档是判据来源，插件是实现。对照表见 [DESIGN-MAP.md](DESIGN-MAP.md)——每一条硬规则都能指到具体文件与测试。
 
@@ -65,14 +67,14 @@ dsh-mind/                        ← 插件列表里的那张卡（不插自己�
 |---|---|---|
 | 角色注册表 | [`src/registry.js`](src/registry.js) | 索引可从真源重算 · 封存 ≠ 删除 · 实例权限只来自岗位 |
 | 共享工作台 | [`src/workbench.js`](src/workbench.js) | **无存储的纯投影**：`projectWorkbench` 是纯函数，磁盘上不留痕 |
-| 任务图 | [`src/tasks.js`](src/tasks.js) | 判据必填 · 派发后冻结 · 待决项是节点状态 · 打回≥2 升级主权者 · **N 份独立答案按人留** |
-| 消息总线 | [`src/bus.js`](src/bus.js) | 线程隔离 · 支持暂不投递 · 会审解锁需「全员已交」 |
+| 任务图 | [`src/tasks.js`](src/tasks.js) | 判据必填 · 派发后冻结 · 负责人岗位与实例绑定分离 · 待决项是状态 · 打回≥2 升级主权者；新会审不占任务节点 |
+| 消息总线 | [`src/bus.js`](src/bus.js) | 线程隔离 · 支持暂不投递 · **发件人恒为真实主体**（会审讨论消息线程=`会审-{id}`，见 §10） |
 | 策略引擎 | [`src/policy.js`](src/policy.js) | 唯一判定点 · fail-closed · 拒绝带可执行理由 · 只读标签不读路径 |
 | 能力库 | [`src/capability.js`](src/capability.js) | 双区各一份 · 同名不合并 · 角色卡只存引用（单源） |
 | 记忆服务 | [`src/memory.js`](src/memory.js) | 写入必带「谁记的 + 怎么知道的」 · 不许改写只能追加 |
 | 审计日志 | [`src/audit.js`](src/audit.js) | 只增（链哈希可验篡改）· 写入无条件 · 不承担回滚 |
 
-外加上层机制：对象存储与版本回滚（[`src/store.js`](src/store.js)）、升级的条款级合并（[`src/upgrade.js`](src/upgrade.js)）、安全类探针与回滚目标定位（[`src/probes.js`](src/probes.js)：见红只定位入账并升级主权者，装回由主权者经版本管理执行）、复核与反趋同（[`src/review.js`](src/review.js)）、BM25 检索（[`src/retrieval.js`](src/retrieval.js)）。
+外加上层机制：对象存储与版本回滚（[`src/store.js`](src/store.js)）、升级的条款级合并（[`src/upgrade.js`](src/upgrade.js)）、安全类探针与回滚目标定位（[`src/probes.js`](src/probes.js)：见红只定位入账并升级主权者，装回由主权者经版本管理执行）、复核（[`src/review.js`](src/review.js)：复核员 = 普通岗位卡，Lead 按任务 `member_spawn` 起实例；独立性 = 冲突排除 + 冻结判据 + 独立上下文 + 采纳权留痕兜底；结论是**硬闸**）、BM25 检索（[`src/retrieval.js`](src/retrieval.js)）。
 
 ## 看板显示什么（以及为什么只显示这些）
 
@@ -81,7 +83,7 @@ dsh-mind/                        ← 插件列表里的那张卡（不插自己�
 | 面板上的块 | 依据 |
 |---|---|
 | **待你决定**（首屏） | §7 唯一点名「工作台把它投影出来」的东西就是待决项；这里再并上打回升级 / 挂起 diff / 探针见红。每项附**该敲的命令**——§9 硬规则③「工作台只读」，所以给命令不给按钮 |
-| **会审** | §10：独立答案（**交齐前投影里只有盲标**——真名、结论、反例面、产出物引用都不出，**连「零分歧」也不投影**：那本身也是内容级信息；交齐才全给，W3 批2/批3 把遮罩做在投影这一层）· 分歧清单 · 反例面 · 零分歧告警。**零分歧按异常呈现**，因为「全票一致 = 异常信号」 |
+| **会审** | §10 + v2：会审页数据源 = 会审自己的存档账本（问题/各答案/分歧/结论/来源会话/时间六要素）。盲评遮罩在服务层（`council.list` 按读者遮：作答中参与者只见他人盲标，交齐解锁才全给）· 分歧清单 · 反例面 · 零分歧告警。**零分歧按异常呈现**，因为「全票一致 = 异常信号」 |
 | **任务** | 投影的两个来源之一（§7「能从任务图 + 日志重算」）：判据 / 冻结 / 打回次数 / 产物引用 / 交卷进度 |
 | **审计尾** | 另一个来源；事实记录，不是讨论 |
 | **状态条** | 闸 / 介入度 / 失联 / 探针——取**已有记录**（探针取最近一次快照），不现场重跑 |
@@ -130,16 +132,22 @@ $DSH_HOME/mind-data/mind-private/       ← 私有区（首次启动自动引导
 
 ```
 status · workbench · policy_check
-task_create · task_reassign · task_dispatch · task_start · task_submit · task_review · task_pending · task_resolve · task_settle
-review_nominate · review_exempt
+task_create · task_reassign · task_bind · task_attach · task_dispatch · task_start · task_submit · task_review · task_accept · task_disagree · task_criteria · task_pending · task_resolve · task_settle
+review_exempt
 memory_write · memory_query · memory_lineage · memory_lifecycle
 capability_list · capability_resolve · capability_read · capability_publish
 bus_send · bus_read · bus_deliver · audit_tail · audit_verify · audit_correct
 store_rollback
 registry_list · registry_can · registry_assign · registry_seal · registry_revoke
-upgrade_pending · review_zero · bus_unlock
-debate_open · debate_say · debate_round · debate_converge
+upgrade_pending · review_zero
+delegation_status · policy_reload
+member_spawn · member_message · member_stop · member_list
+debate_open · debate_answer · debate_unlock · debate_say · debate_round · debate_converge
 ```
+
+注：`review_exempt` 要求主权者在设置中开启全局「复核免审」（默认关，变更入审计）；模型不能替主权者开关。`review_zero` 仍按任务图的独立答案现算。
+
+`debate_*` 六动作是 **v2 会话级会审面**：`debate_open` 可点名既有 `参与者`，或用 `参与岗位` 受管创建 N 个咨询实例（不占节点）；`资料` 是它们唯一文件读根，未提供不等于整个工作区。作答 → 交齐解锁 → 可选讨论 → 收敛，答案统一遮罩，实例只作本场咨询并在结束时退役。`bus_unlock` 已退出模型动作清单，旧任务图会审写入口封闭，历史数据不迁移。
 
 命令面还多两个**专属动作**（工具 schema 里没有它们——模型没有这只手）：
 
@@ -161,7 +169,7 @@ upgrade_compare · upgrade_resolve · upgrade_withdraw
 { "成功": false, "结果": "拒绝",
   "规则": "宪章 §3.4 组织给自己发合格证",
   "理由": "提案者不得自批：本次提案人与批准人是同一个主体。",
-  "要什么授权": "宪章", "怎么改": "换一个未参与提案的主体批准（复核者或主权者）。" }
+  "要什么授权": "宪章", "怎么改": "换一个未参与提案的主体批准（复核实例或主权者）。" }
 ```
 
 ## 安装
@@ -201,6 +209,29 @@ dsh plugin --profile <名> add <本仓路径>
 而「组件」的定义恰恰是**那张卡下面的行**（一行一个独立开关）。三个组件行的来源是
 `dsh-mind` 自己的 `cordis.patch.yml`，bundles 里写 `dsh-mind` 一项就够。
 
+### DSH 运行时升级后的适配检查（0.2.1 起必做）
+
+**症状**：升级 DSH 桌面版后，插件卡还在、`dependencies` 还在，但 `mind` / `mind_guard`
+工具消失、`/mind` 命令没了、面板空白、`/plugins/dsh-mind/ping` 404——**整个插件一行代码都没跑**，
+也没有任何报错。
+
+**根因**：DSH 0.2.1 的装载器**只按 `dsh.profile.bundles` 清单应用 bundle patch**（见
+`dsh-app-boot` 的 `readBundlePatches`）；旧运行时还会顺带应用「普通 dependency」声明的
+`dsh.bundle.patch`。运行时升级 + profile 迁移/插件操作后，`dsh.profile.bundles` 里丢掉了
+`dsh-mind` 这一项，于是 patch 不再应用——**依赖还在、卡没了**，且 fail 得很安静。
+
+**修法**（二选一，改完 HMR 会热重组，未开 HMR 则重启 App）：
+
+- 插件管理器（推荐）：Web 侧边栏「插件」页把 `dsh-mind` 的开关打开（它会追加回 `bundles`）；
+- 手工：在 `profiles/<名>/package.json` 的 `dsh.profile.bundles` 数组里补 `"dsh-mind"`
+  （备份原文件；只加这一项，不要动其它项）。
+
+**必检**：升级后跑一次安装自检——「bundles 缺卡」这条就是本症状的探针：
+
+```powershell
+node scripts/verify-profile-install.mjs %USERPROFILE%\.dsh\profiles\desktop
+```
+
 ### 装完自检（防「装到不完整的包」）
 
 ```powershell
@@ -231,30 +262,18 @@ npm publish         # 需要 npm 账号登录；发布名 dsh-mind（2026-10-11 
 ## 验证
 
 ```powershell
-cd <本仓路径>
-npm test                                             # preflight 门禁 + 内核/宿主/集成用例 + 看板两半区，一条命令跑全
-node components/board/test/client-harness.mjs        # 看板：367 条行为断言
-node --test components/board/test/client.test.js     # 看板：11 条结构断言
+npm test                                             # preflight + 根测试 + board测试 + client-harness
+node scripts/verify-profile-install.mjs --selftest   # 安装形状的反例自测
 ```
 
-数字口径（哪个脚本产出哪个数，本机实测 exit=0）：
-
-| 数 | 产出者 | 怎么看 |
+| 范围 | 单独运行 | 本轮最终合并门禁（2026-10-18） |
 |---|---|---|
-| **327** | `node --test "test/*.test.js"`（只跑根 `test/` 的那一段；`npm test` 中段的第一个 glob） | `ℹ tests 327` / `ℹ pass 327` / `ℹ fail 0` |
-| **367** | `components/board/test/client-harness.mjs` 自己打印（`npm test` 末段） | 末行 `client-harness: 367 条断言全部通过` |
-| **11** | `node --test components/board/test/client.test.js` | `ℹ tests 11` / `ℹ pass 11` / `ℹ fail 0` |
+| 根测试 | `node --test "test/*.test.js"` | 893/893 |
+| 看板结构与设置 | `node --test "components/board/test/*.test.js"` | 21/21 |
+| 浏览器行为 | `node components/board/test/client-harness.mjs` | 503 条断言 |
+| 真加载与安装反例 | `node test/preflight.mjs`；安装 selftest | 均 exit 0 |
 
-这三个数会随断言增加而变——**以脚本自己的输出为准**（表里是写这份文档时的实测值）。
-
-**看板测试此前不在门禁里**：`scripts.test` 原来只跑 `node --test "test/*.test.js"`，
-而看板的 11 条结构断言与 367 条行为断言都在 `components/board/test/` 下——
-看板行为红了而 `npm test` 全绿是可能的。现在两处都进了 `scripts.test`
-（`"components/board/test/*.test.js"` 一个 glob ＋ `client-harness.mjs` 一段）：
-`npm test` 中段两个 glob 合起来是 327 + 11 = 338 条，末段再跑那 367 条行为断言。
-
-**这两个看板脚本在 `components/board/test/` 下**（不在根 `test/`）——
-写成 `node test/client-harness.mjs` 会 MODULE_NOT_FOUND。
+数字以该次脚本输出及源码哈希为准，不能借给后续版本。本版另有17项独立副本变异、四闭探针绿→红校准及当前宿主两实例咨询全生命周期证据；真实审批网页/任意越权入口全覆盖等没有被本轮夹具替代。[完整记录](<docs/技术规格/代码审查报告-m56ik-2026-10-18.md>)。看板入口在 `components/board/test/`，不是根 `test/`。
 
 `preflight` 是门禁：出厂件结构、岗位卡的能力引用、**组件名册与装载行配置对得上**、
 清单里每个被引用的路径都在 `exports` 里、`client.js` 的经典脚本约束、
@@ -263,8 +282,8 @@ node --test components/board/test/client.test.js     # 看板：11 条结构断�
 ## 设计上刻意保留的取舍
 
 - **失联从第一次交互起算**：全新部署由「启动」本身记为第一次交互；否则自治档从第一天就被冻住。
-- **`复核者` 的只读边界属法律档**：它写在 `权限矩阵.md` 的默认文本里，主权者改法即可调整；
-  但「不自批」「不删除」「身份核心锁定」属宪章不变式，任何法律都翻不动。
+- **复核员岗的写动作由策略引擎按岗位名一律拒**（v2）：`#preGrantBoundary` 按 `roleId` 判，且前移到授权块之前——一条 grant 绕不过它。复核员卡**不再是任命例外**：Lead 可建 / 改，但改卡在「预审 / 审批」档是高风险动作，要等主权者放行。
+- **复核硬闸不在 Lead 手里**：`task_review(过)` 只生成当前有效的 `rv-N` 票，不自动采纳；Lead 另用 `task_accept` 引用该任务的有效票。合法免审与旧账显式承接有独立资格检查；新交卷/新成果会使旧票失效。「未验」不得采纳；Lead 只能追加不同意，不能改结论或冻结判据。
 - **检索的证据门槛**：CJK 单字会让几乎任何查询都「命中」点什么，于是 0 命中永不出现。
   因此含双字词或拉丁词的查询必须至少命中一个同级词——这是精度修复，不是排序偏好。
 - **工具范围闸用 `tools.guard()` 而非 `tools/pre-execute`**：前者单调，后来的监听者翻不回放行（§12.1）。
@@ -272,8 +291,7 @@ node --test components/board/test/client.test.js     # 看板：11 条结构断�
   只有次要面（命令、提示段）才降级为告警。吞掉主面只会得到一个「看起来装好了」的假象。
 - **只读面也过判定，但档位是「记汇总」（契约B 2026-10-09）**：`memory.query` / `bus.read` /
   `capability.resolve` 的调用链带 subject 过 `policy.check`，放行**一次调用一条**审计——
-  查询命中 50 条 ≠ 50 条审计。介入度调到「变更预审 / 逐条审批」时读面会被判 `confirm`：
-  那是既有 tierRule 语义，收窄时未改动。
+  查询命中 50 条 ≠ 50 条审计。介入度只罩自治写，读取不因「预审 / 审批」自动变成待批；读取仍受身份、项目和任务读域约束。
 - **知识晋升先过披露机械检查（契约C 2026-10-09）**：`memory_lifecycle op=promote` 对
   标题+内容+标签 跑敏感模式（盘符/UNC 路径、`%环境变量%`、email、凭据词表），命中即拒；
   清单可在私有 `部署.json` 的 `披露敏感模式` 键整体覆盖（非法正则 = 引擎 fail-closed，不静默）。
@@ -291,12 +309,11 @@ node --test components/board/test/client.test.js     # 看板：11 条结构断�
   （记汇总：主体+命中模式名，不抄原文）——拦截企图是安全信号；部署.json
   `披露敏感模式: []` 是主权者显式关闭这道闸——合法且生效，但引擎按状态迁移记一条
   告警档审计（持续关闭不刷屏，再关再喊），不许静默关闭。
-- **会审有讨论段，预算冻结在开启时刻（W2 2026-10-09）**：独立会审交齐后
-  `debate_open` 揭名开讨论（齐卷判据与 `bus_unlock` 同款重算，不信自报）；成员用
-  `debate_say` 落 分歧/表态/答复（线程=节点 id，预算现算：每轮消息数与每人每轮字符
-  双闸，超限拒并给 `x/y` 读数）；`debate_round` 换轮（默认上限 2，用尽须收敛），
-  `debate_converge` 仅 Lead、末位表态记进事件。预算默认
-  `{轮次2·人数8·每轮24条·每人4000字}`，部署.json `会审讨论` 键部分覆盖（坏值
-  fail-closed）；**开启时冻结快照**——之后改部署不追溯进行中的讨论。复核对讨论是
-  **软约束**：讨论中仍可 review，工作台会审行标注「讨论未收敛」——「Lead 不收敛」
-  是要在面板上看得见的信号，不是组织死锁。
+- **会审 = 会话级独立功能（v2 2026-10-18 条目18/19 已落地）**：Lead `debate_open` 抛问题点名参与者
+  （在册在岗实例，≥2 人），成员 `debate_answer` 各交独立答案（盲评：未交齐互不可见），齐后
+  `debate_unlock` 揭名（仅 Lead）；讨论段**默认关闭**，Lead 第一次 `debate_round` 显式开启，
+  成员 `debate_say` 落 分歧/表态/答复（线程=`会审-{id}`，预算现算：每轮消息数与每人每轮字符
+  双闸，超限拒并给 `x/y` 读数）；`debate_converge` 仅 Lead，分歧清单=各答案反例面∪讨论分歧，
+  零分歧命中即审计报警。预算默认 `{轮次2·人数8·每轮24条·每人4000字}`，部署.json `会审讨论`
+  键部分覆盖（坏值 fail-closed）；**发起时冻结快照**。存档在会审自己的事件流（六要素：
+  问题/各答案/分歧/结论/来源会话/时间），会审页读它；旧任务图讨论段原地只读不迁移。

@@ -30,7 +30,7 @@ import { subjectFor } from './org.js';
  * notify.js:311/368、session-budget.js:293/337、mind-mood.js:418）用的都是
  * `header.origin === 'subagent'`（types.d.ts:81，全文只有这一个取值；写入端唯一一处是
  * dsh-subagent 的 childSessionMeta，三条创建路径共用 ⇒ **所有 in-process 子会话都带它，
- * 而顶层会话这个字段缺席**）。成员子会话正是子代理：`startContinuable` 起的成员走的就是
+ * 而顶层会话这个字段缺席**）。成员子会话正是子代理：`startActivation`（旧名 startContinuable）起的成员走的就是
  * 这条路。于是这里用**同一份事实**，与那四处同口径；`delegationDepth` 只作佐证
  * （types.d.ts:82-87：顶层缺席、子会话 = 父+1）。
  *
@@ -117,4 +117,25 @@ export function agentSubject(exec) {
  */
 export function 会话实例键(会话id) {
   return typeof 会话id === 'string' && 会话id.trim() ? 会话id : null;
+}
+
+/**
+ * 给主体补上**钉住的卡版本**（v2 口述收敛 2026-10-18 条目10 的审计面落点）。
+ *
+ * 为什么补在主体上而不是各动作的 `详情` 里：这一位回答的是「它当时凭的是哪一版岗位卡」，
+ * 属于**主体形状**（与 roleId / generation 同级），不是某一次动作的细节。
+ * 补在这里（一个函数），并只在 runAction 一个入口调用 ⇒ 该实例之后每条审计行都带版本
+ * （`src/audit.js` 的 normalizeActor 认这个键），而不用每个 service 各记一遍。
+ *
+ * 缺版本（历史实例未钉 / 读不到）⇒ 原样返回，**不伪造**：账上宁可没有这一位，
+ * 也不能写一个看起来像已钉的摘要。
+ *
+ * @param {object} subject 主体
+ * @param {string|null|undefined} 卡版本 摘要
+ * @returns {object} 新主体（带 卡版本）；无摘要时原样
+ */
+export function 钉版主体(subject, 卡版本) {
+  if (!subject || typeof subject !== 'object') return subject;
+  if (typeof 卡版本 !== 'string' || !卡版本.trim()) return subject;
+  return { ...subject, 卡版本: 卡版本.trim() };
 }
