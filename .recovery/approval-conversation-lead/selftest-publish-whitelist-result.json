@@ -1,0 +1,16 @@
+{
+  "at": "2026-10-18T16:32:32.099Z",
+  "scope": "Tooling self-test in temp dirs only; not a real publication, no real ticket",
+  "positive": {
+    "prepared": 3,
+    "published": 3,
+    "verifyMismatched": 0,
+    "prepareKeptLiveUntouched": true
+  },
+  "negatives": {
+    "sourceShaMismatchRefused": true,
+    "liveDriftAfterPrepareRefused": true,
+    "driftLeftLiveAtForeignContent": true,
+    "noPublishedReceiptWritten": true
+  }
+}

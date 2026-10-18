@@ -1,0 +1,67 @@
+{
+  "control": {
+    "id": "control",
+    "status": 0,
+    "error": null,
+    "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-combined-hFhjQ5\\combined-final-mutation-control.log"
+  },
+  "variants": [
+    {
+      "id": "skip-required-published-entry",
+      "status": 1,
+      "error": null,
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-combined-hFhjQ5\\combined-final-mutation-skip-required-published-entry.log",
+      "detected": true
+    },
+    {
+      "id": "missing-automatic-hook",
+      "status": 1,
+      "error": null,
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-combined-hFhjQ5\\combined-final-mutation-missing-automatic-hook.log",
+      "detected": true
+    },
+    {
+      "id": "latest-race",
+      "status": 1,
+      "error": null,
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-combined-hFhjQ5\\combined-final-mutation-latest-race.log",
+      "detected": true
+    },
+    {
+      "id": "constant-source-fingerprint",
+      "status": 1,
+      "error": null,
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-combined-hFhjQ5\\combined-final-mutation-constant-source-fingerprint.log",
+      "detected": true
+    },
+    {
+      "id": "trusted-caller-label",
+      "status": 1,
+      "error": null,
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-combined-hFhjQ5\\combined-final-mutation-trusted-caller-label.log",
+      "detected": true
+    },
+    {
+      "id": "legacy-identity-backfill",
+      "status": 1,
+      "error": null,
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-combined-hFhjQ5\\combined-final-mutation-legacy-identity-backfill.log",
+      "detected": true
+    },
+    {
+      "id": "swallowed-audit-failure",
+      "status": 1,
+      "error": null,
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-combined-hFhjQ5\\combined-final-mutation-swallowed-audit-failure.log",
+      "detected": true
+    },
+    {
+      "id": "delayed-after-health",
+      "status": 1,
+      "error": null,
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-combined-hFhjQ5\\combined-final-mutation-delayed-after-health.log",
+      "detected": true
+    }
+  ],
+  "sourceUnchanged": true
+}

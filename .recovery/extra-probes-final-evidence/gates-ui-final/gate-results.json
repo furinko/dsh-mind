@@ -1,0 +1,43 @@
+{
+  "at": "2026-10-18T14:13:54.049Z",
+  "root": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-combined-hFhjQ5\\product",
+  "unchanged": true,
+  "files": 286,
+  "results": [
+    {
+      "name": "preflight",
+      "status": 0,
+      "signal": null,
+      "error": null,
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-combined-hFhjQ5\\gates-ui-final\\preflight.log"
+    },
+    {
+      "name": "root-tests",
+      "status": 0,
+      "signal": null,
+      "error": null,
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-combined-hFhjQ5\\gates-ui-final\\root-tests.log"
+    },
+    {
+      "name": "board-tests",
+      "status": 0,
+      "signal": null,
+      "error": null,
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-combined-hFhjQ5\\gates-ui-final\\board-tests.log"
+    },
+    {
+      "name": "client-harness",
+      "status": 0,
+      "signal": null,
+      "error": null,
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-combined-hFhjQ5\\gates-ui-final\\client-harness.log"
+    },
+    {
+      "name": "install-selftest",
+      "status": 0,
+      "signal": null,
+      "error": null,
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-combined-hFhjQ5\\gates-ui-final\\install-selftest.log"
+    }
+  ]
+}

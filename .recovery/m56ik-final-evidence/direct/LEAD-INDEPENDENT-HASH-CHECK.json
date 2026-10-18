@@ -1,0 +1,136 @@
+{
+  "at": "2026-10-18T10:54:18.075Z",
+  "checker": "Lead independent node:crypto byte read",
+  "baselineCount": 280,
+  "candidateBaselineChanged": [
+    {
+      "path": "src/policy.js",
+      "baseline": "098755fca9e1e61377ee816fe999fc1be7065305e4a437f8824c6a6e83684253",
+      "actual": "ff22b8ee9cfd96eca119094c7018cc861a7e07a40fcd354e8850ae9d6342349f"
+    },
+    {
+      "path": "src/tasks.js",
+      "baseline": "82d1ebadad10cfc6dab166ccce6b36823383d5466fb8929fa0db2ea357ce5d82",
+      "actual": "ac9c75f73d0afa95c4fe4a3a7f22da0fa38f0427b55f17a03e7ba3ac4d3149d6"
+    }
+  ],
+  "liveBaselineChanged": [
+    {
+      "path": "INTERFACES.md",
+      "baseline": "e1a8693a4bc51e0a1131e624f23e9c61db2cbee05b83d4c77ab793a70a70e2b5",
+      "actual": "41d6f297f51832d1e777807d18b32f358a50d0eb4b7ddbc9b491a60717b31850"
+    },
+    {
+      "path": "README.md",
+      "baseline": "18610faf04e612d06bcec788ea48db1c3d641ddc48498f4ecbf6733e2a2106a7",
+      "actual": "8b5970856552ed278580080b349071ae6b91e250c8f03e58dc0395113e647ba2"
+    },
+    {
+      "path": "components/kernel/lib/index.js",
+      "baseline": "2808396d7da83264c998413c1303fa2bd2b425873b6013ae581323827ae03694",
+      "actual": "6a87ca31a6d429d2690493425dafc7be1db267919e56f42bde0be82f9073dbb3"
+    },
+    {
+      "path": "test/guard-reviewer-readonly-2026-10-18.test.js",
+      "baseline": "8026d2477d3d48062e673fbc259a9bb64ed702810855471e4aa707b9e1baa932",
+      "actual": "83d6ce65defe807e09243568b5b53f6bf40b8217b906d78aa692b8c4e43edb06"
+    }
+  ],
+  "deliverables": [
+    {
+      "path": "src/policy.js",
+      "live": "098755fca9e1e61377ee816fe999fc1be7065305e4a437f8824c6a6e83684253",
+      "candidate": "ff22b8ee9cfd96eca119094c7018cc861a7e07a40fcd354e8850ae9d6342349f"
+    },
+    {
+      "path": "src/tasks.js",
+      "live": "82d1ebadad10cfc6dab166ccce6b36823383d5466fb8929fa0db2ea357ce5d82",
+      "candidate": "ac9c75f73d0afa95c4fe4a3a7f22da0fa38f0427b55f17a03e7ba3ac4d3149d6"
+    },
+    {
+      "path": "test/direct-lead-execution.test.js",
+      "live": null,
+      "candidate": "42b95c8cb5bb45f4212875da15080597c6bd96ef1136079d1805f8b92d393b10"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "test/direct-lead-execution.test.js",
+      "claimed": "42b95c8cb5bb45f4212875da15080597c6bd96ef1136079d1805f8b92d393b10",
+      "actual": "42b95c8cb5bb45f4212875da15080597c6bd96ef1136079d1805f8b92d393b10",
+      "ok": true
+    },
+    {
+      "path": "test/direct-lead-baseline.mjs",
+      "claimed": "98ee0354b76f482395d2191558cb933b4806f0f178e2322369f04c142a5d3cc6",
+      "actual": "98ee0354b76f482395d2191558cb933b4806f0f178e2322369f04c142a5d3cc6",
+      "ok": true
+    },
+    {
+      "path": "direct-baseline-manifest.json",
+      "claimed": "eeeceb44335cee60c27412b5b8f908be75533d6bcc682d73f36899d0b34ebbe3",
+      "actual": "eeeceb44335cee60c27412b5b8f908be75533d6bcc682d73f36899d0b34ebbe3",
+      "ok": true
+    },
+    {
+      "path": "direct-baseline.txt",
+      "claimed": "2c460bbb0eb36d5b45c04cd5511982caa0994336cfa2c42f17a7b478e945b5c4",
+      "actual": "2c460bbb0eb36d5b45c04cd5511982caa0994336cfa2c42f17a7b478e945b5c4",
+      "ok": true
+    },
+    {
+      "path": "direct-focused-final.txt",
+      "claimed": "b13bb77e22c81175a66d001ebdf172dacce8215c364a6c1a4031a0a255be3872",
+      "actual": "b13bb77e22c81175a66d001ebdf172dacce8215c364a6c1a4031a0a255be3872",
+      "ok": true
+    },
+    {
+      "path": "direct-preflight.txt",
+      "claimed": "829e6153cb68641268575894aba6c65f143a88b1ff19ce230ab64cc7533db805",
+      "actual": "829e6153cb68641268575894aba6c65f143a88b1ff19ce230ab64cc7533db805",
+      "ok": true
+    },
+    {
+      "path": "direct-full-suite.txt",
+      "claimed": "163ea757713ea3196558e6d07ad8d69022e3fe457e531816598cd727036b1ad3",
+      "actual": "163ea757713ea3196558e6d07ad8d69022e3fe457e531816598cd727036b1ad3",
+      "ok": true
+    },
+    {
+      "path": "direct-client-harness.txt",
+      "claimed": "351b896155de1f497d9ea86a138774be57f894da2b2764fc9e3e3f7c18f48e7d",
+      "actual": "351b896155de1f497d9ea86a138774be57f894da2b2764fc9e3e3f7c18f48e7d",
+      "ok": true
+    },
+    {
+      "path": "direct-mutation-self.txt",
+      "claimed": "5331ce3a2ed7c55133251c9781a5e06730fc68d457ff05407a488f3d5b668900",
+      "actual": "5331ce3a2ed7c55133251c9781a5e06730fc68d457ff05407a488f3d5b668900",
+      "ok": true
+    },
+    {
+      "path": "direct-mutation-policy.txt",
+      "claimed": "64e6844b408973db81c9a5c34d11c2cd4bb4c169cc670050ce74d1d28db1f5c3",
+      "actual": "64e6844b408973db81c9a5c34d11c2cd4bb4c169cc670050ce74d1d28db1f5c3",
+      "ok": true
+    },
+    {
+      "path": "direct-mutation-lock.txt",
+      "claimed": "6fed33a0be975dab1063b61ba2a5337dfc4045b958fccf7c15d37737dc40f30a",
+      "actual": "6fed33a0be975dab1063b61ba2a5337dfc4045b958fccf7c15d37737dc40f30a",
+      "ok": true
+    },
+    {
+      "path": "DIRECT-EXECUTION-REPORT.md",
+      "claimed": "5cbaba5e9f071fc4ab5908935f0ab4671a36df0bccbc1cbd9aba4e334cc60bda",
+      "actual": "5cbaba5e9f071fc4ab5908935f0ab4671a36df0bccbc1cbd9aba4e334cc60bda",
+      "ok": true
+    },
+    {
+      "path": "direct-finalize.mjs",
+      "claimed": "4eca4ccb4256408162ec444263bd4f80867b7dec6d91a34bab4a9aa57bdb0606",
+      "actual": "4eca4ccb4256408162ec444263bd4f80867b7dec6d91a34bab4a9aa57bdb0606",
+      "ok": true
+    }
+  ]
+}

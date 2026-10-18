@@ -1,0 +1,41 @@
+{
+  "at": "2026-10-18T10:27:30.385Z",
+  "root": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-m56ik-fd8dc94d",
+  "results": [
+    {
+      "name": "preflight",
+      "status": 0,
+      "signal": null,
+      "error": null,
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-m56ik-fd8dc94d\\.recovery\\preflight.log"
+    },
+    {
+      "name": "root-tests",
+      "status": 0,
+      "signal": null,
+      "error": null,
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-m56ik-fd8dc94d\\.recovery\\root-tests.log"
+    },
+    {
+      "name": "board-tests",
+      "status": 0,
+      "signal": null,
+      "error": null,
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-m56ik-fd8dc94d\\.recovery\\board-tests.log"
+    },
+    {
+      "name": "client-harness",
+      "status": 0,
+      "signal": null,
+      "error": null,
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-m56ik-fd8dc94d\\.recovery\\client-harness.log"
+    },
+    {
+      "name": "install-selftest",
+      "status": 0,
+      "signal": null,
+      "error": null,
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-m56ik-fd8dc94d\\.recovery\\install-selftest.log"
+    }
+  ]
+}

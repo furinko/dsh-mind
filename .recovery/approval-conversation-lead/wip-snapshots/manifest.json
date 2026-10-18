@@ -1,0 +1,80 @@
+﻿[
+    {
+        "snapshot":  "candidate-443f",
+        "path":  "components/board/lib/client.js",
+        "sha256":  "bc47f2b2e08d9d794e4abba98e9bad3fc7ba173a2a1c788c370d91031af5b655",
+        "bytes":  346965
+    },
+    {
+        "snapshot":  "candidate-443f",
+        "path":  "components/board/test/client-harness.mjs",
+        "sha256":  "6a93ac1520bec581338a8e5523babe6862a9a579d1de4e8fa5b9ed4a2c1e3c25",
+        "bytes":  269664
+    },
+    {
+        "snapshot":  "candidate-443f",
+        "path":  "components/kernel/lib/routes.js",
+        "sha256":  "c04a467ea3ef32c8f19b573e855125f5976607b1e4abeb3cf81b775bc88500a9",
+        "bytes":  34706
+    },
+    {
+        "snapshot":  "candidate-443f",
+        "path":  "src/intervention.js",
+        "sha256":  "b20f0875f407a82e823068100a3976259db4f3ab2c6937703be5ee8716d5f09e",
+        "bytes":  47006
+    },
+    {
+        "snapshot":  "candidate-443f",
+        "path":  "test/v2-intervention-approval-2026-10-18.test.js",
+        "sha256":  "7d18e27167c0d44682c6165425bbad5cd0a46fbcad8297aaf82674be2faea866",
+        "bytes":  29550
+    },
+    {
+        "snapshot":  "candidate-443f",
+        "path":  "components/board/test/conversation-approval.test.js",
+        "sha256":  "53013b6d0f6e3ae00b1084f512533c29d7c36116c2b27e0b148e5c7f0f04e18f",
+        "bytes":  13181
+    },
+    {
+        "snapshot":  "candidate-443f",
+        "path":  "test/conversation-approval.test.js",
+        "sha256":  "08a3c3c066b885ca434821c936c1e3a41b151d1e8d1677e90d43eec3bba94d78",
+        "bytes":  10116
+    },
+    {
+        "snapshot":  "repair-1-wip",
+        "path":  "components/board/lib/client.js",
+        "sha256":  "7056702026c8801e2652c4f5730b57b9703fdd993fdb48c16eb9aa06e05417bc",
+        "bytes":  349056
+    },
+    {
+        "snapshot":  "repair-1-wip",
+        "path":  "components/board/test/client-harness.mjs",
+        "sha256":  "07f23504948a7af7eb7bfc21e27b4d392e84f411e4a79d16e89a51622851d99f",
+        "bytes":  269620
+    },
+    {
+        "snapshot":  "repair-1-wip",
+        "path":  "components/board/test/conversation-approval.test.js",
+        "sha256":  "487c4cef770924786713ffd1adf9e60b53a307311605d392c1e32bcbc063b195",
+        "bytes":  19298
+    },
+    {
+        "snapshot":  "repair-1-wip",
+        "path":  "src/intervention.js",
+        "sha256":  "9164a03064074f83490d035b98f793ea5f15df9294ef556d97855b494647b81f",
+        "bytes":  47922
+    },
+    {
+        "snapshot":  "repair-1-wip",
+        "path":  "components/board/test/approval-renderer.mjs",
+        "sha256":  "211bf5d4a58818376d90c1090ccf6b0622e32596a32db530fb6b649d392fc065",
+        "bytes":  1882
+    },
+    {
+        "snapshot":  "repair-1-wip",
+        "path":  "test/approved-replay.test.js",
+        "sha256":  "8da51b369c356ba2ce1c559f5dab5cdf6baa926456d34411b06d9bac5d67adfc",
+        "bytes":  4806
+    }
+]

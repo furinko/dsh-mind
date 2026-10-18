@@ -1,0 +1,22 @@
+{
+  "at": "2026-10-18T12:14:04.953Z",
+  "transform": "Only JSON.parse result text and pretty-print; original source files unchanged",
+  "rows": [
+    {
+      "source": "session-ea05d8ff-0aab-45e2-aca4-e263855042b0.native-tool-receipts.json",
+      "sourceSha256": "ef5734aeeddc24bedc34e2384e858b7372f00557606d774331848b24dc771b36",
+      "action": "debate_converge",
+      "target": "decoded-converge.json",
+      "callId": "call_6fbe0964719d44fbae1746ddf00a5708|fc_03d56e216da54b2e016ad4ae9101308191a0c1df30726b0870",
+      "viewSha256": "fd7c1f31d5a68621f1735f3a5fd39da9c99ae1c1bc7a8765f1ceb74e076b524d"
+    },
+    {
+      "source": "8252e161-1d1c-45df-b05d-097caa5cc890.native-tool-receipts.json",
+      "sourceSha256": "bf39769b375ec34e433a1d3923ecb1f276dbc06ece65918790625a73a7eb62ac",
+      "action": "debate_answer",
+      "target": "decoded-second-answer.json",
+      "callId": "call_c929e8bb473e4a16a967294681bcd1dd|fc_0ea98285fb7cbaae016ad4ae0a8a2881919ab21c7f9022a9a4",
+      "viewSha256": "c1d5690254c592fbb5a288a14fbff692cb3f1e0101c3b1c68f2c310f5a67dfcc"
+    }
+  ]
+}

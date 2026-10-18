@@ -1,0 +1,15 @@
+{
+  "at": "2026-10-18T10:40:15.463Z",
+  "files": [
+    {
+      "rel": "lib/actions.js",
+      "originalHash": "6983e57010372aefabc7603a2547dad7bf567a7b410ab38f783b734fbe5ba0d1",
+      "sha256": "14005a844d19aba3a10b7bd4595e46fd24789c43319482b8cc60a8ffb66b31bd"
+    },
+    {
+      "rel": "test/policy-check-task-context-2026-10-18.test.js",
+      "originalHash": null,
+      "sha256": "c032330526461c32de945008ef22e45e340650de701ab3f21c6c9f9386846ba8"
+    }
+  ]
+}

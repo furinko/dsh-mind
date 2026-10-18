@@ -1,0 +1,162 @@
+{
+  "at": "2026-10-18T11:17:38.435Z",
+  "root": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-oDmmE9",
+  "node": "v24.21.0",
+  "results": [
+    {
+      "name": "consult-guard-disabled",
+      "status": 1,
+      "caught": true,
+      "witness": "ERR_ASSERTION",
+      "clone": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-mutant-5xuCIg",
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-oDmmE9\\.recovery\\mutation-consult-guard-disabled.log"
+    },
+    {
+      "name": "approval-plan-unwired",
+      "status": 1,
+      "caught": true,
+      "witness": "ERR_ASSERTION",
+      "clone": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-mutant-DMWiJo",
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-oDmmE9\\.recovery\\mutation-approval-plan-unwired.log"
+    },
+    {
+      "name": "consult-helper-missing",
+      "status": 1,
+      "caught": true,
+      "witness": "ReferenceError",
+      "clone": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-mutant-aX1yul",
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-oDmmE9\\.recovery\\mutation-consult-helper-missing.log"
+    },
+    {
+      "name": "discussion-unwired",
+      "status": 1,
+      "caught": true,
+      "witness": "ERR_ASSERTION",
+      "clone": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-mutant-eH1pRw",
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-oDmmE9\\.recovery\\mutation-discussion-unwired.log"
+    },
+    {
+      "name": "review-parent-gap",
+      "status": 1,
+      "caught": true,
+      "witness": "ERR_ASSERTION",
+      "clone": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-mutant-730Wlp",
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-oDmmE9\\.recovery\\mutation-review-parent-gap.log"
+    },
+    {
+      "name": "preflight-context-dropped",
+      "status": 1,
+      "caught": true,
+      "witness": "ERR_ASSERTION",
+      "clone": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-mutant-COKuWB",
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-oDmmE9\\.recovery\\mutation-preflight-context-dropped.log"
+    },
+    {
+      "name": "criteria-binding-dropped",
+      "status": 1,
+      "caught": true,
+      "witness": "不是节点",
+      "clone": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-mutant-t5ECnu",
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-oDmmE9\\.recovery\\mutation-criteria-binding-dropped.log"
+    },
+    {
+      "name": "direct-self-dropped",
+      "status": 1,
+      "caught": true,
+      "witness": "不越授",
+      "clone": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-mutant-q1lr3w",
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-oDmmE9\\.recovery\\mutation-direct-self-dropped.log"
+    },
+    {
+      "name": "direct-bind-reassign-unwired",
+      "status": 1,
+      "caught": true,
+      "witness": "Missing expected rejection",
+      "clone": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-mutant-ZrEvLo",
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-oDmmE9\\.recovery\\mutation-direct-bind-reassign-unwired.log"
+    },
+    {
+      "name": "direct-dispatch-stale",
+      "status": 1,
+      "caught": true,
+      "witness": "fulfilled",
+      "clone": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-mutant-AM4bhb",
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-oDmmE9\\.recovery\\mutation-direct-dispatch-stale.log"
+    },
+    {
+      "name": "abort-finality",
+      "status": 1,
+      "caught": true,
+      "witness": "'作废' !== '已收敛'",
+      "clone": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-mutant-Gur730",
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-oDmmE9\\.recovery\\mutation-abort-finality.log"
+    },
+    {
+      "name": "stop-api-disappearance",
+      "status": 1,
+      "caught": true,
+      "witness": "缺接口必须有补偿失败证据",
+      "clone": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-mutant-MEWvIZ",
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-oDmmE9\\.recovery\\mutation-stop-api-disappearance.log"
+    },
+    {
+      "name": "opened-commit-report",
+      "status": 1,
+      "caught": true,
+      "witness": "ERR_ASSERTION",
+      "clone": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-mutant-H9YTw4",
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-oDmmE9\\.recovery\\mutation-opened-commit-report.log"
+    },
+    {
+      "name": "owned-boundary",
+      "status": 1,
+      "caught": true,
+      "witness": "Missing expected rejection",
+      "clone": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-mutant-2DY9jh",
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-oDmmE9\\.recovery\\mutation-owned-boundary.log"
+    },
+    {
+      "name": "assign-audit-cleanup",
+      "status": 1,
+      "caught": true,
+      "witness": "'在岗' !== '封存'",
+      "clone": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-mutant-RKgMb3",
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-oDmmE9\\.recovery\\mutation-assign-audit-cleanup.log"
+    },
+    {
+      "name": "committed-retirement",
+      "status": 1,
+      "caught": true,
+      "witness": "deepStrictEqual",
+      "clone": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-mutant-KiOTrB",
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-oDmmE9\\.recovery\\mutation-committed-retirement.log"
+    },
+    {
+      "name": "member-source-merge",
+      "status": 1,
+      "caught": true,
+      "witness": "'subagent'",
+      "clone": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-mutant-3fxzU3",
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-final-oDmmE9\\.recovery\\mutation-member-source-merge.log"
+    }
+  ],
+  "before": {
+    "components/kernel/lib/index.js": "6a87ca31a6d429d2690493425dafc7be1db267919e56f42bde0be82f9073dbb3",
+    "lib/approval-plan.js": "b23d9dd51d339818bbb53f3c986a3d5eff9aa26fb0145abb0e443369c1805656",
+    "src/council.js": "177974dbf72fc1dca273af1a4efcf3ad4263db0f2a5299d8597131a21bb3ce75",
+    "lib/actions.js": "fd515899f94c64e51acf5334e44f2c59efab86965c503da2ff8205707735886b",
+    "src/policy.js": "ff22b8ee9cfd96eca119094c7018cc861a7e07a40fcd354e8850ae9d6342349f",
+    "src/tasks.js": "ac9c75f73d0afa95c4fe4a3a7f22da0fa38f0427b55f17a03e7ba3ac4d3149d6",
+    "src/intervention.js": "a73f03fe97321d558057a3ef397c64332298c0d9a172516028cfea898d84738d"
+  },
+  "after": {
+    "components/kernel/lib/index.js": "6a87ca31a6d429d2690493425dafc7be1db267919e56f42bde0be82f9073dbb3",
+    "lib/approval-plan.js": "b23d9dd51d339818bbb53f3c986a3d5eff9aa26fb0145abb0e443369c1805656",
+    "src/council.js": "177974dbf72fc1dca273af1a4efcf3ad4263db0f2a5299d8597131a21bb3ce75",
+    "lib/actions.js": "fd515899f94c64e51acf5334e44f2c59efab86965c503da2ff8205707735886b",
+    "src/policy.js": "ff22b8ee9cfd96eca119094c7018cc861a7e07a40fcd354e8850ae9d6342349f",
+    "src/tasks.js": "ac9c75f73d0afa95c4fe4a3a7f22da0fa38f0427b55f17a03e7ba3ac4d3149d6",
+    "src/intervention.js": "a73f03fe97321d558057a3ef397c64332298c0d9a172516028cfea898d84738d"
+  },
+  "unchanged": true
+}

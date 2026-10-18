@@ -1,0 +1,31 @@
+{
+  "name": "dsh-mind-kernel",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "心智 · 数字组织 —— 内核组件：八件基础设施的对外两个面（mind 工具 / mind 命令），外加工具范围闸、审计钩子与系统提示段",
+  "license": "MIT",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "meta": {
+    "title": "心智 · 内核",
+    "description": "组织对外的唯一入口：模型侧 mind 工具、人侧 /mind 命令，以及工具范围闸、审计钩子与系统提示段。"
+  },
+  "files": [
+    "lib"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": ">=0.1.5-rc.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh": {
+      "optional": true
+    }
+  }
+}

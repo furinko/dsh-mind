@@ -1,0 +1,14 @@
+[
+  {
+    "file": "src/instance-snapshot.js",
+    "sha256": "66e343a047744b7aca0aea6838d34f2e3de9bef0ee55c1bb7945175541f3b018"
+  },
+  {
+    "file": "src/registry.js",
+    "sha256": "37b4103a191667a55f66cc0c9c55ba024c69aae0b4f0d4a4cc103f1398dd5f89"
+  },
+  {
+    "file": "components/kernel/lib/index.js",
+    "sha256": "1f99ff6c762d448379f7244ac3b0378f2a50c4b052d9b5946787400444375005"
+  }
+]

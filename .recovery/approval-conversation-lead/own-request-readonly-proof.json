@@ -1,0 +1,34 @@
+{
+  "at": "2026-10-18T15:49:18.670Z",
+  "channel": "Existing applicant-only read method, not sovereign route or decision",
+  "readWindowUnchanged": true,
+  "sha256": "0f49d1b4429025feff669993b0c0f32ff2152a4582474981172f473c9d19a576",
+  "keys": [
+    "版本",
+    "请求id",
+    "请求指纹",
+    "动作",
+    "项目",
+    "档位",
+    "规则",
+    "主体",
+    "目标",
+    "入参",
+    "步骤",
+    "冻结于",
+    "内容摘要"
+  ],
+  "requestId": "d836af9632cbb951abc2f2acd8566f1a6c7939fc4103c56c9cbd0e0ce231a1d8",
+  "recordVersion": 1,
+  "subject": {
+    "id": "session-ea05d8ff-0aab-45e2-aca4-e263855042b0",
+    "kind": "Lead",
+    "roleId": "Lead",
+    "卡版本": "558a3d8664b3300acd8322892b7ba13c06bdce5e8304a453e155ad0886772797"
+  },
+  "project": "plugins",
+  "action": "task_settle",
+  "target": null,
+  "stepCount": 3,
+  "contentDigest": "e3490ad6a15f66b6394a34040a21d500be1d3080d0a0c8a730427940addde09c"
+}

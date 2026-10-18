@@ -1,0 +1,546 @@
+﻿[
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\DESIGN-MAP.md",
+        "Hash":  "D8A01DEF7D1B925061BA34B1342EB230CA23C7C5BDFDCC7158C0924BF0A4A4C1"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\INTERFACES.md",
+        "Hash":  "E1A8693A4BC51E0A1131E624F23E9C61DB2CBEE05B83D4C77AB793A70A70E2B5"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\package.json",
+        "Hash":  "A68A76694D5EB6EBB49EF8DDD113F955A8E3FF88B05F980688B306AE90241800"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\README.md",
+        "Hash":  "18610FAF04E612D06BCEC788EA48DB1C3D641DDC48498F4ECBF6733E2A2106A7"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\components\\board\\package.json",
+        "Hash":  "69E417F0C1FC84C82724B045AFCB15F5D8D5FFA220929E27BA07C427C5897E3F"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\components\\board\\lib\\client.js",
+        "Hash":  "58BF09A6594CA9F6FFA7F914A3271D8C0B5CC97832E125D07C74CE50BD0B5DBB"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\components\\board\\test\\client-harness.mjs",
+        "Hash":  "4194C7DC542A16E3EEA0F96BA2AF0FF4C54A430132D00A50EF71F9B6BB0E4927"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\components\\board\\test\\client.test.js",
+        "Hash":  "CC79E3947FC195B2A0BE49C8551EB25E022CD7EECAE730C4640286F8559BDE45"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\components\\board\\test\\delegation-settings.test.js",
+        "Hash":  "D1A7036CBD5C8B456709254FB0558337EF75926546201D5E36F247566596F383"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\components\\guard\\package.json",
+        "Hash":  "8ED22E034BF921820AA1FDB111C88309EE138659B711963C3577DC7B49556054"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\components\\guard\\lib\\index.js",
+        "Hash":  "4C076C945898817C333C2672446F34B00B4494B64F3318E5CEF398D4C176143A"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\components\\kernel\\package.json",
+        "Hash":  "E54260287B9B330A09619D67E5DF2FD09E0B02F18E21C9401B43E2A499285FF4"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\components\\kernel\\lib\\delegation-settings.js",
+        "Hash":  "D1D55CEB78004696BE78F9D8A6C70EEA4B3444578165124F302C566F5883E675"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\components\\kernel\\lib\\index.js",
+        "Hash":  "C02B1896D606A165B3BE6C550BBEA382D1A55F5273FDE9FE39D4D031685F6FF5"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\components\\kernel\\lib\\routes.js",
+        "Hash":  "96BFFBA7ABED90B4FC1CFFFC46A56FF9ADBB4A322DCDAD8F5CE220A434528013"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\lib\\actions.js",
+        "Hash":  "4060910E9D8433A7F64F27E93D638C0F6A16134FCEB24935BEAC903D1864B89D"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\lib\\index.js",
+        "Hash":  "F5918168106059A5F275300CFBC0C423F1F069228F9C8816118E617BBEC2538A"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L0-宪章\\宪章.md",
+        "Hash":  "8A57F618898A5A5F505783DBD3189F22C6275DE4B6928C984A78B8D2707997AE"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L1-法律\\协作协议.md",
+        "Hash":  "40BF419443CFE6E6362D6739652558E911DFD870A3BBE1AF071A69628EA0DE3B"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L1-法律\\审计要求.md",
+        "Hash":  "28689A41D6992A669BD72B200D5EF3A4EB1EB4740471501337AC06C8B95948B6"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L1-法律\\权限矩阵.md",
+        "Hash":  "F1C24C021F1B8EF73FF9E1A0C1500795E797863EE3B1209D92582FAAB80F5117"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L1-法律\\裁决流程.md",
+        "Hash":  "41359DBB0564BB3AED835A08BBC7A72E9ED232CF48506D13E672776FD77D41F7"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L2-共享基础设施\\README.md",
+        "Hash":  "D1D400C20F42CDF14779147503F19D433D0C8F85903E1DBEA8FC8F4CC3403CF0"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L2-共享基础设施\\defaults\\介入度.json",
+        "Hash":  "01470FA4F0B5C81C4E776657A7C67BF51600775A4499531C026E9BB493430AEE"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L2-共享基础设施\\defaults\\响应期限.json",
+        "Hash":  "DA9A32813628A3EB2F902ECC10B7464AECACDD6CA3C59A1018A26D752975DCFC"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L2-共享基础设施\\defaults\\安全类探针.json",
+        "Hash":  "A6C2ACFB3E2B96D7B61E0B3344133F6B0F3987F96FBBECC567A84659237FCFDC"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L2-共享基础设施\\defaults\\工具总范围.json",
+        "Hash":  "4E99B36B364CF663C8C7489BABE5C5031BDC498C26C9B5B77DAC619133FACA04"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L2-共享基础设施\\能力库\\audit-append.md",
+        "Hash":  "DE0B1181EECC871E77F184A40970432B0F5B6FAD636E2B52C40FB349CCC619BD"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L2-共享基础设施\\能力库\\memory-write.md",
+        "Hash":  "70B854E8549D5DEAAA749C03A5619D4AF55FEC1143B76216D2A1609E20A117AA"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L2-共享基础设施\\能力库\\policy-decision.md",
+        "Hash":  "455BF789DE90FF6AA1BDCB9B8DD9BBC39629C75DAF7A4E91643A75E42F1C2F8E"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L2-共享基础设施\\能力库\\review-run.md",
+        "Hash":  "66BA1E10E2FF972517711964F536F5AD344685D5825807B7A7A1E7D69726C2B4"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L2-共享基础设施\\能力库\\task-node.md",
+        "Hash":  "2EA646484E2656132555A7C42B47ADFBA8A80ABCDA31B37DBA376E6FD388B5C2"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L2-共享基础设施\\能力库\\upgrade-merge.md",
+        "Hash":  "1DA09913887ABC0E697ABE6C56FBB2527E96B57C7B7BE343ADB69612005EBB2B"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L2-集体结构\\编制.md",
+        "Hash":  "FA9844CE949B0DD0FE79B2B7FE2794162C41C7A263A9EC782A6ECCD126E522B0"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L3-成员角色卡\\Lead.md",
+        "Hash":  "A12B09724342E564D3F646EFE796B87618431AC50BE4A6C2E05AA1796E321FA6"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L3-成员角色卡\\_模板.md",
+        "Hash":  "D039818077E8E1BC214CED368223A29F4816D3CB3941D9D80212FB358AA482F1"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L3-成员角色卡\\复核员.md",
+        "Hash":  "406F7D1B230C22531091E0589850F22C30E2FE65B6C3162E50A814EE5DD7125D"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L3-成员角色卡\\插件工程.md",
+        "Hash":  "842A6400DCBF9D467D4E5BDF2A889A8F481F380F17F32E2E4000DDCC26A01740"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L3-成员角色卡\\文档整理.md",
+        "Hash":  "2085A1904171840826008D97B0C78A81755EC6FD5B23EE1BC1623BC9EB03A495"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\mind\\集体L3-成员角色卡\\记忆整理.md",
+        "Hash":  "C44D9C9F38E3E87250581BEF07EDD5404B9CEEF465E3A59F284A7D89C9F87714"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\audit.js",
+        "Hash":  "94B0AD580B99131C4C5957F397DDCE0282188BB4D85AEB9EE92E54E84A0E97AE"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\bus.js",
+        "Hash":  "6FECC03F6CDED9E759679BC09A95AA9EC8304E7D92F91FE68ABBF76AC4766C1D"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\capability.js",
+        "Hash":  "9129BC0F884461F19B5084187667323B3F8526D8BCCCEB31D8E3F63D1BF95EA0"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\council.js",
+        "Hash":  "759D500F3D2EF3F9146024B700156EADFB63778988E634083D1DAE8E164C294E"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\delegation-policy.js",
+        "Hash":  "B83FD694CB87EFFC96D4E21DB2F0AA79CEC5281AE444211FA40667C5B4D9F471"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\mechanism.js",
+        "Hash":  "7AF649F9E8022E73D282DB489507CE389FAEAA40399A35A7DD49E28A6E0F8890"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\memory.js",
+        "Hash":  "EC91B66F377569706C39FD8365CE26C3776E50DA56342675FE632B1AF616058C"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\org.js",
+        "Hash":  "2B2DF2A94B61BFF9EA0F7A6061D337A7CC5D725D56D259807B65ED85D9E9522C"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\paths.js",
+        "Hash":  "D2B6EA9FAA268BA5944B9CB89AAB8857354D8CE1C75CA5E1F5B136F150A89460"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\policy.js",
+        "Hash":  "EFB6ECB67B841A7E129768C52CB0827C0BD3FC1CC540DF0C412D818032E7737A"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\probes.js",
+        "Hash":  "6CD9D0160967A76E046FA9C1E094D1D09C2E045227DC9226AB6C9714845CB48C"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\registry.js",
+        "Hash":  "1E973B2A7D2D5B575F17446E922E6AAE38508769A90405176E0F249E39B7E168"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\retrieval.js",
+        "Hash":  "B27780D400A2198AA7C18606CA90FC2C21F9662A09671A07FC4F75CCC2CD2B9E"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\review.js",
+        "Hash":  "7FCDEDDDC097EC8A98119804FDADF84D3675012AF4B36674ECB519DD0B500F05"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\runtime.js",
+        "Hash":  "06C634EBFD0F0398106910D2EC9D129463BCF6CB1B065AAD28B6EB7007F063C1"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\store.js",
+        "Hash":  "52C62AED6EADDA1A5473F944B28993E89A8A7D2A6D669A81E2AE85C07ADCC5C1"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\subject.js",
+        "Hash":  "F5A4A8624B0078DB82CDEF2B02C5EBCECB2DE2DE6D5DD1740FE8926BBDC7B587"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\tags.js",
+        "Hash":  "C17C71EECBE176C150CD5B0FA8B256F432E63C182522F55A2476CD6838CF83E2"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\tasks.js",
+        "Hash":  "32BCF36759929D8B9CB69F4D85A8FAE73F6559FC427B42B81E5AB7F897E9E532"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\upgrade.js",
+        "Hash":  "ED94CAA8BEDB5D0E27F7EEB29FEFCB85FF0690333389CF01BD797CA39FAF9AA4"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\workbench.js",
+        "Hash":  "BA1E5AD392CB395EDB3092F779166C45BB810BCECA408D503B7CFA672C9FC093"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\kernel\\errors.js",
+        "Hash":  "89AA7BE8C0481391D4344D6AD21F8F2F394DA56821885457D448802FD8D9C6F3"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\kernel\\fsx.js",
+        "Hash":  "79D005FC6DE584615FC1CE47DA381DD15E3D0461587EB6F9B87897437B698D52"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\kernel\\ids.js",
+        "Hash":  "A40A3BDF2DD93088FB16B978D9F9C39BEFBE327B038E5CE08EF72B58EFE40E39"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\kernel\\text.js",
+        "Hash":  "5938AA463B47F1BBFEA0A39A039E7BC3105C45F5EF8B7C4A82D207F955FE85FE"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\src\\kernel\\time.js",
+        "Hash":  "AE083D1ED2240C93FFF43233ECF891DE3F0D8DD7C41A7A002793F5D86D029905"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\audit-checkpoint-2026-10-16.test.js",
+        "Hash":  "517832A5DDCAFD729789F7D01CC282913715BFFC13B65C31E8A535D461DE50FA"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\audit-correction.test.js",
+        "Hash":  "1C3153C206C533BC8AE22BD6A2275F4302C955A4FE4B956575D5076AC312A6A6"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\auth-boundary-2026-10-16.test.js",
+        "Hash":  "EE13FE26DA37BC494EFEE6E98CDA30FBE41357D130B0397BCA327111B11D27B1"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\bom-tolerance.test.js",
+        "Hash":  "C4CE4CC8F0357B78579FE2E90375496A66F945FA314D43AAD59110BD7AAF3171"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\components.test.js",
+        "Hash":  "2EC3B54CAD9814B548DDE80565C9163662C3074836A027B1D23E7F9BE4A45637"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\concurrency-w3.test.js",
+        "Hash":  "7CA7E378D60CF8E58E59823629CC2086CBDC048BB973D45F21BA9613D9AB53F7"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\consistency-2026-10-16.test.js",
+        "Hash":  "108C569E696CFE1AB07A3A51CD8E50D743C9920A21E5C5D9C1D648462603B0CF"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\consistency-w3b.test.js",
+        "Hash":  "73E47EBEE74D6F374B3E092202560E8BA667EBC3252159153CDC047488BA74EE"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\contracts-a.test.js",
+        "Hash":  "1AE20034F1046C77F9DBF8BAE62E8AC79259D15D49E75B90FA6AA4CE54262BB8"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\contracts-bc.test.js",
+        "Hash":  "DE8E276C01647A7D0DC4CE2D456875071B387AB95F9753678ECF71CA2A370CA0"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\delegation-settings.test.js",
+        "Hash":  "28E3187BC29C20BDCA788320DE9BDE3371B581DCBD0C4B8060A9CCD2FA17C7C5"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\delegation.test.js",
+        "Hash":  "36A57E60A3360B6B7047525CF867D9F94459347FA4152766C8AA0D1609243A8B"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\design-debt-24-slice.test.js",
+        "Hash":  "AB07E2A8AF535B0E6DD3231403A571090281D0A20868C5115B382CF503E1DA84"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\dispatch-liveness.test.js",
+        "Hash":  "7DEAE8D1F05E861BF66F2954AD2FDA505F4CB828AA9C75C1AF781C89196CD8F2"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\effective-2026-10-16.test.js",
+        "Hash":  "77DCD4F54BFBA6E2B19BD73D06622BDD10D1DA6440582073AA0DD30F0123539B"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\entry-bounds-w3c.test.js",
+        "Hash":  "EEF744211640FAC303F0009C741EA1D5888E7153C835709E68D365D0D5B16B77"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\fix-batch-2026-10-13.test.js",
+        "Hash":  "610645FC444F38E248316CF6B3D2C82D2CC2521AA0D403DFA5DE43A1A0C5ED82"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\fix-batch-2026-10-14.test.js",
+        "Hash":  "B08FBAC31A79ABBBE5C258DFB64E8F434B435F2CAE365F491B358A5AEE5F13F8"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\fix-batch-design-2026-10-15.test.js",
+        "Hash":  "0D1E3F6552B956D9B49CB62EA672FB7F083652B39332A894653AA117F117A3FF"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\fix-batch2-2026-10-13.test.js",
+        "Hash":  "367FFDA59ADFEA480CC3F94F2269326D4A62F57216D14E019A0EC32CA3882145"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\fix-batch2-design-2026-10-15.test.js",
+        "Hash":  "A6F04BCCFC40DE785D01DAD95C82F57484C3A1533606A69489F9AE0F926E4CF3"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\fix-batch3-design-2026-10-15.test.js",
+        "Hash":  "90F60C8AAE8C0535E0A3B0573F398646E82D7A31F8AEF59D111A5961996ABEB3"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\fix-batch3-裁决-2026-10-13.test.js",
+        "Hash":  "79F2D32D3F370226B18A8102655E48E06D09C57AD55D16D383CB10A9A02219CD"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\fix-batch4-2026-10-13.test.js",
+        "Hash":  "C40AE8767B38BBA00596E998F26116D40B11819A25DE89F7A497D9747509B43F"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\fix-batch4-design-2026-10-15.test.js",
+        "Hash":  "CAF8C9C92EB2261F76EF5B9BCE7EFC9D3B7C005677EE695F3B35BBDB422C4611"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\fix-batch5-cache-2026-10-13.test.js",
+        "Hash":  "E9572B9FEBA847DFF6C056601E765928A29CA1B169FC007488E926AC6EA503EF"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\fix-batch5b-memory-cache-2026-10-13.test.js",
+        "Hash":  "2EBBA1003FFA3D8AC5450B4ECDE815E072927B1F8C03774E5FB26BBA490FDB22"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\fix-batch6-index-cache-2026-10-13.test.js",
+        "Hash":  "CF81830CBA123DA1D1F84652D789A2FAFADAEAA940B4F8722D0332097576C378"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\flow.test.js",
+        "Hash":  "7FC6BE5FB72752F0FAB6159273E9EE65C1B02B3B86825D32B1E882A7F2A69161"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\gate-trace.test.js",
+        "Hash":  "35418E9848BED0C26B8A8A05B70E2EA1667F5CC73ED7F3254E495BC210F03A13"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\guard-subject.test.js",
+        "Hash":  "C642913FCEA91733ECFE1DC66A0C67E555D4CB7A4593900101BC2756574EADB9"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\helpers.mjs",
+        "Hash":  "BD3DB14A0625DAF87BAD56122E4C9A254E91CA8DF498F3E10C26BB81B2C67B87"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\host-harness.mjs",
+        "Hash":  "1202F73BC57219F5BF2D871382BDE47405FD0B0DD84B3A2EE2F1431AF152E63F"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\host-routes.test.js",
+        "Hash":  "7865E9437DB7FC9775BF676DB50A5449DAEDE8A568C3F2F65BC63DD7118CBEDB"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\host.test.js",
+        "Hash":  "4D3867B0F9E34702C11167E386371BE84873FA4B9265DFAF8FA8BC5CC5855FD7"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\identity-chain.test.js",
+        "Hash":  "41EACEFAB61C8F13A74DF2DF5A6839E9BFCFED2976A320105C795C0879FFFBF1"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\integration.test.js",
+        "Hash":  "B4911114733E3D32BCE1D9C2388325F2629904AE9916C29EB13950F1D5CBAEA0"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\lead-identity.test.js",
+        "Hash":  "BD8F8D892A673EFA720E76FE88DA4BBA6C98B53CB9796D2CE88BB808916ADB0E"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\memory-readout.test.js",
+        "Hash":  "B4517420522358109C34C20FA92117BB32544A1672B0EF295FC00B31CC80C521"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\objects.test.js",
+        "Hash":  "5C9EA4ED4DC3C9183EFF14791E316300A136CDFB6CBD1825E228DBE230411FF1"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\p1-fixes-2026-10-17.test.js",
+        "Hash":  "DFFEB8CCD7B9517F601AC3FD2BFD4E45BF457923BE498CE1C3B01F8A3278C6D2"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\p3-sweep.test.js",
+        "Hash":  "AB5B1674DBA58156811970BA2D6127498A32A5D06149EF72876A52C420F2D111"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\policy-freshness.test.js",
+        "Hash":  "76658D8D31209361D7B1817E63A50E6C1F56842C22D55B084A44246633FBBAB4"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\policy.test.js",
+        "Hash":  "0CDF233AECB4C0B6E46EEBCE2F964EB8E2B251FA1399B331F75FBCC5DA193B54"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\preflight.mjs",
+        "Hash":  "3C1833799A69067B34F71DBACFEA710C5C0AC8DA01FB66AD9B7509E5A57308E0"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\presence-bounds.test.js",
+        "Hash":  "201CCF28AD152CF61FF6CF499A0AFA1E5B69A7FCAD06DF45B76C49C81822734A"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\presence-command.test.js",
+        "Hash":  "92ECCBDD101128C2044CDAAE1C958AB3D852DFA6406D5B0436056DF64B2E7A32"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\presence-readout.test.js",
+        "Hash":  "407D7091846DF6FC890442C2B38EC26914A66921C9E42EDCFF8FB192EDC16524"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\presence.test.js",
+        "Hash":  "59AB4AE437270CB97A30C375213A06A98C517E4EFC2DE2003813318175EA5019"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\probe-retention.test.js",
+        "Hash":  "5E4AB29DB4B06BD8368C5A22281FFBD7563E877843E4E89EFB0F2A3999135214"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\project-list.test.js",
+        "Hash":  "2A91F096CB019CE1BC088D9ABB7AB27464B5863D6D84126CC2F8D999741A1681"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\registry-merge.test.js",
+        "Hash":  "569AFCE25B5EE7FE4D4912FFF1984E4E37D1D910B0BBB892DC6142FAA0F9945C"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\review-fixes.test.js",
+        "Hash":  "2BD01392BEA191AD32AF037BCEB91ABC1DC92313D9C607EEBF4A257665E89501"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\review-path-2026-10-16.test.js",
+        "Hash":  "264C9D9F3C8819D53697501DA777E7C74C6B4ACD9B882160D960D0640DCB7D56"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\roundtrip-w3d.test.js",
+        "Hash":  "AB0A42C0F2A2577AD99BC169EE61313E266A93007D29B5508EE41246BD63E24A"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\safety-suite.test.js",
+        "Hash":  "D8F88B808B7DDBF5475C7B755D9552F8202F05EA9E6B62E5D5AFB8707E0E33EE"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\scope-resolve.test.js",
+        "Hash":  "2ACCAC3E73EE70DD28A6006283BB5378F95C428831AC61D758C65D1C803C438C"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\selfreport-binding.test.js",
+        "Hash":  "E078A3634A0FD916137FF55EB5D1BDDF9A6241679D9271E4637A3B9953DE158C"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\storage-floor.test.js",
+        "Hash":  "087BA47E8FB913EAEF1404AAD6301192EF5E76873D0218FFC50422A7A3BC4205"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\subject-creation.test.js",
+        "Hash":  "560EACB1A18093B1D6B992E0E5B8896A5C737787C4D68FBC9121A6478978C05F"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\task-context-649a4.test.js",
+        "Hash":  "236E632F60751AE4C8815745D7FD284DD058F883C2E8572906391855C6F57C24"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\task-context.test.js",
+        "Hash":  "9CEF59BFAB6054DE6279E7E69B5BDC2F7CACA5AC66458E245C9E9940D98DD2CF"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\trace-floor.test.js",
+        "Hash":  "55D39D6C1EE34EC7F6898359D60BAE032DD42D71ED11B743FDCB28971AE8315D"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\v2-council-2026-10-18.test.js",
+        "Hash":  "DEF185D7C776AB83472022BF5BD7D65F113CE04062F0E7F08AC78D170F1F0154"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\v2-council-concurrency-2026-10-18.test.js",
+        "Hash":  "F876F236F8931DCCA24D902E01C5A9AC7C2024239854E5ADEFFBE6DFBA7BB0B9"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\v2-instance-model-2026-10-18.test.js",
+        "Hash":  "95A6333224B9D2F45E1BD5D40CF6DC7B3A302CC03C79B7D2F6BA0395D43D64E5"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\v2-intervention-2026-10-18.test.js",
+        "Hash":  "144ABA7D1296F55CE32650DD15C319AB66521E309E730E728BEC9ABD9D508A59"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\v2-memory-2026-10-18.test.js",
+        "Hash":  "149BAFEC54A152D4ECB954F569FA0B5A98CDB0E791EAD664E6022CD3260960AF"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\v2-reviewer-demotion-2026-10-18.test.js",
+        "Hash":  "49C8877FF315C84D9C57BC222B628F0FF4446327C47110E3B600F1D26B330A77"
+    },
+    {
+        "Path":  "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind\\.recovery\\w5-stable-20261018-0420\\test\\workbench-graph.test.js",
+        "Hash":  "9B605E1C620E29FFC3DE939C294499FC4E6D95417EA13D218979C7AB6CC1C6E7"
+    }
+]

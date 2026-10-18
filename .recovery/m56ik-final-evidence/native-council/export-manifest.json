@@ -1,0 +1,120 @@
+{
+  "at": "2026-10-18T12:08:32.056Z",
+  "filter": "Only council-specific native tool/call + paired tool/result events; no system prompts, provider credentials or unrelated project data exported.",
+  "sources": [
+    {
+      "id": "session-ea05d8ff-0aab-45e2-aca4-e263855042b0",
+      "path": "C:\\Users\\wjthq\\.dsh\\sessions\\--C-Users-wjthq-.dsh-plugins--\\session-ea05d8ff-0aab-45e2-aca4-e263855042b0\\session.v4.jsonl.zstd",
+      "bytes": 4053411,
+      "sha256": "a732aa7bb920177921f76aacf3481db53f509388b7f29b694bafecea2d22f242",
+      "frames": 1262,
+      "records": 2437,
+      "incompleteTail": null
+    },
+    {
+      "id": "93650aef-9692-4f9b-9093-106b8ee4cc81",
+      "path": "C:\\Users\\wjthq\\.dsh\\sessions\\--C-Users-wjthq-.dsh-plugins--\\93650aef-9692-4f9b-9093-106b8ee4cc81\\session.v4.jsonl.zstd",
+      "bytes": 106272,
+      "sha256": "97618b9d125f45fc9bfd126b914bc46a914cf5bb7f02cf5e5e0fb6d7cc228cfe",
+      "frames": 39,
+      "records": 84,
+      "incompleteTail": null,
+      "selectedRoute": {
+        "provider": "openai-codex",
+        "model": "gpt-6.1-sol",
+        "reasoningEffort": "high"
+      }
+    },
+    {
+      "id": "8252e161-1d1c-45df-b05d-097caa5cc890",
+      "path": "C:\\Users\\wjthq\\.dsh\\sessions\\--C-Users-wjthq-.dsh-plugins--\\8252e161-1d1c-45df-b05d-097caa5cc890\\session.v4.jsonl.zstd",
+      "bytes": 109634,
+      "sha256": "c62b2409663617d296965a81c5df494a18776d77f595bd99200a9548fa42eab2",
+      "frames": 42,
+      "records": 89,
+      "incompleteTail": null,
+      "selectedRoute": {
+        "provider": "openai-codex",
+        "model": "gpt-6.1-sol",
+        "reasoningEffort": "high"
+      }
+    }
+  ],
+  "files": [
+    {
+      "name": "session-ea05d8ff-0aab-45e2-aca4-e263855042b0.native-tool-receipts.json",
+      "sha256": "ef5734aeeddc24bedc34e2384e858b7372f00557606d774331848b24dc771b36",
+      "actions": [
+        "debate_open",
+        "debate_unlock",
+        "debate_round",
+        "debate_converge"
+      ]
+    },
+    {
+      "name": "93650aef-9692-4f9b-9093-106b8ee4cc81.native-tool-receipts.json",
+      "sha256": "39333f614157556f9d61f87e1a046f9f2409f8fb26411eed10487d1ccfa1b553",
+      "actions": [
+        "debate_answer",
+        "workbench",
+        "debate_say"
+      ]
+    },
+    {
+      "name": "8252e161-1d1c-45df-b05d-097caa5cc890.native-tool-receipts.json",
+      "sha256": "bf39769b375ec34e433a1d3923ecb1f276dbc06ece65918790625a73a7eb62ac",
+      "actions": [
+        "workbench",
+        "debate_answer",
+        "workbench",
+        "debate_say"
+      ]
+    },
+    {
+      "name": "native-workbench-council.json",
+      "sha256": "c6fc353d479870ddee08dafeed7729444bc7c14fcc920a43b6d40a78215160cd"
+    }
+  ],
+  "liveRecheck": [
+    {
+      "path": "src/intervention.js",
+      "expected": "a73f03fe97321d558057a3ef397c64332298c0d9a172516028cfea898d84738d",
+      "actual": "a73f03fe97321d558057a3ef397c64332298c0d9a172516028cfea898d84738d"
+    },
+    {
+      "path": "src/council.js",
+      "expected": "177974dbf72fc1dca273af1a4efcf3ad4263db0f2a5299d8597131a21bb3ce75",
+      "actual": "177974dbf72fc1dca273af1a4efcf3ad4263db0f2a5299d8597131a21bb3ce75"
+    },
+    {
+      "path": "lib/actions.js",
+      "expected": "fd515899f94c64e51acf5334e44f2c59efab86965c503da2ff8205707735886b",
+      "actual": "fd515899f94c64e51acf5334e44f2c59efab86965c503da2ff8205707735886b"
+    },
+    {
+      "path": "test/v2-council-managed-2026-10-18.test.js",
+      "expected": "e4452e48b36d1bbeaee82be6bc2687adadc511c8eee05e9b770cfb9e153f64a8",
+      "actual": "e4452e48b36d1bbeaee82be6bc2687adadc511c8eee05e9b770cfb9e153f64a8"
+    },
+    {
+      "path": "test/v2-council-entry-recovery-2026-10-18.test.js",
+      "expected": "fe98810153ef51c6effaec8f0ede40d77bb7dc7a4fa15f6d3540ef4890230348",
+      "actual": "fe98810153ef51c6effaec8f0ede40d77bb7dc7a4fa15f6d3540ef4890230348"
+    },
+    {
+      "path": "test/v2-council-failure-cleanup-2026-10-18.test.js",
+      "expected": "e00dc7ed87ac843b320ee2a7ca5550adb522bbe29f6589bfaf34401fde9e442a",
+      "actual": "e00dc7ed87ac843b320ee2a7ca5550adb522bbe29f6589bfaf34401fde9e442a"
+    },
+    {
+      "path": "test/policy-check-task-context-2026-10-18.test.js",
+      "expected": "3302e60850ce68aae09cf1520515177862cbe905f6b70e11896c9aef26a47ef0",
+      "actual": "3302e60850ce68aae09cf1520515177862cbe905f6b70e11896c9aef26a47ef0"
+    },
+    {
+      "path": "test/fix-batch3-design-2026-10-15.test.js",
+      "expected": "39af11c5004bbae8d81d4957988fd8e3129f0bee95e4adad57c64229c3d43b35",
+      "actual": "39af11c5004bbae8d81d4957988fd8e3129f0bee95e4adad57c64229c3d43b35"
+    }
+  ]
+}

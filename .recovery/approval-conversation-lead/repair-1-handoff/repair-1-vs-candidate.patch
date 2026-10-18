@@ -1,0 +1,368 @@
+﻿diff --git "a/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\product/components/board/lib/client.js" "b/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\repair-1\\product/components/board/lib/client.js"
+index ff09253..3092dab 100644
+--- "a/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\product/components/board/lib/client.js"
++++ "b/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\repair-1\\product/components/board/lib/client.js"
+@@ -3737,6 +3737,30 @@ window.__ModuleLoader__.load({
+       });
+     }
+ 
++    /** 官方根席位只从实际可见引用取会话：主视图mainView、嵌入侧聊sidebarChat；不把后台持有者当正在看的会话。 */
++    function 审批覆盖层(props) {
++      var useSessions = props && props.useSessions;
++      var state = typeof useSessions === 'function' ? useSessions(function (value) { return value; }) : null;
++      var ids = [];
++      var problem = '';
++      if (!state || state.phase !== 'ready' || !Array.isArray(state.ids) || !obj(state.byId)) {
++        problem = '介入审批不可用：所属会话目录尚未就绪，不能猜测归属。';
++      } else {
++        state.ids.forEach(function (id) {
++          var row = state.byId[id];
++          var refs = row && obj(row.retainedBy);
++          if (typeof id === 'string' && id && row && row.id === id && refs
++            && (Number(refs.mainView) > 0 || Number(refs.sidebarChat) > 0) && ids.indexOf(id) < 0) ids.push(id);
++        });
++        if (!ids.length) problem = '介入审批不可用：缺少所属会话，未选择会话或没有可见会话引用；不会借用其他会话。';
++      }
++      return h('aside', { 'data-dshmind': 'approval-overlay', style: { position: 'fixed', zIndex: 1000,
++        top: 'var(--dsh-frame-overlay-top, 20px)', right: '20px', width: 'min(760px, calc(100vw - 40px))',
++        maxHeight: 'calc(100vh - 80px)', overflow: 'auto', pointerEvents: 'none' } },
++        problem ? h('div', { role: 'status', 'data-dshmind': 'approval-unavailable', style: { padding: '8px', background: 'var(--dsw-alias-bg-base, #fff)', color: 'var(--dsw-alias-label-primary, #222)', pointerEvents: 'auto' } }, problem)
++          : ids.map(function (id) { return h(会话审批, { key: id, sessionId: id }); }));
++    }
++
+     /** 所属会话的人侧入口；只消费 intervention 的持久请求，不新建第二套审批状态机。 */
+     function 会话审批(props) {
+       var sessionId = line(props && props.sessionId, '');
+@@ -3751,17 +3775,18 @@ window.__ModuleLoader__.load({
+         life.sessionId = sessionId;
+         life.busy = false;
+         var epoch = ++life.seq;
+-        var pendingRead = 0;
++        var inFlight = null;
+         function alive() { return life.active && life.seq === epoch && life.sessionId === sessionId; }
+         function fail(message) {
+           if (alive()) setSnap(function (old) { return Object.assign({}, old, { sessionId: sessionId, phase: 'error', error: message }); });
+         }
+-        function read() {
++        function read(force) {
+           if (!alive()) return Promise.resolve(null);
+           if (!sessionId) { fail('缺少所属会话 sessionId；不会猜测其他会话。'); return Promise.resolve(null); }
+-          var ticket = ++pendingRead;
+-          return runCommand(activeCtx, sessionId, { method: 'GET', path: route }).then(function (out) {
+-            if (!alive() || ticket !== pendingRead) return null;
++          // poll复用同一在途读取；人侧POST后的强制回读必须等旧读结束再新发，不能拿旧快照确认。
++          if (inFlight) return force === true ? inFlight.then(function () { return read(true); }) : inFlight;
++          inFlight = runCommand(activeCtx, sessionId, { method: 'GET', path: route }).then(function (out) {
++            if (!alive()) return null;
+             var value = obj(out.value);
+             if (!out.ok) { fail('读取会话审批失败：' + out.error); return null; }
+             if (!value || value.会话 !== sessionId || !Array.isArray(value.待决)
+@@ -3770,7 +3795,8 @@ window.__ModuleLoader__.load({
+             }
+             setSnap(function (old) { return Object.assign({}, old, { sessionId: sessionId, phase: 'live', 清单: value.待决, error: '' }); });
+             return value.待决;
+-          });
++          }).then(function (value) { inFlight = null; return value; });
++          return inFlight;
+         }
+         life.refresh = read;
+         read();
+@@ -3797,7 +3823,7 @@ window.__ModuleLoader__.load({
+           if (!life.active || life.seq !== epoch) return;
+           var reply = obj(out.value);
+           var accepted = out.ok && reply && reply.请求id === item.请求id && reply.决定 === decision;
+-          return life.refresh().then(function (items) {
++          return life.refresh(true).then(function (items) {
+             if (!life.active || life.seq !== epoch) return;
+             var actual = items && items.find(function (row) { return row.请求id === item.请求id; });
+             var expected = decision === '批准' ? '已批准待重放' : decision === '拒绝' ? '已拒绝' : '已撤销';
+@@ -3815,11 +3841,12 @@ window.__ModuleLoader__.load({
+       var signature = sessionId + '|' + (snap.error || openRows.map(function (item) { return item.请求id + ':' + item.审阅指纹; }).join('|'));
+       var visible = dismiss[0] !== signature && (openRows.length > 0 || snap.phase === 'error' || !!snap.提示);
+       var labelId = 'dshmind-approval-' + sessionId;
+-      return h('div', { 'data-dshmind': 'conversation-approval', 'data-session-id': sessionId }, [
++      return h('div', { 'data-dshmind': 'conversation-approval', 'data-session-id': sessionId, style: { pointerEvents: 'auto' } }, [
++        h('p', { key: 'scope', style: { margin: '4px 0', fontSize: '12px' } }, '所属会话：' + sessionId),
+         h('button', { key: 'open', type: 'button', className: 'dshmind-set__btn', onClick: function () { dismiss[1](''); if (life.refresh) life.refresh(); } },
+           '介入审批 · ' + (snap.phase === 'error' ? '读取失败' : snap.phase === 'reading' ? '读取中' : String(openRows.length))),
+         visible ? h('section', { key: 'dialog', role: 'dialog', 'aria-labelledby': labelId, 'data-dshmind': 'approval-dialog',
+-          style: { position: 'fixed', zIndex: 1000, top: '90px', right: '24px', width: 'min(760px, calc(100vw - 48px))', maxHeight: 'calc(100vh - 120px)', overflow: 'auto', padding: '20px', borderRadius: '12px', border: '1px solid var(--dsw-alias-border-l2, #888)', background: 'var(--dsw-alias-bg-base, #fff)', color: 'var(--dsw-alias-label-primary, #222)', boxShadow: '0 12px 40px #0004', textAlign: 'left', whiteSpace: 'normal' } }, [
++          style: { position: 'relative', zIndex: 1, width: '100%', maxHeight: 'min(560px, calc(100vh - 160px))', overflow: 'auto', padding: '20px', borderRadius: '12px', border: '1px solid var(--dsw-alias-border-l2, #888)', background: 'var(--dsw-alias-bg-base, #fff)', color: 'var(--dsw-alias-label-primary, #222)', boxShadow: '0 12px 40px #0004', textAlign: 'left', whiteSpace: 'normal' } }, [
+           h('h2', { key: 'h', id: labelId }, '会话待批准'),
+           h('p', { key: 'session' }, '所属会话：' + (sessionId || '缺失（不猜归属）')),
+           h('p', { key: 'boundary' }, '先审阅全部冻结参数与每一步计划。批准仅解除介入门，不替申请者执行；硬拒、版本、复核与原申请者校验仍生效。'),
+@@ -5060,7 +5087,7 @@ window.__ModuleLoader__.load({
+      *  2. `sidebar.panellist`（list，声明方 `@deepseek-ai/dsh-client-ui-sidebar`）—— 侧边栏里的面板入口；
+      *  3. `settings.section`（list，声明方 `@deepseek-ai/dsh-client-ui-settings-*`）—— 官方设置页里的
+      *     「心智设置」分区。
+-     *  4. `conversation.session.header.actions` —— 不受 composer takeover 影响的所属会话审批。
++     *  4. `shell.overlay` —— 脱离会话header/composer的生命周期，按官方可见引用呈现所属会话审批。
+      *
+      * ⚠️ **看板面板 ≠ 设置页**，这是两件被分开的东西，别再合并回去：
+      * 面板是常驻运维视图，§9 工作台只读 ⇒ 面板里**一个写控件都没有**；
+@@ -5113,8 +5140,8 @@ window.__ModuleLoader__.load({
+           label: function () { return '心智 · 数字组织'; },
+         }, MindGlyph);
+       });
+-      登记('conversation.session.header.actions', function () {
+-        return slots.register({ name: 'conversation.session.header.actions', id: 'dsh-mind-intervention', order: 60 }, 会话审批);
++      登记('shell.overlay', function () {
++        return slots.register({ name: 'shell.overlay', id: 'dsh-mind-intervention', order: 60 }, 审批覆盖层);
+       });
+       登记('settings.section', function () {
+         return slots.register({
+diff --git "a/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\repair-1\\product/components/board/test/approval-renderer.mjs" "b/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\repair-1\\product/components/board/test/approval-renderer.mjs"
+new file mode 100644
+index 0000000..a7d9050
+--- /dev/null
++++ "b/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\repair-1\\product/components/board/test/approval-renderer.mjs"
+@@ -0,0 +1,29 @@
++import {createRenderer} from './client-harness.mjs';
++
++/**
++ * Execute the real root entry and keyed function children with independent hook lifetimes.
++ * @param {Function} Component Actual module registration component.
++ * @param {object} props Root standard props supplied by the host-contract fixture.
++ * @returns {object} Renderer facade; unmount disposes every actual child effect.
++ */
++export function createApprovalRenderer(Component,props){
++  const root=createRenderer(Component,props);const children=new Map();let tree;
++  function assemble(flush){
++    const used=new Set();
++    function visit(node,key='root'){
++      if(Array.isArray(node))return node.map((child,i)=>visit(child,key+'/'+(child?.key??i)));
++      if(!node||typeof node!=='object'||!node.props)return node;
++      if(typeof node.type==='function'){
++        const id=key+':'+(node.key??'');used.add(id);let state=children.get(id);
++        if(state&&state.type!==node.type){state.renderer.unmount();children.delete(id);state=null;}
++        if(!state){const input={...node.props};state={type:node.type,props:input,renderer:createRenderer(node.type,input)};children.set(id,state);}
++        else{for(const p of Object.keys(state.props))delete state.props[p];Object.assign(state.props,node.props);state.renderer.render();}
++        if(flush)state.renderer.flush();return visit(state.renderer.tree,id+'/out');
++      }
++      return {...node,props:{...node.props,children:visit(node.props.children,key+'/children')}};
++    }
++    tree=visit(root.tree);for(const [key,state]of children)if(!used.has(key)){state.renderer.unmount();children.delete(key);}return tree;
++  }
++  assemble(false);
++  return {get tree(){return tree;},render(){root.render();return assemble(false);},flush(){root.flush();return assemble(true);},unmount(){root.unmount();for(const child of children.values())child.renderer.unmount();children.clear();}};
++}
+diff --git "a/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\product/components/board/test/client-harness.mjs" "b/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\repair-1\\product/components/board/test/client-harness.mjs"
+index 2d898f1..0a69138 100644
+--- "a/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\product/components/board/test/client-harness.mjs"
++++ "b/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\repair-1\\product/components/board/test/client-harness.mjs"
+@@ -924,8 +924,8 @@ export async function runHarness() {
+ 
+   const injected = a.calls.inject.slice().sort();
+   passed.push(check(injected.length === 4
+-    && injected[0] === 'conversation.session.header.actions' && injected[1] === 'main' && injected[2] === 'settings.section' && injected[3] === 'sidebar.panellist',
+-    'inject 的槽位恰好是 main + sidebar.panellist + settings.section + conversation.session.header.actions', a.calls.inject.join(',')));
++    && injected[0] === 'main' && injected[1] === 'settings.section' && injected[2] === 'shell.overlay' && injected[3] === 'sidebar.panellist',
++    'inject 的槽位恰好是 main + sidebar.panellist + settings.section + shell.overlay', a.calls.inject.join(',')));
+   // ⚠️ 这一条**改过**，理由必须留在注释里（不是把历史的红偷偷删掉）：
+   //
+   // 旧断言是「不再注册 settings.section」，理由是「看板已搬出设置页」。那条决定说的是
+diff --git "a/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\product/components/board/test/conversation-approval.test.js" "b/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\repair-1\\product/components/board/test/conversation-approval.test.js"
+index e342858..cd8d9ad 100644
+--- "a/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\product/components/board/test/conversation-approval.test.js"
++++ "b/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\repair-1\\product/components/board/test/conversation-approval.test.js"
+@@ -1,6 +1,7 @@
+ import { test } from 'node:test';
+ import assert from 'node:assert/strict';
+ import { loadClient, makeSlots, makeCtx, makeSessions, makeStrictRequire, createRenderer, collect, textOf, jsonResponse, settle } from './client-harness.mjs';
++import { createApprovalRenderer } from './approval-renderer.mjs';
+ import { makeFixture } from '../../../test/helpers.mjs';
+ import { Org } from '../../../src/org.js';
+ import { intervention路由 } from '../../kernel/lib/routes.js';
+@@ -25,7 +26,11 @@ function env(handler, options = {}) {
+   return { loaded, calls, entry, registrations, dispose, async drain() {
+     for (let i = 0; i < 20; i += 1) { await Promise.all([...pending]); await settle(30); if (!pending.size) return; }
+     throw Error('真实传输未收敛，不能清理夹具或宣称完成');
+-  }, mount(sessionId = A) { const props = { sessionId }; const renderer = createRenderer(entry.Component, props); renderer.flush(); return { renderer, props }; } };
++  }, mount(sessionId = A) {
++    const props = { sessionId };
++    const renderer = createApprovalRenderer(entry.Component, { useSessions: select => select({phase:'ready',ids:props.sessionId?[props.sessionId]:[],byId:props.sessionId?{[props.sessionId]:{id:props.sessionId,retainedBy:{mainView:1}}}:{}}) });
++    renderer.flush(); return {renderer,props};
++  }, mountRoot(snapshot) {const renderer=createApprovalRenderer(entry.Component,{useSessions:select=>select(snapshot)});renderer.flush();return renderer;} };
+ }
+ async function flush(r) { await settle(30); r.flush(); await settle(20); r.flush(); }
+ function elements(r) { return collect(r.tree, {skipStyle:true}).elements; }
+@@ -35,9 +40,62 @@ function click(r, text) { const b = button(r,text); assert.ok(b, 'button missing
+ function response(sessionId, rows) { return jsonResponse({ 成功:true, 会话:sessionId, 待决:rows }); }
+ function tick(e) { for (const t of e.loaded.timers.intervals) t.fn(); }
+ 
+-test('会话header入口只追加自己的id，不依赖全局末条会话或composer takeover且不覆盖原action', async () => {
++test('hideChrome与blank有真实mainView引用时不依赖header也主动显示完整冻结计划', async()=>{
++  const e=env(()=>response(A,[row('hidden-header-valid')]));
++  const r=e.mountRoot({phase:'ready',ids:[A],byId:{[A]:{id:A,blank:true,hideChrome:true,retainedBy:{mainView:1}}}});await flush(r);
++  assert.equal(e.entry.options.name,'shell.overlay');assert.ok(dialog(r));assert.match(textOf(r.tree),/hidden-header-valid/);r.unmount();e.dispose();
++});
++
++test('embedded仅sidebarChat真实引用无主header时仍按嵌入会话id主动呈现', async()=>{
++  const e=env(()=>response(B,[row('embedded-valid',B)]));const r=e.mountRoot({phase:'ready',ids:[B],byId:{[B]:{id:B,retainedBy:{sidebarChat:1}}}});await flush(r);
++  assert.ok(dialog(r));assert.match(textOf(r.tree),/embedded-valid/);assert.ok(e.calls.every(req=>new URL(req.url,'http://local').searchParams.get('sessionId')===B));r.unmount();e.dispose();
++});
++
++test('主会话与嵌入会话各自呈现不串正文，后台controller和gateway会话不可被扫描或借用', async()=>{
++  const e=env(req=>{const id=new URL(req.url,'http://local').searchParams.get('sessionId');return response(id,[row(id===A?'PRIVATE-A':'PRIVATE-B',id)]);});
++  const r=e.mountRoot({phase:'ready',ids:[A,B,'background','gateway'],byId:{[A]:{id:A,retainedBy:{mainView:1}},[B]:{id:B,retainedBy:{sidebarChat:1}},background:{id:'background',retainedBy:{controllerOperation:1}},gateway:{id:'gateway',retainedBy:{gateway:1}}}});await flush(r);
++  assert.deepEqual([...new Set(e.calls.map(req=>new URL(req.url,'http://local').searchParams.get('sessionId')))].sort(),[A,B].sort());
++  const sections=elements(r).filter(el=>el.props['data-dshmind']==='conversation-approval');assert.equal(sections.length,2);
++  const a=sections.find(el=>el.props['data-session-id']===A);const b=sections.find(el=>el.props['data-session-id']===B);assert.match(textOf(a),/PRIVATE-A/);assert.ok(!textOf(a).includes('PRIVATE-B'));assert.match(textOf(b),/PRIVATE-B/);assert.ok(!textOf(b).includes('PRIVATE-A'));r.unmount();e.dispose();
++});
++
++test('blank无session或目录未就绪明确不可用，不能拿后台末条会话冒充归属', async()=>{
++  for(const snapshot of [{phase:'ready',ids:[],byId:{}},{phase:'pending',ids:[A],byId:{[A]:{id:A,retainedBy:{mainView:1}}}},{phase:'ready',ids:[B],byId:{[B]:{id:B,retainedBy:{gateway:1}}}}]){
++    const e=env(()=>{throw Error('未知归属不得取数');});const r=e.mountRoot(snapshot);await flush(r);assert.match(textOf(r.tree),/介入审批不可用/);assert.equal(e.calls.length,0);assert.ok(!button(r,'批准'));r.unmount();e.dispose();
++  }
++});
++
++test('根标准useSessions缺席也有明确不可用状态，不退回ctx全局会话猜测', async()=>{
++  const e=env(()=>{throw Error('根契约缺失不得取数');});const r=createApprovalRenderer(e.entry.Component,{});r.flush();await flush(r);assert.match(textOf(r.tree),/所属会话目录尚未就绪/);assert.equal(e.calls.length,0);r.unmount();e.dispose();
++});
++
++test('POST确认必须等已有旧GET结束再发全新GET，single-flight不能拿批准前快照假确认',async()=>{
++  let read=0;let release;let approved=false;
++  const e=env(req=>{if(req.method==='POST'){approved=true;return jsonResponse({成功:true,请求id:'r1',决定:'批准'});}read++;if(read===2)return new Promise(resolve=>{release=resolve;});return response(A,[row('r1',A,{状态:approved?'已批准待重放':'待放行',可选项:approved?['撤销']:['批准','拒绝']})]);});
++  const r=e.mount().renderer;await flush(r);tick(e);await flush(r);assert.equal(read,2);click(r,'批准');await flush(r);assert.equal(read,2,'旧读未完成前不并发发读，也不据旧读宣称成功');assert.ok(!textOf(r.tree).includes('已回读确认'));
++  release(response(A,[row()]));await e.drain();await flush(r);assert.equal(read,3,'必须有POST之后新发的读取');assert.match(textOf(r.tree),/已回读确认「已批准待重放」/);r.unmount();e.dispose();
++});
++
++test('持续4秒成功响应配3秒轮询最终呈现且不饥饿，延迟小于原8秒超时', async () => {
++  let now=0;let completed=0;let maxActive=0;const queued=[];
++  const e=env(()=>new Promise(resolve=>{queued.push({due:now+4000,resolve,done:false});maxActive=Math.max(maxActive,queued.filter(x=>!x.done).length);}));
++  const r=e.mount().renderer;await flush(r);
++  try {
++    for(now=1000;now<=24000;now+=1000){if(now%3000===0)tick(e);await flush(r);for(const q of queued.filter(x=>!x.done&&x.due<=now)){q.done=true;completed++;q.resolve(response(A,[row('slow-valid')]));}await flush(r);if(now>=4000){assert.ok(dialog(r),'4秒有效响应必须进入视图，不能每3秒被新票淘汰');assert.match(textOf(r.tree),/slow-valid/);}}
++    assert.ok(completed>=4,'持续慢响应须真实完成至少4次而非只验首帧');assert.equal(maxActive,1,'同会话GET不重叠，poll复用在途请求');
++  } finally {r.unmount();e.dispose();}
++});
++
++test('4秒失败响应不被3秒轮询淘汰，明确错误并可在下一次请求恢复', async () => {
++  const pending=[];const e=env(()=>new Promise(resolve=>pending.push(resolve)));const r=e.mount().renderer;await flush(r);
++  tick(e);await flush(r);pending[0](jsonResponse({成功:false,理由:'慢响应可读失败'},503));await flush(r);assert.match(textOf(r.tree),/慢响应可读失败/);assert.ok(!button(r,'批准'));
++  tick(e);await flush(r);pending.at(-1)(response(A,[row('recovered')]));await flush(r);assert.match(textOf(r.tree),/recovered/);assert.ok(dialog(r));r.unmount();e.dispose();
++});
++
++test('根overlay入口只追加自己的id，不依赖header或全局末条会话或composer takeover且不覆盖原action', async () => {
+   const e = env(req => response(new URL(req.url,'http://local').searchParams.get('sessionId'), [row()])); const {renderer:r} = e.mount(); await flush(r);
+-  assert.equal(e.entry.options.name,'conversation.session.header.actions');
++  assert.equal(e.entry.options.name,'shell.overlay');
++  assert.equal(e.registrations.register.filter(x=>x.options.name==='conversation.session.header.actions'&&x.options.id==='dsh-mind-intervention').length,0,'旧header入口真实移除，不并存');
+   assert.equal(e.registrations.register.filter(x=>x.options.id==='native-action').length,1);
+   assert.ok(!e.registrations.inject.includes('conversation.composer') && !e.registrations.inject.includes('conversation.input.overlay'));
+   assert.ok(e.calls.every(x=>new URL(x.url,'http://local').searchParams.get('sessionId')===A));
+diff --git "a/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\product/src/intervention.js" "b/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\repair-1\\product/src/intervention.js"
+index c66cf23..bb4bb3d 100644
+--- "a/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\product/src/intervention.js"
++++ "b/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\repair-1\\product/src/intervention.js"
+@@ -386,7 +386,8 @@ export class InterventionService {
+    * @returns {Promise<object>}
+    */
+   async 读冻结({ 请求id, subject }) {
+-    const 记录 = await this.#读冻结(String(请求id ?? ''));
++    const 项 = this.#折叠(await this.audit.read({})).get(String(请求id ?? ''));
++    const 记录 = await this.#读冻结(String(请求id ?? ''), 项);
+     if (!记录) throw new InvalidBody(`没有这个介入请求记录：${请求id}。记录缺失时不能预览、也不能盲批。`, { missing: ['请求id'] });
+     const 是本人 = subject?.kind === '主权者';
+     const 是原申请者 = String(subject?.id ?? '') === String(记录.主体?.id ?? '');
+@@ -451,7 +452,7 @@ export class InterventionService {
+         );
+       }
+       // 不盲批：记录读不到或摘要不符，决议直接拒绝（fail-closed）。
+-      const 冻结 = await this.#读冻结(指纹);
++      const 冻结 = await this.#读冻结(指纹, 项);
+       if (!冻结) {
+         throw new InvalidBody(`介入请求 ${指纹} 的完整冻结记录缺失：没有可预览的内容，不能由主权者拍板。`, { missing: ['请求记录'] });
+       }
+@@ -506,7 +507,7 @@ export class InterventionService {
+       }
+       let 冻结;
+       try {
+-        冻结 = await this.#读冻结(指纹);
++        冻结 = await this.#读冻结(指纹, 项, true);
+       } catch (error) {
+         return { ok: false, 状态: '记录不可用', 原因: error instanceof Error ? error.message : String(error) };
+       }
+@@ -649,11 +650,8 @@ export class InterventionService {
+     const 清单 = (await this.投影({ 项目 })).filter(x => 会话 === null || x.原主体?.id === 会话);
+     for (const 项 of 清单) {
+       try {
+-        const 记录 = await this.#读冻结(项.请求id);
++        const 记录 = await this.#读冻结(项.请求id, 项);
+         if (记录) {
+-          if (记录.请求id !== 项.请求id || 记录.内容摘要 !== 项.内容摘要 || 记录.主体?.id !== 项.原主体?.id || 记录.项目 !== 项.项目) {
+-            throw new InvalidBody('完整冻结记录与请求账本不符，禁止展示或决定。', { missing: ['请求记录'] });
+-          }
+           项.完整请求 = 记录.入参;
+           // 完整意图：每一步写什么、作用是什么（正文预览，不只 hash）。
+           项.步骤 = 记录.步骤 ?? [];
+@@ -754,7 +752,7 @@ export class InterventionService {
+    * @param {string} 请求id
+    * @returns {Promise<object|null>}
+    */
+-  async #读冻结(请求id) {
++  async #读冻结(请求id, 项, 需决议 = false) {
+     const 记录 = await readJsonOrNull(this.#记录路径(请求id));
+     if (!记录) return null;
+     if (Number(记录.版本) !== 记录版本) {
+@@ -764,6 +762,17 @@ export class InterventionService {
+     if (typeof 内容摘要 !== 'string' || 内容摘要 !== digest(canonical(其余))) {
+       throw new InvalidBody(`介入请求记录 ${请求id} 的内容摘要不符（疑似被改过）：拒绝把它当作冻结请求。`, { detail: { 请求id } });
+     }
++    // 自摘要只能证明文件内部一致，不能证明它仍是人批准的那份意图。
++    if (!项 || 记录.请求id !== 请求id || 记录.请求指纹 !== 请求id || 记录.内容摘要 !== 项.内容摘要
++      || 记录.主体?.id !== 项.原主体?.id || 记录.项目 !== 项.项目) {
++      throw new InvalidBody('完整冻结记录与请求账本不符，禁止展示、决定或重放。', { missing: ['请求记录'] });
++    }
++    if (this.请求指纹({ subject: 记录.主体, action: 记录.动作, args: 记录.入参, 目标: 记录.目标, 项目: 记录.项目 }) !== 请求id) {
++      throw new InvalidBody('冻结记录的规范请求指纹不符，禁止替换原请求。', { missing: ['请求指纹'] });
++    }
++    if (需决议 && (!项.决议内容摘要 || 记录.内容摘要 !== 项.决议内容摘要)) {
++      throw new InvalidBody('冻结记录与已批准决议的内容摘要不符，禁止重放。', { missing: ['决议摘要'] });
++    }
+     return 记录;
+   }
+ 
+@@ -796,6 +805,7 @@ export class InterventionService {
+           状态: '待放行',
+           决议: null,
+           决议行: null,
++          决议内容摘要: null,
+           占用行: null,
+           完成行: null,
+           失败原因: '',
+@@ -807,6 +817,7 @@ export class InterventionService {
+       if (动作 === 决议动作) {
+         项.决议 = { 决定: 行.结果, 理由: 行.详情?.理由 ?? '', 入口: 行.详情?.入口 ?? null, 行: { seq: 行.seq, hash: 行.hash } };
+         项.决议行 = { seq: 行.seq, hash: 行.hash };
++        项.决议内容摘要 = 行.详情?.请求记录?.摘要 ?? null;
+         // 新一轮决定：清掉上一轮的消费痕迹（只影响状态推导，账本行永在）。
+         项.占用行 = null;
+         项.完成行 = null;
+diff --git "a/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\repair-1\\product/test/approved-replay.test.js" "b/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\repair-1\\product/test/approved-replay.test.js"
+new file mode 100644
+index 0000000..f0ca326
+--- /dev/null
++++ "b/C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-conversation-approval-RPsVEF\\repair-1\\product/test/approved-replay.test.js"
+@@ -0,0 +1,21 @@
++import {test} from 'node:test';
++import assert from 'node:assert/strict';
++import {readFile,writeFile} from 'node:fs/promises';
++import {makeFixture} from './helpers.mjs';
++import {Org} from '../src/org.js';
++import {canonical,digest} from '../src/kernel/text.js';
++const owner={id:'repair-original-applicant',kind:'Lead'};
++const source={subject:owner,action:'write',args:{内容:'OWNER-APPROVED-ORIGINAL'},项目:'plugins',档位:'审批',步骤:[{动作:'write',目标:{kind:'产物',id:'artifact-proof'},预览:{内容:'OWNER-APPROVED-ORIGINAL'},说明:'冻结写'}]};
++async function scene(fn){const f=await makeFixture({defaults:{介入度:'审批'}});try{const org=await Org.open({home:f.home,factoryRoot:f.factoryRoot,privateRoot:f.privateRoot,project:'plugins'});const request=await org.intervention.记请求(source);await org.intervention.人侧决议({请求id:request.请求id,决定:'批准',通道:'隔离真实人侧适配器',认证:'测试认证事实'});const file=org.layout.private('介入请求',request.请求id+'.json');const record=JSON.parse(await readFile(file,'utf8'));await fn(org,request,file,record);}finally{await f.cleanup();}}
++function seal(record){delete record.内容摘要;record.内容摘要=digest(canonical(record));return record;}
++async function zeroUse(org){assert.equal((await org.audit.read({})).filter(x=>x.动作==='介入放行占用').length,0,'校验拒绝前不可占用或执行');}
++
++test('批准后原冻结记录正控：原申请者原参数原步骤可占用一次，不把安全修复做成恒拒',()=>scene(async(org,r)=>{const a=await org.intervention.校验放行({请求id:r.请求id,subject:owner,action:'write',入参:source.args,步骤:source.步骤});assert.equal(a.ok,true);assert.equal(a.冻结.入参.内容,'OWNER-APPROVED-ORIGINAL');assert.equal((await org.intervention.校验放行({请求id:r.请求id,subject:owner})).ok,false);}));
++
++test('批准后篡改入参并自重算摘要，同步提交篡改参数/步骤仍须被原请求账本拒绝',()=>scene(async(org,r,file,record)=>{record.入参.内容='AFTER-APPROVAL-SWAP';await writeFile(file,JSON.stringify(seal(record)));const a=await org.intervention.校验放行({请求id:r.请求id,subject:owner,action:'write',入参:record.入参,步骤:record.步骤});assert.equal(a.ok,false,'批准后的自摘要置换不能通过重放');assert.match(a.原因,/账本不符|规范请求指纹/);await zeroUse(org);}));
++
++test('批准后仅改计划且自重算摘要：规范请求id不含计划，仍须以原账本摘要绑定拒绝',()=>scene(async(org,r,file,record)=>{record.步骤[0].预览.内容='CHANGED-PLAN';record.步骤[0].内容指纹=digest(canonical({说明:record.步骤[0].说明,预览:record.步骤[0].预览}));await writeFile(file,JSON.stringify(seal(record)));assert.equal(org.intervention.请求指纹(source),r.请求id,'正控：这次坏面不依赖规范请求id变化');const a=await org.intervention.校验放行({请求id:r.请求id,subject:owner,入参:record.入参,步骤:record.步骤});assert.equal(a.ok,false);assert.match(a.原因,/账本不符/);await zeroUse(org);}));
++
++test('重放须绑定当前批准行内容摘要：冻结文件与请求行不变，错误批准摘要不能消费',()=>scene(async(org,r)=>{await org.audit.append({动作:'介入决议',主体:{id:'sovereign',kind:'主权者'},对象:{id:r.请求id,kind:'介入请求'},项目:'plugins',结果:'批准',依据:'独立错误批准摘要夹具',详情:{请求记录:{请求id:r.请求id,摘要:'f'.repeat(64)}}});const a=await org.intervention.校验放行({请求id:r.请求id,subject:owner,入参:source.args,步骤:source.步骤});assert.equal(a.ok,false);assert.match(a.原因,/决议.*摘要/);await zeroUse(org);}));
++
++test('规范请求id独立绑定：自摘要及请求/批准摘要相互一致也不能换掉规范请求身份',()=>scene(async(org,r,file,record)=>{const fake='d'.repeat(64);record.请求id=fake;record.请求指纹=fake;seal(record);await writeFile(org.layout.private('介入请求',fake+'.json'),JSON.stringify(record));await org.audit.append({动作:'介入请求',主体:owner,对象:{id:fake,kind:'介入请求'},项目:'plugins',结果:'待放行',依据:'规范指纹错误独立夹具',详情:{动作:'write',档位:'审批',目标:null,请求记录:{请求id:fake,摘要:record.内容摘要}}});await org.audit.append({动作:'介入决议',主体:{id:'sovereign',kind:'主权者'},对象:{id:fake,kind:'介入请求'},项目:'plugins',结果:'批准',依据:'夹具批准',详情:{请求记录:{请求id:fake,摘要:record.内容摘要}}});const a=await org.intervention.校验放行({请求id:fake,subject:owner,入参:record.入参,步骤:record.步骤});assert.equal(a.ok,false);assert.match(a.原因,/规范请求指纹/);await zeroUse(org);}));

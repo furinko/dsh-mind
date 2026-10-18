@@ -1,0 +1,130 @@
+{
+  "at": "2026-10-18T14:41:57.672Z",
+  "url": "http://127.0.0.1:7710",
+  "snapshotFile": "2026-10-18T14-40-25Z-mvdxn1mr3reg-e2f2ad.json",
+  "snapshotSha256": "2891f149b8a3d639e4b65e624bc855517f9db2ed2b71d8488bf7b6213229adff",
+  "ping": {
+    "status": 200,
+    "body": {
+      "成功": true,
+      "组件": "dsh-mind-kernel",
+      "有webServer": true,
+      "本机通道": {
+        "读": 4,
+        "写": 0,
+        "首次于": "2026-10-18T14:40:02Z",
+        "最近于": "2026-10-18T14:41:57Z",
+        "最近指纹": {
+          "secFetchSite": "（无）",
+          "origin": "（无）",
+          "host": "127.0.0.1:7710",
+          "referer": "（无）",
+          "标记": "（无）"
+        }
+      },
+      "时间": "2026-10-18T14:41:57Z"
+    }
+  },
+  "workbench": {
+    "status": 200,
+    "summary": {
+      "project": "plugins",
+      "tasks": 101,
+      "history": 14,
+      "currentUnsettled": 44,
+      "oldHistoryRows": [
+        {
+          "id": "task-代码审查批次3-身份链-B1-B-pj3i9",
+          "state": "已采纳",
+          "readonly": true,
+          "ticket": "rv-5"
+        },
+        {
+          "id": "task-补-记忆规模与异动-读数-Mem-qbttr",
+          "state": "已采纳",
+          "readonly": true,
+          "ticket": "rv-10"
+        },
+        {
+          "id": "task-退役系统残骸吸收与清理-吸收高价-qx4ks",
+          "state": "已采纳",
+          "readonly": true,
+          "ticket": "rv-15"
+        },
+        {
+          "id": "task-批次4实施-主权者通道不开-Le-sqpkf",
+          "state": "已采纳",
+          "readonly": true,
+          "ticket": "rv-20"
+        },
+        {
+          "id": "task-看板优化批143-诊断档-五-第-jo0he",
+          "state": "已采纳",
+          "readonly": true,
+          "ticket": "rv-25"
+        },
+        {
+          "id": "task-看板-UI-基础卫生批-主人视觉-knpxa",
+          "state": "已采纳",
+          "readonly": true,
+          "ticket": "rv-30"
+        },
+        {
+          "id": "task-完成旧系统退役-主权者指令-mi-l6ugr",
+          "state": "已采纳",
+          "readonly": true,
+          "ticket": "rv-35"
+        },
+        {
+          "id": "task-mind-private-整理批-le9uf",
+          "state": "已采纳",
+          "readonly": true,
+          "ticket": "rv-40"
+        },
+        {
+          "id": "task-dsh-mind-可发布化-对齐-mazes",
+          "state": "已采纳",
+          "readonly": true,
+          "ticket": "rv-45"
+        },
+        {
+          "id": "task-主权者指令-吸收掉旧体系值得吸收-p34t0",
+          "state": "已采纳",
+          "readonly": true,
+          "ticket": "rv-50"
+        },
+        {
+          "id": "task-主权者指令-对新系统做跑通测试--q4mgg",
+          "state": "已采纳",
+          "readonly": true,
+          "ticket": "rv-57"
+        },
+        {
+          "id": "task-跑通测试发现的-P3-3-落地--t7nbc",
+          "state": "已采纳",
+          "readonly": true,
+          "ticket": "rv-62"
+        },
+        {
+          "id": "task-面板优化路线最后一件-7-bus-tce4r",
+          "state": "已采纳",
+          "readonly": true,
+          "ticket": "rv-67"
+        },
+        {
+          "id": "task-面板项目解析修正-主权者指令-修-ee61l",
+          "state": "已采纳",
+          "readonly": true,
+          "ticket": "rv-72"
+        }
+      ],
+      "confirmationIds": [
+        "task-按条目15-16-22-知识-晋-o0gro",
+        "task-按条目8-9-10-12-20--o0gvc",
+        "task-审计补修A-复核读域-真实署名--bgu0d",
+        "task-修复同步身份工具闸在热重载混合代-cuoik"
+      ],
+      "oldSettleHints": []
+    }
+  }
+}

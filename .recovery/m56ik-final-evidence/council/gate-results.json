@@ -1,0 +1,17 @@
+[
+  {
+    "name": "preflight",
+    "status": 0,
+    "error": null
+  },
+  {
+    "name": "full-tests",
+    "status": 0,
+    "error": null
+  },
+  {
+    "name": "client-harness",
+    "status": 0,
+    "error": null
+  }
+]

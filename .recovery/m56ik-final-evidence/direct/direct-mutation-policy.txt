@@ -1,0 +1,44 @@
+﻿▶ Lead 真实自执行与不越授唯一判定
+  ✖ 派发前后绑定另一Lead或上级均拒，拒绝不落bound事件 (1450.283ms)
+  ✖ 派发前后改派另一Lead或上级及混合名单均拒，新负责人未落线 (1161.5568ms)
+✖ Lead 真实自执行与不越授唯一判定 (2618.5995ms)
+ℹ tests 2
+ℹ suites 1
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4019.9907
+
+✖ failing tests:
+
+test at direct-mutations\skip-reassignment-policy\test\direct-lead-execution.test.js:112:3
+✖ 派发前后绑定另一Lead或上级均拒，拒绝不落bound事件 (1450.283ms)
+  AssertionError [ERR_ASSERTION]: Missing expected rejection (overGrant).
+      at async file:///C:/Users/wjthq/AppData/Local/Temp/dsh-mind-direct-bb516c0c2a1444c4ba6ce2126e8c7e9d/direct-mutations/skip-reassignment-policy/test/direct-lead-execution.test.js:119:9
+      at async withOrg (file:///C:/Users/wjthq/AppData/Local/Temp/dsh-mind-direct-bb516c0c2a1444c4ba6ce2126e8c7e9d/direct-mutations/skip-reassignment-policy/test/direct-lead-execution.test.js:32:5)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Promise.all (index 5)
+      at async Suite.run (node:internal/test_runner/test:1771:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at direct-mutations\skip-reassignment-policy\test\direct-lead-execution.test.js:125:3
+✖ 派发前后改派另一Lead或上级及混合名单均拒，新负责人未落线 (1161.5568ms)
+  AssertionError [ERR_ASSERTION]: Missing expected rejection (overGrant).
+      at async file:///C:/Users/wjthq/AppData/Local/Temp/dsh-mind-direct-bb516c0c2a1444c4ba6ce2126e8c7e9d/direct-mutations/skip-reassignment-policy/test/direct-lead-execution.test.js:130:9
+      at async withOrg (file:///C:/Users/wjthq/AppData/Local/Temp/dsh-mind-direct-bb516c0c2a1444c4ba6ce2126e8c7e9d/direct-mutations/skip-reassignment-policy/test/direct-lead-execution.test.js:32:5)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    operator: 'rejects',
+    diff: 'simple'
+  }

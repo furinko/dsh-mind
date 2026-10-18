@@ -1,3 +1,7 @@
 * text=auto eol=lf
 *.svg text
 *.json text
+
+# 证据面逐字节保真：.recovery 是证据/快照，不是源码，禁止行尾转换与文本规范化。
+.recovery/** -text
+

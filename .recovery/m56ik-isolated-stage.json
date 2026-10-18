@@ -1,0 +1,12 @@
+{
+  "source": "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind",
+  "stage": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-m56ik-fd8dc94d",
+  "entry": "components/kernel/lib/index.js",
+  "originalHash": "530faa77edc7d411c31aa91d6723d346cceb6013feeafe11557d1669082edbcb",
+  "at": "2026-10-18T09:23:37.453Z",
+  "excluded": [
+    ".git",
+    ".recovery",
+    "node_modules"
+  ]
+}

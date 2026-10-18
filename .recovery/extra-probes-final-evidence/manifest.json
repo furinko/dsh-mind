@@ -1,0 +1,232 @@
+{
+  "at": "2026-10-18T15:31:58.432Z",
+  "source": "C:/Users/wjthq/AppData/Local/Temp/dsh-mind-combined-hFhjQ5",
+  "files": [
+    {
+      "path": "ROOT-T4-FINAL-REPORT.md",
+      "bytes": 5907,
+      "sha256": "2d230d1b3e663ff2dd6afc2bdd6ad51ef1accd5ca708bb13c96b5212013e5552"
+    },
+    {
+      "path": "ROOT-UL5-REPORT.md",
+      "bytes": 4514,
+      "sha256": "ee2a9db6559a2871e88178c15375e7c2c65e20d8a2c4b1c33f9e569b1c09d116"
+    },
+    {
+      "path": "combined-final-mutation-constant-source-fingerprint.log",
+      "bytes": 2518,
+      "sha256": "6a97d7acc5102167a333b94acf9e1185cacac67e253cfd7980ea84e8d6f68c7d"
+    },
+    {
+      "path": "combined-final-mutation-control.log",
+      "bytes": 5271,
+      "sha256": "0000c2096701741ea7ed30c2afc09dfabf830b259ff599961b390ab44aa4b424"
+    },
+    {
+      "path": "combined-final-mutation-delayed-after-health.log",
+      "bytes": 1763,
+      "sha256": "99973d365b262e1da82f643a7a0a2e61571bb0e31f28109528ba74eb47fd23d2"
+    },
+    {
+      "path": "combined-final-mutation-latest-race.log",
+      "bytes": 3327,
+      "sha256": "dcf7b5c87658e8eab6a36a40382fdc0f6f3a59f9b96d923a9aaa7f65132f5928"
+    },
+    {
+      "path": "combined-final-mutation-legacy-identity-backfill.log",
+      "bytes": 1778,
+      "sha256": "8c46711037b62f47bce22c1596c96c9d2f537f1cdd64a5bcae07a6640c534c80"
+    },
+    {
+      "path": "combined-final-mutation-missing-automatic-hook.log",
+      "bytes": 1739,
+      "sha256": "df80ffd6d12608fa2d47e85c400811d0c80749fb9c4c3da9ba33255beae65702"
+    },
+    {
+      "path": "combined-final-mutation-skip-required-published-entry.log",
+      "bytes": 1912,
+      "sha256": "144c5e2f608ab4cf60519aac2942e0382adf8cb32944833416ad7fe54b05e425"
+    },
+    {
+      "path": "combined-final-mutation-source-hashes.json",
+      "bytes": 74882,
+      "sha256": "7a14be62a1aa61fe3a2aa3b22c6c905eda7d3e35967f980c5855420eac160de6"
+    },
+    {
+      "path": "combined-final-mutation-summary.json",
+      "bytes": 2217,
+      "sha256": "849b6b86d581bf8d09af71f593a7044dcb14014e83b04ea46b7751d6fb239b36"
+    },
+    {
+      "path": "combined-final-mutation-swallowed-audit-failure.log",
+      "bytes": 1681,
+      "sha256": "0d041d91a121e7363d380e148fb71094026d383d6e13671c60e74745b1efbd00"
+    },
+    {
+      "path": "combined-final-mutation-trusted-caller-label.log",
+      "bytes": 1884,
+      "sha256": "72dbbcb9f67b31d866860fb77c41562444742d1258d54037c8041d3ec97b33e0"
+    },
+    {
+      "path": "final-live-drift-proof.json",
+      "bytes": 180,
+      "sha256": "d38d639cac971db4f922466ef7fa46d2871b4957e44818758bc1b563cc2191c6"
+    },
+    {
+      "path": "final-publication-whitelist.json",
+      "bytes": 2972,
+      "sha256": "80137185cef710085a804b045fefa3c26e901767274a4621baf466ed56eeaaa7"
+    },
+    {
+      "path": "final-source-identity.json",
+      "bytes": 7116,
+      "sha256": "98041722dd7247de5eb3fbfa64514a71f5e5d36f5ca7886cf4c0624b7090b5a4"
+    },
+    {
+      "path": "gates-ui-final/board-tests.log",
+      "bytes": 2454,
+      "sha256": "b3779c83bed1498bcf5f0404a29a094f8e2887b271337c30dc316c94e40bff90"
+    },
+    {
+      "path": "gates-ui-final/client-harness.log",
+      "bytes": 36418,
+      "sha256": "2568e239a02fc346c8984547e71c7b745d11e0088681a1b9a67606cb36a83a81"
+    },
+    {
+      "path": "gates-ui-final/gate-results.json",
+      "bytes": 1276,
+      "sha256": "8d9f7f4ad6f8339e619f82d5ae1768aa4b8b8ad1095219032ee69dbc13de3de0"
+    },
+    {
+      "path": "gates-ui-final/install-selftest.log",
+      "bytes": 430,
+      "sha256": "728a65b057c005dcb5be65fd44ce0aec3a81e95283f397cb5653d9bbafb9b38a"
+    },
+    {
+      "path": "gates-ui-final/preflight.log",
+      "bytes": 225,
+      "sha256": "d51eed387c1a818f50812301e0480985266e01827a5673127ff6d05ca7d24d50"
+    },
+    {
+      "path": "gates-ui-final/root-tests.log",
+      "bytes": 132964,
+      "sha256": "48a9efc212c16781abde95992df59187e4414946edefd69addcd58e6f06c741f"
+    },
+    {
+      "path": "gates-ui-final/source-after.json",
+      "bytes": 40274,
+      "sha256": "3774346c6d7439a1e75ace1162452fb9d9ef1dadf517ccde2403451e6373f091"
+    },
+    {
+      "path": "gates-ui-final/source-before.json",
+      "bytes": 40274,
+      "sha256": "3774346c6d7439a1e75ace1162452fb9d9ef1dadf517ccde2403451e6373f091"
+    },
+    {
+      "path": "historical-events-prepublication-sha.json",
+      "bytes": 3910,
+      "sha256": "5b1ff18a81218bfa31b18fdfa697f306ea1efe25bd65bf49e65ab7c71130f1a1"
+    },
+    {
+      "path": "publication/approval-mode-readback-before-request.json",
+      "bytes": 855,
+      "sha256": "53946ce94da41083d4b2248c0920ee9406c865f8dace7672eb102071c1549cd3"
+    },
+    {
+      "path": "publication/approval-mode-readback-confirmed.json",
+      "bytes": 109,
+      "sha256": "a29e83a8971bcd51428809a8e69c030df2355baad9e0b61372df02e9c4b9e364"
+    },
+    {
+      "path": "publication/current-7710-http-proof.json",
+      "bytes": 3746,
+      "sha256": "340cec398c4d7551f658aa280642b5e3ed8c2a3af62c55879d818f543d119ce2"
+    },
+    {
+      "path": "publication/native-probe-snapshot.json",
+      "bytes": 8531,
+      "sha256": "2891f149b8a3d639e4b65e624bc855517f9db2ed2b71d8488bf7b6213229adff"
+    },
+    {
+      "path": "publication/post-byte-proof.json",
+      "bytes": 247,
+      "sha256": "f5182ecde497579f3e92e0e1d05a47eab91e71ec62bc4c9a53a8325fb675c619"
+    },
+    {
+      "path": "publication/prepared.json",
+      "bytes": 7617,
+      "sha256": "376d4a981c57e1a4077518f160a7cff90f8ef4b325b9cb6ae9b2c53a3d50d046"
+    },
+    {
+      "path": "publication/published.json",
+      "bytes": 2009,
+      "sha256": "41007cd12ec343964c4925aa3df980bfe944dabeb99ae7d89b338c8da0175892"
+    },
+    {
+      "path": "readonly-mutations-v2/results.json",
+      "bytes": 4482,
+      "sha256": "5f8ae40e8623d2d9422421bac9fb3fd1d5f8ed1c6baf8441e0aad7eac027ec4d"
+    },
+    {
+      "path": "real-history-client-consumer-proof.json",
+      "bytes": 13981,
+      "sha256": "b5bfe967b8bf65f8fef078f7a28bca412f079285be0410499f238df48614609e"
+    },
+    {
+      "path": "real-history-projection-proof.json",
+      "bytes": 75302,
+      "sha256": "9c7e2a7736d02e679b8d1dc4bd147acb63eab83c26a7441e80e937fe2f4d54ca"
+    },
+    {
+      "path": "release-final/pack-files.json",
+      "bytes": 2901,
+      "sha256": "74631ae665dfc24cbf74c64a6a7b86c789d3b9debb27f79aef702864c5836941"
+    },
+    {
+      "path": "release-final/packs/dsh-mind-1.1.0.tgz",
+      "bytes": 580692,
+      "sha256": "231c7987f34ba3e7ebe5c061ab0b5c61b78f24c9254d5dc6d5cc71088daa7e7d"
+    },
+    {
+      "path": "release-final/real-pack-mapping-validated.json",
+      "bytes": 10586,
+      "sha256": "8fd43b63baa84bad1319fc11f0a846a7d20a5739c31458df198b2f87ff383b66"
+    },
+    {
+      "path": "release-final/real-web-1792333479885.dom.json",
+      "bytes": 2211,
+      "sha256": "5696f099d143861ce1c0f1ce576d5559ae3a270b0781a14747b2502e8576e8be"
+    },
+    {
+      "path": "release-final/real-web-1792333479885.png",
+      "bytes": 69443,
+      "sha256": "850471d28b3964c180ec2c5b097d739c07b7fc9141d37f3707d3582c1372d9e5"
+    },
+    {
+      "path": "release-final/real-web-1792333479885.result.json",
+      "bytes": 3884,
+      "sha256": "9cd078da72db13beb432b60a713d864c94eaad1a59fc47099d45aaa26426ad6a"
+    },
+    {
+      "path": "release-final/real-web-1792333732054.result.json",
+      "bytes": 2350,
+      "sha256": "c2396b87e298861ab6ec452e417b19655d28608dcf6676ecdedc089191a0ce5a"
+    },
+    {
+      "path": "release-final/real-web-1792333732054.workbench.json",
+      "bytes": 7343,
+      "sha256": "52e644f5f18c81f8acdbcefedac751a30280af3ce2681631296f358146acaf12"
+    },
+    {
+      "path": "utbst-formal-submission-proof.json",
+      "bytes": 469,
+      "sha256": "947eebb532764a793384ce306d8f501f9069109b81165a8edfdc9377220863ca"
+    },
+    {
+      "path": "utbst-formal-submission.md",
+      "bytes": 5743,
+      "sha256": "7dd8f077ef54369e4fdc915a4fe77abf0c27bfe3d1bf6845223f64346aa57d4a"
+    }
+  ],
+  "scope": "Accepted probe/history repair evidence, not a claim conversation approval is complete; no private home/cache/cookies/raw browser logs copied"
+}

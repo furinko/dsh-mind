@@ -1,0 +1,15 @@
+{
+  "at": "2026-10-18T10:45:23.818Z",
+  "files": [
+    {
+      "rel": "components/kernel/lib/index.js",
+      "originalHash": "2808396d7da83264c998413c1303fa2bd2b425873b6013ae581323827ae03694",
+      "sha256": "6a87ca31a6d429d2690493425dafc7be1db267919e56f42bde0be82f9073dbb3"
+    },
+    {
+      "rel": "test/guard-reviewer-readonly-2026-10-18.test.js",
+      "originalHash": "8026d2477d3d48062e673fbc259a9bb64ed702810855471e4aa707b9e1baa932",
+      "sha256": "83d6ce65defe807e09243568b5b53f6bf40b8217b906d78aa692b8c4e43edb06"
+    }
+  ]
+}

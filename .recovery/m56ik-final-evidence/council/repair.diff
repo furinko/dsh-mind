@@ -1,0 +1,931 @@
+--- a/lib/actions.js
++++ b/lib/actions.js
+@@ -30,7 +30,7 @@
+ import { 复核读域, 在读域, 审计行在读域, 线程在读域, 复核对象引用 } from '../src/review-scope.js';
+ // v2 条目14/17（2026-10-18 补修F）：主权者逐请求放行的重放上下文；步骤计划构造器是
+ // 宏动作 → 底层策略写的唯一翻译层（本文件只在入口处调它，不在这里另抄一份步骤）。
+-import { 以放行上下文 } from '../src/intervention.js';
++import { 以放行上下文, 记录本次新建 } from '../src/intervention.js';
+ import { 介入计划Of, 计划会挂起 } from './approval-plan.js';
+ // 介入度三档的唯一来源（设置入口校验与策略引擎读同一张表，别在两处各写一份）。
+ import { INTERVENTION } from '../src/policy.js';
+@@ -522,7 +522,13 @@
+           await org.intervention.记完成({ 请求id: 审批引用, 主体, 占用行: 放行.占用, 项目: 冻结项目 });
+           return 回;
+         } catch (error) {
+-          await org.intervention.记失败({ 请求id: 审批引用, 主体, 占用行: 放行.占用, 原因: 错误信息(error), 项目: 冻结项目 });
++          try {
++            await org.intervention.记失败({ 请求id: 审批引用, 主体, 占用行: 放行.占用, 原因: 错误信息(error), 项目: 冻结项目 });
++          } catch (报告错误) {
++            throw new Fault(error.code ?? 'APPROVAL_REPLAY_FAILED', `${错误信息(error)}；介入失败记账也失败：${错误信息(报告错误)}`, {
++              detail: { ...error.detail, 请求id: 审批引用, 介入失败记账错误: 错误信息(报告错误) },
++            });
++          }
+           throw error;
+         }
+       }
+@@ -1163,6 +1169,7 @@
+     // 审批档护栏：完整宏计划（create 会审 + N 身份）没摊出来就拒绝，避免只批第一笔后卡 N 次登记。
+     await 断言会审计计划完整({ org, subject, 项目, 动作: 'debate_open', args });
+ 
++    const 退役实例 = 会审退役适配器({ org, subject, 宿主 });
+     let 序号 = 0;
+     const 创建参与者 = async ({ 会审, 项目: 跑项目, 问题: 跑问题, 资料: 跑资料, 岗位, 来源会话 }) => {
+       序号 += 1;
+@@ -1172,8 +1179,27 @@
+         '第一步：调用 mind action=status 确认主体；实例尚未登记时被拒是预期行为，至多重试一次，并记住拒绝里报出的真实实例 id。',
+         '第二步：不要开始任何业务工作。回一句启动确认即结束本轮，等待 Lead 的会审任务书。',
+       ].join('\n');
++      const 创建前 = (await org.registry.identity()).members ?? {};
+       const 执行体 = await 起执行体({ 宿主, 方式, 名, 描述: `会审参与·${岗位}·${会审}`, 待命书, 模型路由 });
+-      const 停 = () => 停执行体({ 宿主, 方式, agent: 执行体.agent, 实例: 执行体.实例, 团队名: 执行体.团队名, 名 });
++      if (Object.hasOwn(创建前, 执行体.实例)) {
++        throw new Fault('COUNCIL_CREATE_DUPLICATE_ID', `宿主返回已有身份 ${执行体.实例}：不改绑、不封存、不停用预给或别场实例。`);
++      }
++      const 停 = () => 停执行体({ 宿主, 方式, agent: 执行体.agent, 实例: 执行体.实例, 团队名: 执行体.团队名, 名, 响亮: true });
++      const 确认首登 = async () => {
++        const 成员 = (await org.registry.identity()).members?.[执行体.实例];
++        const 绑定 = 成员?.会审绑定;
++        if (绑定?.会审 !== 会审 || 绑定?.来源会话 !== subject.id || 绑定?.项目 !== 跑项目) return false;
++        记录本次新建(subject, { kind: '身份', id: 执行体.实例 });
++        return true;
++      };
++      const 失败补偿 = async () => {
++        const 错误 = [];
++        let 已首登 = false;
++        try { 已首登 = await 确认首登(); } catch (error) { 错误.push(`归属确认失败：${错误信息(error)}`); }
++        if (已首登) return 退役实例({ 实例: 执行体.实例, 会审, 原因: '会审登记/钉版/审计失败补偿（本请求 owned）' });
++        try { await 停(); } catch (error) { 错误.push(`停机失败：${错误信息(error)}`); }
++        if (错误.length) throw new Fault('COUNCIL_RETIRE_FAILED', 错误.join('；'));
++      };
+       const 钉卡 = await 登记钉版({
+         org,
+         subject,
+@@ -1183,8 +1209,10 @@
+         方式,
+         绑定: { 会审: { id: 会审, 项目: 跑项目, 资料: 跑资料 } },
+         停,
++        失败补偿,
+       });
+       try {
++        if (!await 确认首登()) throw new Error('新身份落盘绑定与本场/真实来源不符');
+         await org.audit.append({
+           动作: '成员创建',
+           主体: subject,
+@@ -1194,10 +1222,10 @@
+           详情: { 方式, 岗位, 会审, 来源会话, 模型路由: 模型路由 ?? null, 授权指纹: 授权.fingerprint },
+         });
+       } catch (error) {
+-        await 停();
+-        try { await org.registry.seal({ subject, 实例: 执行体.实例, 理由: '成员创建审计失败补偿' }); } catch { /* 补偿失败不掩盖主因 */ }
++        let 补偿失败 = null;
++        try { await 失败补偿(); } catch (失败) { 补偿失败 = 错误信息(失败); }
+         throw new Fault('AUDIT_APPEND_FAILED_AFTER_EVENT', `会审参与实例 ${执行体.实例} 已登记，但「成员创建」审计追加失败：${错误信息(error)}。已尝试停用/封存。`, {
+-          detail: { 阶段: 'audit', 实例: 执行体.实例, 会审 },
++          detail: { 阶段: 'audit', 实例: 执行体.实例, 会审, 原因: 错误信息(error), 补偿失败 }, 
+         });
+       }
+       return { 实例: 执行体.实例, 钉卡 };
+@@ -1227,7 +1255,6 @@
+       await 发成员书({ 宿主, 方式, agent, 实例, 团队名, signal: 中止信号(宿主), 内容 });
+     };
+ 
+-    const 退役实例 = 会审退役适配器({ org, subject, 宿主 });
+     return {
+       会审: await org.council.open({
+         subject,
+@@ -1819,11 +1846,13 @@
+     }
+     if (宿主?.subagents && agent?.session?.id) {
+       for (const 子 of await 安全子代(宿主.subagents, agent.session.id)) {
+-        if (!子.实例 || rows.has(子.实例)) continue;
+-        rows.set(子.实例, { 实例: 子.实例, 岗位: null, 来源: 'subagent', 名: 子.名 ?? null, 状态: null });
++        if (!子.实例) continue;
++        const 既有 = rows.get(子.实例) ?? { 实例: 子.实例, 岗位: null, 来源: null, 名: null, 状态: null };
++        if (既有.来源 === 'team') continue;
++        rows.set(子.实例, { ...既有, 来源: 'subagent', 名: 子.名 ?? 既有.名, 状态: 子.状态 ?? null });
+       }
+     }
+-    return { 成员: [...rows.values()], 说明: '来源为空 = 在册但宿主侧未接线；Team 成员也是子会话，按名册去重不重复列。' };
++    return { 成员: [...rows.values()], 说明: '来源为空 = 在册但宿主枚举未证实来源（可能未接线、查询失败或不在子代中）；状态为空 = 宿主未提供运行状态，不等于运行中。Team 成员也是子会话，按名册去重不重复列。' };
+   },
+ };
+ 
+@@ -2123,19 +2152,35 @@
+   return { 实例, 团队名, agent, signal };
+ }
+ 
+-/** 停执行体（补偿/退役共用，尽力而为；失败不掩盖主因）。 */
+-async function 停执行体({ 宿主, 方式, agent, 实例, 团队名, 名 }) {
++/** 普通成员维持尽力合同；会审失败补偿必须报告停机不成立，不能把缺接口当成功。 */
++async function 停执行体({ 宿主, 方式, agent, 实例, 团队名, 名, 响亮 = false }) {
++  if (响亮) {
++    const 服务 = 方式 === 'team' ? 宿主?.agentTeams : 宿主?.subagents;
++    const 方法 = 方式 === 'team' ? 'interrupt' : 'drainChildren';
++    if (typeof 服务?.[方法] !== 'function') {
++      throw new Fault('COUNCIL_ADAPTER_NOT_READY', `会审实例 ${实例} 的停机接口 ${方式}.${方法} 已不可用：未停机，不能报补偿成功。`, {
++        detail: { 实例, 方式, 缺: 方法, 已停: false },
++      });
++    }
++    if (方式 === 'team') await 服务.interrupt(agent, 团队名 ?? 名);
++    else await 服务.drainChildren(agent, [实例]);
++    return;
++  }
+   try {
+-    if (方式 === 'team') 宿主?.agentTeams?.interrupt?.(agent, 团队名 ?? 名);
++    if (方式 === 'team') await 宿主?.agentTeams?.interrupt?.(agent, 团队名 ?? 名);
+     else await 宿主?.subagents?.drainChildren?.(agent, [实例]);
+-  } catch { /* 补偿失败不掩盖主因 */ }
++  } catch { /* 普通成员仍按旧尽力合同，不掩盖原始创建错误。 */ }
+ }
+ 
+ /**
+  * 登记 + 钉版 —— 唯一实例登记适配器（member_spawn 节点绑定 / 会审 会审绑定共用）。
+  * 任何失败先停执行体，再抛带阶段的 Fault；返回实例钉住的卡（规程唯一来源）。
+  */
+-async function 登记钉版({ org, subject, 岗位, 实例, 代次, 方式, 绑定, 授权引用, 停 }) {
++async function 登记钉版({ org, subject, 岗位, 实例, 代次, 方式, 绑定, 授权引用, 停, 失败补偿 = null }) {
++  const 补偿 = async () => {
++    try { await (失败补偿 ?? 停)?.(); return null; }
++    catch (error) { return 错误信息(error); }
++  };
+   try {
+     await org.registry.assign({
+       subject,
+@@ -2147,9 +2192,9 @@
+       ...(绑定?.会审 ? { 会审: 绑定.会审 } : {}),
+     });
+   } catch (error) {
+-    await 停?.();
+-    throw new Fault('MEMBER_SPAWN_ASSIGN_FAILED', `实例 ${实例} 已创建但登记失败：${错误信息(error)}。已尝试停用该实例。`, {
+-      detail: { 阶段: 'registry_assign', 实例, 方式, 岗位 },
++    const 补偿失败 = await 补偿();
++    throw new Fault('MEMBER_SPAWN_ASSIGN_FAILED', `实例 ${实例} 已创建但登记失败：${错误信息(error)}。已尝试清理该实例（登记审计失败时可能已经落盘）。`, {
++      detail: { 阶段: 'registry_assign', 实例, 方式, 岗位, 原因: 错误信息(error), 补偿失败 },
+       howToChange: `修好原因后重试（会另起新实例）；或确认该实例仍可用则手工 registry_assign 岗位=${岗位} 实例=${实例}。`,
+     });
+   }
+@@ -2158,13 +2203,7 @@
+     钉 = await org.registry.cardOf(实例);
+     if (钉?.就绪 !== true) throw new Error(钉?.原因 ?? 'registry 没给就绪读数');
+   } catch (error) {
+-    await 停?.();
+-    let 封存错误 = null;
+-    // 咨询创建适配器尚未返回 id，Council 的 owned 清单还看不到它，必须在这里补偿登记。
+-    if (绑定?.会审) {
+-      try { await org.registry.seal({ subject, 实例, 理由: '会审钉版失败补偿（本次 owned）' }); }
+-      catch (失败) { 封存错误 = 错误信息(失败); }
+-    }
++    const 封存错误 = await 补偿();
+     throw new Fault('MEMBER_SPAWN_CARD_NOT_READY', `实例 ${实例} 已登记，但其岗位卡钉版未就绪（${错误信息(error)}）：不会发假开工书；已尝试停用${绑定?.会审 ? '并封存本次咨询实例' : ''}。`, {
+       detail: { 阶段: 'card', 实例, 岗位, 就绪: 钉?.就绪 ?? null, ...(封存错误 ? { 封存错误 } : {}) },
+     });
+@@ -2371,7 +2410,7 @@
+ async function 安全子代(subagents, 父会话id) {
+   try {
+     const kids = await subagents.listChildren?.(父会话id);
+-    return (Array.isArray(kids) ? kids : []).map((k) => ({ 实例: k?.id ?? k?.childId ?? k?.sessionId ?? null, 名: k?.label ?? k?.name ?? null }));
++    return (Array.isArray(kids) ? kids : []).map((k) => ({ 实例: k?.id ?? k?.childId ?? k?.sessionId ?? null, 名: k?.label ?? k?.name ?? null, 状态: k?.status ?? null }));
+   } catch {
+     return [];
+   }
+--- a/src/council.js
++++ b/src/council.js
+@@ -105,12 +105,21 @@
+         target: { id, kind: '会审', authority: '自治', zone: '私有', project: spec.项目 },
+         context: {},
+       });
+-      const { view } = await this.#append(spec.项目, {
+-        kind: 'opened', id, 问题, 参与者,
+-        来源会话: spec.subject?.id ?? null,
+-        轮次上限: 预算.轮次上限,
+-        预算快照: { 每轮消息上限: 预算.每轮消息上限, 每人每轮字符上限: 预算.每人每轮字符上限 },
+-      }, spec.subject, '会审发起');
++      let view;
++      try {
++        ({ view } = await this.#append(spec.项目, {
++          kind: 'opened', id, 问题, 参与者,
++          来源会话: spec.subject?.id ?? null,
++          轮次上限: 预算.轮次上限,
++          预算快照: { 每轮消息上限: 预算.每轮消息上限, 每人每轮字符上限: 预算.每人每轮字符上限 },
++        }, spec.subject, '会审发起'));
++      } catch (error) {
++        if (error?.detail?.kind !== 'opened') throw error;
++        const 作废错误 = await this.#作废(spec.项目, spec.subject, id, 'open', error);
++        throw 受管创建失败('COUNCIL_OPEN_FAILED', `会审 ${id} opened 已落线但审计失败：${错误信息(error)}；已尝试冻结作废，不退役预给参与者。`, {
++          会审: id, 阶段: 'open', 原因: 错误信息(error), 作废错误,
++        });
++      }
+       return { 会审: view, id, 参与者, 来源会话: view.来源会话 };
+     }
+ 
+@@ -176,8 +185,8 @@
+     } catch (error) {
+       const 补偿 = await this.#补偿创建(创建实例, spec.退役实例, id);
+       const 审计错误 = await this.#记创建失败(spec.项目, spec.subject, id, 'create', 创建实例, 补偿, error);
+-      throw 受管创建失败('COUNCIL_CREATE_FAILED', `会审 ${id} 创建第 ${创建实例.length + 1} 个实例失败：${错误信息(error)}。已清理本次已建实例（${创建实例.map((x) => x.实例).join('、') || '无'}）。`, {
+-        会审: id, 阶段: 'create', 已创建: 创建实例.map((x) => x.实例), 失败岗位: 参与岗位[创建实例.length] ?? null, 补偿失败: 补偿, 原因: 错误信息(error), ...(审计错误 ? { 审计错误 } : {}),
++      throw 受管创建失败('COUNCIL_CREATE_FAILED', `会审 ${id} 创建第 ${创建实例.length + 1} 个实例失败：${错误信息(error)}。已尝试清理本次已建实例（${创建实例.map((x) => x.实例).join('、') || '无'}）。`, {
++        会审: id, 阶段: 'create', 已创建: 创建实例.map((x) => x.实例), 失败岗位: 参与岗位[创建实例.length] ?? null, 补偿失败: 补偿, 原因: 错误信息(error), ...(error?.detail ? { 错误详情: error.detail } : {}), ...(审计错误 ? { 审计错误 } : {}),
+       });
+     }
+ 
+@@ -194,10 +203,13 @@
+         创建实例: 创建实例.map(({ 实例, 岗位, 钉卡 }) => ({ 实例, 岗位, 卡版本: 钉卡?.卡版本?.摘要 ?? null })),
+       }, spec.subject, '会审发起'));
+     } catch (error) {
++      const 已落线 = error?.detail?.kind === 'opened';
++      const 作废错误 = 已落线
++        ? await this.#作废(spec.项目, spec.subject, id, 'open', error) : null;
+       const 补偿 = await this.#补偿创建(创建实例, spec.退役实例, id);
+-      const 审计错误 = await this.#记创建失败(spec.项目, spec.subject, id, 'open', 创建实例, 补偿, error);
+-      throw 受管创建失败('COUNCIL_OPEN_FAILED', `会审 ${id} 的创建已完成，但 opened 事件落线失败：${错误信息(error)}。已清理本次已建实例；不要重试同一动作。`, {
+-        会审: id, 阶段: 'open', 已创建: 创建实例.map((x) => x.实例), 补偿失败: 补偿, 原因: 错误信息(error), ...(审计错误 ? { 审计错误 } : {}),
++      const 审计错误 = await this.#记创建失败(spec.项目, spec.subject, id, 'open', 创建实例, 补偿, error, 作废错误);
++      throw 受管创建失败('COUNCIL_OPEN_FAILED', `会审 ${id} 的实例创建已完成，${已落线 ? 'opened 事件已落线，但发起审计失败' : 'opened 事件未能落线'}：${错误信息(error)}。已尝试${已落线 ? '冻结作废并' : ''}清理本次已建实例；不要重试同一动作。`, {
++        会审: id, 阶段: 'open', opened已落线: 已落线, 已创建: 创建实例.map((x) => x.实例), 补偿失败: 补偿, 作废错误, 原因: 错误信息(error), ...(审计错误 ? { 审计错误 } : {}),
+       });
+     }
+ 
+@@ -209,15 +221,10 @@
+         已发 += 1;
+       }
+     } catch (error) {
+-      let 作废错误 = null;
+-      try {
+-        await this.#append(spec.项目, { kind: 'aborted', id, 原因: 错误信息(error), 阶段: 'send', 已发 }, spec.subject, '会审作废');
+-      } catch (e) {
+-        作废错误 = 错误信息(e);
+-      }
++      const 作废错误 = await this.#作废(spec.项目, spec.subject, id, 'send', error, { 已发 });
+       const 补偿 = await this.#补偿创建(创建实例, spec.退役实例, id);
+       const 审计错误 = await this.#记创建失败(spec.项目, spec.subject, id, 'send', 创建实例, 补偿, error, 作废错误, { 已发 });
+-      throw 受管创建失败('COUNCIL_SEND_FAILED', `会审 ${id} 已落线，但任务书发送失败（已发 ${已发}/${创建实例.length}）：${错误信息(error)}。已落 aborted 并清理本次实例；不要重试同一动作。`, {
++      throw 受管创建失败('COUNCIL_SEND_FAILED', `会审 ${id} 已落线，但任务书发送失败（已发 ${已发}/${创建实例.length}）：${错误信息(error)}。已尝试落 aborted 并清理本次实例；不要重试同一动作。`, {
+         会审: id, 阶段: 'send', 已发, 已创建: 创建实例.map((x) => x.实例), 补偿失败: 补偿, 作废错误, 原因: 错误信息(error), ...(审计错误 ? { 审计错误 } : {}),
+       });
+     }
+@@ -255,6 +262,15 @@
+           目标: { kind: '身份', 新: true, authority: '自治', zone: '私有' },
+           说明: `创建会审参与实例 ${序号 + 1}/${参与岗位.length}（${岗位}）`,
+           预览: { 序号: 序号 + 1, 岗位, 来源会话: '真实登记主体（exec 会话事实）', 会审: '本次新建' },
++        });
++      }
++      for (const [序号, 岗位] of 参与岗位.entries()) {
++        步骤.push({
++          动作: 'seal',
++          目标: { kind: '身份', authority: '自治', zone: '私有' },
++          补偿自: 序号 + 2,
++          说明: `仅失败时封存本请求第 ${序号 + 1} 个实际新建身份（${岗位}），成功不执行`,
++          预览: { 创建步序: 序号 + 2, 条件: '创建、登记、钉版、审计或投递失败；只限本请求真实新建且绑定本场及真实来源的身份，预给与别场不动' },
+         });
+       }
+       return { 步骤 };
+@@ -589,57 +605,67 @@
+     // 两笔零分歧报警（Lead 判据「并发收敛只成功一次」）。
+     const 事件 = { kind: 'converged', id: spec.id, 结论: null, 分歧清单: [], 零分歧异常: false };
+     const 结果 = { 分歧清单: [], 判定: null };
+-    const { view } = await this.#append(spec.项目, 事件, spec.subject, '会审收敛', {
+-      inLockGuard: async (锁内) => {
+-        if (!锁内) throw new InvalidBody(`没有这场会审：${spec.id}（项目 ${spec.项目}）。会审存档在会审页可查。`);
+-        if (锁内.状态 === '作答中') {
+-          throw new Denied('会审 · 未解锁不得收敛（锁内复检）', `会审 ${spec.id} 还在作答中：先全员交齐并解锁（debate_unlock），再收敛（锁内复检）。`);
+-        }
+-        if (锁内.状态 === '已收敛') {
+-          throw new Denied('会审 · 状态机（锁内复检）', `会审 ${spec.id} 已收敛存档：结论已定格（锁内复检：并发收敛只有一次能成功）。`);
+-        }
+-        if (锁内.状态 === '作废') {
+-          throw new Denied('会审 · 作废不得收敛（锁内复检）', `会审 ${spec.id} 已作废（创建/投递失败）：没有可收敛的咨询，作废存档里的早卷不当结论。`);
+-        }
+-        const 消息 = await this.bus.readRaw({ 项目: spec.项目, 线程: 线程名(spec.id) });
+-        const 分歧清单 = [
+-          ...锁内.答案.flatMap((a) => (a.反例面 ?? []).map((x) => `${a.成员}: ${x}`)),
+-          ...本轮发言(消息, 锁内.参与者).filter((m) => m.类型 === '分歧').map((m) => `${m.发件}: ${m.内容}`),
+-          // 讨论里历史轮的分歧也要算（不只本轮）：收敛清的是全场的账。
+-          ...(消息 ?? []).filter((m) => m?.类型 === '分歧' && 锁内.参与者.includes(m?.发件)).map((m) => `${m.发件}: ${m.内容}`),
+-        ].filter((v, i, arr) => arr.indexOf(v) === i);
+-        // 零分歧报警（留 · 条目19）：结论层一致且无人给反例面 ⇒ 异常信号，随存档记。
+-        结果.分歧清单 = 分歧清单;
+-        结果.判定 = judgeZeroDivergence(锁内.答案);
+-        事件.结论 = String(spec.内容 ?? '').trim() || `收敛：会审结束（${锁内.答案.length} 份答案）`;
+-        事件.分歧清单 = 分歧清单;
+-        事件.零分歧异常 = 结果.判定.零分歧;
+-      },
+-      // 零分歧报警在事件落线后入账：并发第二路已在锁内被拒，不会多报；一旦这一段
+-      // 失败，事件已定格（不可重试），必须响亮并指人工补记。
+-      afterAppend: async () => {
+-        if (!结果.判定?.零分歧) return;
+-        try {
+-          await this.audit.append({
+-            动作: '零分歧异常',
+-            主体: { id: 'system', kind: '系统' },
+-            对象: { id: spec.id, kind: '会审' },
+-            依据: '§10 零分歧报警：结论层一致且无人给出反例面',
+-            结果: '会审零分歧异常',
+-            项目: spec.项目,
+-            详情: { 会审: spec.id, 结论层: 结果.判定.结论层, 参与人数: 结果.判定.参与人数 },
+-          });
+-        } catch (error) {
+-          throw new Fault('AUDIT_APPEND_FAILED_AFTER_EVENT', `会审 ${spec.id} 的收敛事件已落线，但「零分歧异常」审计追加失败：${error instanceof Error ? error.message : String(error)}。不要重试 debate_converge——结论已定格；请人工核对审计账本并补记。`, {
+-            detail: { 会审: spec.id, 项目: spec.项目 },
+-          });
+-        }
+-      },
+-    });
++    let view = null;
++    let 收敛错误 = null;
++    try {
++      await this.#append(spec.项目, 事件, spec.subject, '会审收敛', {
++        onCommitted: (落线后) => { view = 落线后; },
++        inLockGuard: async (锁内) => {
++          if (!锁内) throw new InvalidBody(`没有这场会审：${spec.id}（项目 ${spec.项目}）。会审存档在会审页可查。`);
++          if (锁内.状态 === '作答中') {
++            throw new Denied('会审 · 未解锁不得收敛（锁内复检）', `会审 ${spec.id} 还在作答中：先全员交齐并解锁（debate_unlock），再收敛（锁内复检）。`);
++          }
++          if (锁内.状态 === '已收敛') {
++            throw new Denied('会审 · 状态机（锁内复检）', `会审 ${spec.id} 已收敛存档：结论已定格（锁内复检：并发收敛只有一次能成功）。`);
++          }
++          if (锁内.状态 === '作废') {
++            throw new Denied('会审 · 作废不得收敛（锁内复检）', `会审 ${spec.id} 已作废（创建/投递失败）：没有可收敛的咨询，作废存档里的早卷不当结论。`);
++          }
++          const 消息 = await this.bus.readRaw({ 项目: spec.项目, 线程: 线程名(spec.id) });
++          const 分歧清单 = [
++            ...锁内.答案.flatMap((a) => (a.反例面 ?? []).map((x) => `${a.成员}: ${x}`)),
++            ...本轮发言(消息, 锁内.参与者).filter((m) => m.类型 === '分歧').map((m) => `${m.发件}: ${m.内容}`),
++            // 讨论里历史轮的分歧也要算（不只本轮）：收敛清的是全场的账。
++            ...(消息 ?? []).filter((m) => m?.类型 === '分歧' && 锁内.参与者.includes(m?.发件)).map((m) => `${m.发件}: ${m.内容}`),
++          ].filter((v, i, arr) => arr.indexOf(v) === i);
++          // 零分歧报警（留 · 条目19）：结论层一致且无人给反例面 ⇒ 异常信号，随存档记。
++          结果.分歧清单 = 分歧清单;
++          结果.判定 = judgeZeroDivergence(锁内.答案);
++          事件.结论 = String(spec.内容 ?? '').trim() || `收敛：会审结束（${锁内.答案.length} 份答案）`;
++          事件.分歧清单 = 分歧清单;
++          事件.零分歧异常 = 结果.判定.零分歧;
++        },
++        // 零分歧报警在事件落线后入账：并发第二路已在锁内被拒，不会多报；一旦这一段
++        // 失败，事件已定格（不可重试），必须响亮并指人工补记。
++        afterAppend: async () => {
++          if (!结果.判定?.零分歧) return;
++          try {
++            await this.audit.append({
++              动作: '零分歧异常',
++              主体: { id: 'system', kind: '系统' },
++              对象: { id: spec.id, kind: '会审' },
++              依据: '§10 零分歧报警：结论层一致且无人给出反例面',
++              结果: '会审零分歧异常',
++              项目: spec.项目,
++              详情: { 会审: spec.id, 结论层: 结果.判定.结论层, 参与人数: 结果.判定.参与人数 },
++            });
++          } catch (error) {
++            throw new Fault('AUDIT_APPEND_FAILED_AFTER_EVENT', `会审 ${spec.id} 的收敛事件已落线，但「零分歧异常」审计追加失败：${error instanceof Error ? error.message : String(error)}。不要重试 debate_converge——结论已定格；请人工核对审计账本并补记。`, {
++              detail: { 会审: spec.id, 项目: spec.项目 },
++            });
++          }
++        },
++      });
++    } catch (error) {
++      if (!view) throw error;
++      收敛错误 = error;
++    }
++    // 本次已经落线才清理；并发输家不会凭「别人已收敛」冒领清理权或重复结论。
+     // 收敛已落线（结论定格）⇒ 锁外退役本次 owned 实例；退役失败如实回执，不重试结论。
+     // 只认 opened 里 `创建实例` + 身份记录 `会审绑定.会审 === 本场`：预给参与者/别场实例不动。
+     const 退役 = await this.#退役本场(spec.项目, view, spec.退役实例 ?? null);
+     let 退役事件错误 = null;
++    let 退役审计错误 = null;
+     if (退役.length > 0) {
+       try {
+         await this.#append(spec.项目, { kind: 'retired', id: spec.id, 退役 }, spec.subject, '会审退役');
+@@ -655,10 +681,18 @@
+             项目: spec.项目,
+             详情: { 会审: spec.id, 退役, 原因: 退役事件错误 },
+           });
+-        } catch { /* 审计失败不掩盖退役报告：事件错误已随返回值带出 */ }
+-      }
+-    }
+-    const 存档 = (await this.get(spec.项目, spec.id)) ?? view;
++        } catch (失败) { 退役审计错误 = 错误信息(失败); }
++      }
++    }
++    let 存档 = view;
++    let 存档读取错误 = null;
++    try { 存档 = (await this.get(spec.项目, spec.id)) ?? view; }
++    catch (error) { 存档读取错误 = 错误信息(error); }
++    if (收敛错误) {
++      throw new Fault(收敛错误.code ?? 'COUNCIL_CONVERGE_FAILED_AFTER_EVENT', `${错误信息(收敛错误)}；已逐个尝试本场退役，结论不可重试。`, {
++        detail: { ...收敛错误.detail, 会审: spec.id, 结论已定格: true, 退役, 退役事件错误, 退役审计错误, 存档读取错误 },
++      });
++    }
+     return {
+       会审: 存档,
+       分歧清单: 结果.分歧清单,
+@@ -666,6 +700,8 @@
+       零分歧依据: 结果.判定.依据,
+       退役,
+       ...(退役事件错误 ? { 退役事件错误 } : {}),
++      ...(退役审计错误 ? { 退役审计错误 } : {}),
++      ...(存档读取错误 ? { 存档读取错误 } : {}),
+     };
+   }
+ 
+@@ -773,6 +809,20 @@
+       });
+     }
+     return 绑定;
++  }
++
++  /** 已落线的失败会审先冻结；审计故障也必须保留作废错误而不阻断成员清理。 */
++  async #作废(项目, subject, id, 阶段, error, 附加 = {}) {
++    try {
++      await this.#append(项目, { kind: 'aborted', id, 原因: 错误信息(error), 阶段, ...附加 }, subject, '会审作废', {
++        inLockGuard: (当前) => {
++          if (当前?.状态 === '已收敛') {
++            throw new Denied('会审 · 定格结论不可作废（锁内复检）', `会审 ${id} 已收敛：延迟到达的创建/投递失败不得覆盖已定格状态，仍须尝试本次 owned 清理。`);
++          }
++        },
++      });
++      return null;
++    } catch (失败) { return 错误信息(失败); }
+   }
+ 
+   /** 失败补偿：只退役**本次创建**的实例（逆序 seal→stop），返回逐条失败（不吞）。 */
+@@ -833,7 +883,12 @@
+         结果.push({ 实例: null, 已退役: false, 原因: '创建实例记录缺 id' });
+         continue;
+       }
+-      const 成员 = (await this.registry.identity()).members?.[实例];
++      let 成员;
++      try { 成员 = (await this.registry.identity()).members?.[实例]; }
++      catch (error) {
++        结果.push({ 实例, 已退役: false, 原因: `身份读取失败：${错误信息(error)}` });
++        continue;
++      }
+       if (!成员) {
+         结果.push({ 实例, 已退役: false, 原因: '身份档案里没有该实例（不猜）' });
+         continue;
+@@ -884,13 +939,14 @@
+    * @param {object} event 事件行；**按引用**传进锁，锁内改字段（如轮次）后落线的是锁内值。
+    * @param {object} subject
+    * @param {string|((current: object|null) => string)} 审计动作 需要按锁内状态区分的动作名传函数。
+-   * @param {{ inLockGuard?: ((current: object|null) => (void|Promise<void>))|null, afterAppend?: ((view: object|undefined, current: object|null) => (void|Promise<void>))|null }} [hooks]
++   * @param {{ inLockGuard?: ((current: object|null) => (void|Promise<void>))|null, afterAppend?: ((view: object|undefined, current: object|null) => (void|Promise<void>))|null, onCommitted?: ((view: object|undefined) => void)|null }} [hooks]
+    *   `inLockGuard(current)`：锁内、落线前的权威复检（会审的解锁/换轮/收敛/作答全是读-判-写，
+    *   锁外读到的视图只配早失败——并发两路会读到同一个旧视图）。
++   *   `onCommitted(view)`：只通知本调用事件已落线（同步、无副作用）；后续审计失败仍可清理。
+    *   `afterAppend(view, current)`：锁内、事件与审计落线后的第二步写入（换轮边界消息必须与
+    *   轮次事件同锁同序；放锁外发会被并发换轮乱序，预算闸按最后一条边界切轮就切错）。
+    */
+-  async #append(项目, event, subject, 审计动作, { inLockGuard = null, afterAppend = null } = {}) {
++  async #append(项目, event, subject, 审计动作, { inLockGuard = null, afterAppend = null, onCommitted = null } = {}) {
+     const file = this.layout.councilLog(项目);
+     const eventId = `${event.kind}-${randomUUID().slice(0, 8)}`;
+     return this.#withCouncilLock(项目, async () => {
+@@ -900,6 +956,9 @@
+       if (inLockGuard) await inLockGuard(current);
+       const row = { ...event, at: this.clock.iso(), by: subject, eventId };
+       await appendLines(file, [row]);
++      const 落线后 = foldCouncils([...rows, row]);
++      const view = 落线后.find((v) => v.id === event.id);
++      if (onCommitted) onCommitted(view);
+       const 动作 = typeof 审计动作 === 'function' ? 审计动作(current) : 审计动作;
+       try {
+         await this.audit.append({
+@@ -916,8 +975,6 @@
+           detail: { 会审: event.id, kind: event.kind, 项目 },
+         });
+       }
+-      const 落线后 = foldCouncils([...rows, row]);
+-      const view = 落线后.find((v) => v.id === event.id);
+       if (afterAppend) await afterAppend(view, current);
+       return { view };
+     });
+--- a/src/intervention.js
++++ b/src/intervention.js
+@@ -108,6 +108,7 @@
+         zone: 目标.zone ?? null,
+         project: 目标.project ?? null,
+       },
++      ...(步?.补偿自 != null ? { 补偿自: Number(步.补偿自) } : {}),
+       次数: Number.isInteger(步?.次数) && 步.次数 > 0 ? 步.次数 : 1,
+       说明: String(步?.说明 ?? ''),
+       预览: 步?.预览 ?? null,
+@@ -139,7 +140,7 @@
+ export function 以放行上下文(上下文, fn) {
+   // 计划在这里**再归一一次**：调用方给的是带 说明/预览 的原始步骤（没有 序 就要现编），
+   // 不归一就所有步骤共用同一个 `undefined` 计数键 —— 第一步一用，其余全被当成用尽。
+-  return 放行上下文.run({ ...(上下文 ?? {}), 步骤: 规范步骤(上下文?.步骤), 已用: new Map(), 已匹配: new Map() }, fn);
++  return 放行上下文.run({ ...(上下文 ?? {}), 步骤: 规范步骤(上下文?.步骤), 已用: new Map(), 已匹配: new Map(), 新建: new Map() }, fn);
+ }
+ 
+ /**
+@@ -157,13 +158,29 @@
+   return `${String(action ?? '')}|${String(target?.kind ?? '')}|${String(target?.id ?? '')}|${写标签}`;
+ }
+ 
++/**
++ * 登记适配器确认已真实首登后，绑定本请求的新对象与创建步；不授予计划外动作。
++ * @param {object} subject 原申请者
++ * @param {object} target 已落盘的新对象（调用方必须核验首登与归属）
++ * @returns {boolean} 无放行上下文或未匹配新建步时不登记
++ */
++export function 记录本次新建(subject, target) {
++  const 放行 = 放行上下文.getStore();
++  if (!放行 || String(放行.原主体) !== String(subject?.id)) return false;
++  const 命中 = 放行.已匹配.get(写入身份('create', target, null));
++  const 步 = 放行.步骤.find(x => x.序 === 命中?.序);
++  if (!步 || 步.动作 !== 'create' || 步.目标.新 !== true) return false;
++  放行.新建.set(`${target.kind}|${target.id}`, 步.序);
++  return true;
++}
++
+ /** 计划步与本次底层写是否同一形状（动作/kind/id/写标签/三标签）。 */
+ function 步骤对上(步, action, target, 写标签) {
+   if (String(步.动作 ?? '') !== String(action ?? '')) return false;
+   if (步.写 != null && String(步.写) !== 写标签) return false;
+   const 目标 = 步.目标 ?? {};
+   if (String(目标.kind ?? '') !== String(target?.kind ?? '')) return false;
+-  if (目标.新 !== true && String(目标.id ?? '') !== String(target?.id ?? '')) return false;
++  if (目标.新 !== true && 步.补偿自 == null && String(目标.id ?? '') !== String(target?.id ?? '')) return false;
+   if (目标.authority && target?.authority && 目标.authority !== target.authority) return false;
+   if (目标.zone && target?.zone && 目标.zone !== target.zone) return false;
+   if (目标.project && target?.project && 目标.project !== target.project) return false;
+@@ -175,6 +192,8 @@
+   for (const 步 of 放行.步骤) {
+     if ((放行.已用.get(步.序) ?? 0) >= (步.次数 ?? 1)) continue;
+     if (!步骤对上(步, action, target, 写标签)) continue;
++    if (步.补偿自 != null && (步.动作 !== 'seal' || 步.目标.kind !== '身份'
++      || 放行.新建?.get(`${target?.kind}|${target?.id}`) !== 步.补偿自)) continue;
+     return 步;
+   }
+   return null;
+--- a/test/v2-council-managed-2026-10-18.test.js
++++ b/test/v2-council-managed-2026-10-18.test.js
+@@ -186,11 +186,11 @@
+       const 开 = await org.council.open({ subject: LEAD, 项目: P, 问题: '计划', 参与者: [MEMBER.id], 参与岗位: ['插件工程', '插件工程'], 资料: [资料], ...a });
+       const 开前 = await org.council.get(P, 开.id);
+       const 开计划 = await org.council.councilPlan({ 项目: P, 动作: 'debate_open', args: { 参与者: [MEMBER.id], 参与岗位: ['插件工程', '插件工程'], 问题: '计划', 资料: [资料] } });
+-      assert.equal(开计划.步骤.length, 3, 'create 会审 + 2 次身份登记');
++      assert.equal(开计划.步骤.length, 5, 'create 会审 + 2 次身份登记 + 2 条条件失败补偿');
+       assert.equal(开计划.步骤[0].动作, 'create');
+       assert.equal(开计划.步骤[0].目标.kind, '会审');
+       assert.equal(开计划.步骤[0].目标.新, true);
+-      assert.deepEqual(开计划.步骤.slice(1).map((s) => [s.动作, s.目标.kind, s.目标.新]), [['create', '身份', true], ['create', '身份', true]]);
++      assert.deepEqual(开计划.步骤.slice(1, 3).map((s) => [s.动作, s.目标.kind, s.目标.新]), [['create', '身份', true], ['create', '身份', true]]);
+       assert.ok(开计划.步骤.every((s) => s.写 == null), '计划不带写标签（与 assign 的实际 context 对齐）');
+       assert.equal((await org.council.get(P, 开.id)).状态, 开前.状态, '只读：计划不推进状态');
+ 
+--- a/test/v2-council-entry-recovery-2026-10-18.test.js
++++ b/test/v2-council-entry-recovery-2026-10-18.test.js
+@@ -202,7 +202,7 @@
+     } finally { await s.close(); }
+   });
+ 
+-  it('审批完整链：open 在 host 前挂一张完整三步单；批准一次后建两实例；converge 一次批准覆盖 write+两seal', async () => {
++  it('审批完整链：open 在 host 前挂完整五步单（含失败补偿）；批准一次后建两实例；converge 一次批准覆盖 write+两seal', async () => {
+     const s = await setup();
+     try {
+       await s.f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '审批' }));
+@@ -212,8 +212,9 @@
+       assert.equal(s.calls.spawn.length, 0);
+       assert.equal((await s.org.council.list({ 项目: P })).length, 0);
+       let pending = (await s.org.intervention.人侧待决({ 项目: P })).find((x) => x.请求id === openRequest);
+-      assert.equal(pending.步骤.length, 3);
+-      assert.deepEqual(pending.步骤.map((x) => [x.动作, x.目标.kind]), [['create', '会审'], ['create', '身份'], ['create', '身份']]);
++      assert.equal(pending.步骤.length, 5);
++      assert.deepEqual(pending.步骤.map((x) => [x.动作, x.目标.kind]), [['create', '会审'], ['create', '身份'], ['create', '身份'], ['seal', '身份'], ['seal', '身份']]);
++      assert.deepEqual(pending.步骤.slice(3).map(x => x.补偿自), [2, 3]);
+       await s.org.intervention.人侧决议({ 请求id: openRequest, 决定: '批准', 通道: '设置页', 认证: '隔离夹具认证' });
+       const opened = await s.action({ ...s.openArgs, 审批引用: openRequest });
+       const council = opened.会审;
+@@ -262,7 +263,7 @@
+       const readCard = s.org.registry.cardOf.bind(s.org.registry);
+       s.org.registry.cardOf = async (id) => { if (id === 'consult-1') throw new Error('卡读取故障'); return readCard(id); };
+       await assert.rejects(() => s.action({ ...s.openArgs, 参与者: 'member-a' }), (e) => e instanceof Fault && e.code === 'COUNCIL_CREATE_FAILED');
+-      assert.deepEqual(s.calls.drain, ['consult-1']);
++      assert.deepEqual(s.calls.stop, ['consult-1']);
+       assert.equal((await s.org.registry.identity()).members['consult-1'].status, '封存');
+       assert.equal((await s.org.registry.identity()).members['member-a'].status, '在岗');
+       assert.equal((await s.org.council.list({ 项目: P })).length, 0);
+--- /dev/null
++++ b/test/v2-council-failure-cleanup-2026-10-18.test.js
+@@ -0,0 +1,320 @@
++/** 真实 Org/runAction + 契约宿主故障注入；状态只读临时双区。 */
++import { it } from 'node:test';
++import assert from 'node:assert/strict';
++import { makeFixture, LEAD } from './helpers.mjs';
++import { Org } from '../src/org.js';
++import { runAction } from '../lib/actions.js';
++import { readJsonl } from '../src/kernel/fsx.js';
++import { NeedsApproval } from '../src/kernel/errors.js';
++import { 以放行上下文, 本次放行匹配, 本次放行可匹配, 记录本次新建, 当前放行 } from '../src/intervention.js';
++
++const P = 'council-failures';
++async function setup() {
++  const f = await makeFixture();
++  const org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
++  const calls = { spawn: 0, stop: [], drain: [] };
++  const agent = { session: { id: 'lead' } };
++  const subagents = {
++    async startActivation() { assert.equal(this, subagents); return { childId: `owned-${++calls.spawn}` }; },
++    async sendMessage() { assert.equal(this, subagents); return { messageId: 'sent' }; },
++    async interrupt(id) { assert.equal(this, subagents); calls.stop.push(id); },
++    async drainChildren(parent, ids) { assert.equal(this, subagents); assert.equal(parent, agent); calls.drain.push(...ids); },
++    async listChildren() { return [{ id: 'owned-1', label: 'real child' }, { id: 'unregistered', label: 'unknown child' }]; },
++  };
++  const host = { agent, subagents, delegation: { authorize: () => ({ fingerprint: 'isolated-failure-test' }) } };
++  const action = (args) => runAction({ org, 项目: P, 主体: LEAD, 面: 'tool', 宿主: host, args });
++  const openArgs = { action: 'debate_open', 问题: '失败矩阵', 参与者: 'member-a', 参与岗位: '插件工程,插件工程', 方式: 'subagent' };
++  const mode = async (value) => { await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: value })); await org.policy.reload(); };
++  const approve = async (args) => {
++    let request;
++    await assert.rejects(() => action(args), e => e instanceof NeedsApproval && (request = e.detail.请求id, true));
++    await org.intervention.人侧决议({ 请求id: request, 决定: '批准', 通道: '设置页', 认证: '隔离夹具' });
++    return request;
++  };
++  const injectAudit = (predicate) => {
++    const append = org.audit.append.bind(org.audit);
++    org.audit.append = async (row) => { if (predicate(row)) throw new Error(`injected audit: ${row.动作}`); return append(row); };
++  };
++  return { f, org, calls, subagents, action, openArgs, mode, approve, injectAudit };
++}
++
++it('审批第二次spawn失败：冻结补偿意图可预览，只清当前实际owned', async () => {
++  const s = await setup();
++  try {
++    await s.mode('审批');
++    const request = await s.approve(s.openArgs);
++    const pending = (await s.org.intervention.人侧待决({ 项目: P })).find(x => x.请求id === request);
++    const start = s.subagents.startActivation;
++    s.subagents.startActivation = async function () { if (s.calls.spawn === 1) throw new Error('second spawn injected'); return start.call(this); };
++    let failure;
++    await assert.rejects(() => s.action({ ...s.openArgs, 审批引用: request }), e => (failure = e, e.code === 'COUNCIL_CREATE_FAILED'));
++    const members = (await s.org.registry.identity()).members;
++    console.log('approval spawn failure:', members['owned-1'].status, JSON.stringify(failure.detail));
++    assert.equal(members['owned-1'].status, '封存');
++    assert.equal(members['member-a'].status, '在岗');
++    assert.equal(pending.步骤.filter(x => x.动作 === 'seal' && x.补偿自).length, 2);
++    assert.deepEqual(failure.detail.补偿失败, []);
++    assert.equal((await s.org.intervention.投影({ 项目: P })).find(x => x.请求id === request).状态, '失败');
++  } finally { await s.f.cleanup(); }
++});
++
++for (const stage of ['状态变更', '主体创建', '成员创建']) it(`登记后${stage}审计失败：当前尚未回Council的实例也清理`, async () => {
++  const s = await setup();
++  try {
++    await s.mode('审批');
++    const request = await s.approve(s.openArgs);
++    s.injectAudit(row => row.动作 === stage && row.对象?.id === 'owned-1');
++    let failure;
++    await assert.rejects(() => s.action({ ...s.openArgs, 审批引用: request }), e => (failure = e, e.code === 'COUNCIL_CREATE_FAILED'));
++    assert.equal((await s.org.registry.identity()).members['owned-1'].status, '封存');
++    assert.equal((await s.org.registry.identity()).members['member-a'].status, '在岗');
++    assert.ok([...s.calls.stop, ...s.calls.drain].includes('owned-1'));
++    assert.match(JSON.stringify(failure.detail), /injected audit/);
++    assert.equal(failure.detail.错误详情.实例, 'owned-1');
++    if (stage === '状态变更') assert.match(failure.detail.错误详情.补偿失败, /封存失败.*injected audit: 状态变更/);
++  } finally { await s.f.cleanup(); }
++});
++
++it('opened已落而审计失败：作废冻结并清owned，预给不动', async () => {
++  const s = await setup();
++  try {
++    s.injectAudit(row => row.动作 === '会审发起');
++    let failure;
++    await assert.rejects(() => s.action(s.openArgs), e => (failure = e, e.code === 'COUNCIL_OPEN_FAILED'));
++    assert.match(failure.message, /opened 事件已落线，但发起审计失败/);
++    assert.doesNotMatch(failure.message, /opened 事件落线失败/);
++    assert.equal(failure.detail.opened已落线, true);
++    const [view] = await s.org.council.list({ 项目: P });
++    assert.equal(view.状态, '作废');
++    await assert.rejects(() => s.org.council.answer({ subject: { id: 'member-a', kind: '成员' }, 项目: P, id: view.id, 结论: '禁止早卷' }));
++    assert.equal((await s.org.registry.identity()).members['member-a'].status, '在岗');
++    assert.equal((await s.org.registry.identity()).members['owned-1'].status, '封存');
++  } finally { await s.f.cleanup(); }
++});
++
++for (const stage of ['会审收敛', '零分歧异常', '介入失败']) it(`converged后${stage}审计失败：逐个退役，合并失败，不重复结论`, async () => {
++  const s = await setup();
++  try {
++    const { 会审: opened } = await s.action(s.openArgs);
++    for (const id of opened.参与者) await s.org.council.answer({ subject: { id, kind: '成员' }, 项目: P, id: opened.id, 结论: '相同', 结论层: '方案A' });
++    await s.org.council.unlock({ subject: LEAD, 项目: P, id: opened.id });
++    await s.mode('审批');
++    const args = { action: 'debate_converge', id: opened.id, 内容: '唯一结论' };
++    const request = await s.approve(args);
++    s.injectAudit(row => row.动作 === stage || (stage === '介入失败' && row.动作 === '会审收敛') || row.动作 === '会审退役' || row.动作 === '会审退役失败');
++    s.subagents.interrupt = async function (id) { s.calls.stop.push(id); if (id === 'owned-1') throw new Error('first stop injected'); };
++    let failure;
++    await assert.rejects(() => s.action({ ...args, 审批引用: request }), e => (failure = e, /injected audit/.test(e.message)));
++    assert.deepEqual(s.calls.stop, ['owned-1', 'owned-2']);
++    assert.equal((await s.org.registry.identity()).members['owned-1'].status, '封存');
++    assert.equal((await s.org.registry.identity()).members['owned-2'].status, '封存');
++    assert.match(JSON.stringify(failure.detail), /first stop injected/);
++    assert.match(JSON.stringify(failure.detail), /会审退役失败/);
++    if (stage === '介入失败') assert.match(failure.detail.介入失败记账错误, /injected audit: 介入失败/);
++    const rows = await readJsonl(s.org.layout.councilLog(P));
++    assert.equal(rows.filter(x => x.kind === 'converged').length, 1);
++    await assert.rejects(() => s.action(args));
++    assert.deepEqual(s.calls.stop, ['owned-1', 'owned-2']);
++  } finally { await s.f.cleanup(); }
++});
++
++it('member_list同id登记与子代合并，team去重，未知状态不编造', async () => {
++  const s = await setup();
++  try {
++    await s.action(s.openArgs);
++    const { 成员 } = await s.action({ action: 'member_list' });
++    const row = 成员.find(x => x.实例 === 'owned-1');
++    assert.equal(row.岗位, '插件工程'); assert.equal(row.来源, 'subagent'); assert.equal(row.名, 'real child'); assert.equal(row.状态, null);
++    assert.equal(成员.find(x => x.实例 === 'unregistered').状态, null);
++    assert.equal(成员.filter(x => x.实例 === 'owned-1').length, 1);
++    const host = { agent: { session: { id: 'lead' } }, subagents: s.subagents, agentTeams: { listMembers: () => [{ role: 'teammate', id: 'owned-1', name: 'team-name', status: 'idle' }] }, delegation: { authorize: () => ({ fingerprint: 'test' }) } };
++    const team = await runAction({ org: s.org, 项目: P, 主体: LEAD, 面: 'tool', 宿主: host, args: { action: 'member_list' } });
++    assert.equal(team.成员.find(x => x.实例 === 'owned-1').来源, 'team');
++    assert.equal(team.成员.find(x => x.实例 === 'owned-1').名, 'team-name');
++    assert.equal(team.成员.find(x => x.实例 === 'owned-1').状态, 'idle');
++    assert.equal(team.成员.filter(x => x.实例 === 'owned-1').length, 1);
++  } finally { await s.f.cleanup(); }
++});
++
++it('审批成功不执行失败补偿，预给/别场/未登记/伪owned都拿不到seal', async () => {
++  const s = await setup();
++  try {
++    await s.org.registry.assign({ subject: LEAD, 岗位: '插件工程', 实例: 'other-council', 会审: { id: 'other', 项目: P, 资料: [] } });
++    await s.mode('审批');
++    const args = { ...s.openArgs, owned: ['member-a', 'other-council'] };
++    const request = await s.approve(args);
++    const append = s.org.audit.append.bind(s.org.audit);
++    let checked = 0;
++    s.org.audit.append = async (row) => {
++      if (row.动作 === '成员创建') {
++        for (const id of ['member-a', 'member-b', 'other-council', 'not-created']) {
++          await assert.rejects(() => s.org.registry.seal({ subject: LEAD, 实例: id, 理由: '伪造owned不能放行' }), e => e instanceof NeedsApproval);
++          checked++;
++        }
++      }
++      return append(row);
++    };
++    await s.action({ ...args, 审批引用: request });
++    assert.equal(checked, 8, '负例在实际批准请求上下文中执行');
++    const members = (await s.org.registry.identity()).members;
++    for (const id of ['member-a', 'member-b', 'other-council', 'owned-1', 'owned-2']) assert.equal(members[id].status, '在岗');
++    assert.deepEqual(s.calls.stop, []);
++    assert.deepEqual(s.calls.drain, []);
++  } finally { await s.f.cleanup(); }
++});
++
++it('宿主冒返已有身份时，不改绑、不seal、不停预给与别场', async () => {
++  for (const id of ['member-a', 'other-council']) {
++    const s = await setup();
++    try {
++      await s.org.registry.assign({ subject: LEAD, 岗位: '插件工程', 实例: 'other-council', 会审: { id: 'other', 项目: P, 资料: [] } });
++      const before = (await s.org.registry.identity()).members[id];
++      s.subagents.startActivation = async () => ({ childId: id });
++      await s.mode('审批');
++      const request = await s.approve(s.openArgs);
++      await assert.rejects(() => s.action({ ...s.openArgs, 审批引用: request }), e => e.code === 'COUNCIL_CREATE_FAILED');
++      assert.deepEqual((await s.org.registry.identity()).members[id], before);
++      assert.deepEqual(s.calls.stop, []); assert.deepEqual(s.calls.drain, []);
++    } finally { await s.f.cleanup(); }
++  }
++});
++
++for (const mode of ['subagent', 'team']) it(`创建后${mode}停机API消失：补偿如实失败而非可选调用假绿`, async () => {
++  const s = await setup();
++  try {
++    s.org.registry.assign = async () => { throw new Error('registration before write injected'); };
++    let run = s.action;
++    let stopCalls = 0;
++    if (mode === 'subagent') {
++      const start = s.subagents.startActivation;
++      s.subagents.startActivation = async function (...args) {
++        const result = await start.apply(this, args);
++        delete this.drainChildren;
++        return result;
++      };
++    } else {
++      const teams = {
++        async spawnTeammate() { assert.equal(this, teams); s.calls.spawn++; delete this.interrupt; return { member: { id: 'owned-team', name: 'temporary' } }; },
++        async sendMessage() {},
++        async interrupt() { stopCalls++; },
++        listMembers() { return [{ role: 'teammate', id: 'owned-team', name: 'temporary' }]; },
++      };
++      const host = { agent: { session: { id: 'lead' } }, agentTeams: teams, delegation: { authorize: () => ({ fingerprint: 'test' }) } };
++      run = args => runAction({ org: s.org, 项目: P, 主体: LEAD, 面: 'tool', 宿主: host, args });
++    }
++    let failure;
++    await assert.rejects(() => run({ ...s.openArgs, 方式: mode }), e => (failure = e, e.code === 'COUNCIL_CREATE_FAILED'));
++    assert.equal(s.calls.spawn, 1, '通过副作用前校验，真实创建后才注入缺接口');
++    assert.notEqual(failure.detail.错误详情.补偿失败, null, '缺接口必须有补偿失败证据');
++    assert.match(failure.detail.错误详情.补偿失败, /停机接口.*已不可用.*未停机/);
++    assert.match(failure.detail.错误详情.原因, /registration before write injected/);
++    assert.deepEqual(s.calls.drain, []); assert.deepEqual(s.calls.stop, []); assert.equal(stopCalls, 0);
++    assert.equal((await s.org.registry.identity()).members['member-a'].status, '在岗');
++  } finally { await s.f.cleanup(); }
++});
++
++it('opened未能提交时如实报未落线，不声称已落或已作废', async () => {
++  const s = await setup();
++  const councilLog = s.org.layout.councilLog;
++  try {
++    s.org.layout.councilLog = () => s.f.home;
++    let failure;
++    await assert.rejects(() => s.action(s.openArgs), e => (failure = e, e.code === 'COUNCIL_OPEN_FAILED'));
++    assert.equal(failure.detail.opened已落线, false);
++    assert.match(failure.message, /opened 事件未能落线/);
++    assert.doesNotMatch(failure.message, /已尝试冻结作废/);
++    assert.deepEqual(s.calls.stop.sort(), ['owned-1', 'owned-2']);
++  } finally { s.org.layout.councilLog = councilLog; await s.f.cleanup(); }
++});
++
++it('开场发送阻塞后另一Root先收敛：失败作废不得覆盖已定格状态', async () => {
++  const s = await setup();
++  let release;
++  let entered;
++  const gate = new Promise(resolve => { release = resolve; });
++  const ready = new Promise(resolve => { entered = resolve; });
++  let opening;
++  try {
++    s.subagents.sendMessage = async () => { entered(); await gate; throw new Error('delayed send injected'); };
++    opening = s.action(s.openArgs).then(value => ({ value }), error => ({ error }));
++    await ready;
++    const [opened] = await s.org.council.list({ 项目: P });
++    for (const id of opened.参与者) await s.org.council.answer({ subject: { id, kind: '成员' }, 项目: P, id: opened.id, 结论: id });
++    await s.org.council.unlock({ subject: LEAD, 项目: P, id: opened.id });
++    await s.action({ action: 'debate_converge', id: opened.id, 内容: '另一Root已定格的唯一结论' });
++    release();
++    const { error } = await opening;
++    assert.equal(error.code, 'COUNCIL_SEND_FAILED');
++    const final = await s.org.council.get(P, opened.id);
++    assert.equal(final.状态, '已收敛');
++    assert.equal(final.结论, '另一Root已定格的唯一结论');
++    assert.match(error.detail.作废错误, /已收敛/);
++    assert.deepEqual(s.calls.stop.sort(), ['owned-1', 'owned-1', 'owned-2', 'owned-2'], '作废被拒后仍逐个尝试owned清理');
++    assert.equal((await s.org.registry.identity()).members['member-a'].status, '在岗');
++    const rows = await readJsonl(s.org.layout.councilLog(P));
++    assert.equal(rows.filter(x => x.kind === 'converged').length, 1);
++    assert.equal(rows.filter(x => x.kind === 'aborted').length, 0);
++  } finally { release(); if (opening) await opening; await s.f.cleanup(); }
++});
++
++it('新id落盘绑定错场时，不凭匹配过create给它seal', async () => {
++  const s = await setup();
++  try {
++    await s.mode('审批');
++    const request = await s.approve(s.openArgs);
++    const assign = s.org.registry.assign.bind(s.org.registry);
++    s.org.registry.assign = spec => assign({ ...spec, 会审: { ...spec.会审, id: 'wrong-council' } });
++    await assert.rejects(() => s.action({ ...s.openArgs, 审批引用: request }), e => e.code === 'COUNCIL_CREATE_FAILED');
++    const member = (await s.org.registry.identity()).members['owned-1'];
++    assert.equal(member.status, '在岗');
++    assert.equal(member.会审绑定.会审, 'wrong-council');
++    assert.deepEqual(s.calls.drain, ['owned-1'], '停止刚spawn的执行体但不得封错场身份');
++  } finally { await s.f.cleanup(); }
++});
++
++it('只有预给的opened审计失败也作废；aborted审计失败不阻断冻结', async () => {
++  const s = await setup();
++  try {
++    s.injectAudit(row => ['会审发起', '会审作废'].includes(row.动作));
++    let failure;
++    await assert.rejects(() => s.action({ action: 'debate_open', 问题: '预给', 参与者: 'member-a,member-b' }), e => (failure = e, e.code === 'COUNCIL_OPEN_FAILED'));
++    assert.match(failure.detail.作废错误, /会审作废/);
++    const [view] = await s.org.council.list({ 项目: P });
++    assert.equal(view.状态, '作废');
++    for (const id of ['member-a', 'member-b']) assert.equal((await s.org.registry.identity()).members[id].status, '在岗');
++  } finally { await s.f.cleanup(); }
++});
++
++it('补偿引用创建步：错序/未确认首登/未匹配create/异主体/跨请求均拒；重复判定幂等且不能多封', async () => {
++  const target = id => ({ kind: '身份', id, authority: '自治', zone: '私有' });
++  const plan = [
++    { 动作: 'create', 目标: { kind: '身份', 新: true } },
++    { 动作: 'seal', 目标: { kind: '身份' }, 补偿自: 1 },
++    { 动作: 'seal', 目标: { kind: '身份' }, 补偿自: 99 },
++  ];
++  await 以放行上下文({ 原主体: LEAD.id, 请求id: 'one', 步骤: plan }, async () => {
++    assert.equal(本次放行匹配(LEAD, 'seal', target('owned')), null);
++    assert.equal(记录本次新建(LEAD, target('owned')), false);
++    assert.ok(本次放行匹配(LEAD, 'create', target('owned')));
++    assert.equal(本次放行匹配(LEAD, 'seal', target('owned')), null, '只预检过create不等于真实首登');
++    assert.equal(记录本次新建({ id: 'impostor' }, target('owned')), false);
++    assert.equal(记录本次新建(LEAD, target('owned')), true);
++    assert.equal(本次放行可匹配(LEAD, 'seal', target('owned')), true);
++    const first = 本次放行匹配(LEAD, 'seal', target('owned'));
++    assert.equal(first.序, 2);
++    assert.equal(本次放行匹配(LEAD, 'seal', target('owned')).重复, true);
++    assert.equal(当前放行().已用.get(2), 1);
++    assert.equal(本次放行匹配(LEAD, 'seal', target('extra')), null);
++    assert.equal(记录本次新建(LEAD, target('extra')), false);
++    assert.equal(本次放行匹配({ id: 'impostor' }, 'seal', target('owned')), null);
++    await 以放行上下文({ 原主体: LEAD.id, 请求id: 'two', 步骤: plan }, () => {
++      assert.equal(本次放行匹配(LEAD, 'seal', target('owned')), null, '新请求不继承owned');
++    });
++  });
++  await 以放行上下文({ 原主体: LEAD.id, 请求id: 'wrong-step', 步骤: [plan[0], plan[2]] }, () => {
++    assert.ok(本次放行匹配(LEAD, 'create', target('owned')));
++    assert.equal(记录本次新建(LEAD, target('owned')), true);
++    assert.equal(本次放行匹配(LEAD, 'seal', target('owned')), null, '错创建步序不能封');
++  });
++  assert.equal(本次放行匹配(LEAD, 'seal', target('owned')), null, '执行结束无全局豁免');
++});

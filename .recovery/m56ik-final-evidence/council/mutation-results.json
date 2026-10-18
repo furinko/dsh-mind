@@ -1,0 +1,64 @@
+{
+  "results": [
+    {
+      "name": "abort-finality",
+      "path": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-councilfail-mutant-abort-finality-4a005773",
+      "status": 1,
+      "caught": true,
+      "witness": "'作废' !== '已收敛'"
+    },
+    {
+      "name": "stop-api-disappearance",
+      "path": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-councilfail-mutant-stop-api-disappearance-5db706c9",
+      "status": 1,
+      "caught": true,
+      "witness": "缺接口必须有补偿失败证据"
+    },
+    {
+      "name": "opened-commit-report",
+      "path": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-councilfail-mutant-opened-commit-report-f6b2671d",
+      "status": 1,
+      "caught": true,
+      "witness": "ERR_ASSERTION"
+    },
+    {
+      "name": "owned-boundary",
+      "path": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-councilfail-mutant-owned-boundary-8f437da6",
+      "status": 1,
+      "caught": true,
+      "witness": "Missing expected rejection"
+    },
+    {
+      "name": "assign-audit-cleanup",
+      "path": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-councilfail-mutant-assign-audit-cleanup-75f73be4",
+      "status": 1,
+      "caught": true,
+      "witness": "'在岗' !== '封存'"
+    },
+    {
+      "name": "committed-retirement",
+      "path": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-councilfail-mutant-committed-retirement-f230dd1f",
+      "status": 1,
+      "caught": true,
+      "witness": "deepStrictEqual"
+    },
+    {
+      "name": "member-source-merge",
+      "path": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-councilfail-mutant-member-source-merge-358485fb",
+      "status": 1,
+      "caught": true,
+      "witness": "'subagent'"
+    }
+  ],
+  "before": {
+    "src/council.js": "177974dbf72fc1dca273af1a4efcf3ad4263db0f2a5299d8597131a21bb3ce75",
+    "lib/actions.js": "294794eaef20dd3c9e9d4068feb9ed4074b1cf31a11ac741e2d9f5eea58b4411",
+    "src/intervention.js": "a73f03fe97321d558057a3ef397c64332298c0d9a172516028cfea898d84738d"
+  },
+  "after": {
+    "src/council.js": "177974dbf72fc1dca273af1a4efcf3ad4263db0f2a5299d8597131a21bb3ce75",
+    "lib/actions.js": "294794eaef20dd3c9e9d4068feb9ed4074b1cf31a11ac741e2d9f5eea58b4411",
+    "src/intervention.js": "a73f03fe97321d558057a3ef397c64332298c0d9a172516028cfea898d84738d"
+  },
+  "unchanged": true
+}

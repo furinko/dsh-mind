@@ -1,0 +1,7 @@
+{
+  "files": [
+    ["components/kernel/lib/index.js", "2808396d7da83264c998413c1303fa2bd2b425873b6013ae581323827ae03694"],
+    ["test/guard-reviewer-readonly-2026-10-18.test.js", "8026d2477d3d48062e673fbc259a9bb64ed702810855471e4aa707b9e1baa932"]
+  ],
+  "log": "review-parent-publication.json"
+}

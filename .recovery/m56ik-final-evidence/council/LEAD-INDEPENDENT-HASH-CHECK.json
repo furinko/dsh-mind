@@ -1,0 +1,64 @@
+{
+  "at": "2026-10-18T11:11:29.863Z",
+  "checker": "Lead independent byte SHA256",
+  "candidate": "C:/Users/wjthq/AppData/Local/Temp/dsh-mind-councilfail-210fe8c6cc7a4855814d87b61738ce63",
+  "live": "C:/Users/wjthq/.dsh/plugins/dsh-mind",
+  "rows": [
+    {
+      "path": "lib/actions.js",
+      "changed": true,
+      "expectedOriginal": "14005a844d19aba3a10b7bd4595e46fd24789c43319482b8cc60a8ffb66b31bd",
+      "expectedCandidate": "294794eaef20dd3c9e9d4068feb9ed4074b1cf31a11ac741e2d9f5eea58b4411",
+      "live": "14005a844d19aba3a10b7bd4595e46fd24789c43319482b8cc60a8ffb66b31bd",
+      "candidate": "294794eaef20dd3c9e9d4068feb9ed4074b1cf31a11ac741e2d9f5eea58b4411"
+    },
+    {
+      "path": "src/council.js",
+      "changed": true,
+      "expectedOriginal": "b93d19b410afd403133bd10914eb5319fd9930f6f00dbc3b27725e8e60daf542",
+      "expectedCandidate": "177974dbf72fc1dca273af1a4efcf3ad4263db0f2a5299d8597131a21bb3ce75",
+      "live": "b93d19b410afd403133bd10914eb5319fd9930f6f00dbc3b27725e8e60daf542",
+      "candidate": "177974dbf72fc1dca273af1a4efcf3ad4263db0f2a5299d8597131a21bb3ce75"
+    },
+    {
+      "path": "src/intervention.js",
+      "changed": true,
+      "expectedOriginal": "4f6f3cc129d468031de7d74825826c174219a699c1821098920e9afb34629bc7",
+      "expectedCandidate": "a73f03fe97321d558057a3ef397c64332298c0d9a172516028cfea898d84738d",
+      "live": "4f6f3cc129d468031de7d74825826c174219a699c1821098920e9afb34629bc7",
+      "candidate": "a73f03fe97321d558057a3ef397c64332298c0d9a172516028cfea898d84738d"
+    },
+    {
+      "path": "lib/approval-plan.js",
+      "changed": false,
+      "expectedOriginal": "b23d9dd51d339818bbb53f3c986a3d5eff9aa26fb0145abb0e443369c1805656",
+      "expectedCandidate": "b23d9dd51d339818bbb53f3c986a3d5eff9aa26fb0145abb0e443369c1805656",
+      "live": "b23d9dd51d339818bbb53f3c986a3d5eff9aa26fb0145abb0e443369c1805656",
+      "candidate": "b23d9dd51d339818bbb53f3c986a3d5eff9aa26fb0145abb0e443369c1805656"
+    },
+    {
+      "path": "test/v2-council-managed-2026-10-18.test.js",
+      "changed": true,
+      "expectedOriginal": "f40f9ce379759227142dffb16f8ced01244953f5b04081f27736346e83adb947",
+      "expectedCandidate": "e4452e48b36d1bbeaee82be6bc2687adadc511c8eee05e9b770cfb9e153f64a8",
+      "live": "f40f9ce379759227142dffb16f8ced01244953f5b04081f27736346e83adb947",
+      "candidate": "e4452e48b36d1bbeaee82be6bc2687adadc511c8eee05e9b770cfb9e153f64a8"
+    },
+    {
+      "path": "test/v2-council-entry-recovery-2026-10-18.test.js",
+      "changed": true,
+      "expectedOriginal": "a1acc79184ddd07543d387df30166d355ef8ed95c85a440b8467aefc3dbb57d4",
+      "expectedCandidate": "fe98810153ef51c6effaec8f0ede40d77bb7dc7a4fa15f6d3540ef4890230348",
+      "live": "a1acc79184ddd07543d387df30166d355ef8ed95c85a440b8467aefc3dbb57d4",
+      "candidate": "fe98810153ef51c6effaec8f0ede40d77bb7dc7a4fa15f6d3540ef4890230348"
+    },
+    {
+      "path": "test/v2-council-failure-cleanup-2026-10-18.test.js",
+      "changed": true,
+      "expectedOriginal": null,
+      "expectedCandidate": "e00dc7ed87ac843b320ee2a7ca5550adb522bbe29f6589bfaf34401fde9e442a",
+      "live": null,
+      "candidate": "e00dc7ed87ac843b320ee2a7ca5550adb522bbe29f6589bfaf34401fde9e442a"
+    }
+  ]
+}

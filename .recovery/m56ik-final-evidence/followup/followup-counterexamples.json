@@ -1,0 +1,17 @@
+{
+  "results": [
+    {
+      "name": "review-parent-gap",
+      "clone": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-followup-mutant-iZxRL6",
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-followup-ET2HlE\\.recovery\\review-parent-gap.log",
+      "caught": true
+    },
+    {
+      "name": "preflight-context-dropped",
+      "clone": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-followup-mutant-XaOgOC",
+      "log": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-followup-ET2HlE\\.recovery\\preflight-context-dropped.log",
+      "caught": true
+    }
+  ],
+  "unchanged": true
+}

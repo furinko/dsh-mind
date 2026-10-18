@@ -1,0 +1,9 @@
+{
+  "sourceRoot": "C:/Users/wjthq/AppData/Local/Temp/dsh-mind-direct-bb516c0c2a1444c4ba6ce2126e8c7e9d",
+  "files": [
+    ["src/policy.js", "098755fca9e1e61377ee816fe999fc1be7065305e4a437f8824c6a6e83684253"],
+    ["src/tasks.js", "82d1ebadad10cfc6dab166ccce6b36823383d5466fb8929fa0db2ea357ce5d82"],
+    ["test/direct-lead-execution.test.js", null]
+  ],
+  "log": "direct-publication.json"
+}

@@ -1,0 +1,59 @@
+{
+  "kind": "native-tool-receipts-transcription",
+  "gui": "http://127.0.0.1:7710",
+  "pid": 29832,
+  "generation": "895b55ce-6e15-447c-bf16-daf7a1e3b87f",
+  "assembly": "34773a40-009b-4493-91fe-da09960d19cd",
+  "subject": "session-ea05d8ff-0aab-45e2-aca4-e263855042b0",
+  "taskCount": {
+    "before": 95,
+    "after": 95,
+    "beforeAt": "2026-10-18T11:28:57Z",
+    "afterAt": "2026-10-18T11:42:03Z"
+  },
+  "council": {
+    "id": "council-mvdqtu70-f0325",
+    "opened": "2026-10-18T11:29:45Z",
+    "unlocked": "2026-10-18T11:32:15Z",
+    "converged": "2026-10-18T11:33:40Z",
+    "round": 1,
+    "messages": 2,
+    "budget": 24,
+    "participants": [
+      "93650aef-9692-4f9b-9093-106b8ee4cc81",
+      "8252e161-1d1c-45df-b05d-097caa5cc890"
+    ],
+    "messageIds": [
+      "msg-ac9ba7b5-34a9-4949-a4c7-b0d388973c36",
+      "msg-9026fe13-49c7-4653-86c3-9dede3d3896e"
+    ],
+    "retirement": [
+      {
+        "sealed": true,
+        "stopped": true
+      },
+      {
+        "sealed": true,
+        "stopped": true
+      }
+    ],
+    "blindBeforeUnlock": true,
+    "visibleAfterUnlock": true
+  },
+  "probe": {
+    "at": "2026-10-18T11:34:38Z",
+    "allGreen": true,
+    "historicalCorrectedAuditDefects": 9,
+    "stickyGreenWarningRetained": true
+  },
+  "ownCriteriaRead": {
+    "member": "24581596-3601-4cb2-99a7-14dfb6dad4de",
+    "sameNodeBefore": "deny",
+    "sameNodeAfter": "allow"
+  },
+  "limits": [
+    "Actual council ran in delegated autonomy, not a forged human approval flow",
+    "No production ledger corruption for calibration",
+    "No claim of exhaustive runtime denial coverage, cross-ledger atomicity, scale performance or manual browser DOM verification"
+  ]
+}

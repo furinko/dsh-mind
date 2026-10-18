@@ -1,0 +1,57 @@
+{
+  "at": "2026-10-18T10:27:30.320Z",
+  "source": "C:\\Users\\wjthq\\.dsh\\plugins\\dsh-mind",
+  "stage": "C:\\Users\\wjthq\\AppData\\Local\\Temp\\dsh-mind-m56ik-fd8dc94d",
+  "files": [
+    {
+      "rel": "src/paths.js",
+      "originalHash": "d2b6ea9faa268ba5944b9cb89aab8857354d8ce1c75ca5e1f5b136f150a89460",
+      "stagedHash": "d6a6d7e208bb3270d39402baa066009cc0f196a1579cc4c0a50afb4ab6f74e04"
+    },
+    {
+      "rel": "src/policy.js",
+      "originalHash": "85175e8309eb9886a65ba0cceef0239dcd5e1e9043be2b4b998ec733dce0dde2",
+      "stagedHash": "098755fca9e1e61377ee816fe999fc1be7065305e4a437f8824c6a6e83684253"
+    },
+    {
+      "rel": "src/bus.js",
+      "originalHash": "4638c611bea7e55a240bfb5e315a6f859eca8a5172e0923cdc8796e656838129",
+      "stagedHash": "9034daf3b490f60aec7540a1a64b9a45392a45c2adbbd9a4be5aef548917e1bd"
+    },
+    {
+      "rel": "src/council.js",
+      "originalHash": "d2d39ee9941ef6f82ba78d24f00046108f10dc08a3f4ed54b13efb1bf15aed6e",
+      "stagedHash": "b93d19b410afd403133bd10914eb5319fd9930f6f00dbc3b27725e8e60daf542"
+    },
+    {
+      "rel": "src/org.js",
+      "originalHash": "9072dbe4f2195a2d5a77aeb1d6faa9d18d4aff00550a29283a640c5607add952",
+      "stagedHash": "4aa650a63995e0652503dc9b763fd86c147800cf615ea5508243c24785c35301"
+    },
+    {
+      "rel": "lib/approval-plan.js",
+      "originalHash": "d48933d86a376712404ee6ff7d54f7ce1be0faf9d2afd37b159c8606ff325ac1",
+      "stagedHash": "b23d9dd51d339818bbb53f3c986a3d5eff9aa26fb0145abb0e443369c1805656"
+    },
+    {
+      "rel": "lib/actions.js",
+      "originalHash": "c32b74ed6654327e978534d96a6df5af9b37e617518d708f5e1bc3cdab868433",
+      "stagedHash": "6983e57010372aefabc7603a2547dad7bf567a7b410ab38f783b734fbe5ba0d1"
+    },
+    {
+      "rel": "components/kernel/lib/index.js",
+      "originalHash": "530faa77edc7d411c31aa91d6723d346cceb6013feeafe11557d1669082edbcb",
+      "stagedHash": "2808396d7da83264c998413c1303fa2bd2b425873b6013ae581323827ae03694"
+    },
+    {
+      "rel": "test/v2-council-2026-10-18.test.js",
+      "originalHash": "0a0b0b72a6f6bd10f85f3d77b5b1e0d43b079680121e6f18c06b8956b5c51653",
+      "stagedHash": "196865fd6cce3bdd7790d2e426234d2c0be4efa9e92d70408b65347456818fc7"
+    },
+    {
+      "rel": "test/v2-council-entry-recovery-2026-10-18.test.js",
+      "originalHash": null,
+      "stagedHash": "a1acc79184ddd07543d387df30166d355ef8ed95c85a440b8467aefc3dbb57d4"
+    }
+  ]
+}

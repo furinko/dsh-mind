@@ -1,0 +1,32 @@
+{
+  "at": "2026-10-18T16:33:23.450Z",
+  "source": "live audit-2026-10.jsonl",
+  "scope": "Exact audit rows copied verbatim; hashes are of this excerpt, not the whole ledger",
+  "redRows": [
+    {
+      "seq": 3178,
+      "动作": "探针异常",
+      "时间": "2026-10-18T15:02:18Z",
+      "excerptSha": "a7593a149eff8bde79cc584d0984859fbf1cedc0a524d13e70110d0d3483a7fd"
+    },
+    {
+      "seq": 3179,
+      "动作": "自动回滚",
+      "时间": "2026-10-18T15:02:18Z",
+      "excerptSha": "4b5f283224d8074888570652bb6606a20ef348a9b1e53a4db0c1a7eb027b9ec6"
+    }
+  ],
+  "greenRows": [
+    {
+      "seq": 3265,
+      "动作": "探针巡检",
+      "时间": "2026-10-18T16:33:15Z",
+      "excerptSha": "ba4eb812614c539a251c5695408b865c780fad94f1b08bce7a13ae2c03122f68"
+    }
+  ],
+  "interpretation": {
+    "red": "15:02:18Z 闸在位 red: 调度创建闸 registered=缺, 随即 system 自动回滚: 定位目标=上一全绿快照 2891f149b8a3d639 (d9), 执行=false, 可恢复=不可确定, 升级主权者",
+    "green": "16:33:15Z 手工巡检全绿, 策略引擎 16:30:16Z 重载后 范围闸+调度创建闸 均已注册",
+    "honest": "这不是可回滚的已发布制品凭据；也未证明 15:02 红灯的根因已修，只能说重载后已恢复注册。"
+  }
+}

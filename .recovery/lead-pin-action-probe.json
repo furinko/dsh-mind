@@ -1,0 +1,18 @@
+[
+  {
+    "case": "sealed",
+    "writeDenied": true,
+    "rule": "v2 条目10 · Lead 自治写必须先钉版（在册在岗 + 钉版摘要可读）",
+    "businessNodesBefore": 0,
+    "businessNodesAfter": 0,
+    "diagnosticReadAllowed": true
+  },
+  {
+    "case": "unpinned",
+    "writeDenied": true,
+    "rule": "v2 条目10 · Lead 自治写必须先钉版（在册在岗 + 钉版摘要可读）",
+    "businessNodesBefore": 0,
+    "businessNodesAfter": 0,
+    "diagnosticReadAllowed": true
+  }
+]
