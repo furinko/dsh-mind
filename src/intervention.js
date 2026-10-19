@@ -386,7 +386,8 @@ export class InterventionService {
    * @returns {Promise<object>}
    */
   async 读冻结({ 请求id, subject }) {
-    const 记录 = await this.#读冻结(String(请求id ?? ''));
+    const 项 = this.#折叠(await this.audit.read({})).get(String(请求id ?? ''));
+    const 记录 = await this.#读冻结(String(请求id ?? ''), 项);
     if (!记录) throw new InvalidBody(`没有这个介入请求记录：${请求id}。记录缺失时不能预览、也不能盲批。`, { missing: ['请求id'] });
     const 是本人 = subject?.kind === '主权者';
     const 是原申请者 = String(subject?.id ?? '') === String(记录.主体?.id ?? '');
@@ -408,10 +409,10 @@ export class InterventionService {
    * 决定前必须能读到完整冻结记录（不能盲批）；批准/拒绝/撤销都算一次有效本人交互
    * （恢复失联），但**不等于**批准别的待决。
    *
-   * @param {{请求id: string, 决定: '批准'|'拒绝'|'撤销', 理由?: string, 通道: string, 认证: string, 项目?: string|null}} spec
+   * @param {{请求id: string, 决定: '批准'|'拒绝'|'撤销', 理由?: string, 通道: string, 认证: string, 项目?: string|null, 会话?: string|null, 审阅指纹?: string|null}} spec
    * @returns {Promise<{请求id: string, 决定: string, 决议行: {seq: number, hash: string}, 主体: object, 交互: object}>}
    */
-  async 人侧决议({ 请求id, 决定, 理由 = '', 通道, 认证, 项目 = null }) {
+  async 人侧决议({ 请求id, 决定, 理由 = '', 通道, 认证, 项目 = null, 会话 = null, 审阅指纹 = null }) {
     if (!决议取值.includes(决定)) {
       throw new InvalidBody(`人侧决议只认 ${决议取值.join(' / ')}，收到 ${JSON.stringify(决定 ?? null)}。`, { missing: ['决定'] });
     }
@@ -419,42 +420,56 @@ export class InterventionService {
       throw new InvalidBody('人侧决议必须声明入口与认证事实（通道/认证）：来源不许由调用方省略，也不许由模型面补造。', { missing: ['通道', '认证'] });
     }
     const 指纹 = String(请求id ?? '');
-    const 项 = this.#折叠(await this.#读(项目)).get(指纹);
-    if (!项) {
-      throw new InvalidBody(`没有这个介入请求：${指纹}。请求 id 就是请求指纹（「介入请求」账本行的 对象.id）。`, { missing: ['请求id'] });
-    }
-    const 允许 = 决定 === '撤销'
-      ? ['待放行', '已批准待重放', '占用未报告', '失败']
-      : ['待放行', '失败'];
-    if (收口态.has(项.状态) || !允许.includes(项.状态)) {
-      throw new Denied(
-        '法律 介入度 · 决议只对未收口的请求（v2 条目14/17）',
-        `介入请求 ${指纹} 当前是「${项.状态}」：${决定} 不能应用。收口态不复活，重复决议不产生第二份副作用。`,
-        {
-          requireAuthority: '主权者',
-          howToChange: '看「介入审批」清单里该请求的当前状态；要重新申请，由原申请者按原动作再发起一次（会得到新请求）。',
-          detail: { 请求id: 指纹, 状态: 项.状态, 收到决定: 决定 },
-        },
-      );
-    }
-    // 不盲批：记录读不到或摘要不符，决议直接拒绝（fail-closed）。
-    const 冻结 = await this.#读冻结(指纹);
-    if (!冻结) {
-      throw new InvalidBody(`介入请求 ${指纹} 的完整冻结记录缺失：没有可预览的内容，不能由主权者拍板。`, { missing: ['请求记录'] });
-    }
-    // 主权者主体：本方法内部构造 —— 调用方传什么 subject/kind 都不参与。
-    const 主体 = { id: 'sovereign', kind: '主权者' };
-    const 行 = await this.audit.append({
-      动作: 决议动作,
-      主体,
-      对象: { id: 指纹, kind: '介入请求' },
-      依据: `人侧入口：${通道}（${认证}）· v2 条目14/17/20`,
-      结果: 决定,
-      项目: 项.项目,
-      详情: { 请求指纹: 指纹, 请求行: 项.请求行, 理由, 入口: { 通道, 认证 }, 请求记录: { 请求id: 指纹, 摘要: 冻结.内容摘要 } },
+    if (!/^[a-f0-9]{64}$/.test(指纹)) throw new InvalidBody('人侧决议需要合法请求id（64位请求指纹）。', { missing: ['请求id'] });
+    // 与登记/重放共用同一把请求锁，双击或并发批准不能同时读到待放行。
+    return withLock(this.#锁路径(指纹), async () => {
+      const 项 = this.#折叠(await this.#读(项目)).get(指纹);
+      if (会话 !== null && (!会话 || 项?.原主体?.id !== 会话)) {
+        throw new InvalidBody('请求不属于此会话；拒绝跨会话决议。', { missing: ['会话'] });
+      }
+      if (审阅指纹 !== null) {
+        const 当前 = (await this.人侧待决({ 项目, 会话 })).find(x => x.请求id === 指纹);
+        if (!审阅指纹 || !当前 || 当前.审阅指纹 !== 审阅指纹 || 当前.记录问题) {
+          throw new InvalidBody('审阅版本已变化或完整冻结记录不可用；请重新读取完整计划后决定。', { missing: ['审阅指纹'] });
+        }
+        if (!当前.可选项.includes(决定)) throw new InvalidBody(`请求当前「${当前.状态}」不可${决定}。`, { missing: ['决定'] });
+      }
+      if (!项) {
+        throw new InvalidBody(`没有这个介入请求：${指纹}。请求 id 就是请求指纹（「介入请求」账本行的 对象.id）。`, { missing: ['请求id'] });
+      }
+      const 允许 = 决定 === '撤销'
+        ? ['待放行', '已批准待重放', '占用未报告', '失败']
+        : ['待放行', '失败'];
+      if (收口态.has(项.状态) || !允许.includes(项.状态)) {
+        throw new Denied(
+          '法律 介入度 · 决议只对未收口的请求（v2 条目14/17）',
+          `介入请求 ${指纹} 当前是「${项.状态}」：${决定} 不能应用。收口态不复活，重复决议不产生第二份副作用。`,
+          {
+            requireAuthority: '主权者',
+            howToChange: '看「介入审批」清单里该请求的当前状态；要重新申请，由原申请者按原动作再发起一次（会得到新请求）。',
+            detail: { 请求id: 指纹, 状态: 项.状态, 收到决定: 决定 },
+          },
+        );
+      }
+      // 不盲批：记录读不到或摘要不符，决议直接拒绝（fail-closed）。
+      const 冻结 = await this.#读冻结(指纹, 项);
+      if (!冻结) {
+        throw new InvalidBody(`介入请求 ${指纹} 的完整冻结记录缺失：没有可预览的内容，不能由主权者拍板。`, { missing: ['请求记录'] });
+      }
+      // 主权者主体：本方法内部构造 —— 调用方传什么 subject/kind 都不参与。
+      const 主体 = { id: 'sovereign', kind: '主权者' };
+      const 行 = await this.audit.append({
+        动作: 决议动作,
+        主体,
+        对象: { id: 指纹, kind: '介入请求' },
+        依据: `人侧入口：${通道}（${认证}）· v2 条目14/17/20`,
+        结果: 决定,
+        项目: 项.项目,
+        详情: { 请求指纹: 指纹, 请求行: 项.请求行, 理由, 入口: { 通道, 认证 }, 请求记录: { 请求id: 指纹, 摘要: 冻结.内容摘要 } },
+      });
+      const 交互 = await this.记本人交互();
+      return { 请求id: 指纹, 决定, 决议行: { seq: 行.seq, hash: 行.hash }, 主体, 交互 };
     });
-    const 交互 = await this.记本人交互();
-    return { 请求id: 指纹, 决定, 决议行: { seq: 行.seq, hash: 行.hash }, 主体, 交互 };
   }
 
   /**
@@ -492,7 +507,7 @@ export class InterventionService {
       }
       let 冻结;
       try {
-        冻结 = await this.#读冻结(指纹);
+        冻结 = await this.#读冻结(指纹, 项, true);
       } catch (error) {
         return { ok: false, 状态: '记录不可用', 原因: error instanceof Error ? error.message : String(error) };
       }
@@ -625,19 +640,25 @@ export class InterventionService {
   /**
    * 人侧待决清单：在 `投影` 之上补**完整冻结请求**，供主权者批准前预览。
    * 只给人侧路由/设置页用（它是人类入口；账本投影与工作台不得拿它当公共读数）。
-   * @param {{项目?: string|null}} [spec]
+   * @param {{项目?: string|null, 会话?: string|null}} [spec]
    * @returns {Promise<object[]>}
    */
-  async 人侧待决({ 项目 = null } = {}) {
-    const 清单 = await this.投影({ 项目 });
+  async 人侧待决({ 项目 = null, 会话 = null } = {}) {
+    if (会话 !== null && (typeof 会话 !== 'string' || !会话.trim())) {
+      throw new InvalidBody('会话范围不能为空；不猜测当前会话。', { missing: ['会话'] });
+    }
+    const 清单 = (await this.投影({ 项目 })).filter(x => 会话 === null || x.原主体?.id === 会话);
     for (const 项 of 清单) {
       try {
-        const 记录 = await this.#读冻结(项.请求id);
+        const 记录 = await this.#读冻结(项.请求id, 项);
         if (记录) {
           项.完整请求 = 记录.入参;
           // 完整意图：每一步写什么、作用是什么（正文预览，不只 hash）。
           项.步骤 = 记录.步骤 ?? [];
           项.冻结于 = 记录.冻结于;
+          项.审阅指纹 = digest(canonical({ 内容摘要: 记录.内容摘要, 请求行: 项.请求行, 状态: 项.状态, 决议行: 项.决议行 }));
+        } else {
+          项.记录问题 = '完整冻结记录缺失，不能盲批。';
         }
       } catch (error) {
         项.记录问题 = error instanceof Error ? error.message : String(error);
@@ -731,7 +752,7 @@ export class InterventionService {
    * @param {string} 请求id
    * @returns {Promise<object|null>}
    */
-  async #读冻结(请求id) {
+  async #读冻结(请求id, 项, 需决议 = false) {
     const 记录 = await readJsonOrNull(this.#记录路径(请求id));
     if (!记录) return null;
     if (Number(记录.版本) !== 记录版本) {
@@ -740,6 +761,17 @@ export class InterventionService {
     const { 内容摘要, ...其余 } = 记录;
     if (typeof 内容摘要 !== 'string' || 内容摘要 !== digest(canonical(其余))) {
       throw new InvalidBody(`介入请求记录 ${请求id} 的内容摘要不符（疑似被改过）：拒绝把它当作冻结请求。`, { detail: { 请求id } });
+    }
+    // 自摘要只能证明文件内部一致，不能证明它仍是人批准的那份意图。
+    if (!项 || 记录.请求id !== 请求id || 记录.请求指纹 !== 请求id || 记录.内容摘要 !== 项.内容摘要
+      || 记录.主体?.id !== 项.原主体?.id || 记录.项目 !== 项.项目) {
+      throw new InvalidBody('完整冻结记录与请求账本不符，禁止展示、决定或重放。', { missing: ['请求记录'] });
+    }
+    if (this.请求指纹({ subject: 记录.主体, action: 记录.动作, args: 记录.入参, 目标: 记录.目标, 项目: 记录.项目 }) !== 请求id) {
+      throw new InvalidBody('冻结记录的规范请求指纹不符，禁止替换原请求。', { missing: ['请求指纹'] });
+    }
+    if (需决议 && (!项.决议内容摘要 || 记录.内容摘要 !== 项.决议内容摘要)) {
+      throw new InvalidBody('冻结记录与已批准决议的内容摘要不符，禁止重放。', { missing: ['决议摘要'] });
     }
     return 记录;
   }
@@ -773,6 +805,7 @@ export class InterventionService {
           状态: '待放行',
           决议: null,
           决议行: null,
+          决议内容摘要: null,
           占用行: null,
           完成行: null,
           失败原因: '',
@@ -784,6 +817,7 @@ export class InterventionService {
       if (动作 === 决议动作) {
         项.决议 = { 决定: 行.结果, 理由: 行.详情?.理由 ?? '', 入口: 行.详情?.入口 ?? null, 行: { seq: 行.seq, hash: 行.hash } };
         项.决议行 = { seq: 行.seq, hash: 行.hash };
+        项.决议内容摘要 = 行.详情?.请求记录?.摘要 ?? null;
         // 新一轮决定：清掉上一轮的消费痕迹（只影响状态推导，账本行永在）。
         项.占用行 = null;
         项.完成行 = null;
