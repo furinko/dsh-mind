@@ -233,6 +233,23 @@ export class Layout {
     return this.private(DIR.基础设施, DIR.任务图, assertPathSegment(project, '项目'), '.councils.lock');
   }
 
+  /** 逐任务冻结实验的私有目录；模型动作不接受自定义落点。 */
+  reviewExperimentDir(project) {
+    return this.private(DIR.基础设施, '复核实验', assertPathSegment(project, '项目'));
+  }
+
+  /** 许可、占用与收据的只增事件流。 */
+  reviewExperimentLog(project) { return join(this.reviewExperimentDir(project), 'events.jsonl'); }
+
+  /** 实验事件流独占锁；不得与任务锁重入。 */
+  reviewExperimentLock(project) { return join(this.reviewExperimentDir(project), '.events.lock'); }
+
+  /** 输出只用服务生成的运行id和封闭流名，不能传路径。 */
+  reviewExperimentOutput(project, run, stream) {
+    if (!['stdout', 'stderr'].includes(stream)) throw new Error('未知实验输出流');
+    return join(this.reviewExperimentDir(project), 'output', `${assertPathSegment(run, '运行id')}.${stream}.bin`);
+  }
+
   /** 消息总线目录：`消息总线/<项目>/`。 */
   busDir(project) {
     return this.private(DIR.基础设施, DIR.消息总线, assertPathSegment(project, '项目'));
