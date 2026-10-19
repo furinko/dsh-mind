@@ -1,0 +1,11 @@
+{
+  "scope": "A-loading-only",
+  "basis": "User replied 继续 to the immediately preceding single scoped A confirmation question in this conversation.",
+  "profile": "desktop",
+  "candidateCodeSha256": "46693109560950969b07c2677c13b06c9b52ab62c23f068259f17aa9a57107ca",
+  "candidateManifestHash": "621db2d7fa1b53a53145c3e90db8f9218fdf5262702230c2b0b6f2c6babffbea",
+  "allowed": ["Offline fixed-target temporary patch install", "Protected local backup", "User-assisted original application restart", "Loading-only verification", "Offline exact rollback"],
+  "notAllowed": ["B experiment execution", "Enable reviewExperiments", "Set reviewed=true", "Create or resume real members", "Enable long-term delegation or review exemption", "Kill current GUI", "Start another server", "Change PowerShell execution policy", "Request administrator privilege for ACL restore", "Rollback audit or task history"],
+  "currentState": "executor prepared; real App remains running; actual profile install/restart/rollback have not occurred",
+  "organizationTask": "task-用户在已明确A单项问题后答-继续-5n7g2"
+}

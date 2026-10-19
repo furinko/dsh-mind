@@ -1,0 +1,206 @@
+[
+  {
+    "path": "dsh/node_modules/@deepseek-ai/cordis-plugin-include/lib/index.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__cordis-plugin-include__lib__index.js",
+    "bytes": 8606,
+    "sha256": "ad5eaf3b80a8fd9945466486493a0d1a8e9590895bcde01e5673f3d07b4fd306"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__cordis-plugin-loader__lib__index.js",
+    "bytes": 24077,
+    "sha256": "638b9ad360e01236120772323f80a65570c4f3f42f4cfc6243330241025b6d72"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/cordis/lib/index.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__cordis__lib__index.js",
+    "bytes": 60361,
+    "sha256": "6a9394c0877ff45218818c6e815edd038f8057e1a1deb390a8d43ec81c57691e"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-app-boot__lib__index.js",
+    "bytes": 203572,
+    "sha256": "5135179ac810e4f626f32ec3bdc3293dc7d2028e8aa92e5e0c006f1a33b78e76"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-app-boot/lib/worker/profile-resolution-bootstrap.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-app-boot__lib__worker__profile-resolution-bootstrap.js",
+    "bytes": 37338,
+    "sha256": "ccc8086845b5bba49e5fe3eed55cc1ddc3e96fc5eda1fee035e9d6a730137f19"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-client-modules/lib/client.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-client-modules__lib__client.js",
+    "bytes": 46292,
+    "sha256": "426084f8672c26a469566a3f43c91a9b0d1dd73d0834028e553a6d0fa9cffa44"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-client-modules/lib/index.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-client-modules__lib__index.js",
+    "bytes": 42376,
+    "sha256": "d2d89461e1e7f15d6e24cd8ac3faaa2b931e066d5b5300f3c38aea29def38bcf"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-config-editor/lib/index.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-config-editor__lib__index.js",
+    "bytes": 7411,
+    "sha256": "373e05c8250d25dda983ccf6e214a55e3792a211d1a7b883affcd66de47b5bf8"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/index.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-plugin-manager__lib__index.js",
+    "bytes": 102561,
+    "sha256": "1b8bf9eb266d7b3b7f899175e3f435c89ed8baa8aabc677212759f8c6cd23132"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/typert.host.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-plugin-manager__lib__typert.host.js",
+    "bytes": 92797,
+    "sha256": "4d52452212ba28f6121adb4cceab5d4a64b0f9c09f3216edeffbf81e7717a238"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/typert.remote-client.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-plugin-manager__lib__typert.remote-client.js",
+    "bytes": 73676,
+    "sha256": "9254a2e61de2ac50c89d286c27ad4f7d52e74491eed4c019d4c7e99af678484a"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/types/build-approval.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-plugin-manager__lib__types__build-approval.js",
+    "bytes": 4142,
+    "sha256": "9b66793730ada549504c29d679150a42a6d11bc804c43e98bf47bcd1a27eee09"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/types/failure.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-plugin-manager__lib__types__failure.js",
+    "bytes": 990,
+    "sha256": "55d33bddce5a545f821902bbefa6a58053715227f2922d8d7451b6c5b7ab44a4"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/types/github-connection.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-plugin-manager__lib__types__github-connection.js",
+    "bytes": 3348,
+    "sha256": "0f3acd07fdbb50e7c73b147a242b69281c446d12a15004bd75cf078679936c30"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/types/index.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-plugin-manager__lib__types__index.js",
+    "bytes": 62809,
+    "sha256": "65273cda2f7e37210721af93d999569bd4467fcee4a6a54772e4fcdc08d8986a"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/types/install-failure.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-plugin-manager__lib__types__install-failure.js",
+    "bytes": 1675,
+    "sha256": "fc22ec581dbf3a04ebed6fa2bd9785298a8cd80873a999cb909e9a7e45f7627c"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/types/install-spec.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-plugin-manager__lib__types__install-spec.js",
+    "bytes": 6021,
+    "sha256": "ad8b136cdb7b710609fb4ca1e07dbeb05aba39a096205767f6fbdc352cfa323b"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/types/official-install-target.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-plugin-manager__lib__types__official-install-target.js",
+    "bytes": 3351,
+    "sha256": "2356f3c2b0182260de9351d83fc3bb6a982ea82c1d049c27408e24a009155fd2"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/types/operations.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-plugin-manager__lib__types__operations.js",
+    "bytes": 34646,
+    "sha256": "a9f2c4bbcfcad95eaac8878358e5aecb2532cfa4a7a9c6f981ff507fe3403f94"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/types/patch.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-plugin-manager__lib__types__patch.js",
+    "bytes": 4400,
+    "sha256": "8ef0de60d03c8cbfc132b8560118e1cb817345381f072c9cad215f2654702626"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/types/registry.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-plugin-manager__lib__types__registry.js",
+    "bytes": 5237,
+    "sha256": "9b8e2a742c989c4741dc4e5a2ba25a00b305d71b5eea90213d24a38ebb53ae5d"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/types/run-tree.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-plugin-manager__lib__types__run-tree.js",
+    "bytes": 2575,
+    "sha256": "3e65f458bd298dd2d3a8e3b48b30d771bb8e60a097bc2e6e924dad647f953e4b"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/types/tools.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-plugin-manager__lib__types__tools.js",
+    "bytes": 12206,
+    "sha256": "07438d86ae290c0add52f2dd3863ee128be8739d35dc4599208e1387028431bd"
+  },
+  {
+    "path": "dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/types/types.js",
+    "file": "official/dsh__node_modules__@deepseek-ai__dsh-plugin-manager__lib__types__types.js",
+    "bytes": 44,
+    "sha256": "01ae2a5b120382f9a648ced7ee8507493a134f216d100fc61600c6c9738235d2"
+  },
+  {
+    "path": "node_modules/@deepseek-ai/cordis/lib/index.js",
+    "file": "official/node_modules__@deepseek-ai__cordis__lib__index.js",
+    "bytes": 60361,
+    "sha256": "6a9394c0877ff45218818c6e815edd038f8057e1a1deb390a8d43ec81c57691e"
+  },
+  {
+    "path": "node_modules/@deepseek-ai/cordis/lib/types/context.js",
+    "file": "official/node_modules__@deepseek-ai__cordis__lib__types__context.js",
+    "bytes": 4342,
+    "sha256": "49ee341e27ee27b9a7e0d40e522ee0a706154f1519f80117b9499fa3f2ba4d24"
+  },
+  {
+    "path": "node_modules/@deepseek-ai/cordis/lib/types/events.js",
+    "file": "official/node_modules__@deepseek-ai__cordis__lib__types__events.js",
+    "bytes": 7886,
+    "sha256": "6e2c6fe9b9f2c634ee14804963050dd8fe603f5e289c088eb6ffdf8852e641cd"
+  },
+  {
+    "path": "node_modules/@deepseek-ai/cordis/lib/types/fiber.js",
+    "file": "official/node_modules__@deepseek-ai__cordis__lib__types__fiber.js",
+    "bytes": 24856,
+    "sha256": "bb7d54ff392861fce9dcac7e14e6503eddb9e64e35276a898fca5ceb622a1606"
+  },
+  {
+    "path": "node_modules/@deepseek-ai/cordis/lib/types/index.js",
+    "file": "official/node_modules__@deepseek-ai__cordis__lib__types__index.js",
+    "bytes": 719,
+    "sha256": "bd57618de816c3354c1d2d677284f9a957d44cea31c98d998a508039930e72a5"
+  },
+  {
+    "path": "node_modules/@deepseek-ai/cordis/lib/types/logger.js",
+    "file": "official/node_modules__@deepseek-ai__cordis__lib__types__logger.js",
+    "bytes": 7022,
+    "sha256": "b58f8113f52778f4d801b678b003489558968284a8daf94a9dbb72bb98656f73"
+  },
+  {
+    "path": "node_modules/@deepseek-ai/cordis/lib/types/reflect.js",
+    "file": "official/node_modules__@deepseek-ai__cordis__lib__types__reflect.js",
+    "bytes": 12655,
+    "sha256": "4276c47cab2b0a30eb39e2bf3587c56ea95766be0c8b357ab55bcdd328b2a754"
+  },
+  {
+    "path": "node_modules/@deepseek-ai/cordis/lib/types/registry.js",
+    "file": "official/node_modules__@deepseek-ai__cordis__lib__types__registry.js",
+    "bytes": 7963,
+    "sha256": "68c2e49991ad65c9bcbf1b739c3009fe0b339d4cbfebdd697d8a7e2df293d921"
+  },
+  {
+    "path": "node_modules/@deepseek-ai/cordis/lib/types/service.js",
+    "file": "official/node_modules__@deepseek-ai__cordis__lib__types__service.js",
+    "bytes": 4377,
+    "sha256": "8cab9e0cee4c69fd6fdb4e9ec4c27e24de6ec68ab202c3d501878de9a70c9fc7"
+  },
+  {
+    "path": "node_modules/@deepseek-ai/cordis/lib/types/utils.js",
+    "file": "official/node_modules__@deepseek-ai__cordis__lib__types__utils.js",
+    "bytes": 10270,
+    "sha256": "2b2a6a1a98df05e565264030af2c351e30540fc10ad0f6645ef76e8a8837b069"
+  }
+]

@@ -1,0 +1,20 @@
+{
+  "at": "2026-10-19T11:41:00.476Z",
+  "verified": true,
+  "protectedCounts": {
+    "original": 577,
+    "approval": 241,
+    "batch1": 240,
+    "r06": 242,
+    "batch2": 250
+  },
+  "profileUnchanged": true,
+  "privateBackupCreated": false,
+  "lockCreated": false,
+  "receiptUnchanged": true,
+  "realInstallation": false,
+  "realRestart": false,
+  "realRollback": false,
+  "independentReviewTicket": null,
+  "stage": "executor ready, user must close and restart original App"
+}
