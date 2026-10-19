@@ -188,9 +188,14 @@ export async function apply(ctx, config = {}) {
   // type AbortSignal"，本机重启后实测），官方工具链恒传 exec.signal——这里对齐同一契约。
   const 宿主服务 = (exec) => ({
     agent: exec?.agent ?? null,
+    get project() {
+      const cwd = 会话工作目录(exec, { ctx });
+      return cwd ? basename(cwd) : null; // 独立于 args.project；目录变化须在提交前重新核对。
+    },
     signal: exec?.signal ?? null,
     agentTeams: 取服务(ctx, 'agentTeams'),
     subagents: 取服务(ctx, 'subagents'),
+    agents: 取服务(ctx, 'agents'), // 既有委派维护须核对 exact live Agent，不能只相信同 id 对象。
     delegation,
   });
 

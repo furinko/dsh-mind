@@ -29,7 +29,7 @@ const OFFICIAL = 'Agent Teams is available in this session\n\nThe Team Lead and 
 const 授权配置 = { mode: 'lead-discretion', projects: [P], authorizationRef: 'test-grant' };
 
 /** 造假宿主服务束：记录调用、可控名册，不碰真实执行体。 */
-function 假宿主({ delegation = new DelegationPolicy(授权配置), agent = { id: 'lead-agent', session: { id: 'sess-lead' } }, team = [], kids = [] } = {}) {
+function 假宿主({ delegation = new DelegationPolicy(授权配置), agent = { id: LEAD.id, session: { id: LEAD.id, header: { id: LEAD.id } } }, team = [], kids = [] } = {}) {
   const calls = { spawn: [], teamSend: [], subSend: [], interrupts: [] };
   const agentTeams = {
     spawnTeammate: async (_caller, req) => { calls.spawn.push(req); return { member: { id: `team-${calls.spawn.length}`, name: req.name } }; },
@@ -48,7 +48,7 @@ function 假宿主({ delegation = new DelegationPolicy(授权配置), agent = { 
     drainChildren: async (_parent, ids) => { calls.interrupts.push(...ids); },
     listChildren: async () => kids,
   };
-  return { 宿主: { agent, agentTeams, subagents, delegation }, calls };
+  return { 宿主: { project: P, agent, agents: { get: id => id === agent.id ? agent : undefined }, agentTeams, subagents, delegation }, calls };
 }
 
 describe('DelegationPolicy · 授权真源', () => {
@@ -294,6 +294,12 @@ describe('member_* 动作 · 统一治理入口', () => {
       const { 宿主, calls } = 假宿主({ team: [{ id: 'team-1', role: 'teammate', name: 'member-x', status: 'inactive' }] });
       await org.registry.assign({ subject: LEAD, 岗位: '插件工程', 实例: 'team-1' });
       await org.registry.assign({ subject: LEAD, 岗位: '插件工程', 实例: 'sub-9' });
+      for (const 实例 of ['team-1', 'sub-9']) {
+        const node = await 建待发节点(org, `维护 ${实例}`);
+        await org.tasks.bind(node.id, { subject: LEAD, 项目: P, 实例, 岗位: '插件工程' });
+        await org.tasks.dispatch(node.id, { subject: LEAD, 项目: P });
+      }
+      宿主.subagents.listChildren = async () => [{ id: 'sub-9', mode: 'continuable' }];
       const r1 = await 执行(org, 宿主, { action: 'member_message', 实例: 'team-1', 内容: '进展如何' });
       assert.equal(r1.通道, 'team');
       assert.equal(calls.teamSend[0].target, 'member-x', '按实例 id 查真实名，不猜');
@@ -318,12 +324,15 @@ describe('member_* 动作 · 统一治理入口', () => {
         team: [{ id: 'team-1', role: 'teammate', name: 'member-x', status: 'inactive' }, { id: 'team-2', role: 'teammate', name: 'n2', status: 'running' }],
         kids: [{ id: 'kid-9', label: '普通子' }],
       });
+      const node = await 建待发节点(org);
+      await org.tasks.bind(node.id, { subject: LEAD, 项目: P, 实例: 'team-1', 岗位: '插件工程' });
+      await org.tasks.dispatch(node.id, { subject: LEAD, 项目: P });
       const r = await 执行(org, 宿主, { action: 'member_list' });
       const 按实例 = new Map(r.成员.map((m) => [m.实例, m]));
       assert.equal(按实例.get('team-1').来源, 'team');
       assert.equal(按实例.get('team-1').名, 'member-x');
-      assert.equal(按实例.get('team-2').来源, 'team');
-      assert.equal(按实例.get('kid-9').来源, 'subagent');
+      assert.equal(按实例.has('team-2'), false, '未登记未绑定的Team行不扩张组织读域');
+      assert.equal(按实例.has('kid-9'), false, '原生子目录不是任务登记，不自动入册');
       assert.ok(!按实例.has('member-a'), '封存实例不列');
       const s = await 执行(org, 宿主, { action: 'delegation_status' });
       assert.equal(s.数据.mode, 'lead-discretion');
