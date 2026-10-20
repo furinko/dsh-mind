@@ -1,0 +1,136 @@
+{
+  "homePatchObservation": {
+    "path": "C:\\Users\\kuro\\.dsh\\cordis.patch.yml",
+    "exists": false
+  },
+  "savedAtUtc": "2026-10-19T10:57:13.047Z",
+  "mode": "read-only files and managed environment, no PowerShell script execution",
+  "managed": {
+    "profile": "desktop",
+    "dir": "C:\\Users\\kuro\\.dsh\\profiles\\desktop",
+    "home": "C:\\Users\\kuro\\.dsh",
+    "webUrl": "http://127.0.0.1:8377"
+  },
+  "osObservation": {
+    "source": "Successful inline Get-NetTCPConnection/Get-CimInstance tool calls in this turn, before denied .ps1 attempt; not recollected by this script",
+    "listenerPid": 29128,
+    "parentPid": 28720,
+    "executable": "E:/DeepSeek_Harness_Desktop/DeepSeek Harness.exe",
+    "flagsChecked": [
+      "--profile",
+      "--profile-dir",
+      "--config",
+      "--home"
+    ],
+    "recognizedFlags": [],
+    "rawCommandLineSaved": false
+  },
+  "officialStatusObservation": {
+    "source": "mind.status in this turn",
+    "at": "2026-10-19T10:38:35Z",
+    "bootPid": 29128,
+    "latestProbeAt": "2026-10-19T08:04:19Z",
+    "latestProbeCode": "de758799dcfc345055e96a83f113d3dda9e622ae6c4e761cb44a3edc9a849b38",
+    "latestProbeIsHistorical": true,
+    "freshLoadedCodeIdentity": "未验（本轮未运行写快照的正式probe）"
+  },
+  "profileFiles": [
+    {
+      "name": "package.json",
+      "path": "C:\\Users\\kuro\\.dsh\\profiles\\desktop\\package.json",
+      "sha256": "884307e2afa8dca92399c973ef7ec94e4afff74ab0038fc06de2ed5cd72b9e74",
+      "bytes": 1168
+    },
+    {
+      "name": "cordis.yml",
+      "path": "C:\\Users\\kuro\\.dsh\\profiles\\desktop\\cordis.yml",
+      "sha256": "c300dcf2ebc5f02062d6591268d29d3db6fe45e0cb138f5467276fe2ba06076e",
+      "bytes": 223
+    },
+    {
+      "name": "cordis.patch.yml",
+      "path": "C:\\Users\\kuro\\.dsh\\profiles\\desktop\\cordis.patch.yml",
+      "sha256": "b8cfef916942be03d7f26f6c77f989f74cbb8db7e1c28f717831f0336946bc8e",
+      "bytes": 2543
+    }
+  ],
+  "mindDependency": "link:C:/Users/kuro/.dsh/repos/dsh-mind",
+  "mindBundleIncluded": true,
+  "mindAliasesInBundles": [
+    "dsh-mind"
+  ],
+  "links": [
+    {
+      "name": "dsh-mind",
+      "path": "C:\\Users\\kuro\\.dsh\\profiles\\desktop\\node_modules\\dsh-mind",
+      "isSymbolicLink": true,
+      "realPath": "C:\\Users\\kuro\\.dsh\\repos\\dsh-mind"
+    },
+    {
+      "name": "dsh-mind-kernel",
+      "path": "C:\\Users\\kuro\\.dsh\\profiles\\desktop\\node_modules\\dsh-mind-kernel",
+      "isSymbolicLink": true,
+      "realPath": "C:\\Users\\kuro\\.dsh\\repos\\dsh-mind\\components\\kernel"
+    },
+    {
+      "name": "dsh-mind-guard",
+      "path": "C:\\Users\\kuro\\.dsh\\profiles\\desktop\\node_modules\\dsh-mind-guard",
+      "isSymbolicLink": true,
+      "realPath": "C:\\Users\\kuro\\.dsh\\repos\\dsh-mind\\components\\guard"
+    },
+    {
+      "name": "dsh-mind-board",
+      "path": "C:\\Users\\kuro\\.dsh\\profiles\\desktop\\node_modules\\dsh-mind-board",
+      "isSymbolicLink": true,
+      "realPath": "C:\\Users\\kuro\\.dsh\\repos\\dsh-mind\\components\\board"
+    }
+  ],
+  "installedPackage": {
+    "root": "C:\\Users\\kuro\\.dsh\\repos\\dsh-mind",
+    "name": "dsh-mind",
+    "version": "1.1.0",
+    "exports": {
+      ".": "./lib/index.js",
+      "./kernel": "./components/kernel/lib/index.js",
+      "./guard": "./components/guard/lib/index.js",
+      "./client": "./components/board/lib/client.js",
+      "./cordis.patch.yml": "./cordis.patch.yml",
+      "./package.json": "./package.json",
+      "./icon.svg": "./icon.svg"
+    },
+    "bundle": {
+      "path": "C:\\Users\\kuro\\.dsh\\repos\\dsh-mind\\cordis.patch.yml",
+      "sha256": "a674bb3506293707aea628b9689e60d90b02939b9931001d5c24491148738816",
+      "expectedEntryIds": [
+        "dsh-mind-kernel",
+        "dsh-mind-guard",
+        "dsh-mind-board"
+      ],
+      "hasAllExpectedIds": true
+    }
+  },
+  "profilePatchMentionsMind": false,
+  "diskOnlyCodeIdentity": {
+    "mechanism": "dsh-mind@1.1.0+sha256:de758799dcfc345055e96a83f113d3dda9e622ae6c4e761cb44a3edc9a849b38",
+    "resources": 43,
+    "notRunningProcessEvidence": true
+  },
+  "frozenCandidate": {
+    "root": "C:\\Users\\kuro\\.dsh\\repos\\_mind_review_channel_20261019\\batch2\\product\\dsh-mind",
+    "files": 250,
+    "mechanism": "dsh-mind@1.1.0+sha256:46693109560950969b07c2677c13b06c9b52ab62c23f068259f17aa9a57107ca",
+    "resources": 48,
+    "verified": true
+  },
+  "executionPolicyObservation": {
+    "source": "Get-ExecutionPolicy -List and Get-ExecutionPolicy successful inline calls",
+    "effective": "Restricted",
+    "scopes": "MachinePolicy/UserPolicy/Process/CurrentUser/LocalMachine all Undefined",
+    "ps1AttemptDenied": true,
+    "ps1BodyExecuted": false,
+    "changedPolicy": false,
+    "bypassOrIexUsed": false
+  },
+  "deploymentPerformed": false,
+  "realMemberCreatedOrResumed": false
+}

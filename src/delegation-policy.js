@@ -86,6 +86,19 @@ export class DelegationPolicy {
   }
 
   /**
+   * 维护已登记委派不授予创建权；归属、任务与宿主父链由唯一维护判据继续核实。
+   * @param {{subject:object,project:string}} spec
+   * @returns {object} 维护准入快照（不改变 authorized 创建权读数）。
+   * @throws {Denied|Fault} 非 Lead、组件关闭或项目键不合法时拒绝。
+   */
+  authorizeMaintenance({ subject, project }) {
+    if (this.closed) throw new Fault('DELEGATION_DISPOSED', '调度组件已卸载或授权正在重载，不接受既有委派维护。');
+    if (subject?.kind !== 'Lead') throw new Denied('组织调度 · 仅 Lead', '仅真实 Lead 可维护已有委派。', { howToChange: '交回派发该实例的 Lead；不得自报父身份。' });
+    const state = this.status(assertPathSegment(project, '维护项目'));
+    return { ...state, maintenanceOnly: true };
+  }
+
+  /**
    * 受授权项目的创建只走组织适配入口，避免裸工具绕过登记与任务装载。
    * @param {{name?: string}} exec
    * @param {{subject: object, project: string}} spec

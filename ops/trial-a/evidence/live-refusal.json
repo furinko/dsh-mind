@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-19T11:32:30.519Z",
+  "command": "trial-a.mjs install",
+  "expectedExit": 1,
+  "actualExit": 1,
+  "code": "APP_STILL_RUNNING",
+  "profileFilesUnchanged": true,
+  "backupCreated": false,
+  "lockCreated": false,
+  "appKilled": false,
+  "deployed": false
+}

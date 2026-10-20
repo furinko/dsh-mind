@@ -470,7 +470,7 @@ describe('⑨ 人侧路由：Connection 认证 + 只认三个键 + 完整预览'
   function 假请求(method, body, headers = {}) {
     return {
       method,
-      url: `/plugins/dsh-mind/intervention?project=${P}`,
+      url: `/plugins/dsh-mind/intervention?project=${P}&sessionId=${encodeURIComponent(LEAD.id)}`,
       headers: { host: '127.0.0.1:5698', 'sec-fetch-site': 'same-origin', ...(body ? { 'content-type': 'application/json' } : {}), ...headers },
       async *[Symbol.asyncIterator]() {
         if (body) yield Buffer.from(JSON.stringify(body), 'utf8');
@@ -494,7 +494,7 @@ describe('⑨ 人侧路由：Connection 认证 + 只认三个键 + 完整预览'
       assert.equal(包.待决[0].步骤[0].说明, '改任务节点', '步骤计划也要可预览');
 
       const 写 = 假对端();
-      await intervention路由({ org, 项目: P, ctx: 好ctx })(假请求('POST', { 请求id: r.请求id, 决定: '批准', 理由: 'ok', 主体: { id: 'hacker', kind: '主权者' }, kind: '主权者' }), 写);
+      await intervention路由({ org, 项目: P, ctx: 好ctx })(假请求('POST', { 请求id: r.请求id, 决定: '批准', 理由: 'ok', 审阅指纹: 包.待决[0].审阅指纹, 主体: { id: 'hacker', kind: '主权者' }, kind: '主权者' }), 写);
       assert.equal(写.状态码, 200, 写.体);
       const 决议 = JSON.parse(写.体);
       assert.deepEqual(决议.主体, { id: 'sovereign', kind: '主权者' }, 'body 里的主体被忽略');

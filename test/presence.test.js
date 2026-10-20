@@ -82,6 +82,11 @@ const 冻结动作表 = [
   // 提名机制（review_nominate）随复核者降级移除：复核员是普通岗位卡，
   // 由 Lead 按任务 member_spawn 起实例。
   'review_exempt',
+  // 用户本轮选择的受限冻结实验三入口：不写部署配置，不给模型任意命令。
+  // 独立硬编码预期保留；不引用ACTIONS生成，否则会把新增动作门改成自证。
+  'review_experiment_allow',
+  'review_experiment_run',
+  'review_experiment_read',
   'memory_write',
   'memory_query',
   'memory_lineage',

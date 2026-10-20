@@ -3166,8 +3166,6 @@ window.__ModuleLoader__.load({
     var 投影store = { 快照: EMPTY, 订阅者: [] };
     var 设置store = { 快照: { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' }, 订阅者: [] };
     /** 待批准清单（v2 条目14/17）：状态机投影由域服务给，前端只读、只发批准/拒绝/撤销。 */
-    var 审批页已访问 = false;
-    var 审批store = { 快照: { phase: 'reading', 清单: [], error: '', 忙: '', 提示: '' }, 订阅者: [] };
     /**
      * 会审折叠态（优化批③）：看板唯一的 UI 状态——照 `投影store` 同款「模块级 store + 组件订阅」，
      * **不挂 useEffect**（设计债⑩：这个宿主给插件的 effect 可能是空实现，取数如此，UI 状态也如此）。
@@ -3206,7 +3204,6 @@ window.__ModuleLoader__.load({
     var 投影序号 = 序号器();
     var 设置序号 = 序号器();
     var 调度序号 = 序号器();
-    var 审批序号 = 序号器();
     /**
      * 投影变更签名（2026-10-14 审查 P2-23）：轮询 3s 一拍，**数据没变就不重渲染**——
      * 修前每拍都全量 发通知（7 页 reconcile）+ writeCache 大 JSON.stringify，投影变大后
@@ -3740,64 +3737,144 @@ window.__ModuleLoader__.load({
       });
     }
 
-    /**
-     * 拉一次「待批准」清单（设置页打开后才轮询）。响应里的 `待决` 是域服务的状态机投影：
-     * 状态、完整请求、每一步预览都在里面；**只读**，决议走 `决定审批`。
-     */
-    function 刷新审批() {
-      if (!审批页已访问) return Promise.resolve();
-      var ctx = activeCtx;
-      var 号 = 审批序号.取号();
-      var 旧 = 审批store.快照;
-      return new Promise(function (resolve) {
-        var session = { id: '' };
-        try { session = resolveSessionId(ctx); } catch (error) { session = { id: '' }; }
-        if (!session.id) { resolve(); return; }
-        runCommand(ctx, session.id, { method: 'GET', path: ROUTE_INTERVENTION }).then(function (out) {
-          if (!审批序号.该用(号)) { resolve(); return; }
-          if (!out.ok) {
-            发通知(审批store, Object.assign({}, 旧, { phase: 'error', 清单: [], error: out.error, 忙: '' }));
-            resolve();
-            return;
-          }
-          发通知(审批store, Object.assign({}, 旧, {
-            phase: 'live',
-            清单: arr(obj(out.value) && out.value.待决),
-            error: '',
-            忙: '',
-          }));
-          resolve();
-        }, function (error) {
-          if (!审批序号.该用(号)) { resolve(); return; }
-          发通知(审批store, Object.assign({}, 旧, { phase: 'error', 清单: [], error: '读取待批准失败：' + line(error && error.message, String(error)), 忙: '' }));
-          resolve();
+    /** 官方根席位只从实际可见引用取会话：主视图mainView、嵌入侧聊sidebarChat；不把后台持有者当正在看的会话。 */
+    function 审批覆盖层(props) {
+      var useSessions = props && props.useSessions;
+      var state = typeof useSessions === 'function' ? useSessions(function (value) { return value; }) : null;
+      var ids = [];
+      var problem = '';
+      if (!state || state.phase !== 'ready' || !Array.isArray(state.ids) || !obj(state.byId)) {
+        problem = '介入审批不可用：所属会话目录尚未就绪，不能猜测归属。';
+      } else {
+        state.ids.forEach(function (id) {
+          var row = state.byId[id];
+          var refs = row && obj(row.retainedBy);
+          if (typeof id === 'string' && id && row && row.id === id && refs
+            && (Number(refs.mainView) > 0 || Number(refs.sidebarChat) > 0) && ids.indexOf(id) < 0) ids.push(id);
         });
-      });
+        if (!ids.length) problem = '介入审批不可用：缺少所属会话，未选择会话或没有可见会话引用；不会借用其他会话。';
+      }
+      return h('aside', { 'data-dshmind': 'approval-overlay', style: { position: 'fixed', zIndex: 1000,
+        top: 'var(--dsh-frame-overlay-top, 20px)', right: '20px', width: 'min(760px, calc(100vw - 40px))',
+        maxHeight: 'calc(100vh - 80px)', overflow: 'auto', pointerEvents: 'none' } },
+        problem ? h('div', { role: 'status', 'data-dshmind': 'approval-unavailable', style: { padding: '8px', background: 'var(--dsw-alias-bg-base, #fff)', color: 'var(--dsw-alias-label-primary, #222)', pointerEvents: 'auto' } }, problem)
+          : ids.map(function (id) { return h(会话审批, { key: id, sessionId: id }); }));
     }
 
-    /** 主权者决策（批准 / 拒绝 / 撤销）：走同源路由 → `intervention` 域服务。 */
-    function 决定审批(请求id, 决定) {
-      var ctx = activeCtx;
-      var session = { id: '' };
-      try { session = resolveSessionId(ctx); } catch (error) { session = { id: '' }; }
-      if (!session.id) {
-        发通知(审批store, Object.assign({}, 审批store.快照, { 提示: '没写进去：定位不到会话 id。' }));
-        return;
-      }
-      发通知(审批store, Object.assign({}, 审批store.快照, { 忙: 请求id, 提示: '' }));
-      runCommand(ctx, session.id, { method: 'POST', path: ROUTE_INTERVENTION, body: { 请求id: 请求id, 决定: 决定 } }).then(function (out) {
-        if (!out.ok) {
-          发通知(审批store, Object.assign({}, 审批store.快照, { 忙: '', 提示: '没写进去：宿主拒绝（' + out.error + '）' }));
-          return;
+    /** 所属会话的人侧入口；只消费 intervention 的持久请求，不新建第二套审批状态机。 */
+    function 会话审批(props) {
+      var sessionId = line(props && props.sessionId, '');
+      var snapState = useState({ sessionId: '', phase: 'reading', 清单: [], error: '', 提示: '', 忙: '' });
+      var setSnap = snapState[1];
+      var life = useState(function () { return { active: false, seq: 0, busy: false, refresh: null, sessionId: '' }; })[0];
+      var dismiss = useState('');
+      var snap = snapState[0].sessionId === sessionId ? snapState[0] : { phase: 'reading', 清单: [], error: '', 提示: '', 忙: '' };
+      var route = ROUTE_INTERVENTION + '?sessionId=' + encodeURIComponent(sessionId);
+      useEffect(function () {
+        life.active = true;
+        life.sessionId = sessionId;
+        life.busy = false;
+        var epoch = ++life.seq;
+        var inFlight = null;
+        function alive() { return life.active && life.seq === epoch && life.sessionId === sessionId; }
+        function fail(message) {
+          if (alive()) setSnap(function (old) { return Object.assign({}, old, { sessionId: sessionId, phase: 'error', error: message }); });
         }
-        发通知(审批store, Object.assign({}, 审批store.快照, { 忙: '', 提示: '已提交「' + 决定 + '」；状态以回读为准。' }));
-        刷新审批();
-      });
+        function read(force) {
+          if (!alive()) return Promise.resolve(null);
+          if (!sessionId) { fail('缺少所属会话 sessionId；不会猜测其他会话。'); return Promise.resolve(null); }
+          // poll复用同一在途读取；人侧POST后的强制回读必须等旧读结束再新发，不能拿旧快照确认。
+          if (inFlight) return force === true ? inFlight.then(function () { return read(true); }) : inFlight;
+          inFlight = runCommand(activeCtx, sessionId, { method: 'GET', path: route }).then(function (out) {
+            if (!alive()) return null;
+            var value = obj(out.value);
+            if (!out.ok) { fail('读取会话审批失败：' + out.error); return null; }
+            if (!value || value.会话 !== sessionId || !Array.isArray(value.待决)
+              || value.待决.some(function (item) { return !item || !item.原主体 || item.原主体.id !== sessionId; })) {
+              fail('宿主返回的会话审批范围不符；拒绝展示其他会话请求。'); return null;
+            }
+            setSnap(function (old) { return Object.assign({}, old, { sessionId: sessionId, phase: 'live', 清单: value.待决, error: '' }); });
+            return value.待决;
+          }).then(function (value) { inFlight = null; return value; });
+          return inFlight;
+        }
+        life.refresh = read;
+        read();
+        var set = 取计时器('setInterval');
+        var clear = 取计时器('clearInterval');
+        var timer = null;
+        if (set && clear && sessionId) timer = set(read, POLL_MS);
+        else if (sessionId) fail('会话审批轮询计时器不可用；请使用重新读取，不能保证新请求主动显示。');
+        return function () {
+          if (timer !== null && clear) clear(timer);
+          if (life.seq === epoch) { life.active = false; life.seq += 1; life.refresh = null; }
+        };
+      }, [sessionId]);
+
+      function decide(item, decision) {
+        if (!life.active || life.sessionId !== sessionId || life.busy || snap.phase !== 'live') return;
+        if (!item || !item.审阅指纹 || item.记录问题 || !obj(item.完整请求) || !Array.isArray(item.步骤) || !item.步骤.length) {
+          setSnap(function (old) { return Object.assign({}, old, { 提示: '完整冻结计划或审阅指纹不可用，不能盲批。' }); }); return;
+        }
+        life.busy = true;
+        var epoch = life.seq;
+        setSnap(function (old) { return Object.assign({}, old, { 忙: item.请求id, 提示: '' }); });
+        runCommand(activeCtx, sessionId, { method: 'POST', path: route, body: { 请求id: item.请求id, 决定: decision, 审阅指纹: item.审阅指纹 } }).then(function (out) {
+          if (!life.active || life.seq !== epoch) return;
+          var reply = obj(out.value);
+          var accepted = out.ok && reply && reply.请求id === item.请求id && reply.决定 === decision;
+          return life.refresh(true).then(function (items) {
+            if (!life.active || life.seq !== epoch) return;
+            var actual = items && items.find(function (row) { return row.请求id === item.请求id; });
+            var expected = decision === '批准' ? '已批准待重放' : decision === '拒绝' ? '已拒绝' : '已撤销';
+            var confirmed = accepted && actual && actual.状态 === expected;
+            life.busy = false;
+            setSnap(function (old) { return Object.assign({}, old, { 忙: '', 提示: confirmed
+              ? '已回读确认「' + expected + '」。批准不会执行原动作，仍需原申请者重放冻结请求。'
+              : '决议未确认：' + (out.ok ? '回执或独立回读不匹配，请核查当前状态后再决定。' : out.error) }); });
+          });
+        });
+      }
+
+      var rows = arr(snap.清单);
+      var openRows = rows.filter(function (item) { return ['已完成', '已拒绝', '已撤销', '已失效'].indexOf(item.状态) < 0; });
+      var signature = sessionId + '|' + (snap.error || openRows.map(function (item) { return item.请求id + ':' + item.审阅指纹; }).join('|'));
+      var visible = dismiss[0] !== signature && (openRows.length > 0 || snap.phase === 'error' || !!snap.提示);
+      var labelId = 'dshmind-approval-' + sessionId;
+      return h('div', { 'data-dshmind': 'conversation-approval', 'data-session-id': sessionId, style: { pointerEvents: 'auto' } }, [
+        h('p', { key: 'scope', style: { margin: '4px 0', fontSize: '12px' } }, '所属会话：' + sessionId),
+        h('button', { key: 'open', type: 'button', className: 'dshmind-set__btn', onClick: function () { dismiss[1](''); if (life.refresh) life.refresh(); } },
+          '介入审批 · ' + (snap.phase === 'error' ? '读取失败' : snap.phase === 'reading' ? '读取中' : String(openRows.length))),
+        visible ? h('section', { key: 'dialog', role: 'dialog', 'aria-labelledby': labelId, 'data-dshmind': 'approval-dialog',
+          style: { position: 'relative', zIndex: 1, width: '100%', maxHeight: 'min(560px, calc(100vh - 160px))', overflow: 'auto', padding: '20px', borderRadius: '12px', border: '1px solid var(--dsw-alias-border-l2, #888)', background: 'var(--dsw-alias-bg-base, #fff)', color: 'var(--dsw-alias-label-primary, #222)', boxShadow: '0 12px 40px #0004', textAlign: 'left', whiteSpace: 'normal' } }, [
+          h('h2', { key: 'h', id: labelId }, '会话待批准'),
+          h('p', { key: 'session' }, '所属会话：' + (sessionId || '缺失（不猜归属）')),
+          h('p', { key: 'boundary' }, '先审阅全部冻结参数与每一步计划。批准仅解除介入门，不替申请者执行；硬拒、版本、复核与原申请者校验仍生效。'),
+          snap.error ? h('p', { key: 'error', role: 'alert' }, snap.error) : null,
+          snap.提示 ? h('p', { key: 'tip', role: 'status' }, snap.提示) : null,
+          rows.map(function (item) {
+            var complete = !item.记录问题 && obj(item.完整请求) && Array.isArray(item.步骤) && item.步骤.length && item.审阅指纹;
+            return h('article', { key: item.请求id, 'data-request-id': item.请求id }, [
+              h('h3', { key: 'head' }, '项目 ' + line(item.项目, '未声明') + ' · ' + item.状态),
+              h('p', { key: 'owner' }, '申请者 ' + line(item.原主体 && item.原主体.id, '?') + ' · 动作 ' + line(item.动作, '?') + ' · 档位 ' + line(item.档位, '?')),
+              h('pre', { key: 'request', style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: '13px' } }, JSON.stringify({ 请求id: item.请求id, 项目: item.项目, 原主体: item.原主体, 目标: item.目标, 冻结于: item.冻结于, 内容摘要: item.内容摘要, 审阅指纹: item.审阅指纹, 完整请求: item.完整请求, 步骤: item.步骤 }, null, 2)),
+              !complete ? h('p', { key: 'problem', role: 'alert' }, item.记录问题 || '完整冻结计划不可用，禁止盲批。') : null,
+              item.失败原因 ? h('p', { key: 'failure' }, '原执行失败：' + item.失败原因) : null,
+              arr(item.可选项).map(function (decision) {
+                return h('button', { key: decision, type: 'button', className: 'dshmind-set__btn', disabled: !!snap.忙 || snap.phase !== 'live' || !complete,
+                  onClick: function () { decide(item, decision); } }, decision);
+              }),
+            ]);
+          }),
+          h('button', { key: 'refresh', type: 'button', className: 'dshmind-set__btn', onClick: function () { if (life.refresh) life.refresh(); } }, '重新读取'),
+          h('button', { key: 'close', type: 'button', className: 'dshmind-set__btn', onClick: function () { dismiss[1](signature); } }, '稍后处理'),
+        ]) : null,
+      ]);
     }
 
     /** 立刻拉一次（两个页面都刷）。给"手动刷新"按钮与 effect 增强用。 */
     function 立即刷新() {
-      return Promise.all([刷新投影(), 刷新设置(), 刷新调度(), 刷新审批()]);
+      return Promise.all([刷新投影(), 刷新设置(), 刷新调度()]);
     }
 
     /**
@@ -4576,13 +4653,10 @@ window.__ModuleLoader__.load({
       // ⚠️ 读数来自**模块级 store**（由 `apply` 的裸 setInterval 轮询喂），**不来自 effect**：
       // 这个宿主的 `useEffect` 很可能是空实现 ⇒ 挂在它上面的取数永远不会跑。
       var snap = useStore(设置store);
-      var 审批快照 = useStore(审批store);
       // ══ 调度授权区：订阅 / 草稿 / 保存链 ══
       调度页已访问 = true;
-      审批页已访问 = true;
       var 调度快照 = useStore(调度store);
       useEffect(function () { 刷新调度(); }, []);
-      useEffect(function () { 刷新审批(); }, []);
       var 调度表态 = useState({ mode: 'explicit-user', projects: '', authorizationRef: '', fingerprint: '' });
       var 调度表 = 调度表态[0];
       var 设调度表 = 调度表态[1];
@@ -4995,67 +5069,25 @@ window.__ModuleLoader__.load({
         return [未接入块, 表单块, 操作块, 提示块, 坏值块, 读数块].filter(Boolean);
       }
 
-      /** 一条待批准请求：完整请求正文 + 每一步真正要写什么的预览 + 决议按钮。 */
-      function 审批卡(项) {
-        var 可批 = 项.状态 === '待放行' || 项.状态 === '失败';
-        var 可撤 = 项.状态 === '已批准待重放' || 项.状态 === '占用未报告';
-        var 忙 = 审批快照.忙 === 项.请求id;
-        var 步骤串 = arr(项.步骤).map(function (步) {
-          var 目标 = stepTargetText(步);
-          return '第 ' + 步.序 + ' 步 · ' + line(步.动作, '?') + ' ' + 目标
-            + (line(步.说明, '') ? ' · ' + line(步.说明, '') : '')
-            + (步.预览 ? ' · ' + JSON.stringify(步.预览) : '');
-        }).join('\n');
-        return h('div', { key: 'iv-' + 项.请求id, className: 'dshmind-set__rows' }, [
-          h('div', { key: 'head', className: 'dshmind-set__hint' },
-            '状态「' + line(项.状态, '?') + '」 · 主体 ' + line(obj(项.原主体) && 项.原主体.id, '?')
-            + ' · 动作 ' + line(项.动作, '?') + ' · 目标 ' + stepTargetText({ 目标: 项.目标 })
-            + ' · 档位 ' + line(项.档位, '?')),
-          h('code', { key: 'id', className: 'dshmind-set__mono' }, '请求 ' + 项.请求id),
-          h('pre', { key: 'body', className: 'dshmind-set__mono' }, JSON.stringify(项.完整请求 || {}, null, 2)),
-          步骤串 ? h('pre', { key: 'steps', className: 'dshmind-set__mono' }, 步骤串) : null,
-          (可批 || 可撤) ? h('div', { key: 'act', className: 'dshmind-set__actions' }, [
-            可批 ? h('button', { key: 'ok', type: 'button', className: 'dshmind-set__btn dshmind-set__btn--primary', disabled: 忙, onClick: function () { 决定审批(项.请求id, '批准'); } }, 忙 ? '提交中…' : '批准') : null,
-            可批 ? h('button', { key: 'no', type: 'button', className: 'dshmind-set__btn', disabled: 忙, onClick: function () { 决定审批(项.请求id, '拒绝'); } }, '拒绝') : null,
-            可撤 ? h('button', { key: 'rev', type: 'button', className: 'dshmind-set__btn', disabled: 忙, onClick: function () { 决定审批(项.请求id, '撤销'); } }, '撤销') : null,
-          ].filter(Boolean)) : null,
-        ]);
-      }
-
-      /** 步骤/目标的统一展示：新对象不显示「/null」，也不假装有 id。 */
-      function stepTargetText(步) {
-        var 目标 = obj(步 && 步.目标) || {};
-        return line(目标.kind, '?') + (目标.新 === true ? '（新对象）' : '/' + line(目标.id, '?'));
-      }
-
-      var 待审块 = h('section', { key: 'approvals', 'data-dshmind': 'intervention-approvals', className: 'dshmind-set__section' }, [
-        h('h3', { key: 'h', className: 'dshmind-set__subtitle' }, '待批准（主权者逐请求放行）'),
-        h('p', { key: 'lede', className: 'dshmind-set__lede' }, '预审/审批档拦下的写停在这里：先看完整请求与每一步真正要写什么，再批准/拒绝。批准只解除介入度这一道门；硬拒/失联/复核只读照判。'),
-        h('p', { key: 'hint', className: 'dshmind-set__hint' }, '完整正文只在私有请求记录里（账本只留摘要与内容指纹）；页面上看到的就是主权者批准前应看的全部内容。'),
-        ...(arr(审批快照.清单).length
-          ? arr(审批快照.清单).map(function (项) { return 审批卡(项); })
-          : [h('div', { key: 'empty', className: 'dshmind-set__notice' }, 审批快照.phase === 'reading' ? '正在读取待批准…' : (审批快照.error ? '读取待批准失败：' + 审批快照.error : '当前没有待批准的写。'))]),
-        审批快照.提示 ? h('div', { key: 'tip', className: 'dshmind-set__notice' }, 审批快照.提示) : null,
-      ].filter(Boolean));
-
       return h('section', { className: 'dshmind-set__' }, [
         h('h2', { key: 'h', className: 'dshmind-set__title' }, '心智'),
         h('p', { key: 's', className: 'dshmind-set__lede' },
           '失联限制与响应期限：写入本部署的私有设置，随时可关；生效值层序：私有 ＞ 出厂 ＞ 内置兜底。'),
         失联保险区(),
         调度块,
-        未接入 ? null : 待审块,
+        h('p', { key: 'approval-location', className: 'dshmind-set__hint' }, '逐请求批准/拒绝已迁至请求所属会话，收到新请求会主动展开；本页仅管理配置。'),
         页脚块,
       ].filter(Boolean));
     }
 
     // ── 插件体 ──────────────────────────────────────────────────────────────
     /**
-     * 三处注册，两种东西：
+     * 会话入口独立于只读看板与设置配置，不能随设置页是否访问而启停：
      *  1. `main`（keyed，声明方 `@deepseek-ai/dsh-client-ui-layout`）—— 看板面板本体；
      *  2. `sidebar.panellist`（list，声明方 `@deepseek-ai/dsh-client-ui-sidebar`）—— 侧边栏里的面板入口；
      *  3. `settings.section`（list，声明方 `@deepseek-ai/dsh-client-ui-settings-*`）—— 官方设置页里的
      *     「心智设置」分区。
+     *  4. `shell.overlay` —— 脱离会话header/composer的生命周期，按官方可见引用呈现所属会话审批。
      *
      * ⚠️ **看板面板 ≠ 设置页**，这是两件被分开的东西，别再合并回去：
      * 面板是常驻运维视图，§9 工作台只读 ⇒ 面板里**一个写控件都没有**；
@@ -5107,6 +5139,9 @@ window.__ModuleLoader__.load({
           // 标签由侧边栏渲染（`span.panelTitle`），我这份只在窄轨的工具提示里用到。
           label: function () { return '心智 · 数字组织'; },
         }, MindGlyph);
+      });
+      登记('shell.overlay', function () {
+        return slots.register({ name: 'shell.overlay', id: 'dsh-mind-intervention', order: 60 }, 审批覆盖层);
       });
       登记('settings.section', function () {
         return slots.register({

@@ -435,14 +435,15 @@ export function ping路由({ org, ctx }) {
  * 三条纪律：
  *  1. **读也不退回无头通道**：清单里有「谁要对什么做什么」，与调度授权同一档，
  *     要求宿主 Connection 认证（比 presence 的只读投影更严——那是公开读数，这是待决事项）。
- *  2. **body 只认三个键**：`{请求id, 决定, 理由}`。任何 subject/kind/role/面 都不进调用；
+ *  2. **body 只认决议与审阅版本**：`{请求id, 决定, 理由, 审阅指纹}`；所属会话来自 URL 范围。
+ *     任何 subject/kind/role/面 都不进调用；
  *     主权者主体由 `org.intervention` 内部构造（模型参数永远造不出这个身份）。
  *  3. **不代理任意动作**：它只做「读清单 / 落决议」，不跑原写动作；重放由原申请者
  *     带 `审批引用` 发起，审批不能替申请人执行。
  *
  * @param {{ org: object, 项目: string, ctx?: object }} spec
  */
-export function intervention路由({ org, 项目, ctx }) {
+export function intervention路由({ org, ctx }) {
   return async function intervention端点(req, res) {
     const 方法 = String(req?.method ?? 'GET').toUpperCase();
     if (!['GET', 'POST', 'PUT'].includes(方法)) return 回方法不对(res, 方法, 'GET（读）或 POST（写）');
@@ -453,7 +454,7 @@ export function intervention路由({ org, 项目, ctx }) {
     }
     const rejection = connection.requestRejection(req);
     if (rejection !== undefined) {
-      return 回JSON(res, rejection === 401 ? 401 : 403, { 成功: false, 结果: '拒绝', 理由: '宿主拒绝此请求：介入审批需要已认证的同源浏览器设置入口。' });
+      return 回JSON(res, rejection === 401 ? 401 : 403, { 成功: false, 结果: '拒绝', 理由: '宿主拒绝此请求：介入审批需要已认证的同源会话入口。' });
     }
     if (方法 === 'GET') {
       const 判读 = 读栅栏(req);
@@ -461,8 +462,11 @@ export function intervention路由({ org, 项目, ctx }) {
         记同源拒绝('intervention·读', req, 判读.为什么);
         return 回拒绝(res, 403, '读取被拒：' + 判读.为什么 + '。收到：' + 指纹串(req), '从本机页面访问该端点。');
       }
+      const 会话 = new URL(req.url, 'http://localhost').searchParams.get('sessionId');
+      if (!会话 || !会话.trim()) return 回JSON(res, 400, { 成功: false, 理由: '缺少所属会话 sessionId；不会返回默认项目或其他会话的请求。' });
       try {
-        回JSON(res, 200, { 成功: true, action: 'intervention', 项目: 取项目(req, 项目), 待决: await org.intervention.人侧待决({ 项目: 取项目(req, 项目) }) });
+        // 同一会话可切换项目；项目取冻结请求本身，不按部署默认项目漏掉请求。
+        回JSON(res, 200, { 成功: true, action: 'intervention', 会话, 待决: await org.intervention.人侧待决({ 项目: null, 会话 }) });
       } catch (error) {
         回失败(res, error);
       }
@@ -491,8 +495,11 @@ export function intervention路由({ org, 项目, ctx }) {
       回JSON(res, 400, { 成功: false, 结果: '结构不合规', 理由: '请求体必须是一个 JSON 对象，例如 {"请求id":"…","决定":"批准"}。', 缺什么: [] });
       return;
     }
-    // 只认三个键：body 里别的字段一律不进调用（主体由服务内部构造，不接受声明）。
-    const 参数 = {};
+    const 会话 = new URL(req.url, 'http://localhost').searchParams.get('sessionId');
+    if (!会话 || !会话.trim()) return 回JSON(res, 400, { 成功: false, 理由: '缺少所属会话 sessionId；不能决定其他会话的请求。' });
+    if (typeof 载荷.审阅指纹 !== 'string' || !载荷.审阅指纹) return 回JSON(res, 400, { 成功: false, 理由: '缺少审阅指纹；先在所属会话读取完整冻结计划。' });
+    // 只收决议与预览版本，不接受任何主体声明，也不代理原动作。
+    const 参数 = { 会话, 审阅指纹: 载荷.审阅指纹 };
     if (Object.hasOwn(载荷, '请求id')) 参数.请求id = 载荷.请求id;
     if (Object.hasOwn(载荷, '决定')) 参数.决定 = 载荷.决定;
     if (Object.hasOwn(载荷, '理由')) 参数.理由 = 载荷.理由;
@@ -501,9 +508,9 @@ export function intervention路由({ org, 项目, ctx }) {
         成功: true,
         ...(await org.intervention.人侧决议({
           ...参数,
-          通道: '设置页',
-          认证: '宿主 Connection 已认证（同源浏览器设置入口）',
-          // 不按 query 项目收窄：请求 id 是含项目的指纹，跨项目决议由主权者自己做主。
+          通道: '所属会话',
+          认证: '宿主 Connection 已认证（同源会话组件）',
+          // 请求指纹绑定真实项目；会话绑定由域服务在请求锁内复核。
           项目: null,
         })),
       });

@@ -6,6 +6,7 @@ import { Org } from '../src/org.js';
 import { runAction } from '../lib/actions.js';
 import { readJsonl } from '../src/kernel/fsx.js';
 import { NeedsApproval } from '../src/kernel/errors.js';
+import { DelegationPolicy } from '../src/delegation-policy.js';
 import { 以放行上下文, 本次放行匹配, 本次放行可匹配, 记录本次新建, 当前放行 } from '../src/intervention.js';
 
 const P = 'council-failures';
@@ -121,13 +122,20 @@ for (const stage of ['会审收敛', '零分歧异常', '介入失败']) it(`con
 it('member_list同id登记与子代合并，team去重，未知状态不编造', async () => {
   const s = await setup();
   try {
-    await s.action(s.openArgs);
-    const { 成员 } = await s.action({ action: 'member_list' });
+    // 维护读面只列真实任务实例；会审咨询实例不因在原生子目录里就获得普通任务凭据。
+    await s.org.registry.assign({ subject: LEAD, 岗位: '插件工程', 实例: 'owned-1' });
+    const task = await s.org.tasks.create({ subject: LEAD, 项目: P, 描述: '目录合并', 负责人: ['插件工程'], 判据: ['合并不丢岗位'] });
+    await s.org.tasks.bind(task.id, { subject: LEAD, 项目: P, 实例: 'owned-1', 岗位: '插件工程' });
+    await s.org.tasks.dispatch(task.id, { subject: LEAD, 项目: P });
+    const agent = { id: LEAD.id, session: { id: LEAD.id, header: { id: LEAD.id } } };
+    s.subagents.listChildren = async () => [{ id: 'owned-1', mode: 'continuable', label: 'real child' }, { id: 'unregistered', mode: 'continuable' }];
+    const host = { project: P, agent, agents: { get: id => id === agent.id ? agent : undefined }, subagents: s.subagents, delegation: new DelegationPolicy({}) };
+    const { 成员 } = await runAction({ org: s.org, 项目: P, 主体: LEAD, 面: 'tool', 宿主: host, args: { action: 'member_list' } });
     const row = 成员.find(x => x.实例 === 'owned-1');
     assert.equal(row.岗位, '插件工程'); assert.equal(row.来源, 'subagent'); assert.equal(row.名, 'real child'); assert.equal(row.状态, null);
-    assert.equal(成员.find(x => x.实例 === 'unregistered').状态, null);
+    assert.equal(成员.some(x => x.实例 === 'unregistered'), false, '未登记行不扩张读域');
     assert.equal(成员.filter(x => x.实例 === 'owned-1').length, 1);
-    const host = { agent: { session: { id: 'lead' } }, subagents: s.subagents, agentTeams: { listMembers: () => [{ role: 'teammate', id: 'owned-1', name: 'team-name', status: 'idle' }] }, delegation: { authorize: () => ({ fingerprint: 'test' }) } };
+    host.agentTeams = { listMembers: () => [{ role: 'teammate', id: 'owned-1', name: 'team-name', status: 'idle' }] };
     const team = await runAction({ org: s.org, 项目: P, 主体: LEAD, 面: 'tool', 宿主: host, args: { action: 'member_list' } });
     assert.equal(team.成员.find(x => x.实例 === 'owned-1').来源, 'team');
     assert.equal(team.成员.find(x => x.实例 === 'owned-1').名, 'team-name');

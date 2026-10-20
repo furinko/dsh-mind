@@ -1,0 +1,14 @@
+[
+  {
+    "at": "2026-10-19T11:39:33.509Z",
+    "end": "2026-10-19T11:39:35.121Z",
+    "args": [
+      "--test",
+      "--test-reporter=tap",
+      "maintenance.test.mjs",
+      "windows.test.mjs"
+    ],
+    "status": 0,
+    "log": "evidence/tests-final.log"
+  }
+]

@@ -22,7 +22,7 @@ import { 盲标分配 } from '../src/review.js';
 import { fakeHost } from './host-harness.mjs';
 import * as kernel from '../components/kernel/lib/index.js';
 import { appendLines } from '../src/kernel/fsx.js';
-import { basename } from 'node:path';
+import { basename, join } from 'node:path';
 
 const P = 'p1-fixes';
 const 岗位卡 = '集体L3-成员角色卡/插件工程.md';
@@ -234,9 +234,13 @@ describe('P1-12 命令面宿主服务形状', () => {
   it('/mind member_list 与工具面看到同一名册（Team 行不被丢）', async () => {
     const f = await makeFixture({ rules: { [岗位卡]: 岗位卡正文 } });
     try {
+      let currentCwd = process.cwd();
+      const agent = { id: 's-cmd', session: { id: 's-cmd', header: { id: 's-cmd', cwd: process.cwd() } } };
       const host = fakeHost({
-        提供服务: ['tools', 'commands', 'systemPrompt', 'connection', 'agentTeams', 'subagents'],
+        提供服务: ['tools', 'commands', 'systemPrompt', 'connection', 'agentTeams', 'subagents', 'agents', 'workingDirectory'],
         服务: {
+          workingDirectory: { get: () => currentCwd },
+          agents: { get: id => id === agent.id ? agent : undefined },
           connection: { requestRejection: () => undefined },
           agentTeams: {
             listMembers: () => [{ id: 'team-1', name: 'member-x', role: 'teammate', status: 'running' }],
@@ -250,11 +254,26 @@ describe('P1-12 命令面宿主服务形状', () => {
         home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot,
         delegation: { mode: 'lead-discretion', projects: [basename(process.cwd())], authorizationRef: 'p1-12' },
       });
-      const agent = { session: { id: 's-cmd', header: { cwd: process.cwd() } } };
+      const invoke = async args => {
+        const result = JSON.parse(await host.工具.get('mind').execute(args, { name: 'mind', agent }));
+        assert.equal(result.成功, true, JSON.stringify(result));
+        return result;
+      };
+      await invoke({ action: 'registry_assign', 岗位: '插件工程', 实例: 'team-1' });
+      const task = (await invoke({ action: 'task_create', 描述: '真实任务名册', 负责人: '插件工程', 判据: '命令工具同形' })).节点;
+      await invoke({ action: 'task_bind', id: task.id, 实例: 'team-1', 岗位: '插件工程' });
+      await invoke({ action: 'task_dispatch', id: task.id });
       const 命令 = JSON.parse((await host.命令.get('mind').handler({ agent, rawInput: 'member_list' })).text);
       const 工具 = JSON.parse(await host.工具.get('mind').execute({ action: 'member_list' }, { name: 'mind', agent }));
       assert.equal(命令.成员.length, 工具.成员.length, `命令面 ${命令.成员.length} vs 工具面 ${工具.成员.length}`);
       assert.ok(命令.成员.some((m) => m.来源 === 'team' && m.实例 === 'team-1'), '命令面不得丢 Team 行');
+      const cross = JSON.parse(await host.工具.get('mind').execute({ action: 'member_list', project: 'foreign-project' }, { name: 'mind', agent }));
+      assert.equal(cross.成功, false, '真实工具面不得用args.project同时覆盖会话项目形成同值假正控');
+      assert.match(cross.理由, /跨项目|会话项目/);
+      currentCwd = join(process.cwd(), 'changed-workspace');
+      const changed = JSON.parse(await host.工具.get('mind').execute({ action: 'member_list' }, { name: 'mind', agent }));
+      assert.equal(changed.成功, false, '提交的workingDirectory变化优先于旧header.cwd');
+      assert.match(changed.理由, /跨项目|会话项目/);
     } finally { await f.cleanup(); }
   });
 });

@@ -13,6 +13,7 @@ import { apply } from '../components/kernel/lib/index.js';
 import { fakeHost } from './host-harness.mjs';
 import { forgetSharedOrg } from '../src/runtime.js';
 import { makeFixture, LEAD, MEMBER, SOVEREIGN } from './helpers.mjs';
+import { captureGuardReceiptTimers } from './guard-receipt-timers.mjs';
 
 const INITIAL = { mode: 'lead-discretion', projects: ['plugins'], authorizationRef: 'operator grant' };
 const NEXT = { mode: 'explicit-user', projects: [], authorizationRef: '' };
@@ -316,9 +317,10 @@ describe('调度设置：正式 editor、认证、锁内 CAS 与分面回执', (
     }
   });
 
-  it('R06回执自愈：apply后落true；被覆写回null后2秒内被幂等确认写恢复（冷启动验收实证场景）', async () => {
+  it('R06回执确认写：首写后施加冲突，再推进真实登记的2000ms回调恢复', async () => {
     const home = await mkdtemp(join(tmpdir(), 'delegation-receipt-'));
     const host = fakeHost({ 提供服务: ['tools', 'commands', 'systemPrompt'] });
+    const scheduler = captureGuardReceiptTimers(host.ctx);
     const receipt = join(home, 'private', '集体L2-共享基础设施', 'defaults', '工具闸回执.json');
     const 读回执 = async () => JSON.parse(await readFile(receipt, 'utf8'));
     const 等到 = async (predicate, ms) => {
@@ -331,17 +333,21 @@ describe('调度设置：正式 editor、认证、锁内 CAS 与分面回执', (
     };
     try {
       await apply(host.ctx, { home, privateRoot: join(home, 'private'), factoryRoot: fileURLToPath(new URL('../mind', import.meta.url)), delegation: INITIAL });
-      // 观察预算 ≠ 机制承诺（2026-10-17 测试稳定性批）：确认写是 apply+2s 的**定时**。
-      // 修前测试先等第一次 true 再覆写——负载下第一次 true 可能已越过 2s 窗，覆写发生在
-      // 确认写之后，永远等不到自愈（把机制缺陷误判成测试超时）。现在**立即**模拟二次激活
-      // 覆写回 null（在 2s 窗内），再等确认写恢复；这才是要测的场景。
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // 只控制 effect 真正登记的确认回调，不替换注册或 atomicWrite。
+      // 50ms 的墙钟等待不保证后续文件写入早于 2s 回调，不能拿负载推断执行先后。
+      assert.equal(scheduler.callbacks.length, 1, '真实内核必须登记且只登记一次确认回调');
+      assert.equal(scheduler.callbacks[0].ms, 2000, '产品的2秒登记参数不改');
+      assert.equal(scheduler.callbacks[0].fired, false);
+      await 等到((doc) => doc.调度创建闸?.registered === true, 15_000);
+      assert.equal(host.闸.length, 2, '本体两闸须真的已注册');
       await writeFile(receipt, `${JSON.stringify({ 范围闸: { registered: true, error: null }, 调度创建闸: { registered: null, error: null } }, null, 2)}\n`, 'utf8');
-      assert.equal((await 读回执()).调度创建闸.registered, null, '前提：覆写已生效（在 2 秒确认写之前）');
+      assert.equal((await 读回执()).调度创建闸.registered, null, '先证明冲突写已经实际提交');
+      scheduler.fire();
       const healed = await 等到((doc) => doc.调度创建闸?.registered === true, 15_000);
       assert.equal(healed.范围闸.registered, true);
       assert.deepEqual(healed.调度创建闸, { registered: true, error: null });
     } finally {
+      scheduler.restore();
       host.清理();
       forgetSharedOrg();
       await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });

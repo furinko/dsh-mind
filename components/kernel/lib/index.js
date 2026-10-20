@@ -34,6 +34,8 @@ import { 挂同源路由, 看板包 } from './routes.js';
 import { createDelegationSettings } from './delegation-settings.js';
 // Lead 自主调度（2026-10-15 主权者授权）：提示词、创建闸与成员入口共用同一份授权判据。
 import { DelegationPolicy } from '../../../src/delegation-policy.js';
+import { ReviewExperimentService } from '../../../src/review-experiments.js';
+import { EXPERIMENT_RECIPES } from '../../../src/review-experiment-files.js';
 
 export const name = 'dsh-mind-kernel';
 export const inject = ['tools'];
@@ -49,7 +51,7 @@ let 上次告警键 = null;
 
 /**
  * @param {any} ctx cordis 上下文
- * @param {{ project?: string, home?: string, factoryRoot?: string, privateRoot?: string, audit工具调用?: boolean }} [config]
+ * @param {{ project?: string, home?: string, factoryRoot?: string, privateRoot?: string, audit工具调用?: boolean, reviewExperiments?: object }} [config]
  */
 export async function apply(ctx, config = {}) {
   const logger = ctx?.logger ?? console;
@@ -186,12 +188,33 @@ export async function apply(ctx, config = {}) {
   // 宿主服务束：member_* 动作经它调官方运行时。每次调用现取（HMR/晚装载的服务取不到就如实为 null）。
   // signal 必带：Team/子会话服务内部 AbortSignal.any 会校验每一项（漏传 ⇒ "signals[0] is not of
   // type AbortSignal"，本机重启后实测），官方工具链恒传 exec.signal——这里对齐同一契约。
+  // 实验能力由部署者固定可信清单，缺省关闭；不能从模型入参注入解释器/命令。
+  let reviewExperiments = null;
+  try {
+    reviewExperiments = new ReviewExperimentService({
+      org, config: config.reviewExperiments ?? {},
+      services: () => ({ sandbox: 取服务(ctx, 'sandbox'), subprocess: 取服务(ctx, 'subprocess') }),
+    });
+    if (reviewExperiments.status().enabled && typeof ctx.effect !== 'function') throw Object.assign(new Error('实验生命周期未接线'), { code: 'EXPERIMENT_LIFECYCLE_UNAVAILABLE' });
+    const lifetime = reviewExperiments;
+    ctx.effect?.(() => () => lifetime.dispose(), 'dsh-mind: 冻结实验生命周期');
+  } catch (error) {
+    const failed = reviewExperiments; reviewExperiments = null;
+    void failed?.dispose().catch(() => logger.error?.('[dsh-mind] 冻结实验降级清理未确认。'));
+    logger.error?.(`[dsh-mind] 冻结实验配置不可用（${error?.code ?? 'INVALID_CONFIG'}），实验保持关闭；不回退通用执行。`);
+  }
   const 宿主服务 = (exec) => ({
     agent: exec?.agent ?? null,
+    get project() {
+      const cwd = 会话工作目录(exec, { ctx });
+      return cwd ? basename(cwd) : null; // 独立于 args.project；目录变化须在提交前重新核对。
+    },
     signal: exec?.signal ?? null,
     agentTeams: 取服务(ctx, 'agentTeams'),
     subagents: 取服务(ctx, 'subagents'),
+    agents: 取服务(ctx, 'agents'), // 既有委派维护须核对 exact live Agent，不能只相信同 id 对象。
     delegation,
+    reviewExperiments,
   });
 
   // 主面（工具）**不吞异常**：注册不上就等于这个组件没生效，
@@ -343,6 +366,18 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger }) {
         // v2 条目14/17（2026-10-18 补修F）：主权者逐请求放行后，原申请者带这个引用重试
         // 原动作——执行的是冻结请求（参数与步骤计划都按原样），不是这次的复述参数。
         审批引用: { type: 'string', description: '介入请求 id（v2 条目14/17）：写动作被介入度挂起后，主权者在设置页「待审批」批准，原申请者带 审批引用=<请求id> 重试原动作。执行的是冻结请求；参数/计划与记录不一致、已执行过、已失效都会拒' },
+        许可id: { type: 'string', description: '冻结实验天然凭据id；不能以聊天授权或自报sandbox替代' },
+        候选id: { type: 'string', description: '部署者已审读固定SHA的候选id；不接受路径或manifest正文' },
+        配方: { type: 'string', enum: Object.keys(EXPERIMENT_RECIPES), description: '复核实例从许可冻结列表中独立选择一项，不接受argv/env/shell' },
+        配方列表: { type: 'array', items: { type: 'string', enum: Object.keys(EXPERIMENT_RECIPES) }, description: 'Lead登记本许可允许的封闭实验配方' },
+        实验次数: { type: 'integer', minimum: 1, maximum: 8 },
+        有效秒数: { type: 'integer', minimum: 1, maximum: 86400 },
+        运行秒数: { type: 'integer', minimum: 1, maximum: 600 },
+        输出上限字节: { type: 'integer', minimum: 1, maximum: 4194304 },
+        运行id: { type: 'string', description: '许可内已生成的实验运行id，不接受任意文件路径' },
+        输出流: { type: 'string', enum: ['stdout','stderr'] },
+        输出偏移: { type: 'integer', minimum: 0, maximum: 4194304, description: '按原字节分页的起点' },
+        输出长度: { type: 'integer', minimum: 1, maximum: 32768 },
         线程: { type: 'string', description: '线程名（bus_send / bus_read）' },
         发件: { type: 'string', description: '已忽略（W2 安全修复）：发件人恒为真实主体 id，自报无效——冒充发件人是伪造轮边界的第一步' },
         收件: { type: 'string', description: '收件人，多个用逗号分隔' },
@@ -643,7 +678,7 @@ function 咨询读路径(exec, deps, 绑定) {
  *
  * 为什么是**闭名单**：`write/edit/pwsh/bash/创建/未知执行类` 的正确集合是「除下面这些
  * 之外的一切」——开名单会把未来新增的工具默认放给复核员（漏一个就是一条写侧门）。
- * `mind` / `mind_guard` 由本体按动作判（写全拒、读按复核读域）；`skill` 是只读规范。
+ * `mind` / `mind_guard` 由本体按动作判（普通写拒；受限任务生命周期/冻结实验逐单核，读按复核读域）；`skill` 是只读规范。
  */
 const 复核只读工具 = new Set(['read', 'glob', 'grep', 'read_image', 'skill', 'mind', 'mind_guard']);
 
