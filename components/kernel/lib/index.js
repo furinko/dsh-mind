@@ -424,7 +424,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger }) {
         // 子会话 `agentSubject` 算出成员、`runAction` 收到的却是 Lead（两处读数都在回报里）。
         // v2 条目9/10：Lead 实例随主会话出生——**落在这里**（真实 exec 的会话事实），
         // 不在路由面/任意 Lead 形状上自动生造（那是「设置页」这类伪实例的来源）。
-        const 登记 = await 钉Lead实例(org, 主体, logger);
+        const 登记 = await 钉Lead实例(org, 主体, logger, exec?.agent?.session);
         // v2 条目10（W5 审计反例收口）：内核入口不再「warn 后继续」——模型面的 Lead 自治写
         // 必须钉版真就绪；诊断读（status / workbench / audit_tail …）照旧放行并带读数。
         // 分类与 runAction / isConcurrencySafe 共用 READ_ONLY_ACTIONS 这一张表。
@@ -480,7 +480,7 @@ function mindCommand(spec) {
         const args = 解析参数(rest.join(' '));
         const 主体 = agentSubject({ agent });
         // v2 条目9/10：同一条出生路径（命令面也是真实 agent 的会话事实）。
-        const 登记 = await 钉Lead实例(spec.org, 主体, spec.logger);
+        const 登记 = await 钉Lead实例(spec.org, 主体, spec.logger, agent?.session);
         // `面: 'command'` 是**人侧**的标记：命令面专属动作（如改设置的 `presence`）
         // 只在这一面可达，`mind` 工具的 enum 里没有它们（模型没有这只手）。
         // `主体` 一起显式传下去：账上要记**敲这条命令的那个人**，不许归并成一个泛化的 lead。
@@ -1178,18 +1178,18 @@ function 组织说明(org) {
  *    `{id:'设置页', kind:'Lead'}`——伪实例，不在这里出生（它直接调 runAction，绕过本函数）。
  *  - **不再「warn 后继续」**：返回的就绪读数是模型面自治写的写前闸输入（已封存 / 未钉版 /
  *    快照读不到 / unknown 一律未就绪）。读动作仍可用并带诊断读数。
- *  - 幂等：已有记录（任何岗位）一律不动——不复活封存、不自动补钉；由写前快照校验与
- *    registry_restore 的正路处理。
+ *  - 身份不重生：不复活封存、不自动补钉；旧运行绑定只能由本入口的宿主会话事实
+ *    核验后续接（绝不从 args 取证），岗位与钉卡保持原样。
  *
  * @param {object} org
  * @param {object} 主体 `agentSubject` 的产物
  * @param {object} logger
  * @returns {Promise<{已登记: boolean, 就绪: boolean, 卡版本?: string|null, 原因?: string}|null>} 非 Lead ⇒ null
  */
-async function 钉Lead实例(org, 主体, logger) {
+async function 钉Lead实例(org, 主体, logger, 宿主会话) {
   if (主体?.kind !== 'Lead') return null;
   try {
-    const 读数 = await org.registry.ensureLeadInstance({ 实例: 主体.id, 代次: org.boot?.代次 });
+    const 读数 = await org.registry.ensureLeadInstance({ 实例: 主体.id, 代次: org.boot?.代次, 宿主会话 });
     // 就绪 = 有登记事实 + 明确就绪 + 有卡版本摘要。缺关键位（unknown）按**未就绪**处理：
     // 写前闸不许「少一个字段就默认 ready」。
     const 就绪 = 读数?.已登记 === true && 读数?.就绪 === true && Boolean(读数?.卡版本);
@@ -1227,7 +1227,7 @@ async function 注入Lead已钉规程(assembly, agent, org, logger) {
     if (typeof 会话id !== 'string' || !会话id.trim()) return assembly;
     const 主体 = agentSubject({ agent });
     if (主体?.kind !== 'Lead' || !主体.id) return assembly;
-    const 登记 = await 钉Lead实例(org, 主体, logger);
+    const 登记 = await 钉Lead实例(org, 主体, logger, agent.session);
     let 段文本;
     if (登记?.就绪 !== true) {
       段文本 = [

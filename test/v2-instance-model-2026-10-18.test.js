@@ -345,8 +345,8 @@ describe('⑤ 不自授（条目20）：按扩张集合判，同权限幂等放�
 });
 
 describe('⑥ 系统主体封闭清单（条目8）：不当万能写后门', () => {
-  it('清单固定：四项，且三元组逐项匹配（换档/换动作/换目标类都不匹配）', () => {
-    assert.deepEqual([...MECHANISM_NAMES].sort(), ['会审解锁', '实例出生', '孤儿回收', '轮边界'].sort());
+  it('清单固定：五项，且三元组逐项匹配（换档/换动作/换目标类都不匹配）', () => {
+    assert.deepEqual([...MECHANISM_NAMES].sort(), ['会审解锁', '实例出生', '孤儿回收', 'Lead运行绑定', '轮边界'].sort());
     assert.equal(mechanismAllows('轮边界', 'create', '只增', '消息'), true);
     assert.equal(mechanismAllows('轮边界', 'write', '只增', '消息'), false, '换动作不匹配');
     assert.equal(mechanismAllows('轮边界', 'create', '自治', '消息'), false, '换档不匹配');

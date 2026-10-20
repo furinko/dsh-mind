@@ -1087,10 +1087,10 @@ export class RoleRegistry {
    * 为什么主体仍是「系统」：出生登记是**机制动作**（宿主起了这个会话，不是 Lead 给自己
    * 发了一张卡），它必须能在任何主体第一次行动之前完成；机制名 `实例出生` 在封闭清单里。
    *
-   * 幂等：已有记录（任何岗位）一律不动——一个实例只能有一个出生记录，
-   * 换岗 / 复岗走 seal → assign 正路，不由出生路径改写。
+   * 已有身份不重生、不换岗、不复岗。唯有旧运行绑定可由宿主真实根会话核验后续接；
+   * 身份状态、钉卡与生命周期不变，运行绑定单独经策略并记审计。
    *
-   * @param {{实例: string, 代次?: {代: string}}} spec
+   * @param {{实例: string, 代次?: {代: string, pid?: number}, 宿主会话?: object}} spec
    * @returns {Promise<{已登记: boolean, 就绪: boolean, 新建?: boolean, 岗位?: string|null, 卡版本?: string|null, 状态?: string|null, 原因?: string}>}
    *
    * **合同（2026-10-18 与 Lead/A 成员对齐，勿改形状）**：
@@ -1106,7 +1106,11 @@ export class RoleRegistry {
   async ensureLeadInstance(spec) {
     const 实例 = String(spec.实例 ?? '').trim();
     if (!实例) return { 已登记: false, 就绪: false, 岗位: null, 卡版本: null, 原因: '没有会话 id：给不出「哪一个 Lead 实例」，不猜。' };
-    const 现存 = (await this.#identity()).members[实例];
+    const 身份 = await this.#identity();
+    const 现存 = 身份.members[实例];
+    if (身份.denylist.some((d) => d.id === 实例 || d.id === 'Lead')) {
+      return { 已登记: Boolean(现存), 就绪: false, 卡版本: null, 原因: '实例或 Lead 岗位已撤权：宿主续接不恢复撤权身份。' };
+    }
     if (现存) {
       // 2026-10-18 W5 审计收口：已有记录**不等于就绪**。三条都如实报「未就绪」，
       // 不自动复活（封存是停岗决定）、不自动补钉（那是写前快照校验的职责）、
@@ -1150,6 +1154,21 @@ export class RoleRegistry {
       const 读 = await this.cardOf(实例);
       if (读?.就绪 !== true) {
         return { 已登记: true, 就绪: false, 岗位: 现存.岗位 ?? null, 卡版本, 状态: 现存.status ?? null, 原因: 读?.原因 ?? '卡快照不可用' };
+      }
+      const 旧代 = typeof 现存.代次 === 'string' ? 现存.代次 : 现存.代次?.代;
+      if (现存.运行绑定?.状态 === '失效' || (旧代 && spec.代次?.代 && 旧代 !== spec.代次.代)) {
+        const 旧pid = typeof 现存.代次 === 'object' ? 现存.代次?.pid : 身份.boot?.代次记录?.[旧代]?.pid;
+        if (现存.运行绑定?.状态 !== '失效' && (旧pid == null || (旧pid !== spec.代次?.pid && 进程存活(旧pid)))) {
+          return { 已登记: true, 就绪: false, 卡版本, 原因: '旧运行仍存活或缺失可靠代次事实：不抢占绑定。' };
+        }
+        const 会话 = spec.宿主会话;
+        const header = 会话?.header;
+        // 此参数只由宿主入口传递，绝不从工具 args / subject.kind 或实例字符串取证。
+        if (会话?.id !== 实例 || !header || (header.id != null && header.id !== 实例)
+          || header.origin === 'subagent' || (header.delegationDepth != null && header.delegationDepth !== 0)) {
+          return { 已登记: true, 就绪: false, 卡版本, 原因: '旧运行绑定不可用：缺少匹配的宿主真实根会话事实，不自动续接。' };
+        }
+        await this.#leadBinding({ 实例, 状态: '有效', 代次: spec.代次, 旧记录: 现存 });
       }
       return { 已登记: true, 就绪: true, 新建: false, 岗位: 现存.岗位 ?? null, 卡版本, 状态: 现存.status ?? null };
     }
@@ -1204,6 +1223,52 @@ export class RoleRegistry {
     return { 已登记: true, 就绪: true, 新建: true, 岗位: 'Lead', 卡版本: 钉.摘要, 状态: '在岗' };
   }
 
+  /** 运行绑定独立于身份生命周期。锁内复核，封存/撤权/换岗竞态一律不恢复。 */
+  async #leadBinding({ 实例, 状态, 代次, 旧记录 }) {
+    await this.policy.check({
+      subject: { ...MECHANISM_SUBJECT }, action: 'write',
+      target: { id: 实例, kind: '身份', authority: '自治', zone: '私有', domain: '个体', project: null },
+      context: { 身份操作: '实例', 机制动作: 'Lead运行绑定' },
+    });
+    let 已改 = false;
+    await this.#mutateIdentity(async (current) => {
+      const m = current.members[实例];
+      if (m?.status !== '在岗' || m.岗位 !== 'Lead'
+        || current.denylist.some((d) => d.id === 实例 || d.id === 'Lead')
+        || m.卡版本?.摘要 !== 旧记录.卡版本?.摘要) {
+        throw new InvalidBody('Lead 运行绑定核验冲突：身份已封存、撤权、换岗或绑定已变更；不自动恢复。');
+      }
+      if (状态 === '有效' && (!代次?.代 || 代次.代 !== current.boot?.代 || 代次.pid !== current.boot?.pid)) {
+        throw new InvalidBody('Lead 续接仅允许绑定已登记的本进程代次。');
+      }
+      if (m.运行绑定?.状态 === 状态 && (状态 === '失效' || m.代次?.代 === 代次.代)) return current;
+      if (JSON.stringify(m.代次) !== JSON.stringify(旧记录.代次)
+        || JSON.stringify(m.运行绑定) !== JSON.stringify(旧记录.运行绑定)) {
+        throw new InvalidBody('Lead 运行绑定已变更：拒绝覆盖并发续接。');
+      }
+      const 卡面 = await this.cardOf(实例);
+      if (状态 === '有效' && 卡面?.就绪 !== true) throw new InvalidBody('Lead 钉卡快照不可用：不续接。');
+      // 审计先行：失败不能留下无账绑定；不改卡版本、身份代数、生命周期或任务。
+      await this.audit.append({
+        动作: '机制维护', 主体: { ...MECHANISM_SUBJECT }, 对象: { id: 实例, kind: '身份' },
+        依据: '宿主进程绑定与 Lead 身份分离；真实根会话和档案岗位核验后续接',
+        结果: `拟写入Lead运行绑定${状态}`, 详情: { 机制动作: 'Lead运行绑定', 阶段: '写入意图', 旧代次: m.代次, 新代次: 状态 === '有效' ? 代次 : null, 卡版本: m.卡版本?.摘要 },
+      });
+      已改 = true;
+      return { ...current, members: { ...current.members, [实例]: {
+        ...m, ...(状态 === '有效' ? { 代次: { 代: 代次.代, pid: 代次.pid } } : {}),
+        运行绑定: { 状态, 于: this.clock.iso() },
+      } } };
+    });
+    if (已改) await this.audit.append({
+      动作: '机制维护', 主体: { ...MECHANISM_SUBJECT }, 对象: { id: 实例, kind: '身份' },
+      依据: 'Lead 运行绑定原子写入完成（不改身份生命周期）',
+      结果: `Lead运行绑定${状态}`,
+      详情: { 机制动作: 'Lead运行绑定', 阶段: '写入完成', 旧代次: 旧记录.代次, 新代次: 状态 === '有效' ? 代次 : null, 卡版本: 旧记录.卡版本?.摘要 },
+    });
+    return 已改;
+  }
+
   /**
    * 登记本进程代次（条目12 的事实源之一）。
    *
@@ -1238,14 +1303,15 @@ export class RoleRegistry {
   }
 
   /**
-   * 孤儿回收（条目12）：崩溃 / 重启后把**判得死**的在岗实例标封存。
+   * 孤儿回收：进程已死只证明旧执行绑定失效，不证明持久根会话已消亡。
+   * Lead 保持身份在岗、仅失效运行绑定，等待宿主核验续接；临时成员仍走封存。
    *
    * 判据只用**可观测事实**，三条：
    *  ① 同代次 ⇒ 活（就在本进程里）。多 Lead 会话共享同一个 Org（同一进程同一代）
    *     ⇒ 邻居会话的实例一律不会被封（「某 Lead 首次动作就把别人全封了」不会发生）。
    *  ② 异代次 ⇒ 查它那一代的 `pid` 是否还活（`process.kill(pid, 0)`，OS 事实）：
    *     还活 ⇒ **未判定**（另一个宿主进程可能正在跑，宁可漏收也不错杀）；
-   *     已死 ⇒ 孤儿 ⇒ 封存。
+   *     已死 ⇒ Lead 绑定失效 / 临时成员封存（两者都走策略，无自动复岗）。
    *  ③ 没有代次记录（本轮之前登记的历史实例）⇒ **未判定**，响亮入账，不猜死。
    *
    * 另外两条硬边界：
@@ -1266,8 +1332,9 @@ export class RoleRegistry {
     const { members, boot } = { ...(await this.#identity()), ...(await this.#bootOf()) };
     const 代次记录 = boot?.代次记录 ?? {};
     const 封存 = [];
+    const 绑定失效 = [];
     const 未判定 = [];
-    const 结果 = { 于: this.clock.iso(), 本代: 代, 封存, 未判定 };
+    const 结果 = { 于: this.clock.iso(), 本代: 代, 封存, 绑定失效, 未判定 };
     for (const [实例, member] of Object.entries(members ?? {})) {
       if (member?.status !== '在岗') continue;
       // 代次两种形状都认：`{代, pid}`（2026-10-18 起，pid 随实例记）与裸字符串 `代`（旧账，
@@ -1280,6 +1347,11 @@ export class RoleRegistry {
       if (pid == null) { 未判定.push({ 实例, 原因: `代次 ${它代} 没有 pid 记录：拿不到存活事实。` }); continue; }
       if (探测(pid)) { 未判定.push({ 实例, 原因: `代次 ${它代} 的进程 pid=${pid} 仍存活（另一宿主可能在跑）：判不了死。` }); continue; }
       try {
+        if (member.岗位 === 'Lead') {
+          await this.#leadBinding({ 实例, 状态: '失效', 旧记录: member });
+          绑定失效.push(实例);
+          continue;
+        }
         await this.seal({ subject: { ...MECHANISM_SUBJECT }, 实例, 理由: `孤儿回收：代次 ${它代} 的进程 pid=${pid} 已不存在（v2 条目12）`, 机制动作: '孤儿回收' });
         封存.push(实例);
       } catch (error) {
@@ -1462,6 +1534,7 @@ export class RoleRegistry {
       members: current?.members ?? {},
       sovereign: current?.sovereign ?? { lastInteraction: null },
       denylist: current?.denylist ?? [],
+      ...(current?.boot ? { boot: current.boot } : {}),
     };
   }
 
