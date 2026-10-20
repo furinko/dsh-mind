@@ -23,6 +23,7 @@
  * 会审讨论正文与成员归属（§10 盲评：未交齐不揭名，遮罩做在投影层）。
  */
 import { 全员已交, 负责人实例名单, 已被合法采纳, 是只读旧会审 } from './tasks.js';
+import { isTaskTerminal } from './task-state.js';
 // 复核读域**唯一判据**（v2 条目4/6/18）：复核员岗实例只读「它绑定的复核任务 → 显式复核对象」
 // 那一片，不是岗位全量；workbench 与 task_criteria/memory/audit/bus 共用这一个函数。
 import { 复核读域, 在读域, 审计行在读域, 线程在读域 } from './review-scope.js';
@@ -65,14 +66,15 @@ export function projectWorkbench(input) {
   // 补修K（条目4「采纳权在 Lead」）：复核「过」只出票、不自动采纳 —— 这一块是 Lead 的
   // **待办**：已过票但尚未采纳的节点，必须连真票一起显式列出（别把「已交卷/写窗口」
   // 当成已被接受）。票来自 fold 派生的 node.待采纳（当前代最后一个「过」且其后无新成果）。
-  const 待采纳 = 现行节点.filter((n) => n.待采纳);
+  const 待采纳 = 现行节点.filter((n) => !isTaskTerminal(n) && n.待采纳);
   // 旧账「复核即采纳」但没有 Lead 承接的节点：前向依赖/结账都不许自动使用，需 Lead 显式确认。
   const 待确认 = 现行节点.filter((n) => n.状态 === '已采纳' && n.需Lead确认 === true);
   // v2 条目16 兜底：已采纳 = 环路只差结账——而结账现在强制记忆处置，
   // 「已采纳但记忆处置为空」就是「还没结」，投到「待你决定」催办。
   // 补修K：未过「已被合法采纳」判定的旧账节点不进这块（它们连采纳这关都还没过）。
   const 待结账 = 现行节点.filter((n) => n.状态 === '已采纳' && 已被合法采纳(n) && !n.记忆处置);
-  const 升级 = 现行节点.filter((n) => n.升级);
+  const 升级 = 现行节点.filter((n) => !isTaskTerminal(n) && n.升级);
+  const 接续提醒 = 现行节点.filter((n) => !isTaskTerminal(n) && n.接续提醒 && (n.接续提醒.阈值提醒 || n.接续提醒.前序待决));
   const 探针 = input.探针 ?? { 状态: '未知', 结果: [] };
   const 见红 = (探针.结果 ?? []).filter((r) => r.状态 === '红');
   // 会审线程名单（⑦ 消息总线遮罩用）：历史任务图会审（讨论段/多人/独立答案）的
@@ -118,12 +120,12 @@ export function projectWorkbench(input) {
     },
 
     // 设计里唯一点名要投影的东西，所以排在最前：主子只需要看这一块。
-    待你决定: 收集待你决定({ 待决, 升级, 见红, 升级挂起: input.升级挂起 ?? [], 介入挂起: input.介入挂起 ?? [], 待结账, 待采纳, 待确认 }),
+    待你决定: 收集待你决定({ 待决, 升级, 接续提醒, 见红, 升级挂起: input.升级挂起 ?? [], 介入挂起: input.介入挂起 ?? [], 待结账, 待采纳, 待确认 }),
 
     任务: {
       总数: 节点.length,
       只读历史数: 节点.length - 现行节点.length,
-      现行未结账数: 现行节点.filter((n) => n.状态 !== '已结账').length,
+      现行未结账数: 现行节点.filter((n) => !['已结账', '已终止'].includes(n.状态)).length,
       计数: {
         待派发: 节点.filter((n) => n.状态 === '待派发').length,
         进行中: 节点.filter((n) => 进行中.has(n.状态)).length,
@@ -137,6 +139,7 @@ export function projectWorkbench(input) {
         // 已结账（W3 批3）：环路的终态之一。不报它会出现「总数 5、各桶加起来 4」——
         // 少掉的那条不是"已结账"，而是"看起来不存在"。
         已结账: 节点.filter((n) => n.状态 === '已结账').length,
+        已终止: 节点.filter((n) => n.状态 === '已终止').length,
         待决: 节点.filter((n) => n.状态 === '待决').length,
       },
       节点: 节点.map((n) => 任务行(n, input.实例活动)),
@@ -421,6 +424,12 @@ function strList(value) {
  */
 function 收集待你决定(parts) {
   const 清单 = [];
+  for (const node of parts.接续提醒 ?? []) {
+    const reminder = node.接续提醒;
+    清单.push({ 类型: '接续提醒', 节点: node.id, 描述: node.描述,
+      原因: `前序任务 ${reminder.来源任务} 的处置状态未确认：${reminder.阈值提醒 ? `累计打回 ${reminder.累计打回次数} 次${reminder.前序升级 ? '，原升级事实保留' : '，保留阈值提醒（未确认原升级事件）'}。` : ''}${reminder.前序待决 ? `原待决：${reminder.前序待决.原因 ?? '原因未记录'}；接续不代表已裁决。` : ''}`,
+      可选项: [], 说明: '请核对前序记录；该提醒不新增审批门槛，也不自动修改当前任务状态或权限。' });
+  }
   // 补修K：复核「过」只出票、不代 Lead 采纳 —— 「待采纳」必须带**真票**与可执行命令，
   // 不能只留一个内部字段。这也是三面（模型/命令/面板）里面板那只手的指路。
   for (const node of parts.待采纳 ?? []) {
@@ -525,6 +534,7 @@ function 收集待你决定(parts) {
 function 任务行(node, 实例活动) {
   const 复核对象 = Array.isArray(node.复核对象) ? node.复核对象 : [];
   const 只读历史 = 是只读旧会审(node);
+  const 已终止 = node.状态 === '已终止';
   return {
     id: node.id,
     描述: node.描述,
@@ -533,6 +543,9 @@ function 任务行(node, 实例活动) {
     // v2 条目18：新节点不造 `模式: null` 空壳；历史事件有值才投影（只读保留）。
     ...(node.模式 != null ? { 模式: node.模式 } : {}),
     ...(只读历史 ? { 只读历史: true, 写入说明: '旧会审已退出任务图；仅保留历史，不改不迁移，不提供写命令。' } : {}),
+    ...(已终止 ? { 已终止: true, 终止: node.终止 ?? null, 写入说明: '组织任务已终止，原成果保留；宿主停止未确认，在途工具未被取消。' } : {}),
+    ...(typeof node.前序任务 === 'string' ? { 前序任务: node.前序任务 } : {}),
+    ...(typeof node.后继任务 === 'string' ? { 后继任务: node.后继任务 } : {}),
     判据: node.判据 ?? [],
     判据冻结: node.判据冻结 === true,
     ...(node.工具文件范围 ? { 工具文件范围: node.工具文件范围 } : {}),
@@ -545,6 +558,8 @@ function 任务行(node, 实例活动) {
       ? { 绑定: node.绑定.map((b) => ({ 实例: b?.实例 ?? null, 岗位: b?.岗位 ?? null })) }
       : {}),
     打回次数: node.打回次数 ?? 0,
+    ...(Number.isSafeInteger(node.继承打回次数) ? { 继承打回次数: node.继承打回次数, 本节点打回次数: node.本节点打回次数 ?? 0 } : {}),
+    ...(node.接续提醒 ? { 接续提醒: structuredClone(node.接续提醒) } : {}),
     产物: node.产出物引用 ?? [],
     交卷: 交卷进度(node),
     // 补修K（条目4）：复核「过」只出票、不代 Lead 采纳——这一行必须把**真票**与命令一起
@@ -552,7 +567,7 @@ function 任务行(node, 实例活动) {
     ...(node.待采纳
       ? {
         待采纳: node.待采纳,
-        ...(!只读历史 ? { 采纳命令: `/mind task_accept id=${node.id} 票=${node.待采纳.票}` } : {}),
+        ...(!只读历史 && !已终止 ? { 采纳命令: `/mind task_accept id=${node.id} 票=${node.待采纳.票}` } : {}),
       }
       : {}),
     ...(node.采纳 ? { 采纳: node.采纳 } : {}),

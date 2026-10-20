@@ -302,7 +302,7 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
     assert.equal(n1.判据冻结, true);
     assert.deepEqual(n1.交卷, { 已交: 0, 应交: 1, 齐: false });
     assert.equal(a.任务.节点.find((n) => n.id === 'n3').打回次数, 2);
-    assert.deepEqual(a.任务.计数, { 待派发: 0, 进行中: 1, 已交卷: 0, 已采纳: 0, 待采纳: 0, 已打回: 1, 未验: 0, 已结账: 0, 待决: 1 });
+    assert.deepEqual(a.任务.计数, { 待派发: 0, 进行中: 1, 已交卷: 0, 已采纳: 0, 待采纳: 0, 已打回: 1, 未验: 0, 已结账: 0, 已终止: 0, 待决: 1 });
 
     const after = await readdir(f.privateRoot, { recursive: true });
     assert.deepEqual(after, before, '工作台在磁盘上不留任何东西（无存储）');

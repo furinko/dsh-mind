@@ -6,7 +6,7 @@ import { Fault } from './kernel/errors.js';
 const EVENT_KINDS = new Set([
   'created', 'dispatched', 'reassigned', 'bound', 'started', 'submitted', 'reviewed',
   'review_nominated', 'review_assigned', 'review_exempted', 'rejected', 'pending',
-  'resolved', 'artifact', 'escalated', 'settled', 'accepted',
+  'resolved', 'artifact', 'escalated', 'settled', 'accepted', 'closed',
   'debate_opened', 'debate_round', 'debate_converged',
 ]);
 

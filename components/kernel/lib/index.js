@@ -357,17 +357,17 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
       properties: {
         action: { type: 'string', enum: ACTIONS, description: '要执行的动作' },
         project: { type: 'string', description: '项目键；省略则用当前项目' },
-        role: { type: 'string', description: '以哪个岗位身份执行（Lead / 复核员 / 成员岗位名）' },
+        role: { type: 'string', description: '兼容字段，不授予身份或岗位权限；实际主体由宿主会话与身份档案确定，自报 Lead 会被拒绝' },
         实例: { type: 'string', description: 'registry_assign / task_bind 的实例 id（必填；省略会被拒，不再按岗位推断）' },
         工具文件范围: { type: 'object', properties: { 读: { type: 'array', items: { type: 'string' } }, 写: { type: 'array', items: { type: 'string' } } }, additionalProperties: false, description: 'task_dispatch / member_spawn：派发时冻结的通用文件读写绝对根。须在部署者 memberFileAccess 可授上限内；不从 cwd 授权，不允许 shell/未知执行类。' },
         id: { type: 'string', description: '对象 id（任务节点 / 记忆条目 / 挂起项 / 能力名——capability_read 按 id 读，不读 名）' },
         // 描述/原因 的分工按动作实际消费面写（设计评审 F2b 普查 · 2026-10-15）：task_pending
         // 的 handler 读的是 原因（服务层 markPending 的 待决原因），不读 描述——修前 描述
         // 的说明写着「task_create / task_pending」两用，照它传参会静默落空。
-        描述: { type: 'string', description: '任务的描述（task_create）' },
-        负责人: { type: 'string', description: '负责人 id 或多个用逗号分隔（task_create 建 / task_reassign 改派——改派仅 Lead、仅待派发/已派发）' },
-        判据: { type: 'string', description: '验收标准；多个用逗号分隔。任务必填，派发后冻结' },
-        依赖: { type: 'string' },
+        描述: { type: 'string', description: '任务的描述（task_create 必填；task_successor 可选新描述，省略继承源描述）' },
+        负责人: { type: 'string', description: '负责人 id 或多个用逗号分隔（task_create 建 / task_reassign 改派 / task_successor 新负责人；恢复动作仅 Lead/主权者）' },
+        判据: { type: 'string', description: '验收标准；多个用逗号分隔。task_create 必填，派发后冻结；task_successor 从已终止源复制冻结判据，禁止自报覆盖' },
+        依赖: { type: 'string', description: 'task_create 的前置任务；task_successor 复制源依赖，禁止覆盖且不迁移其他节点的依赖' },
         复核对象: { type: 'string', description: '复核任务的显式被验目标（节点 id 列表，task_create / task_bind，多个用逗号分隔或 JSON 数组）。它不是依赖：依赖是「先做谁」，复核对象是「验哪一单」——绝不借用 依赖 表达复核对象（依赖须前置已采纳，会让复核闭环死锁）' },
         问题: { type: 'string', description: '会审要收敛的问题（debate_open，v2 条目18）；参与者用「参与者」或「参与岗位」参数点名' },
         参与者: { type: 'string', description: '会审参与者 id，多个用逗号分隔（debate_open）：被点名的在册在岗实例独立作答；预给实例不改原任务权' },
@@ -414,7 +414,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         敏感: { type: 'boolean', description: 'op=purge 时显式声明「这是敏感数据」；声明会进审计，不声明只有主权者能物理删除' },
         披露豁免: { type: 'boolean', description: 'op=promote 时 Lead 显式豁免披露机械检查（仅 Lead 可用）；豁免与命中的敏感模式名会一起进审计' },
         新条目: { type: 'string' },
-        原因: { type: 'string', description: '原因/理由（task_pending 待决原因 / registry_seal / registry_revoke / review_exempt 豁免原因）' },
+        原因: { type: 'string', description: '原因/理由（task_close / task_successor 必填；task_pending 待决原因 / registry_seal / registry_revoke / review_exempt 豁免原因）。task_close 只终止组织任务，不确认宿主停止或在途工具取消；task_successor 为已终止源创建唯一待派发后继，不启动宿主、不继承绑定/文件范围' },
         名: { type: 'string', description: '能力名（capability_resolve 检索 / capability_publish 发布；capability_read 不读名、只读 id）' },
         正文: { type: 'string', description: '能力卡正文（capability_publish）' },
         适用岗位: { type: 'string' },

@@ -33,6 +33,7 @@ import { readVerifiedCardSnapshot } from './card-credential.js';
 // 重放路径 `以放行上下文` 包住那一次调用（AsyncLocalStorage）；匹配按**步骤计划**
 // （底层 动作+目标 kind/id）逐条消费，宏动作名不参与——本文件只读、不写。
 import { 本次放行匹配, 本次放行可匹配 } from './intervention.js';
+import { isTaskTerminal } from './task-state.js';
 // 保留既有公开导出；解析实现只在tags.js，避免合并与求值各维护一份口径。
 export { extractPolicyBlock } from './tags.js';
 
@@ -614,7 +615,7 @@ export class PolicyEngine {
     if (状态 === '待派发') {
       return { ok: false, reason: `该任务节点尚未派发（状态=待派发）：任务授权随派发生效，负责人名单不是预先生效的凭据；由 Lead task_dispatch 后再写` };
     }
-    if (状态 === '已采纳' || 状态 === '已结账') {
+    if (isTaskTerminal(状态)) {
       return { ok: false, reason: `该任务节点已是终态（状态=${状态}）：任务授权随收口终止，「曾负责过」不构成后续写凭据；需要继续产出由 Lead 另立节点` };
     }
     return { ok: true };

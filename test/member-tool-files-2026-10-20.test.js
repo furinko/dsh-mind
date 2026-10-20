@@ -35,6 +35,29 @@ async function setup({ configured = true } = {}) {
 }
 
 describe('普通成员通用工具文件边界', () => {
+  it('终止立即撤回旧任务文件许可，后继须重新绑定并显式授范围', async () => {
+    const s = await setup();
+    try {
+      const original = await s.dispatch();
+      assert.equal(s.guard('write', { file_path: s.input, content: 'before close' }), undefined);
+      const closed = await s.org.tasks.close(original.id, { subject: LEAD, 项目: P, 原因: '结果未知，改由明确后继接续' });
+      assert.equal(closed.节点.状态, '已终止');
+      assert.equal((await s.org.registry.identity()).members[MEMBER.id].status, '在岗', '终止任务不擅自封存仍可能有其他工作的实例');
+      assert.match(s.guard('read', { file_path: s.input }), /本人真实绑定/);
+      assert.match(s.guard('write', { file_path: s.input, content: 'late old task' }), /本人真实绑定/);
+      const successor = await s.org.tasks.createSuccessor(original.id, { subject: LEAD, 项目: P, 负责人: ['插件工程'], 原因: '在新的授权下继续' });
+      const node = successor.节点;
+      assert.equal(node.前序任务, original.id);
+      assert.ok(!node.工具文件范围 && !(node.绑定 ?? []).length, '后继不继承原实例或文件授权');
+      assert.match(s.guard('write', { file_path: s.input, content: 'not dispatched' }), /本人真实绑定/);
+      await s.org.tasks.bind(node.id, { subject: LEAD, 项目: P, 实例: MEMBER.id, 岗位: '插件工程' });
+      assert.match(s.guard('write', { file_path: s.input, content: 'not dispatched' }), /本人真实绑定/);
+      await s.org.tasks.dispatch(node.id, { subject: LEAD, 项目: P, 工具文件范围: { 读: [s.cwd], 写: [s.cwd] } });
+      assert.equal(s.guard('write', { file_path: s.input, content: 'new explicit grant' }), undefined);
+      assert.equal(await readFile(s.input, 'utf8'), 'trusted task input', '测试只验证许可，不执行被拦或未知在途工具');
+    } finally { await s.cleanup(); }
+  });
+
   it('无任务时，raw 私有/出厂文件、普通文件、shell 与未知工具均拒，组织入口与父报告保留', async () => {
     const s = await setup();
     try {

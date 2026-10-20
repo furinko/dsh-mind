@@ -17,6 +17,8 @@ import { Denied, Fault, InvalidBody } from './kernel/errors.js';
 import { 复核对象引用 } from './review-scope.js';
 import { artifactReferences, captureArtifactManifest, verifyArtifactManifest } from './artifact-manifest.js';
 import { ToolFileAuthority } from './tool-file-scope.js';
+import { canonical, digest } from './kernel/text.js';
+import { TASK_TERMINAL_STATES, TASK_RECOVERY_RELATION_FIELDS as RECOVERY_RELATION_FIELDS } from './task-state.js';
 
 /** （v2 · 条目18：MULTI_MODES 删除——多人只剩并行分担，模式字段不再存在。） */
 
@@ -63,7 +65,7 @@ export function 已被合法采纳(node) {
   return Boolean(node.采纳 && 采纳依据集.includes(node.采纳.依据));
 }
 
-const TERMINAL = new Set(['已采纳', '已结账']);
+const TERMINAL = new Set(TASK_TERMINAL_STATES);
 
 /**
  * 合法转移表：主干环路（受理→定判据→派发→执行→交卷→复核→采纳/打回）的次序由它强制执行。
@@ -108,6 +110,7 @@ const TRANSITIONS = {
   // 实例单独记在 `绑定` 里——修前 member_spawn 用 reassign 把负责人覆盖成实例 id，等于把
   // 「这一岗」换成「这一人」，一岗多实例与换人重跑都无法表达。绑在排兵阶段（待派发 / 已派发）。
   bind: ['待派发', '已派发'],
+  close: ['待派发', '已派发', '执行中', '已交卷', '未验', '已打回', '待决'],
   // （v2 · 条目18：debate_* 三键随写路径一并删除——会审退出任务图，没有人再能
   //  追加 debate_* 事件；历史事件仍由 fold 折出。）
 };
@@ -184,6 +187,8 @@ export class TaskGraph {
   /** @type {Map<string, {text: string|null, rows: object[]}>} */
   #readCache;
   #toolFileAuthority;
+  // 仅服务端签发的准备结果可穿过审批预览到实际执行，不能由工具参数伪造。
+  #recoveryPlans = new WeakSet();
 
   /** 仅装配期消费部署者配置；mind 动作不提供修改此上限的入口。 */
   configureToolFiles(config) {
@@ -226,6 +231,8 @@ export class TaskGraph {
    * @returns {Promise<object>} 节点投影
    */
   async create(input) {
+    const injected = RECOVERY_RELATION_FIELDS.filter((key) => Object.hasOwn(input, key));
+    if (injected.length) throw new InvalidBody(`普通建任务不能指定恢复关系字段：${injected.join('、')}。请使用 task_successor。`);
     if (!input.描述?.trim()) throw new InvalidBody('任务节点必须有描述。');
     const 判据 = normalizeList(input.判据);
     if (判据.length === 0) throw new InvalidBody('验收标准必填：没有判据的节点无法验收，也无法在派发后冻结。', { missing: ['判据'] });
@@ -342,7 +349,7 @@ export class TaskGraph {
       spec.subject,
       '状态变更',
       null,
-      async (nodeInLock) => {
+      async (nodeInLock, rows) => {
         // 自领判定依赖真实绑定，必须与落线共用账本锁，不能拿锁外旧绑定放行。
         if (!nodeInLock || nodeInLock.状态 !== '待派发') {
           throw new Denied('任务图 · 状态机', `节点 ${id} 在锁内已推进为 ${nodeInLock?.状态 ?? '不存在'}，不能重复派发。`, { howToChange: '只对「待派发」的节点派发。' });
@@ -352,6 +359,12 @@ export class TaskGraph {
           action: 'dispatch',
           target: { id, kind: '任务', authority: '自治', zone: '私有', project: spec.项目 },
           context: { task: nodeInLock },
+        });
+        const nodes = fold(rows);
+        const 未完成 = (nodeInLock.依赖 ?? []).filter((dependency) => !已被合法采纳(nodes.get(dependency)));
+        if (未完成.length) throw new Denied('任务图 · 依赖尚未合法采纳', `节点 ${id} 的原依赖尚未合法采纳：${未完成.join('、')}。后继任务不能替代原依赖。`, {
+          howToChange: '先完成并由 Lead 合法采纳这些精确依赖；旧依赖已终止时，另立明确依赖的新任务，不能自动迁移。',
+          detail: { 未完成依赖: 未完成 },
         });
         await this.#assertOwnersSeated(nodeInLock.负责人, spec.subject, '派发');
         if (工具文件范围) this.#toolFileAuthority.grant(spec.工具文件范围, spec.subject);
@@ -962,7 +975,12 @@ export class TaskGraph {
       // 递增算出，全事件流里只有一条 rejected 携带次数==2 ⇒ 并发两个 reject 也只有
       // 一个满足条件。修前用 `>=2` + 锁外查「已升过」，两个并发 reject 都在对方
       // escalated 落线前读缓存 ⇒ 双 escalated（告警疲劳正是这条要防的）。
-      const { 节点: 升级后 } = await this.#append(spec.项目, { kind: 'escalated', id, 升级: { 原因: '打回≥2', 至: '主权者' } }, { id: 'system', kind: '系统' });
+      const 升级事件 = { kind: 'escalated', id, 升级: { 原因: '打回≥2', 至: '主权者' } };
+      const { 节点: 升级后 } = await this.#append(spec.项目, 升级事件, { id: 'system', kind: '系统' }, '状态变更', (nodeInLock) => {
+        // rejected 已提交；close/accept 在两笔之间先进入终态时不再追加后半笔升级。
+        // 先前打回仍在账本，后继按累计阈值展示来源提醒，不伪造一条旧升级事实。
+        return nodeInLock && TERMINAL.has(nodeInLock.状态) ? null : 升级事件;
+      });
       return 升级后;
     }
     return rejected.节点;
@@ -1039,6 +1057,184 @@ export class TaskGraph {
   // 仍由下方 fold 分支折出（历史数据原地只读不迁移）；TRANSITIONS 里的 debate_*
   // 条目同步失效：没有人再能追加它们，状态机自然封闭。
 
+  /** 只读准备终止；合法性与审批步骤由同一领域计划给出，不写账本。 */
+  async closePlan(id, spec) {
+    this.#recoveryInput(id, spec, 'task_close');
+    if (Object.hasOwn(spec, '执行计划')) throw new InvalidBody('准备任务恢复不能接收调用者提供的执行计划。');
+    await this.#assertRecoveryActor(spec.subject);
+    const rows = await this.#rowsOf(spec.项目);
+    return this.#signRecoveryPlan(this.#closePlanOf(id, spec, fold(rows), rows));
+  }
+
+  /**
+   * 只结束组织侧任务授权寿命，不声称取消宿主执行或在途工具。
+   * @param {string} id
+   * @param {{subject: object, 项目: string, 原因: string, 执行计划?: object}} spec
+   */
+  async close(id, spec) {
+    this.#recoveryInput(id, spec, 'task_close');
+    const plan = spec.执行计划 ?? await this.closePlan(id, spec);
+    this.#assertRecoveryPlan(plan, id, spec, 'task_close');
+    let 幂等 = false;
+    const { 节点 } = await this.#append(spec.项目, { kind: 'closed', id }, spec.subject, '状态变更', async (node, rows) => {
+      await this.#assertRecoveryActor(spec.subject);
+      const current = this.#closePlanOf(id, spec, fold(rows), rows);
+      if (plan.幂等) {
+        if (!current.幂等 || current.源快照摘要 !== plan.源快照摘要) this.#changedRecoveryPlan();
+      } else if (current.幂等) {
+        // 并发的相同请求已提交：仅认其回执，不能再落一笔 closed。
+        if (node.终止源快照摘要 !== plan.源快照摘要) this.#changedRecoveryPlan();
+      } else if (current.源快照摘要 !== plan.源快照摘要) this.#changedRecoveryPlan();
+      if (current.幂等) {
+        await this.#recoveryRead(id, node, spec);
+        幂等 = true;
+        return null;
+      }
+      await this.#checkWrite(id, node, spec, 'close');
+      return { kind: 'closed', id, 原因: plan.原因, 原状态: node.状态, 终止源快照摘要: plan.源快照摘要 };
+    });
+    return { 节点, 幂等, 组织任务已终止: true, 宿主停止状态: '未确认', 在途工具已取消: false,
+      说明: '仅终止组织侧任务与后续任务授权；无法取消已经进入宿主执行的工具。' };
+  }
+
+  /** 只读准备唯一后继；继承字段只能取源账本，不能由调用者覆盖。 */
+  async successorPlan(id, spec) {
+    this.#recoveryInput(id, spec, 'task_successor');
+    if (Object.hasOwn(spec, '执行计划')) throw new InvalidBody('准备任务恢复不能接收调用者提供的执行计划。');
+    await this.#assertRecoveryActor(spec.subject);
+    const rows = await this.#rowsOf(spec.项目);
+    return this.#signRecoveryPlan(this.#successorPlanOf(id, spec, fold(rows), rows));
+  }
+
+  /**
+   * 新建正式后继；一笔 created 同时构成前序的唯一后继关系。
+   * @param {string} id
+   * @param {{subject: object, 项目: string, 负责人: string|string[], 描述?: string, 原因: string, 执行计划?: object}} spec
+   */
+  async createSuccessor(id, spec) {
+    this.#recoveryInput(id, spec, 'task_successor');
+    const plan = spec.执行计划 ?? await this.successorPlan(id, spec);
+    this.#assertRecoveryPlan(plan, id, spec, 'task_successor');
+    let 幂等 = false;
+    let 源节点;
+    const { 节点 } = await this.#append(spec.项目, { kind: 'created', id: plan.后继输入.id }, spec.subject, '状态变更', async (_node, rows) => {
+      await this.#assertRecoveryActor(spec.subject);
+      const nodes = fold(rows);
+      const current = this.#successorPlanOf(id, spec, nodes, rows);
+      if (current.源快照摘要 !== plan.源快照摘要 || current.后继规范摘要 !== plan.后继规范摘要 || current.后继输入.id !== plan.后继输入.id || (plan.幂等 && !current.幂等)) this.#changedRecoveryPlan();
+      if (current.幂等) {
+        await this.#recoveryRead(current.已有后继.id, current.已有后继, spec);
+        幂等 = true;
+        源节点 = structuredClone(nodes.get(id));
+        return null;
+      }
+      if (nodes.has(plan.后继输入.id)) throw new InvalidBody('后继节点 id 已存在但不属于这条恢复关系，拒绝覆盖。');
+      this.#assertDependencies(plan.后继输入.依赖, plan.后继输入.id, nodes);
+      this.#assertReviewObjects(plan.后继输入.复核对象 ?? [], plan.后继输入.id, nodes);
+      await this.policy.check({ subject: spec.subject, action: 'create', target: this.#recoveryTarget(plan.后继输入.id, spec.项目), context: {} });
+      源节点 = { ...structuredClone(nodes.get(id)), 后继任务: plan.后继输入.id };
+      return { kind: 'created', ...structuredClone(plan.后继输入) };
+    });
+    return { 节点, 前序任务: id, 源节点, 幂等, 说明: '正式后继只继承冻结判据、原依赖与复核对象；必须重新派发、绑定实例和授予文件范围。' };
+  }
+
+  #recoveryInput(id, spec, action) {
+    if (!spec || typeof spec !== 'object' || typeof id !== 'string' || !id.trim() || typeof spec.项目 !== 'string' || !spec.项目.trim()) throw new InvalidBody('任务恢复必须给出精确任务 id 与项目。');
+    const allowed = new Set(['subject', '项目', '原因', '执行计划', 'action', 'id', 'project', '审批引用', ...(action === 'task_successor' ? ['负责人', '描述'] : [])]);
+    const unknown = Object.keys(spec).filter((key) => !allowed.has(key));
+    if (unknown.length) throw new InvalidBody(`任务恢复不允许覆盖字段：${unknown.join('、')}。判据、依赖、复核对象与关系只读源账本。`);
+    if ((spec.id !== undefined && spec.id !== id) || (spec.project !== undefined && spec.project !== spec.项目) || (spec.action !== undefined && spec.action !== action)) throw new InvalidBody('任务恢复入参的动作、项目或节点不一致。');
+    if (typeof spec.原因 !== 'string' || !spec.原因.trim()) throw new InvalidBody('任务恢复必须说明非空原因。');
+    if (action === 'task_successor') {
+      if (!normalizeRecoveryOwners(spec.负责人).length) throw new InvalidBody('后继任务必须明确新负责人。');
+      if (spec.描述 !== undefined && (typeof spec.描述 !== 'string' || !spec.描述.trim())) throw new InvalidBody('后继描述必须是非空字符串。');
+    }
+  }
+
+  async #assertRecoveryActor(subject) {
+    if (typeof subject?.id !== 'string' || !subject.id.trim() || !['Lead', '主权者'].includes(subject.kind)) throw new Denied('任务恢复 · 排兵资格', '只有真实 Lead 或主权者可以终止任务或建立正式后继。', { requireAuthority: 'Lead' });
+    if (subject.kind === 'Lead') {
+      if (!this.registry) throw new Fault('TASK_RECOVERY_IDENTITY_UNAVAILABLE', '任务恢复缺少真实身份源，不能把自报 Lead 当作排兵资格。');
+      const member = (await this.registry.identity()).members?.[subject.id];
+      if (member?.岗位 !== 'Lead' || member.status !== '在岗') throw new Denied('任务恢复 · 排兵资格', '当前主体不是在册在岗的 Lead 实例。', { requireAuthority: 'Lead' });
+    }
+  }
+
+  #recoveryTarget(id, 项目) { return { id, kind: '任务', authority: '自治', zone: '私有', domain: '集体', project: 项目 }; }
+
+  #planBase(action, id, spec, node) {
+    if (!node) throw new InvalidBody(`没有这个任务节点：${id}（项目 ${spec.项目}）`);
+    if (是只读旧会审(node)) this.#requireTransition(node, 'close');
+    return { 版本: 1, 动作: action, 项目: spec.项目, 主体: { id: spec.subject.id, kind: spec.subject.kind }, 源节点: structuredClone(node), 原因: spec.原因.trim() };
+  }
+
+  #closePlanOf(id, spec, nodes, rows) {
+    const node = nodes.get(id);
+    const base = this.#planBase('task_close', id, spec, node);
+    const 幂等 = node.状态 === '已终止';
+    if (幂等) this.#assertClosedSource(id, rows);
+    if (幂等 && node.终止?.原因 !== base.原因) throw new Denied('任务恢复 · 终止原因冲突', '任务已按另一个原因终止，不能覆盖原终止事实。');
+    if (!幂等) this.#requireTransition(node, 'close');
+    // 后继关系是派生读数，其创建不改写原 closed 回执；其他源事件变化须重新准备。
+    const { 后继任务: _successor, ...source } = node;
+    const 源快照摘要 = digest(canonical(source));
+    return { ...base, 幂等, 源快照摘要, 步骤: [{ 动作: 幂等 ? 'read' : 'write', 目标: this.#recoveryTarget(id, spec.项目),
+      ...(幂等 ? {} : { 写: 'close', 上下文: { task: node, 节点操作: 'close' } }),
+      说明: 幂等 ? '读取已有终止回执' : '终止组织侧任务（不取消在途工具）', 预览: { 节点: id, 描述: node.描述, 当前状态: node.状态, 负责人: node.负责人, 判据: node.判据,
+        已交答案数: (node.独立答案 ?? []).length, 产物数: (node.产出物引用 ?? []).length, 原因: base.原因, 源快照摘要, 宿主停止状态: '未确认', 在途工具已取消: false } }] };
+  }
+
+  #assertClosedSource(id, rows) {
+    const matches = rows.flatMap((row, index) => row.id === id && row.kind === 'closed' ? [index] : []);
+    if (matches.length !== 1) throw new Fault('TASK_CLOSE_SOURCE_INVALID', '终止事实缺失或重复，不能建立恢复关系或认回旧回执。');
+    const index = matches[0];
+    const row = rows[index];
+    const before = fold(rows.slice(0, index)).get(id);
+    const { 后继任务: _successor, ...source } = before ?? {};
+    if (!before || digest(canonical(source)) !== row.终止源快照摘要 || row.原状态 !== before.状态 || rows.slice(index + 1).some((event) => event.id === id)) throw new Fault('TASK_CLOSE_SOURCE_INVALID', '终止前源节点原文与 closed 冻结摘要不一致，或终止后仍有源节点事件；停止恢复写入和认回，请保留账本核对。');
+  }
+
+  #successorPlanOf(id, spec, nodes, rows) {
+    const node = nodes.get(id);
+    const base = this.#planBase('task_successor', id, spec, node);
+    if (node.状态 !== '已终止' || !node.终止) throw new Denied('任务恢复 · 必须先终止', '只有已终止的原任务可以建立正式后继；task_successor 不会自动终止原任务。');
+    this.#assertClosedSource(id, rows);
+    if (!Array.isArray(node.判据) || !node.判据.length || node.判据.some((value) => typeof value !== 'string' || !value.trim())) throw new InvalidBody('源任务判据不完整，不能以恢复关系补造验收标准。');
+    if ([...nodes.values()].filter((candidate) => candidate.前序任务 === id).length > 1) throw new Fault('TASK_SUCCESSOR_RELATION_INVALID', '源任务存在多个正式后继事实，停止恢复写入；请保留账本并人工核对。');
+    const 继承打回次数 = node.打回次数 ?? 0;
+    const 接续提醒 = { 来源任务: id, 前序升级: structuredClone(node.升级 ?? null), 累计打回次数: 继承打回次数, 阈值提醒: 继承打回次数 >= 2,
+      前序待决: node.终止.原状态 === '待决' ? { 原因: node.待决原因 ?? null, 类型: node.待决类型 ?? null } : null, 处置状态: '未确认' };
+    const source = { id, 描述: node.描述, 判据: node.判据, 依赖: node.依赖 ?? [], 复核对象: node.复核对象 ?? [], 终止: node.终止, 继承打回次数, 接续提醒 };
+    const 源快照摘要 = digest(canonical(source));
+    const request = { 描述: spec.描述?.trim() ?? String(node.描述).trim(), 负责人: normalizeRecoveryOwners(spec.负责人), 原因: base.原因 };
+    const 后继规范摘要 = digest(canonical(request));
+    const nextId = `task-${slugOf(request.描述, 'x')}-next-${digest(canonical({ 项目: spec.项目, id, 源快照摘要, 后继规范摘要 })).slice(0, 20)}`;
+    const 后继输入 = { id: nextId, 描述: request.描述, 负责人: request.负责人, 判据: structuredClone(node.判据), 依赖: structuredClone(node.依赖 ?? []),
+      ...(node.复核对象?.length ? { 复核对象: structuredClone(node.复核对象) } : {}), 状态: '待派发', 判据冻结: true, 前序任务: id, 后继原因: request.原因, 源快照摘要, 后继规范摘要, 继承打回次数, 接续提醒 };
+    let 已有后继 = null;
+    if (node.后继任务) {
+      已有后继 = nodes.get(node.后继任务);
+      if (!已有后继 || 已有后继.id !== nextId || 已有后继.前序任务 !== id || 已有后继.源快照摘要 !== 源快照摘要 || 已有后继.后继规范摘要 !== 后继规范摘要) throw new Denied('任务恢复 · 唯一后继冲突', '源任务已有不同规范或源快照的正式后继；不能覆盖关系或把旧请求当作新回执。');
+      // 核不可变 created 原文，不拿可合法改派/推进的当前投影当创建证据。
+      const created = rows.filter((row) => row.kind === 'created' && row.id === 已有后继.id);
+      const allowed = new Set(['kind', 'seq', 'at', 'by', ...Object.keys(后继输入)]);
+      const payload = created.length === 1 ? Object.fromEntries(Object.keys(后继输入).map((key) => [key, created[0][key]])) : null;
+      if (!payload || Object.keys(created[0]).some((key) => !allowed.has(key)) || canonical(payload) !== canonical(后继输入)) throw new Fault('TASK_SUCCESSOR_CREATION_INVALID', '已有后继的创建原文与冻结继承计划不一致；停止认回和写入，请保留账本核对。');
+    }
+    const 幂等 = Boolean(已有后继);
+    return { ...base, 幂等, 源快照摘要, 后继规范摘要, 后继输入, 已有后继: 已有后继 ? structuredClone(已有后继) : null,
+      步骤: [{ 动作: 幂等 ? 'read' : 'create', 目标: this.#recoveryTarget(nextId, spec.项目),
+        说明: 幂等 ? '读取已有正式后继' : '建立唯一后继（重新派发与授权）', 预览: { ...后继输入, 源节点: id, 源快照摘要, 后继输入 } }] };
+  }
+
+  #signRecoveryPlan(plan) { deepFreeze(plan); this.#recoveryPlans.add(plan); return plan; }
+  #assertRecoveryPlan(plan, id, spec, action) {
+    if (!this.#recoveryPlans.has(plan) || plan.动作 !== action || plan.项目 !== spec.项目 || plan.源节点.id !== id || plan.主体.id !== spec.subject?.id || plan.主体.kind !== spec.subject?.kind || plan.原因 !== spec.原因.trim()) throw new InvalidBody('恢复执行计划不是本服务签发的同主体、同项目、同请求准备结果。');
+    if (action === 'task_successor' && plan.后继规范摘要 !== digest(canonical({ 描述: spec.描述?.trim() ?? String(plan.源节点.描述).trim(), 负责人: normalizeRecoveryOwners(spec.负责人), 原因: spec.原因.trim() }))) throw new InvalidBody('后继请求与已准备的规范输入不一致。');
+  }
+  #changedRecoveryPlan() { throw new Denied('任务恢复 · 准备结果已变化', '源任务或恢复关系已变化，请重新查看与准备；读取回执的计划不能变成新写。'); }
+  async #recoveryRead(id, node, spec) { await this.policy.check({ subject: spec.subject, action: 'read', target: this.#recoveryTarget(id, spec.项目), context: { task: node } }); }
+
   /**
    * @param {string} id
    * @param {{ 项目: string }} spec
@@ -1086,7 +1282,7 @@ export class TaskGraph {
 
   /**
    * @param {string} 项目 @param {object} event @param {object} subject @param {string} [审计动作] 覆盖默认的「状态变更」（讨论段三事件按 W2 规格记各自动作名，档位由 ACTION_GRADE 定）
-   * @param {(nodeInLock: object|null, rows: object[]) => object} [eventBuilder] 用**锁内**折叠视图重算事件字段——
+   * @param {(nodeInLock: object|null, rows: object[]) => object|null|Promise<object|null>} [eventBuilder] 用**锁内**折叠视图重算事件字段——
    *   打回次数这类「从当前状态推导」的值必须以锁内读到的为准（W3 批1·2026-10-09）：
    *   锁外算好再进锁，两个并发 reject 会算出同一个次数，链上少一次打回。
    *   第二个参数是**锁内的原始事件行**：跨节点判定（依赖图这类）也必须在锁内做，
@@ -1095,7 +1291,7 @@ export class TaskGraph {
    *   （2026-10-13 审查 P1-6）：锁外 #require/#requireTransition 读到的状态与落笔时刻可能不同——
    *   review(过) 与 submit 并发时，submit 在锁外过闸、锁内把已采纳节点洗回「已交卷」就是这条路。
    *   所有转移类事件在锁内用最新折叠视图再验一次；抛错即拒写。
-   * @returns {Promise<{事件: object, 节点: object|null}>} 实际落线的事件 + **锁内投影出的节点**
+   * @returns {Promise<{事件: object|null, 节点: object|null}>} 实际落线的事件（认回执/终态截断为 null）+ **锁内投影出的节点**
    *   （2026-10-13 第三批性能收口：修前调用方落线后再 `get()` 一次全量读+折叠；
    *   现在锁内已经把新行折进去了，直接给——顺带消掉「写后再读」可能读到别人中途写入的竞态。）
    */
@@ -1120,6 +1316,8 @@ export class TaskGraph {
         const node = fold(rows).get(event.id);
         if (inLockGuard) await inLockGuard(node, rows);
         if (eventBuilder) finalEvent = await eventBuilder(node, rows);
+        // 恢复回执或被终态截断的升级后半笔返回 null；不补事件或审计。
+        if (finalEvent === null) { 新节点 = node ?? null; return; }
         // 判据冻结：派发之后任何想动判据的事件都被拒绝。这是 §7 那一条的可执行形态。
         // 查 builder **之后**的 finalEvent（2026-10-14 审查 P3）：builder 有权改写事件，
         // 只查入参会漏掉 builder 产出里夹带的判据。
@@ -1139,6 +1337,7 @@ export class TaskGraph {
         新节点 = fold([...rows, 落线行]).get(event.id) ?? null;
       }),
     );
+    if (finalEvent === null) return { 事件: null, 节点: 新节点 };
     // 事件已落线、审计是第二笔（2026-10-14 审查 P2-9）：审计追加失败时状态已变、链上
     // 缺条——调用方若只收到裸错误可能误判「没写成」而重试（submit 重试 = 洗自己答案的
     // 合法窗口）。错误必须明示「事件已落线、仅审计缺失」，并把事件 id 带上供人工补账。
@@ -1154,10 +1353,10 @@ export class TaskGraph {
       });
     } catch (error) {
       throw new Fault('AUDIT_APPEND_FAILED_AFTER_EVENT', `任务事件 ${finalEvent.kind}（${finalEvent.id}）已落线，但审计追加失败：${error instanceof Error ? error.message : String(error)}。不要重试本操作——重试会在任务图上再落一条同效事件；请人工核对账本并补记。`, {
-        detail: { 事件: finalEvent.kind, id: finalEvent.id, 项目, 事件序号: committedRow.seq },
+        detail: { 事件: finalEvent.kind, id: finalEvent.id, 项目, 事件序号: committedRow.seq, ...(finalEvent.前序任务 ? { 前序任务: finalEvent.前序任务 } : {}) },
         outcome: { 提交状态: '已提交', 可重试: false,
           恢复指引: '查询本项目任务账本中该序号及任务当前状态，核对后补记缺失审计；不要重放任务动作。',
-          已确认阶段: [{ 阶段: '任务事件落线', 项目, 任务: finalEvent.id, 事件: finalEvent.kind, 事件序号: committedRow.seq }] },
+          已确认阶段: [{ 阶段: '任务事件落线', 项目, 任务: finalEvent.id, 事件: finalEvent.kind, 事件序号: committedRow.seq, ...(finalEvent.前序任务 ? { 前序任务: finalEvent.前序任务 } : {}) }] },
       });
     }
     return { 事件: finalEvent, 节点: 新节点 };
@@ -1635,7 +1834,7 @@ export function fold(rows) {
     const 序 = Number.isInteger(row.seq) ? row.seq : 索引 + 1;
     let node = nodes.get(row.id);
     if (!node) {
-      node = { id: row.id, 状态: '待派发', 打回次数: 0, 产出物引用: [], 复核经过: [], 代: 1, 答案历史: [] };
+      node = { id: row.id, 状态: '待派发', 打回次数: 0, 本节点打回次数: 0, 产出物引用: [], 复核经过: [], 代: 1, 答案历史: [] };
       nodes.set(row.id, node);
     }
     const 进度 = 记账.get(row.id) ?? {};
@@ -1652,10 +1851,22 @@ export function fold(rows) {
           ...(row.模式 != null ? { 模式: row.模式 } : {}),
           // v2 条目6：显式复核对象引用（被验节点 id 列表）。没有就不落键。
           ...(Array.isArray(row.复核对象) && row.复核对象.length > 0 ? { 复核对象: [...new Set(row.复核对象.map(String))] } : {}),
+          ...(row.判据冻结 === true ? { 判据冻结: true } : {}),
+          ...(row.前序任务 ? { 前序任务: row.前序任务, 源快照摘要: row.源快照摘要, 后继规范摘要: row.后继规范摘要, 后继原因: row.后继原因,
+            继承打回次数: row.继承打回次数, 打回次数: row.继承打回次数 ?? 0, 接续提醒: row.接续提醒 } : {}),
           状态: '待派发',
           创建于: row.at,
           创建者: row.by?.id ?? null,
         });
+        if (row.前序任务) {
+          const predecessor = nodes.get(row.前序任务);
+          if (predecessor) predecessor.后继任务 = row.id;
+        }
+        break;
+      case 'closed':
+        node.状态 = '已终止';
+        node.终止 = { 原因: row.原因, 由: row.by?.id ?? null, 于: row.at, 原状态: row.原状态 };
+        node.终止源快照摘要 = row.终止源快照摘要;
         break;
       case 'dispatched':
         node.状态 = '已派发';
@@ -1768,6 +1979,7 @@ export function fold(rows) {
         break;
       case 'rejected':
         node.打回次数 = row.打回次数 ?? (node.打回次数 ?? 0) + 1;
+        node.本节点打回次数 = (node.本节点打回次数 ?? 0) + 1;
         node.最近打回理由 = row.理由;
         if (node.状态 !== '未验') {
           node.状态 = '已打回';
@@ -1900,6 +2112,19 @@ export function fold(rows) {
 function normalizeList(value) {
   if (value === undefined || value === null) return [];
   return (Array.isArray(value) ? value : [value]).map((v) => String(v).trim()).filter(Boolean);
+}
+
+/** 新恢复入口合同：CSV 字符串与同项数组等价，数组中的项仍是精确岗位/实例 id。 */
+function normalizeRecoveryOwners(value) {
+  return [...new Set(normalizeList(typeof value === 'string' ? value.split(/[,，]/u) : value))].sort();
+}
+
+function deepFreeze(value) {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
 }
 
 /** @param {string} text @param {string} fallback */

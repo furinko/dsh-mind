@@ -690,6 +690,7 @@ window.__ModuleLoader__.load({
     }
     /** 待决 = 任务图里的一种节点状态，或投影带了待决原因。 */
     function isPending(task) {
+      if (task && (task.已终止 === true || task.状态 === '已终止')) return false;
       return String((task && task.状态) || '') === '待决' || !!line(task && task.待决原因);
     }
     /** 交卷进度文本：`3/3`；没齐就带上「未齐」，不让人自己去比两个数。 */
@@ -1948,7 +1949,7 @@ window.__ModuleLoader__.load({
     function 状态区(ctx) {
       var 待你决定 = ctx.待你决定 || [];
       var 探针 = ctx.view && obj(ctx.view.状态条) ? obj(ctx.view.状态条.探针) : null;
-      var 挂待决 = (ctx.tasks || []).filter(function (n) { return n.只读历史 !== true && n.待决原因 && n.状态 !== '待决'; });
+      var 挂待决 = (ctx.tasks || []).filter(function (n) { return n.只读历史 !== true && n.已终止 !== true && n.状态 !== '已终止' && n.待决原因 && n.状态 !== '待决'; });
       var 卡 = [];
       if (!待你决定.length) {
         卡.push(h('div', { key: 'clear', className: 'dshmind-attnClear' }, [
@@ -2170,6 +2171,7 @@ window.__ModuleLoader__.load({
           { 名: '进行中', 值: 计数.进行中 || 0, 色: '#5b8def' },
           { 名: '已交卷', 值: 计数.已交卷 || 0, 色: '#d4a053' },
           { 名: '已结账', 值: 计数.已结账 || 0, 色: '#3fb27f' },
+          { 名: '已终止', 值: 计数.已终止 || 0, 色: '#81858c' },
           { 名: '待决', 值: 计数.待决 || 0, 色: '#e5534b' },
         ]));
       }
@@ -4337,7 +4339,8 @@ window.__ModuleLoader__.load({
                 tasks.slice(0, TASK_LIMIT).map(function (task, index) {
                   var rejects = numOf(task.打回次数) || 0;
                   var 只读历史 = task.只读历史 === true;
-                  var pending = !只读历史 && isPending(task);
+                  var 已终止 = task.已终止 === true || task.状态 === '已终止';
+                  var pending = !只读历史 && !已终止 && isPending(task);
                   var frozen = criteriaFrozen(task);
                   var owners = arr(task.负责人).map(refText).filter(Boolean);
                   var criteria = arr(task.判据).map(refText).filter(Boolean);
@@ -4345,7 +4348,7 @@ window.__ModuleLoader__.load({
                   // 判活（派活闭环 2026-10-15）：投影在「已派发/执行中」窗口给的未见活动名单。
                   // 有名单才画徽章（空数组 = 查过且没有，不是缺陷，不画）；字段缺席 = 宿主没给，同样不画。
                   var 无活动 = arr(task.负责人无活动).filter(Boolean);
-                  var cls = 'dshmind-node' + (pending ? ' dshmind-nodePending' : '') + (!只读历史 && rejects >= 2 ? ' dshmind-nodeEscalated' : '');
+                  var cls = 'dshmind-node' + (pending ? ' dshmind-nodePending' : '') + (!只读历史 && !已终止 && rejects >= 2 ? ' dshmind-nodeEscalated' : '');
                   // hasOwnProperty 挡原型链键（'constructor'/'toString' 等字面量查表会返回 truthy 函数，
                   // 绕过「查表 miss ⇒ 保灰」）——坏值不许因为继承属性画出彩色（失联「值不合法」同族口径）。
                   var 徽色 = Object.prototype.hasOwnProperty.call(状态徽章色, task.状态) ? 状态徽章色[task.状态] : null;
@@ -4377,7 +4380,9 @@ window.__ModuleLoader__.load({
                         h('span', { key: 'o' }, '负责人 ' + (owners.length ? owners.join('、') : '未指派')),
                         task.模式 ? h('span', { key: 'm' }, line(task.模式)) : null,
                         h('span', { key: 's', className: 'dshmind-mono' }, '交卷 ' + progressText(task.交卷)),
-                        rejects ? h('span', { key: 'r', className: 'dshmind-mono' }, '打回 ' + rejects + ' 次') : null,
+                        rejects ? h('span', { key: 'r', className: 'dshmind-mono' }, typeof task.继承打回次数 === 'number'
+                          ? '累计打回 ' + rejects + ' 次（前序 ' + task.继承打回次数 + ' + 本节点 ' + (numOf(task.本节点打回次数) || 0) + '）'
+                          : '打回 ' + rejects + ' 次') : null,
                         arr(task.依赖).length ? h('span', { key: 'd' }, '依赖 ' + arr(task.依赖).map(refText).join('、')) : null,
                       ].filter(Boolean)),
                     ]),
@@ -4408,14 +4413,20 @@ window.__ModuleLoader__.load({
                       }, criteria.length ? criteria.join('；') : '（缺失 —— 建节点时必填）'),
                     ]),
                     h('div', { key: 'b', className: 'dshmind-chips' }, [
-                      只读历史 ? badge('历史判据 · 只读') : frozen ? badge('判据冻结') : badge('判据可改', 'warn'),
+                      只读历史 ? badge('历史判据 · 只读') : 已终止 ? badge('终止记录 · 只读') : frozen ? badge('判据冻结') : badge('判据可改', 'warn'),
                       pending ? badge('待决项', 'warn') : null,
-                      !只读历史 && 无活动.length ? badge(无活动.length + ' 位负责人未见活动', 'warn') : null,
-                      !只读历史 && rejects >= 2 ? badge('打回 ' + rejects + ' 次 · 升级主权者', 'red') : null,
-                      !只读历史 && task.升级 ? badge('升级：' + line(task.升级), 'red') : null,
+                      !只读历史 && !已终止 && 无活动.length ? badge(无活动.length + ' 位负责人未见活动', 'warn') : null,
+                      !只读历史 && !已终止 && rejects >= 2 ? badge('打回 ' + rejects + ' 次 · 升级主权者', 'red') : null,
+                      !只读历史 && !已终止 && task.升级 ? badge('升级：' + line(task.升级), 'red') : null,
                       outputs.length ? h('span', { key: 'a', className: 'dshmind-meta' }, '产物 ' + outputs.length + ' 项') : null,
                     ].filter(Boolean)),
-                    task.待决原因 ? h('div', { key: 'w', className: 'dshmind-decideWhy' }, (只读历史 ? '历史待决说明（只读）：' : '待决原因：') + line(task.待决原因)) : null,
+                    已终止 ? h('div', { key: 'closed', className: 'dshmind-meta' }, '终止原因：' + line(task.终止 && task.终止.原因, '未记录') + '。' + line(task.写入说明, '组织任务已终止；宿主停止未确认，在途工具未被取消。')) : null,
+                    task.前序任务 ? h('div', { key: 'predecessor', className: 'dshmind-meta' }, '前序任务：' + line(task.前序任务)) : null,
+                    task.接续提醒 ? h('div', { key: 'lineage', className: 'dshmind-meta' }, '接续提醒（来源 ' + line(task.接续提醒.来源任务) + '，处置未确认）：'
+                      + (task.接续提醒.前序升级 ? '原升级事实保留。' : task.接续提醒.阈值提醒 ? '累计打回达到阈值，未确认原升级事件。' : '')
+                      + (task.接续提醒.前序待决 ? '前序待决：' + line(task.接续提醒.前序待决.原因, '未记录') + '；接续不代表已裁决。' : '')) : null,
+                    task.后继任务 ? h('div', { key: 'successor', className: 'dshmind-meta' }, '后继任务：' + line(task.后继任务) + '；下游依赖未自动迁移') : null,
+                    task.待决原因 ? h('div', { key: 'w', className: 'dshmind-decideWhy' }, (只读历史 ? '历史待决说明（只读）：' : 已终止 ? '终止前待决说明：' : '待决原因：') + line(task.待决原因)) : null,
                     outputs.length
                       ? h('div', { key: 'chips', className: 'dshmind-chips' },
                           outputs.slice(0, 4).map(function (ref, i) {

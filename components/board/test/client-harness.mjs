@@ -3925,6 +3925,32 @@ export async function runHarness() {
     passed.push(check(attention && textOf(attention).includes('task-current-followup') && !textOf(attention).includes('task-readonly-history'), '只读历史不进挂待决注意力旁路且正常现行不漏'));
   }
 
+  {
+    const recoveryView = sampleView();
+    recoveryView.待你决定 = [];
+    recoveryView.任务 = { 总数: 2, 只读历史数: 0, 现行未结账数: 1, 计数: { 已终止: 1, 待派发: 1 }, 节点: [
+      { id: 'task-closed-old', 描述: '已终止任务保留旧成果', 状态: '已终止', 已终止: true, 判据冻结: true, 判据: ['原判据'],
+        终止: { 原因: '停止结果未知，另建后继' }, 后继任务: 'task-successor-new', 负责人: ['old-worker'],
+        待决原因: '原待决原因', 打回次数: 2, 升级: '原升级', 负责人无活动: ['old-worker'], 产物: ['old-artifact'] },
+      { id: 'task-successor-new', 描述: '可追溯后继', 状态: '待派发', 前序任务: 'task-closed-old', 判据冻结: true, 判据: ['原判据'], 负责人: ['new-worker'],
+        打回次数: 3, 继承打回次数: 2, 本节点打回次数: 1,
+        接续提醒: { 来源任务: 'task-closed-old', 阈值提醒: true, 前序升级: null, 前序待决: { 原因: '原材料未齐' }, 处置状态: '未确认' } },
+    ] };
+    const rendered = await renderView(recoveryView);
+    const cards = findAllByClass(rendered.tree, 'dshmind-node');
+    const old = cards.find(el => textOf(el).includes('task-closed-old') && textOf(el).includes('已终止任务保留旧成果'));
+    const next = cards.find(el => textOf(el).includes('task-successor-new') && textOf(el).includes('可追溯后继'));
+    const oldText = old ? textOf(old) : '';
+    passed.push(check(oldText.includes('已终止') && oldText.includes('终止记录 · 只读'), '终止任务明确只读且保留终止状态'));
+    passed.push(check(oldText.includes('停止结果未知，另建后继') && oldText.includes('宿主停止未确认') && oldText.includes('在途工具未被取消'), '终止说明区分组织状态和未知宿主停止'));
+    passed.push(check(oldText.includes('后继任务：task-successor-new') && oldText.includes('下游依赖未自动迁移') && textOf(next).includes('前序任务：task-closed-old'), '前后继关系可见且不声称迁移依赖'));
+    passed.push(check(!String(old?.props.className).includes('nodeEscalated') && !String(old?.props.className).includes('nodePending') && !oldText.includes('升级主权者') && !oldText.includes('负责人未见活动'), '终止旧任务不继续催升级或挂待决'));
+    passed.push(check(!findAllByClass(rendered.tree, 'dshmind-attnCard').some(el => textOf(el).includes('挂有待决说明')), '终止前的待决原因不进入注意力旁路'));
+    passed.push(check(oldText.includes('old-artifact') && oldText.includes('终止前待决说明：原待决原因'), '终止前成果和待决说明仍可追溯'));
+    passed.push(check(textOf(next).includes('累计打回 3 次（前序 2 + 本节点 1）'), '后继区分前序失败与本节点新增，不给新人补签旧失败'));
+    passed.push(check(textOf(next).includes('未确认原升级事件') && textOf(next).includes('接续不代表已裁决'), '后继保留旧升级阈值和待决处置未知，不冒称已解决'));
+  }
+
   return { passed, liveElements: c1.elements.length, liveTexts: c1.texts.length };
 }
 
