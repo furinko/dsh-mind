@@ -233,6 +233,16 @@ export class Layout {
     return this.private(DIR.基础设施, DIR.任务图, assertPathSegment(project, '项目'), '.goals.lock');
   }
 
+  /** 受管准入尝试额度；配置、预占与结果只增，不计作真实token/费用。 */
+  goalBudgetLog(project) {
+    return this.private(DIR.基础设施, DIR.任务图, assertPathSegment(project, '项目'), 'goal-budgets.jsonl');
+  }
+
+  /** 锁序：目标、预算；预算服务不反向变更任务。 */
+  goalBudgetLock(project) {
+    return this.private(DIR.基础设施, DIR.任务图, assertPathSegment(project, '项目'), '.goal-budgets.lock');
+  }
+
   /** 会审存档（v2 条目18）：`任务图/<项目>/councils.jsonl`——与任务图同目录的独立事件流。 */
   councilLog(project) {
     return this.private(DIR.基础设施, DIR.任务图, assertPathSegment(project, '项目'), 'councils.jsonl');

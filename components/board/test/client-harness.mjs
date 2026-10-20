@@ -3968,6 +3968,18 @@ export async function runHarness() {
     passed.push(check(text.includes('关联任务 3；已合法采纳 2') && text.includes('不代表目标自动完成'), '目标不按任务计数自动宣布完成'));
     passed.push(check(text.includes('意图来源：未核验') && rendered.text.includes('在途宿主操作是否停止须另行核对'), '目标不冒认真人来源或宿主已停止'));
     passed.push(check(rendered.text.includes('共 12 个目标，展示 1 个摘要') && rendered.text.includes('还有目标未展示'), '目标概览明确摘要覆盖与剩余目标'));
+    goalView.目标.目标[0].预算 = { 健康: '可用', 配置: { 上限: 3 }, 上限: 3, 累计准入: 2, 已结算: 1, 未决占用: 1, 可准入: 1, token: null, 费用: null };
+    const budgetView = await renderView(goalView);
+    passed.push(check(budgetView.text.includes('受管尝试上限 3；累计准入 2；已返回结果 1；未决占用 1；可准入 1'), '目标额度消费真源累计和未决，不把未决当可用'));
+    passed.push(check(budgetView.text.includes('失败和未知不退额度，token 与费用未知'), '预算界面明确受管范围和未知真实费用'));
+    goalView.目标.目标[0].预算 = { 健康: '可用', 配置: null };
+    const unconfiguredBudget = await renderView(goalView);
+    passed.push(check(unconfiguredBudget.text.includes('配置前用量未知，不表示零消耗') && !unconfiguredBudget.text.includes('累计准入 0'), '未配置预算不冒充零用量'));
+    goalView.目标.目标[0].预算 = { 健康: '不可用', 配置: null };
+    const invalidBudget = await renderView(goalView);
+    passed.push(check(invalidBudget.text.includes('预算记录不可用，当前额度与用量未知') && invalidBudget.text.includes('实现导出预览'), '坏预算记录显示未知而保留可读目标'));
+    goalView.目标.目标[0].预算 = { 健康: '可用', 配置: { 上限: 0 }, 上限: 0, 累计准入: 0, 已结算: 0, 未决占用: 0, 可准入: 0 };
+    passed.push(check((await renderView(goalView)).text.includes('受管尝试上限 0；累计准入 0；已返回结果 0；未决占用 0；可准入 0'), '显式配置零上限按真实数字显示'));
     goalView.目标 = { 健康: '不可用', 总数: null, 目标: [] };
     const unavailable = await renderView(goalView);
     passed.push(check(unavailable.text.includes('目标记录暂不可读，当前状态未知') && !unavailable.text.includes('尚未登记持续目标'), '坏目标读面呈现未知，不冒充空目标'));

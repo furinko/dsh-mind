@@ -31,6 +31,7 @@ import { Denied } from './kernel/errors.js';
 import { projectWorkbench, sliceForViewer } from './workbench.js';
 import { ObservabilityService } from './observability.js';
 import { projectGoalSnapshot } from './goal-view.js';
+import { GoalBudgetService } from './goal-budget.js';
 
 /** 默认项目键。名字即目录名（§14.4-5）。 */
 export const DEFAULT_PROJECT = 'default';
@@ -71,6 +72,7 @@ export class Org {
     const memory = new MemoryService({ layout, policy, audit, clock });
     const tasks = new TaskGraph({ layout, policy, audit, clock, memory, registry });
     const goals = tasks.goals;
+    const budgets = new GoalBudgetService({ layout, policy, audit, clock, registry, goals });
     const bus = new MessageBus({ layout, policy, audit, clock, tasks });
     const capability = new CapabilityLibrary({ layout, policy, audit, clock, store });
     const upgrade = new UpgradeManager({ layout, policy, audit, clock });
@@ -114,6 +116,7 @@ export class Org {
       store,
       tasks,
       goals,
+      budgets,
       bus,
       memory,
       capability,
@@ -278,7 +281,7 @@ export class Org {
     const 可读目标 = !读者 || 读者.kind === '主权者' || (读者.kind === 'Lead' && identity.members?.[读者.id]?.岗位 === 'Lead' && identity.members?.[读者.id]?.status === '在岗');
     if (!可读目标) visible.目标 = null;
     else {
-      try { visible.目标 = projectGoalSnapshot(this.goals, this.goals.rawSnapshot(项目), snapshot.节点); }
+      try { visible.目标 = projectGoalSnapshot(this.goals, this.goals.rawSnapshot(项目), snapshot.节点, 10, this.budgets); }
       catch (error) { visible.目标 = { 健康: '不可用', 故障码: error.code ?? 'GOAL_READ_FAILED', 总数: null, 目标: [] }; }
     }
     // This projection reads the entire verified observation history, independently of the audit tail.

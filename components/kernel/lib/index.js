@@ -41,6 +41,7 @@ import { DelegationPolicy, isCreationTool } from '../../../src/delegation-policy
 import { ReviewExperimentService } from '../../../src/review-experiments.js';
 import { EXPERIMENT_RECIPES } from '../../../src/review-experiment-files.js';
 import { createKernelObservations } from './observability-hooks.js';
+import { createGoalBudgetHooks } from './goal-budget-hooks.js';
 
 export const name = 'dsh-mind-kernel';
 export const inject = ['tools'];
@@ -98,6 +99,10 @@ export async function apply(ctx, config = {}) {
   const observations = createKernelObservations({ org, projectOf: 当前项目键, logger, enabled: config.audit工具调用 !== false });
   try { observations.attach(ctx); }
   catch (error) { org.observability.setCoverage({ nativeTools: 'hook-registration-failed' }); logger.warn?.('[dsh-mind] 监控钩子不可用，覆盖不完整。'); }
+  const budgetHooks = createGoalBudgetHooks({ org, projectOf: 当前项目键, cwdOf: exec => 会话工作目录(exec, { ctx }), logger, observe: config.audit工具调用 !== false });
+  org.budgetHooks = budgetHooks;
+  const disposeBudgetHooks = budgetHooks.attach(ctx);
+  ctx.effect?.(() => disposeBudgetHooks);
   刷新工具总范围(org, logger);
   // 主权者随时可能改工具总范围：定时重读，让改动生效而不必重启。
   // R04（审查 2026-10-16 · 生效闭环）：同一节拍也刷**策略引擎**——修前只刷工具范围，
@@ -133,7 +138,7 @@ export async function apply(ctx, config = {}) {
     // 单调闸：只读部署偏好，不读路径，不接受任何人的「通融」。
     // v2 条目6/7 补修：同一个 guard 里先判**复核员角色边界**（见 闸判定），不新注册平行 guard。
     启动范围闸.activate((exec) => observations.guard(exec, 'kernel.tool-scope', (observationBlock) => {
-      try { return 闸判定(exec, 项目, { org, ctx, 项目键: 当前项目键, observationBlock }); }
+      try { return 闸判定(exec, 项目, { org, ctx, 项目键: 当前项目键, observationBlock, budgetHooks }); }
       catch (error) { return `[dsh-mind] 工具闸无法确认项目/任务权限，按 fail-closed 拒绝：${错误消息(error)}`; }
     }));
     闸回执.范围闸 = { registered: true, error: null };
@@ -360,7 +365,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         role: { type: 'string', description: '兼容字段，不授予身份或岗位权限；实际主体由宿主会话与身份档案确定，自报 Lead 会被拒绝' },
         实例: { type: 'string', description: 'registry_assign / task_bind 的实例 id（必填；省略会被拒，不再按岗位推断）' },
         工具文件范围: { type: 'object', properties: { 读: { type: 'array', items: { type: 'string' } }, 写: { type: 'array', items: { type: 'string' } } }, additionalProperties: false, description: 'task_dispatch / member_spawn：派发时冻结的通用文件读写绝对根。须在部署者 memberFileAccess 可授上限内；不从 cwd 授权，不允许 shell/未知执行类。' },
-        id: { type: 'string', description: '对象 id（持久目标 / 任务节点 / 记忆条目 / 挂起项 / 能力名——capability_read 按 id 读，不读 名）' },
+        id: { type: 'string', description: '对象 id（持久目标 / 任务节点 / 记忆条目 / 挂起项 / 能力名——capability_read 按 id 读，不读 名）；budget_query及人侧budget_decide必填目标id' },
         期望结果: { type: 'string', maxLength: 4000, description: 'goal_create 的用户期望结果；Lead goal_revise不能改目标本意，人侧改动走goal_decide' },
         约束: { type: 'array', maxItems: 32, items: { type: 'string', maxLength: 1000 }, description: '持久目标的约束；Lead仅可追加，移除或替换需人侧goal_decide。命令使用JSON数组' },
         禁止工具: { type: 'array', maxItems: 6, items: { type: 'string', enum: ['read', 'read_image', 'glob', 'grep', 'write', 'edit'] }, description: '持久目标关联任务的额外原生工具禁止项；只能收紧，不能授予或扩张任何权限' },
@@ -368,12 +373,14 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         下一步: { type: 'string', maxLength: 2000, description: '持久目标已记录的下一步计划，不代表宿主正在执行' },
         请求键: { type: 'string', maxLength: 128, description: 'goal_create可选幂等键；同主体、项目、规范输入认回同一目标，冲突不覆盖' },
         修订: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: '持久目标写入必填的当前修订（创建除外）；陈旧修订拒绝，防止并发覆盖' },
+        预算修订: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: '人侧budget_decide的预期预算修订；首次配置为0，之后填当前正整数。与目标修订分开' },
+        上限: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: '人侧budget_decide配置的累计受管准入尝试上限，单位固定每次1；修改不清零已用或未决，不代表token/费用' },
         等待原因: { type: 'string', maxLength: 2000, description: 'goal_progress状态=等待时必填；恢复进行中会清除等待原因' },
         状态: { type: 'string', enum: ['进行中', '等待', '暂停', '已完成', '取消'], description: 'goal_progress仅进行中/等待；人侧goal_decide仅暂停/取消/恢复进行中。完成只走goal_complete；已完成或取消不能恢复' },
         说明: { type: 'string', maxLength: 2000, description: 'goal_complete必填：基于逐条证据的完成判断说明' },
         证据: { type: 'array', maxItems: 32, items: { type: 'string' }, description: 'goal_complete的精确task id；须关联本目标且真源已合法采纳，产物清单仍有效' },
         完成核对: { type: 'array', maxItems: 32, items: { type: 'object', properties: { 依据: { type: 'string', maxLength: 1000 }, 任务: { type: 'array', minItems: 1, maxItems: 32, items: { type: 'string' } } }, required: ['依据', '任务'], additionalProperties: false }, description: 'goal_complete逐条核对当前完成依据；每项精确出现一次，关联任务须包含于证据并覆盖全部证据。语义核对仍由执行者负责' },
-        条数: { type: 'integer', minimum: 1, maximum: 50, description: 'goal_query列表摘要每页条数，默认20最大50；按偏移续页' },
+        条数: { type: 'integer', minimum: 1, maximum: 50, description: 'goal_query列表摘要或budget_query准入尝试每页条数，默认20最大50；按偏移续页' },
         // 描述/原因 的分工按动作实际消费面写（设计评审 F2b 普查 · 2026-10-15）：task_pending
         // 的 handler 读的是 原因（服务层 markPending 的 待决原因），不读 描述——修前 描述
         // 的说明写着「task_create / task_pending」两用，照它传参会静默落空。
@@ -650,6 +657,8 @@ function 闸判定(exec, 项目, deps = {}) {
   if (角色拒 !== undefined) { deps.observationBlock?.('kernel.reviewer-scope'); return 角色拒; }
   const 成员拒 = 咨询?.命中 ? undefined : 普通成员工具闸(exec, 项目, deps);
   if (成员拒 !== undefined) { deps.observationBlock?.('kernel.member-files'); return 成员拒; }
+  const 预算拒 = deps.budgetHooks?.guard(exec);
+  if (预算拒 !== undefined) { deps.observationBlock?.('kernel.goal-budget', deps.budgetHooks.versionOf(exec), 'goal-budget-config'); return 预算拒; }
   if (ENVELOPE_STATE.状态 === '未配置') return undefined;
   if (ENVELOPE_STATE.状态 === '故障') {
     if (工具 === 'mind' && exec?.arguments?.action === 'status') return undefined;
@@ -1268,8 +1277,8 @@ function normalizeArgs(args) {
     if (out[key] === 'true') out[key] = true;
     else if (out[key] === 'false') out[key] = false;
   }
-  // 命令键值对没有 JSON 数字类型；只转换显式数字参数（读分页及目标修订），不改自由文本。
-  for (const key of ['limit', '条数上限', '内容预算', '偏移', '正文偏移', '条数', '修订']) {
+  // 命令键值对没有 JSON 数字类型；只转换显式数字参数（分页、目标/预算修订与上限），不改自由文本。
+  for (const key of ['limit', '条数上限', '内容预算', '偏移', '正文偏移', '条数', '修订', '预算修订', '上限']) {
     if (typeof out[key] === 'string' && /^(0|[1-9]\d*)$/.test(out[key])) out[key] = Number(out[key]);
   }
   for (const key of ['负责人', '判据', '依赖', '复核对象', '分歧清单', '反例面', '产出物引用', '适用岗位', '收件', '标签', '来源引用', '知识候选', '参与者']) {

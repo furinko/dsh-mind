@@ -3761,6 +3761,7 @@ window.__ModuleLoader__.load({
           var waiting = obj(goal.等待原因) || {};
           var progress = obj(goal.任务进展) || {};
           var source = obj(goal.来源声明) || {};
+          var budget = obj(goal.预算);
           var nextLabel = goal.状态 === '等待' ? '等待原因：' : goal.状态 === '进行中' ? '下一步：' : '原计划（当前不推进）：';
           var step = goal.状态 === '等待' ? waiting : next;
           return h('article', { key: goal.id, 'data-goal-id': goal.id }, [
@@ -3769,6 +3770,10 @@ window.__ModuleLoader__.load({
             h('p', { key: 'next' }, nextLabel + String(step.文本 || '见目标详情') + (step.省略 ? '…（摘要）' : '')),
             h('p', { key: 'limits' }, '禁用文件工具：' + (arr(goal.禁止工具).join('、') || '无') + '；另有 ' + String(goal.文本约束条数) + ' 条文本约束，使用 goal_query 读取全文。'),
             h('p', { key: 'progress' }, '关联任务 ' + String(progress.关联) + '；已合法采纳 ' + String(progress.合法采纳) + '。任务进度不代表目标自动完成。'),
+            h('p', { key: 'budget' }, !budget || budget.健康 !== '可用' ? '预算记录不可用，当前额度与用量未知。'
+              : !budget.配置 ? '未配置受管尝试额度；配置前用量未知，不表示零消耗。'
+              : '受管尝试上限 ' + String(budget.上限) + '；累计准入 ' + String(budget.累计准入) + '；已返回结果 ' + String(budget.已结算) + '；未决占用 ' + String(budget.未决占用) + '；可准入 ' + String(budget.可准入)),
+            h('p', { key: 'budget-scope' }, '仅覆盖普通成员文件工具与 member_spawn 的准入尝试；失败和未知不退额度，token 与费用未知。'),
             h('p', { key: 'source' }, '意图来源：' + String(source.用户意图 || '未核验')),
             h('p', { key: 'detail', className: 'dshmind-mono' }, String(goal.详情指引 || '')),
           ]);

@@ -23,12 +23,22 @@ async function setup(config = {}) {
   const org = await shareOrg({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
   const exec = (name = 'read', args = { file_path: input }, id = 'member-a') => Object.freeze({ name, arguments: Object.freeze(args), callId: 'reused-call', rootCallId: 'root', token: Symbol('host-execution'),
     agent: { session: { id, header: { cwd, ...(id === 'lead' ? {} : { origin: 'subagent', parentSession: 'lead', delegationDepth: 1 }) } } } });
-  // Exact host contract: synchronous guards -> no body on denial -> one final result, including denials.
+  // Cordis waterfall: no implicit continuation for undefined; every middleware must return next().
+  const preExecute = (e, terminal = async () => ({ kind: 'allow' })) => {
+    const callbacks = [...(host.钩子.get('tools/pre-execute') ?? [])];
+    const next = () => (callbacks.shift() ?? terminal)(e, next);
+    return next();
+  };
+  // Installed host order: await pre waterfall -> synchronous guards -> body -> final result.
   const execute = async (e, body = async () => readFile(input, 'utf8')) => {
-    let denial; for (const guard of host.闸) { denial = guard(e); if (denial !== undefined) break; }
     let result;
-    if (denial !== undefined) result = { isError: true, error: { message: denial } };
-    else { host.触发('tools/pre-execute', e); try { await body(); result = { isError: false }; } catch { result = { isError: true, error: { code: 'BODY_FAILED' } }; } }
+    try {
+      const gate = await preExecute(e);
+      let denial = gate.kind === 'allow' ? undefined : gate.kind === 'ask' ? 'approval channel unavailable in isolated fixture' : gate.reason;
+      if (gate.kind === 'allow') for (const guard of host.闸) { denial = guard(e); if (denial !== undefined) break; }
+      if (denial !== undefined) result = { isError: true, error: { message: denial } };
+      else { try { await body(); result = { isError: false }; } catch { result = { isError: true, error: { code: 'BODY_FAILED' } }; } }
+    } catch (error) { result = { isError: true, error: { message: error.message, code: error.code ?? 'PIPELINE_FAILED' } }; }
     host.触发('tools/result', e, result); await org.observability.flush(); return result;
   };
   const dispatch = async () => {
@@ -36,11 +46,59 @@ async function setup(config = {}) {
     await org.tasks.bind(n.id, { subject: LEAD, 项目: P, 实例: 'member-a', 岗位: '插件工程' });
     await org.tasks.dispatch(n.id, { subject: LEAD, 项目: P, 工具文件范围: { 读: [cwd], 写: [cwd] } }); return n;
   };
-  return { f, cwd, input, host, org, exec, execute, dispatch, query: () => org.observability.query({ subject: MEMBER, project: P }),
+  return { f, cwd, input, host, org, exec, execute, preExecute, dispatch, query: () => org.observability.query({ subject: MEMBER, project: P }),
     async cleanup() { host.清理(); await org.observability.flush(); forgetSharedOrg(shareKey({ home: f.home, privateRoot: f.privateRoot, project: P })); await f.cleanup(); } };
 }
 
 describe('阻塞监控与反馈闭环', () => {
+  it('真实 pre waterfall 合同：观测钩子透传下个监听，合法 body 执行且顺序正确', async () => {
+    const s = await setup(); try {
+      await s.dispatch();
+      const order = [];
+      s.host.ctx.on('tools/pre-execute', async (_exec, next) => {
+        order.push('downstream-pre');
+        const decision = await next();
+        order.push('downstream-return');
+        return decision;
+      });
+      const result = await s.execute(s.exec(), async () => { order.push('body'); });
+      assert.equal(result.isError, false, JSON.stringify(result));
+      assert.deepEqual(order, ['downstream-pre', 'downstream-return', 'body']);
+      const q = await s.query();
+      assert.equal(q.尝试总数, 1);
+      assert.equal(q.阻塞总数, 0);
+    } finally { await s.cleanup(); }
+  });
+  it('真实 pre waterfall 合同：下游 deny 和原异常透传，观测失败也不截断链', async () => {
+    const s = await setup(); try {
+      await s.dispatch();
+      const observer = s.org.observability;
+      const originalBegin = observer.begin;
+      observer.begin = () => { throw Error('isolated observation failure'); };
+      let downstream = 0, body = 0;
+      const rejection = { kind: 'deny', reason: 'original downstream denial' };
+      const dispose = s.host.ctx.on('tools/pre-execute', async () => { downstream++; return rejection; });
+      try {
+        assert.equal(await s.preExecute(s.exec()), rejection, '不得把下游原拒绝替换为默认 allow');
+        const denied = await s.execute(s.exec(), async () => { body++; });
+        assert.equal(denied.isError, true);
+        assert.equal(denied.error.message, rejection.reason);
+        assert.equal(body, 0);
+        assert.equal(downstream, 2);
+      } finally { dispose(); }
+      const originalError = Error('original downstream exception');
+      const disposeThrow = s.host.ctx.on('tools/pre-execute', async () => { throw originalError; });
+      try { await assert.rejects(s.preExecute(s.exec()), error => error === originalError); }
+      finally { disposeThrow(); }
+      let terminal = 0;
+      assert.deepEqual(await s.preExecute(s.exec(), async () => { terminal++; return { kind: 'allow' }; }), { kind: 'allow' });
+      assert.equal(terminal, 1, '观测异常不应跳过真实下游');
+      assert.ok(observer.health().采集异常 > 0);
+      observer.begin = originalBegin;
+      assert.equal((await s.execute(s.exec(), async () => { body++; })).isError, false);
+      assert.equal(body, 1);
+    } finally { await s.cleanup(); }
+  });
   it('调用摘要只剔除 mind 顶层真实审批凭据，原生/嵌套同名业务输入仍区分', () => {
     const hash = (name, args) => executionTarget({ name, arguments: args });
     assert.equal(hash('mind', { action: 'task_create', 审批引用: 'a' }), hash('mind', { action: 'task_create', 审批引用: 'b' }));

@@ -15,8 +15,8 @@ export function createKernelObservations({ org, projectOf, logger = console, ena
     guard(exec, ruleId, work) {
       const attempt = enabled ? begin(exec, 'guard') : null;
       // Observation failures cannot skip work(), change its return or throw over its own error.
-      const reason = work((id, version) => collect(() => observer.block(attempt, { ruleId: id, ruleVersion: version,
-        versionScope: version === undefined ? 'loaded-policy-documents-and-defaults' : 'tool-envelope-config', source: 'native_sync_guard' })));
+      const reason = work((id, version, versionScope) => collect(() => observer.block(attempt, { ruleId: id, ruleVersion: version,
+        versionScope: versionScope ?? (version === undefined ? 'loaded-policy-documents-and-defaults' : 'tool-envelope-config'), source: 'native_sync_guard' })));
       if (typeof reason === 'string') collect(() => observer.block(attempt, { ruleId, source: 'native_sync_guard' }));
       return reason;
     },
@@ -35,7 +35,10 @@ export function createKernelObservations({ org, projectOf, logger = console, ena
     attach(ctx) {
       observer.setCoverage({ nativeTools: enabled ? 'enabled' : 'disabled', semanticMind: 'enabled' });
       if (!enabled) return;
-      ctx.on('tools/pre-execute', exec => { begin(exec, 'pre-execute'); });
+      ctx.on('tools/pre-execute', (exec, next = () => Promise.resolve({ kind: 'allow' })) => {
+        begin(exec, 'pre-execute');
+        return next();
+      });
       ctx.on('tools/result', (exec, result) => { collect(() => observer.finish(begin(exec, 'result'), result)); });
       挂兼容工具审计(ctx, org, logger);
     },

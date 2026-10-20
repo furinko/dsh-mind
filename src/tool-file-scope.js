@@ -124,7 +124,8 @@ export class ToolFileAuthority {
       target: { id: task.id, kind: '任务', authority: '自治', zone: '私有', project: task.项目 },
       context: { task, 节点操作: 'tool_file' } }) ?? { verdict: 'deny', rule: '同步策略资格缺失', reason: '策略引擎没有同步新鲜度判定，不能授权通用文件工具。' };
   }
-  check({ tool, args, cwd, nodes, instance, parent, member }) {
+  /** 授权候选与递归交集同源；预算只能引用这些实际范围，不接受自报任务归属。 */
+  scopeTasks({ tool, args, cwd, nodes, instance, parent, member }) {
     const writing = FILE_WRITE_TOOLS.has(tool);
     if (!writing && !FILE_READ_TOOLS.has(tool)) throw new Denied('成员通用工具 · 闭名单', `工具「${tool}」没有可核验的任务文件边界；shell、执行器、插件工具与未知工具均拒绝。请通过 mind 或向派发 Lead 报告。`);
     const recursive = tool === 'glob' || tool === 'grep';
@@ -146,6 +147,11 @@ export class ToolFileAuthority {
     // 洗掉目标限制；不相关路径的独立工作仍按各自范围判定。
     // 递归搜索还会触及目标目录下的更窄任务根：反向包含只用于附加限制，绝不授予搜索权限。
     const constrained = recursive ? grants.filter(task => matches(task, true)) : scoped;
+    return { writing, recursive, target, scoped, constrained };
+  }
+  check(input) {
+    const { tool, nodes, instance, member } = input;
+    const { writing, recursive, target, scoped, constrained } = this.scopeTasks(input);
     for (const task of constrained) {
       const goal = this.#goals?.constraintsForTask(task, nodes, task.项目);
       if (!goal) continue;
