@@ -915,6 +915,18 @@ export class PolicyEngine {
         detail: { 实例: subject.id, 状态: member.status ?? null },
       });
     }
+    const 绑定代 = typeof member.代次 === 'string' ? member.代次 : member.代次?.代;
+    const 本代 = this.state.identity?.boot?.代;
+    const 绑定pid = member.代次?.pid ?? this.state.identity?.boot?.代次记录?.[绑定代]?.pid;
+    // 即使启动回收被策略拒绝，也不能让已知异进程的旧绑定继续授权写。
+    // 历史缺代次仍不猜死；同进程 HMR 的旧 UUID 不等于进程已死。
+    const 异进程旧绑定 = 绑定代 && 本代 && 绑定代 !== 本代 && 绑定pid != null && 绑定pid !== process.pid;
+    if (subject.kind === 'Lead' && (异进程旧绑定 || (member.运行绑定 && (member.运行绑定.状态 !== '有效'
+      || 绑定代 !== 本代)))) {
+      return deny('Lead 运行绑定失效（写 fail-closed）', '旧运行绑定不能授权写操作；由宿主核验真实根会话与岗位后续接，不恢复封存或撤权身份。', {
+        requireAuthority: '机制', howToChange: '通过真实宿主会话续接本代；只读诊断仍可用。',
+      });
+    }
     // 补修J（2026-10-18 独立审计 · 第一处缺口）：**卡类型必须与实例真实主体一致**。
     // 修前这一闸只看「在岗 + 有摘要」，于是一个 kind=Lead 的根会话只要档案里背着
     // 一张成员卡（插件工程 / 复核员…）照样过写前闸——成员卡的规则面被当成 Lead 的用。
@@ -1716,6 +1728,7 @@ export class PolicyEngine {
         members: parsed.members ?? {},
         sovereign: parsed.sovereign ?? { lastInteraction: null },
         denylist: parsed.denylist ?? [],
+        ...(parsed.boot ? { boot: parsed.boot } : {}),
       };
     } catch (error) {
       throw new Error(`身份档案无法解析：${error instanceof Error ? error.message : String(error)}`);

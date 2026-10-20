@@ -56,6 +56,13 @@ export const MECHANISMS = Object.freeze([
     说明: '根会话（Lead 实例）随会话出生时登记身份并钉住当时的卡版本（条目9/10）',
   }),
   Object.freeze({
+    名: 'Lead运行绑定',
+    action: 'write',
+    authority: '自治',
+    kinds: Object.freeze(['身份']),
+    说明: '仅失效旧 Lead 运行绑定或由宿主真实根会话续接本代；不恢复封存或撤权身份',
+  }),
+  Object.freeze({
     名: '孤儿回收',
     action: 'seal',
     authority: '自治',
