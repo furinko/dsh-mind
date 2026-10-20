@@ -196,9 +196,9 @@ describe('dsh-mind 宿主半区', () => {
   it('tools/result 钩子把失败全记进审计', async () => {
     const before = (await (await import('node:fs/promises')).readFile(join(home, 'mind-private', '集体L2-共享基础设施', '审计日志', new Date().toISOString().slice(0, 7).replace(/^/, 'audit-') + '.jsonl'), 'utf8').catch(() => '')).split('\n').filter(Boolean).length;
     host.触发('tools/result', fakeExec({ name: 'pwsh' }), { isError: true, error: { message: '命令失败', info: { code: 'X' } } });
-    const after2 = await 等到审计行((rows) => rows.length > before);
+    const after2 = await 等到审计行((rows) => rows.slice(before).some(row => row.动作 === '工具调用失败' && row.详情.原因 === '命令失败'));
     assert.ok(after2.length > before, '失败必须落账');
-    const last = after2[after2.length - 1];
+    const last = after2.slice(before).find(row => row.动作 === '工具调用失败' && row.详情.原因 === '命令失败');
     assert.equal(last.动作, '工具调用失败');
     assert.equal(last.档位, '全记');
     assert.equal(last.详情.原因, '命令失败');

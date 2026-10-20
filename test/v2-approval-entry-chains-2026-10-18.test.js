@@ -37,9 +37,9 @@ function 假宿主() {
       agent: { session: { id: 'lead-session' } },
       delegation: { authorize: () => ({ fingerprint: 'test-auth' }), status: () => ({}) },
       subagents: {
-        startActivation: async () => { 调用.创建 += 1; return { childId: 'member-spawned' }; },
-        sendMessage: async () => { 调用.发消息 += 1; },
-        drainChildren: async () => { 调用.停用 += 1; },
+        startContinuable: async () => { 调用.创建 += 1; return { childId: 'member-spawned', messageId: 'initial-accepted' }; },
+        sendMessage: async () => { 调用.发消息 += 1; return 'work-inbox-accepted'; },
+        drainContinuableChildren: async () => { 调用.停用 += 1; },
       },
     },
   };

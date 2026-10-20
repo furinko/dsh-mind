@@ -16,7 +16,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { link, mkdir, stat, writeFile } from 'node:fs/promises';
 import { symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeFixture, seedReviewRelation } from './helpers.mjs';
@@ -67,11 +67,23 @@ async function 起现场({ 附读根 = true } = {}) {
     }]);
   }
   const host = fakeHost();
-  await plugin.apply(host.ctx, { home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot });
+  await plugin.apply(host.ctx, { home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, projectBindings: [{ path: 项目目录, project: 项目键 }] });
   return { f, host, 项目目录 };
 }
 
 describe('复核员只读工具闸（真 host guard）', () => {
+  it('复核读根内的硬链接别名不能直读私有身份或从其父目录递归检索', async () => {
+    const { f, host, 项目目录 } = await 起现场();
+    try {
+      const alias = join(项目目录, 'src', 'ordinary.json');
+      await link(f.layout.identityFile(), alias);
+      assert.equal((await stat(alias)).nlink, 2);
+      for (const tool of ['read', 'read_image']) assert.match(闸(host, 复核exec(tool, { file_path: alias }, 项目目录)), /硬链接/);
+      for (const tool of ['glob', 'grep']) assert.match(闸(host, 复核exec(tool, { path: 项目目录, pattern: '*' }, 项目目录)), /硬链接/);
+      assert.equal(闸(host, 复核exec('read', { file_path: join(项目目录, 'src', 'a.js') }, 项目目录)), undefined);
+    } finally { host.清理(); await f.cleanup(); }
+  });
+
   it('正例：项目源码 read/glob/grep 放行；mind 由本体按动作判；guard 全部同步', async () => {
     const { f, host, 项目目录 } = await 起现场();
     try {
@@ -219,11 +231,11 @@ describe('复核员只读工具闸（真 host guard）', () => {
     }
   });
 
-  it('同一 guard 不误伤普通成员/Lead：写工具不受复核员闭名单限制（仍由各自边界判）', async () => {
+  it('同一 guard 分别判普通成员/Lead：无任务成员写拒，Lead 不进入成员闭名单', async () => {
     const { f, host, 项目目录 } = await 起现场();
     try {
       const 普通成员 = { name: 'write', arguments: { file_path: join(项目目录, 'src', 'a.js'), 内容: 'x' }, agent: { session: { id: 'member-a', header: { origin: 'subagent', cwd: 项目目录 } } } };
-      assert.equal(闸(host, 普通成员), undefined, '普通成员的 write 不归复核员闸管（工具总范围/策略另有判定）');
+      assert.match(闸(host, 普通成员), /成员工具闸.*本人真实绑定/, '普通成员由自己的任务文件范围闸拒绝，不能因非复核岗而裸写');
       const lead = { name: 'write', arguments: { file_path: join(项目目录, 'src', 'a.js'), 内容: 'x' }, agent: { session: { id: 'lead', header: { cwd: 项目目录 } } } };
       assert.equal(闸(host, lead), undefined, 'Lead 不进入复核员闭名单');
     } finally { await f.cleanup(); }

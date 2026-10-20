@@ -132,7 +132,7 @@ describe('装载后的真实调用链', () => {
   it('记忆与能力库在装载后可用，且拒绝路径带可执行理由', async () => {
     const tool = host.工具.get('mind');
     const exec = fakeExec({ name: 'mind' });
-    const written = JSON.parse(await tool.execute({ action: 'memory_write', 类: '知识', 内容: '装载后写入的知识', 来源: '集成测试', project: 'e2e' }, exec));
+    const written = JSON.parse(await tool.execute({ action: 'memory_write', 类: '知识', 内容: '装载后写入的知识', 来源: '集成测试', project: 'e2e', 依据: 'e2e指定项目的集成验证' }, exec));
     assert.equal(written.成功, true);
     const queried = JSON.parse(await tool.execute({ action: 'memory_query', 文本: '装载后写入', project: 'e2e' }, exec));
     assert.ok(queried.结果.命中.length >= 1);

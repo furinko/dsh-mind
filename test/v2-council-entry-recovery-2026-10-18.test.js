@@ -24,11 +24,11 @@ async function setup() {
   const calls = { spawn: [], send: [], stop: [], drain: [] };
   const agent = { session: { id: 'lead', header: { cwd } } };
   const subagents = {
-    async startActivation(spec) {
+    async startContinuable(spec) {
       assert.equal(this, subagents, '宿主方法不能裸调用');
       assert.equal(spec.request.parent, agent);
       assert.ok(spec.signal instanceof AbortSignal);
-      assert.equal(spec.request.signal, spec.signal);
+      assert.equal(Object.hasOwn(spec.request, 'signal'), false, 'continuable request omits signal');
       calls.spawn.push(spec);
       return { childId: `consult-${calls.spawn.length}`, messageId: 'started' };
     },
@@ -40,10 +40,10 @@ async function setup() {
       return { messageId: `sent-${calls.send.length}` };
     },
     interrupt(id, owner) { assert.equal(this, subagents); assert.equal(owner.agent, agent); calls.stop.push(id); },
-    async drainChildren(parent, ids) { assert.equal(this, subagents); assert.equal(parent, agent); calls.drain.push(...ids); },
+    async drainContinuableChildren(parent, ids) { assert.equal(this, subagents); assert.equal(parent, agent); calls.drain.push(...ids); },
   };
   const host = fakeHost({ 提供服务: ['tools', 'commands', 'systemPrompt', 'subagents'], 服务: { subagents } });
-  const config = { home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P,
+  const config = { home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P, projectBindings: [{ path: cwd, project: P }],
     delegation: { mode: 'lead-discretion', projects: [P], authorizationRef: 'isolated-recovery-test' } };
   await plugin.apply(host.ctx, config);
   const org = await shareOrg(config);
@@ -109,7 +109,8 @@ describe('恢复入口：真作用域、工具闸、审批计划', () => {
       assert.equal(发言.成功, true, JSON.stringify(发言));
       const result = await s.invoke('lead', { action: 'debate_converge', id: council.id, 内容: '取长补短' });
       assert.equal(result.成功, true, JSON.stringify(result));
-      assert.deepEqual(s.calls.stop.sort(), ['consult-1', 'consult-2']);
+      assert.deepEqual(s.calls.drain.sort(), ['consult-1', 'consult-2'], '公开释放精确owned实例，不把interrupt当释放证明');
+      assert.deepEqual(s.calls.stop, [], '释放无需将中断请求冒充已停');
       const doc = await s.org.registry.identity();
       assert.equal(doc.members['consult-1'].status, '封存');
       assert.equal(doc.members['consult-2'].status, '封存');
@@ -117,7 +118,7 @@ describe('恢复入口：真作用域、工具闸、审批计划', () => {
     } finally { await s.close(); }
   });
 
-  it('咨询工具闭名单：代码写、shell、创建、能力发布、安全类写、未知工具全拒；普通成员/Lead 不误伤', async () => {
+  it('咨询工具闭名单：代码写、shell、创建、能力发布、安全类写、未知工具全拒；普通成员另判任务文件范围', async () => {
     const s = await setup();
     try {
       const council = await s.open();
@@ -127,7 +128,7 @@ describe('恢复入口：真作用域、工具闸、审批计划', () => {
       for (const action of ['capability_publish', 'memory_write', 'task_create', 'member_spawn', 'debate_open', 'debate_unlock', 'bus_send']) {
         assert.match(s.guard(s.exec('consult-1', 'mind', { action, id: council.id })), /不得执行/);
       }
-      assert.equal(s.guard(s.exec('member-a', 'write', { file_path: s.brief })), undefined);
+      assert.match(s.guard(s.exec('member-a', 'write', { file_path: s.brief })), /成员工具闸.*本人真实绑定/);
       assert.equal(s.guard(s.exec('lead', 'write', { file_path: s.brief })), undefined);
       assert.match(s.guard(s.exec('consult-1', 'mind', { action: 'debate_answer', id: 'other' })), /只绑定/);
       assert.match(s.guard(s.exec('consult-1', 'mind', { action: 'status', project: 'other' })), /只服务项目/);
@@ -226,34 +227,34 @@ describe('恢复入口：真作用域、工具闸、审批计划', () => {
       const args = { action: 'debate_converge', id: council.id, 内容: '批准后结论' };
       let request;
       await assert.rejects(() => s.action(args), (e) => e instanceof NeedsApproval && (request = e.detail.请求id, true));
-      assert.equal(s.calls.stop.length, 0);
+      assert.equal(s.calls.drain.length, 0);
       assert.equal((await s.org.council.get(P, council.id)).状态, '已解锁');
       pending = (await s.org.intervention.人侧待决({ 项目: P })).find((x) => x.请求id === request);
       assert.deepEqual(pending.步骤.map((x) => x.动作), ['write', 'seal', 'seal']);
       await s.org.intervention.人侧决议({ 请求id: request, 决定: '批准', 通道: '设置页', 认证: '隔离夹具认证' });
       await s.action({ ...args, 审批引用: request });
       assert.equal((await s.org.council.get(P, council.id)).状态, '已收敛');
-      assert.equal(s.calls.stop.length, 2);
+      assert.equal(s.calls.drain.length, 2);
       await assert.rejects(() => s.action({ ...args, 审批引用: request }));
-      assert.equal(s.calls.stop.length, 2);
+      assert.equal(s.calls.drain.length, 2);
     } finally { await s.close(); }
   });
 
   it('必要宿主接口缺失在 open/converge 副作用前拒；不假报停机成功', async () => {
     const s = await setup();
     try {
-      for (const key of ['sendMessage', 'drainChildren', 'interrupt']) {
+      for (const key of ['startContinuable', 'sendMessage', 'drainContinuableChildren']) {
         const fn = s.subagents[key]; delete s.subagents[key];
         await assert.rejects(() => s.action(s.openArgs), (e) => e instanceof Fault && e.code === 'MEMBER_SPAWN_CONTRACT');
         s.subagents[key] = fn;
       }
       assert.equal(s.calls.spawn.length, 0);
       const council = await s.open(); await unlock(s, council);
-      const fn = s.subagents.interrupt; delete s.subagents.interrupt;
+      const fn = s.subagents.drainContinuableChildren; delete s.subagents.drainContinuableChildren;
       await assert.rejects(() => s.action({ action: 'debate_converge', id: council.id }), (e) => e instanceof Fault && e.code === 'COUNCIL_ADAPTER_NOT_READY');
       assert.equal((await s.org.council.get(P, council.id)).状态, '已解锁');
       assert.equal((await s.org.registry.identity()).members['consult-1'].status, '在岗');
-      s.subagents.interrupt = fn;
+      s.subagents.drainContinuableChildren = fn;
     } finally { await s.close(); }
   });
 
@@ -263,7 +264,7 @@ describe('恢复入口：真作用域、工具闸、审批计划', () => {
       const readCard = s.org.registry.cardOf.bind(s.org.registry);
       s.org.registry.cardOf = async (id) => { if (id === 'consult-1') throw new Error('卡读取故障'); return readCard(id); };
       await assert.rejects(() => s.action({ ...s.openArgs, 参与者: 'member-a' }), (e) => e instanceof Fault && e.code === 'COUNCIL_CREATE_FAILED');
-      assert.deepEqual(s.calls.stop, ['consult-1']);
+      assert.deepEqual(s.calls.drain, ['consult-1']);
       assert.equal((await s.org.registry.identity()).members['consult-1'].status, '封存');
       assert.equal((await s.org.registry.identity()).members['member-a'].status, '在岗');
       assert.equal((await s.org.council.list({ 项目: P })).length, 0);
@@ -276,7 +277,7 @@ describe('恢复入口：真作用域、工具闸、审批计划', () => {
       const send = s.subagents.sendMessage;
       s.subagents.sendMessage = async function (...args) { if (args[1] === 'consult-2') throw new Error('投递故障'); return send.apply(this, args); };
       await assert.rejects(() => s.action({ ...s.openArgs, 参与者: 'member-a' }), (e) => e instanceof Fault && e.code === 'COUNCIL_SEND_FAILED');
-      assert.deepEqual(s.calls.stop.sort(), ['consult-1', 'consult-2']);
+      assert.deepEqual(s.calls.drain.sort(), ['consult-1', 'consult-2']);
       const doc = await s.org.registry.identity();
       assert.equal(doc.members['consult-1'].status, '封存'); assert.equal(doc.members['consult-2'].status, '封存');
       assert.equal(doc.members['member-a'].status, '在岗');

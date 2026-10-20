@@ -313,14 +313,16 @@ describe('③ 真实署名：不许冒签，冲突排除仍硬拒', () => {
   it('反例：已绑执行者但尚未亲自交卷 ⇒ 仍不得复核（不靠「独立答案里出现」间接拒）', async () => {
     const { f, org } = await 起组织();
     try {
-      // 负责人=岗位名（v2），真执行者是绑定里的 member-a；member-b 代交了卷，
+      // 负责人=岗位名（v2），真执行者是绑定里的 member-a/member-b；member-b 交了自己的卷，
       // member-a 从未出现在 独立答案 里——修前 `负责人.includes(实例)` 会漏掉这一格。
       const node = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '绑定执行者未交卷', 负责人: ['插件工程'], 判据: ['x'] });
       await org.tasks.dispatch(node.id, { subject: LEAD, 项目: P });
       await org.tasks.bind(node.id, { subject: LEAD, 项目: P, 实例: 'member-a', 岗位: '插件工程' });
+      await org.tasks.bind(node.id, { subject: LEAD, 项目: P, 实例: 'member-b', 岗位: '插件工程' });
       await org.tasks.start(node.id, { subject: MEMBER, 项目: P });
-      await org.tasks.submit(node.id, { subject: { id: 'member-b', kind: '成员', roleId: '插件工程' }, 项目: P, 结论: '代交的卷' });
+      await org.tasks.submit(node.id, { subject: { id: 'member-b', kind: '成员', roleId: '插件工程' }, 项目: P, 结论: 'member-b本人交的卷' });
       const 折 = await org.tasks.get(node.id, { 项目: P });
+      assert.deepEqual(折.绑定.map(row => row.实例).sort(), ['member-a', 'member-b'], '两名真实执行者均精确绑定，不能借同岗回退代交');
       assert.ok(!(折.独立答案 ?? []).some((a) => a.成员 === 'member-a'), '前提：member-a 不在独立答案里');
       // 统一「负责人实例名单（绑定优先）」判：已绑执行者 member-a 即使没交卷也不得复核。
       await assert.rejects(

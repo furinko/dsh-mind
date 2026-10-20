@@ -11,10 +11,12 @@
  * 状态权威的实现方式是 **append-only 事件流 + 折叠**：`tasks.jsonl` 是真相，
  * 内存里的节点只是它的投影，因此重启后一切都能重算（§12.4）。
  */
-import { stat } from 'node:fs/promises';
-import { appendLines, readJsonl, serializeByKey, withLock } from './kernel/fsx.js';
+import { appendLines, readTextOrNull, serializeByKey, withLock } from './kernel/fsx.js';
+import { parseTaskLedger, readTaskLedger } from './task-ledger.js';
 import { Denied, Fault, InvalidBody } from './kernel/errors.js';
 import { 复核对象引用 } from './review-scope.js';
+import { artifactReferences, captureArtifactManifest, verifyArtifactManifest } from './artifact-manifest.js';
+import { ToolFileAuthority } from './tool-file-scope.js';
 
 /** （v2 · 条目18：MULTI_MODES 删除——多人只剩并行分担，模式字段不再存在。） */
 
@@ -171,47 +173,44 @@ export class TaskGraph {
     this.clock = spec.clock;
     this.memory = spec.memory ?? null;
     this.registry = spec.registry ?? null;
+    this.#toolFileAuthority = new ToolFileAuthority({ layout: this.layout, policy: this.policy });
     /**
-     * 事件流读缓存（2026-10-13 第三批性能收口）：键 = 账本路径，值 = {签名, rows}。
-     * 为什么安全：**真源仍是文件**，签名（mtimeMs+size+本进程写计数）一变即重读。
-     * 修前每个公开操作都要重读+重解析整条事件流（get/list/#append/写后再读），
-     * 一次 submit 最多 4 遍全量；账本上万行时写路径明显劣化。
+     * 每次权威读取都读真实字节，只缓存完全相同原文的解析结果。
+     * mtime/size 是性能提示而不是完整性证明：同尺寸改坏或恢复mtime不能继续沿用旧授权。
      */
     this.#readCache = new Map();
-    /** 本进程写计数（写后即使 mtime/size 撞车也重读——同一个写者自己知道自己写过）。 */
-    this.#writeCount = new Map();
   }
 
-  /** @type {Map<string, {签名: string, rows: object[]}>} */
+  /** @type {Map<string, {text: string|null, rows: object[]}>} */
   #readCache;
-  /** @type {Map<string, number>} */
-  #writeCount;
+  #toolFileAuthority;
+
+  /** 仅装配期消费部署者配置；mind 动作不提供修改此上限的入口。 */
+  configureToolFiles(config) {
+    this.#toolFileAuthority = new ToolFileAuthority({ layout: this.layout, policy: this.policy, config });
+    return this.#toolFileAuthority;
+  }
+  toolFileAuthority() { return this.#toolFileAuthority; }
 
   /**
-   * 事件行（带读缓存）：签名 = 盘上 mtime+size + 本进程对这条账本的写次数。
+   * 事件行（带解析缓存）：原文必须逐次读取、逐字一致才复用，不用元数据推断完整性。
    * @param {string} 项目
    * @returns {Promise<object[]>}
    */
   async #rowsOf(项目) {
     const file = this.layout.taskLog(项目);
-    let 签名;
-    try {
-      const st = await stat(file);
-      签名 = `${st.mtimeMs}:${st.size}:${this.#writeCount.get(file) ?? 0}`;
-    } catch {
-      签名 = `absent:${this.#writeCount.get(file) ?? 0}`;
-    }
+    const text = await readTextOrNull(file);
     const hit = this.#readCache.get(file);
-    if (hit?.签名 === 签名) return hit.rows;
-    const rows = await readJsonl(file);
-    this.#readCache.set(file, { 签名, rows });
-    return rows;
+    if (hit?.text === text) return structuredClone(hit.rows);
+    const rows = parseTaskLedger(text, file);
+    this.#readCache.set(file, { text, rows });
+    return structuredClone(rows);
   }
 
-  /** 记一次本进程写入：让缓存签名失效（下一次读必然重读）。 */
+  /** 本进程写入后清解析缓存；下一次读取必须重验真实原文。 */
   #bumpWrite(项目) {
     const file = this.layout.taskLog(项目);
-    this.#writeCount.set(file, (this.#writeCount.get(file) ?? 0) + 1);
+    this.#readCache.delete(file);
   }
 
   /**
@@ -334,11 +333,12 @@ export class TaskGraph {
     const node = await this.#require(id, spec.项目);
     if (node.状态 !== '待派发') throw new Denied('任务图 · 状态机', `节点 ${id} 当前状态为 ${node.状态}，不能重复派发。`, { howToChange: '只对「待派发」的节点派发。' });
     const 复核对象 = 复核对象引用(node);
+    const 工具文件范围 = spec.工具文件范围 === undefined ? null : this.#toolFileAuthority.grant(spec.工具文件范围, spec.subject);
     const { 节点 } = await this.#append(
       spec.项目,
       // v2 条目6：派发时把复核对象**冻结一份快照**进事件流——派发后读域以事件流可判，
       // 事后补绑也照样留痕（bound 事件），历史账本不改。
-      { kind: 'dispatched', id, 判据冻结: true, ...(复核对象.length > 0 ? { 复核对象 } : {}) },
+      { kind: 'dispatched', id, 判据冻结: true, ...(复核对象.length > 0 ? { 复核对象 } : {}), ...(工具文件范围 ? { 工具文件范围 } : {}) },
       spec.subject,
       '状态变更',
       null,
@@ -354,6 +354,7 @@ export class TaskGraph {
           context: { task: nodeInLock },
         });
         await this.#assertOwnersSeated(nodeInLock.负责人, spec.subject, '派发');
+        if (工具文件范围) this.#toolFileAuthority.grant(spec.工具文件范围, spec.subject);
       },
     );
     return 节点;
@@ -481,6 +482,8 @@ export class TaskGraph {
               detail: { 实例, 档案岗位: member.岗位, 声明岗位: 岗位 },
             });
           }
+          // 任务文件权绑定当时真实实例凭证；同id换岗/新代/新卡不能继承旧绑定。
+          绑定.凭证 = { 版本: 1, 代: member.代 ?? 1, 卡版本摘要: member.卡版本?.摘要 ?? null, 宿主代次: member.代次?.代 ?? null };
           const 负责人 = nodeInLock.负责人 ?? [];
           if (负责人.length > 0 && !负责人.includes(实例) && !负责人.includes(岗位)) {
             throw new Denied('任务图 · 绑定岗位必须与节点负责人对得上', `节点 ${id} 的负责人是 ${负责人.join('、')}，与绑定的岗位「${岗位}」/实例 ${实例} 都不匹配：绑定是「这一岗此刻谁在干」，不能挂到别的岗上。`, {
@@ -516,7 +519,7 @@ export class TaskGraph {
       kind: 'submitted',
       id,
       状态: '已交卷',
-      产出物引用: spec.产出物引用 ?? [],
+      产出物引用: normalizeList(spec.产出物引用),
       结论: spec.结论 ?? null,
       // 结论层是 §10 零分歧判据的**主键**（2026-10-14 审查 P1-1）：修前全链路不采集它，
       // judgeZeroDivergence 恒退化为「结论全文逐字相等」——独立写的两份答案几乎不会逐字
@@ -530,7 +533,7 @@ export class TaskGraph {
       // 候选随交卷入账，结账时的记忆处置逐条判它（晋升 / 留账本 / 丢弃）。
       知识候选: (Array.isArray(spec.知识候选) ? spec.知识候选 : []).map((s) => String(s).trim()).filter(Boolean),
     };
-    const { 节点 } = await this.#append(spec.项目, event, spec.subject, undefined, (nodeInLock) => {
+    const { 节点 } = await this.#append(spec.项目, event, spec.subject, undefined, async (nodeInLock) => {
       // 讨论段存在 ⇒ 答案已揭名（或已收敛）：从「已交卷」再交卷会在 fold 里按「同人替换」
       // 静默洗掉本人那份独立答案（2026-10-12 评审 P1-4），零分歧判定就跑在洗过的答案集上。
       // 判定必须在锁内（builder）：debate_opened 与 submit 走同一把项目锁，锁外预读有竞态。
@@ -544,7 +547,12 @@ export class TaskGraph {
           { howToChange: '要改答案走返工环路：请复核者 review「不过」打回 → task_start → task_submit。' },
         );
       }
-      return event;
+      const 他人答案 = (nodeInLock?.独立答案 ?? []).filter((a) => a.成员 !== spec.subject?.id);
+      const 交付物清单 = await captureArtifactManifest(artifactReferences({ ...nodeInLock, 独立答案: [...他人答案, event] }), {
+        layout: this.layout, policy: this.policy, fileAuthority: this.#toolFileAuthority,
+        subject: spec.subject, task: { ...nodeInLock, 项目: spec.项目 },
+      });
+      return { ...event, 交付物清单 };
     }, this.#transitionGuard(id, 'submit'));
     return 节点;
   }
@@ -638,7 +646,14 @@ export class TaskGraph {
       spec.subject,
       '状态变更',
       // 代必须在**锁内**取：票要连同「本任务 · 当前代」校验，锁外读的代会与并发打回竞态。
-      (nodeInLock) => ({ ...事件, 代: nodeInLock?.代 ?? 1 }),
+      async (nodeInLock) => ({
+        ...事件,
+        代: nodeInLock?.代 ?? 1,
+        // 不过/未验仍可描述漂移或旧账；合格票只能引用交卷时已经冻结的内容。
+        ...(spec.三态 === '过' ? { 交付物摘要: await verifyArtifactManifest(nodeInLock?.交付物清单, artifactReferences(nodeInLock), {
+          layout: this.layout, policy: this.policy, subject: spec.subject, task: { ...nodeInLock, 项目: spec.项目 },
+        }) } : {}),
+      }),
       this.#提审分离Guard(id, 'review', 复核者id),
     );
     if (spec.三态 === '不过') await this.reject(id, { subject: spec.subject, 项目: spec.项目, 理由: `复核不过：${(spec.分歧清单 ?? []).join('；') || '未给分歧清单'}` });
@@ -863,7 +878,17 @@ export class TaskGraph {
       事件,
       spec.subject,
       '状态变更',
-      (nodeInLock) => ({ ...事件, 代: nodeInLock?.代 ?? 1 }),
+      async (nodeInLock) => {
+        const 交付物摘要 = await verifyArtifactManifest(nodeInLock?.交付物清单, artifactReferences(nodeInLock), {
+          layout: this.layout, policy: this.policy, subject: spec.subject, task: { ...nodeInLock, 项目: spec.项目 },
+        });
+        if (依据 !== '复核免审' && nodeInLock?.已复核交付物摘要 !== 交付物摘要) {
+          throw new Denied('任务图 · 采纳内容未绑定复核票', '复核票没有绑定本代交卷的内容清单：不能给旧票补造当前内容证据。', {
+            howToChange: '重新交卷并复核出票后再采纳。',
+          });
+        }
+        return { ...事件, 代: nodeInLock?.代 ?? 1, 交付物摘要 };
+      },
       (nodeInLock) => {
         // 锁内复判（并发：锁外过的票/豁免可能在拿号到落笔之间被新交卷、打回或开关关闭作废）
         if (!nodeInLock) throw new InvalidBody(`没有这个任务节点：${id}（在锁内折叠视图中不存在）`);
@@ -1078,6 +1103,7 @@ export class TaskGraph {
     const file = this.layout.taskLog(项目);
     let finalEvent = event;
     let 新节点 = null;
+    let committedRow = null;
     // F4（设计评审 2026-10-15）：在 withLock 外套 serializeByKey（同 key = 本账本文件）。
     // 为什么有了 withLock 还要它：Windows 上「名字式」文件锁存在 rm/create 竞态——持有者的
     // rm 与等待者的 open('wx') 在删除挂起窗口内交错时，两个等待者可以先后各自建出锁文件
@@ -1090,10 +1116,10 @@ export class TaskGraph {
       withLock(this.layout.taskLock(项目), async () => {
         // 锁内必须重读真源（fresh）：缓存可能落后于别的进程刚写下的行，
         // 状态机复检/依赖校验都建立在锁内折叠视图上，读旧表就是判错。
-        const rows = await readJsonl(file);
+        const rows = await readTaskLedger(file);
         const node = fold(rows).get(event.id);
         if (inLockGuard) await inLockGuard(node, rows);
-        if (eventBuilder) finalEvent = eventBuilder(node, rows);
+        if (eventBuilder) finalEvent = await eventBuilder(node, rows);
         // 判据冻结：派发之后任何想动判据的事件都被拒绝。这是 §7 那一条的可执行形态。
         // 查 builder **之后**的 finalEvent（2026-10-14 审查 P3）：builder 有权改写事件，
         // 只查入参会漏掉 builder 产出里夹带的判据。
@@ -1107,6 +1133,7 @@ export class TaskGraph {
         const by = subject && typeof subject === 'object' ? { id: String(subject.id), kind: String(subject.kind ?? '未知') } : { id: String(subject), kind: '未知' };
         const 落线行 = { seq: rows.length + 1, at, by, ...finalEvent };
         await appendLines(file, [落线行]);
+        committedRow = 落线行;
         // 本进程写过了：让读缓存签名失效（下一次读必重读），并把新行折进来的投影直接给出。
         this.#bumpWrite(项目);
         新节点 = fold([...rows, 落线行]).get(event.id) ?? null;
@@ -1127,7 +1154,10 @@ export class TaskGraph {
       });
     } catch (error) {
       throw new Fault('AUDIT_APPEND_FAILED_AFTER_EVENT', `任务事件 ${finalEvent.kind}（${finalEvent.id}）已落线，但审计追加失败：${error instanceof Error ? error.message : String(error)}。不要重试本操作——重试会在任务图上再落一条同效事件；请人工核对账本并补记。`, {
-        detail: { 事件: finalEvent.kind, id: finalEvent.id, 项目 },
+        detail: { 事件: finalEvent.kind, id: finalEvent.id, 项目, 事件序号: committedRow.seq },
+        outcome: { 提交状态: '已提交', 可重试: false,
+          恢复指引: '查询本项目任务账本中该序号及任务当前状态，核对后补记缺失审计；不要重放任务动作。',
+          已确认阶段: [{ 阶段: '任务事件落线', 项目, 任务: finalEvent.id, 事件: finalEvent.kind, 事件序号: committedRow.seq }] },
       });
     }
     return { 事件: finalEvent, 节点: 新节点 };
@@ -1631,6 +1661,7 @@ export function fold(rows) {
         node.状态 = '已派发';
         node.判据冻结 = true;
         node.派发于 = row.at;
+        if (row.工具文件范围) node.工具文件范围 = row.工具文件范围;
         // 派发事件里的复核对象是**冻结快照**（v2 条目6）：派发那一刻验哪一单可回放；
         // 之后补绑走 bound 事件，历史不改。
         if (Array.isArray(row.复核对象)) node.复核对象 = [...new Set(row.复核对象.map(String))];
@@ -1655,6 +1686,8 @@ export function fold(rows) {
       case 'submitted': {
         node.状态 = row.状态 ?? '已交卷';
         进度.最近改成果序 = 序;
+        node.交付物清单 = row.交付物清单 ?? null;
+        delete node.已复核交付物摘要;
         node.产出物引用 = [...new Set([...(node.产出物引用 ?? []), ...(row.产出物引用 ?? [])])];
         node.交卷于 = row.at;
         // 按人留答案（同一个人再交一次就替换他自己那条，别人不受影响）。
@@ -1678,6 +1711,7 @@ export function fold(rows) {
         // 只有「不过 / 未验」带状态（打回关代 / 窗口未关）；「过」不写状态，节点停在原状态。
         if (typeof row.状态 === 'string') node.状态 = row.状态;
         node.最近三态 = row.三态;
+        node.已复核交付物摘要 = row.交付物摘要 ?? null;
         const 票 = `${复核票前缀}${序}`;
         node.复核经过 = [...(node.复核经过 ?? []), {
           票,
@@ -1749,6 +1783,9 @@ export function fold(rows) {
           node.代 = 关代 + 1;
           node.独立答案 = [];
           node.讨论 = null;
+          node.交付挂载 = [];
+          node.交付物清单 = null;
+          delete node.已复核交付物摘要;
         }
         break;
       case 'pending':
@@ -1772,7 +1809,12 @@ export function fold(rows) {
         if (row.复核读根 === true) node.复核读根 = [...new Set([...(node.复核读根 ?? []), row.产出物])];
         // 补修K：非读根的产出物挂载**改变了被验成果** ⇒ 让已出的票作废（与「票后新交卷」同罪）。
         // 读根只是给复核员开文件读面、不改成果；异议更不改成果——两者都不算新证据。
-        else 进度.最近改成果序 = 序;
+        else {
+          进度.最近改成果序 = 序;
+          node.交付挂载 = [...new Set([...(node.交付挂载 ?? []), row.产出物])];
+          node.交付物清单 = null;
+          delete node.已复核交付物摘要;
+        }
         break;
       case 'escalated':
         node.升级 = row.升级;
@@ -1805,6 +1847,7 @@ export function fold(rows) {
           由: row.by?.id ?? null,
           于: row.at ?? null,
           代: row.代 ?? (node.代 ?? null),
+          ...(row.交付物摘要 ? { 交付物摘要: row.交付物摘要 } : {}),
           ...(row.采纳说明 ? { 说明: row.采纳说明 } : {}),
         };
         // Lead 显式采纳/确认即承接：旧账「待确认」标记到此结束。
@@ -1845,7 +1888,9 @@ export function fold(rows) {
     const 进度 = 记账.get(node.id) ?? {};
     const 最后 = 进度.最后复核;
     if (['已交卷', '未验'].includes(node.状态) && 最后 && 最后.三态 === '过' && 最后.代 === (node.代 ?? 1) && 最后.序 > (进度.最近改成果序 ?? 0)) {
-      node.待采纳 = { 票: 最后.票, 复核者: 最后.复核者 ?? null, 于: 最后.于 ?? null, 代: 最后.代 };
+      if (node.已复核交付物摘要 && node.已复核交付物摘要 === node.交付物清单?.摘要) {
+        node.待采纳 = { 票: 最后.票, 复核者: 最后.复核者 ?? null, 于: 最后.于 ?? null, 代: 最后.代 };
+      } else node.交付物待补证 = '旧复核票未绑定交卷内容清单，必须交新卷后重新复核。';
     }
   }
   return nodes;

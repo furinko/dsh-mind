@@ -156,7 +156,7 @@ describe('主干环路', () => {
     assert.equal(默认.条目总数, 55, '总数要给全，别让人以为只有 50 条');
     assert.match(默认.说明 ?? '', /55/, '说明里要有总数');
 
-    const 调宽 = await memory.query({ subject: LEAD, 类: ['偏好'], 条数上限: 100 });
+    const 调宽 = await memory.query({ subject: LEAD, 类: ['偏好'], 条数上限: 100, 内容预算: 32000 });
     assert.equal(调宽.条目.length, 55, '条数上限 调宽后不截断');
     assert.equal(调宽.条目截断, false, '没截断就不许标 true');
 
@@ -370,7 +370,7 @@ describe('主干环路', () => {
     await memory.demote(entry.id, { subject: LEAD, 原因: '冷' });
     const after = await readFile(file, 'utf8');
     assert.ok(after.startsWith(before), '原条目那段字节必须原样在前，追加只能发生在尾部');
-    const folded = await memory.query({ subject: LEAD, 类: ['经历'] });
+    const folded = await memory.query({ subject: LEAD, 类: ['经历'], 含失效: true });
     const target = folded.条目.find((e) => e.id === entry.id);
     assert.equal(target.状态, '已降权');
     assert.equal(target.历史.length, 2);
@@ -450,13 +450,13 @@ describe('主干环路', () => {
     assert.ok(两条.条目.some((e) => e.内容 === '同一毫秒的第二条' && e.id === b.id));
   });
 
-  it('记忆：失效不进默认召回、但仍可见；含失效才拉回来，且降权不许复活它', async () => {
+  it('记忆：失效正文不进默认读面；含失效才拉回来，且降权不许复活它', async () => {
     const entry = await memory.remember({ subject: LEAD, 类: '知识', 内容: '乙案：这条结论后来作废了', 来源: '测试', 项目: P });
     await memory.invalidate(entry.id, { subject: LEAD, 原因: '被新证据推翻' });
 
     const 当前 = await memory.query({ subject: LEAD, 类: ['知识'], 项目: P, 文本: '作废' });
     assert.equal(当前.命中.length, 0, '失效条目不进默认召回');
-    assert.ok(当前.条目.some((e) => e.id === entry.id), '但要留在 条目 里供追溯');
+    assert.ok(!当前.条目.some((e) => e.id === entry.id), '默认不夹带失效全文；追溯用含失效显式读取');
     assert.equal(当前.口径.排除失效, 1, '口径必须点名排除了几条，不许折成「没找到」');
     assert.match(当前.说明 ?? '', /含失效/, '说明要给出把它拉回来的办法');
 
@@ -469,7 +469,9 @@ describe('主干环路', () => {
     await memory.demote(entry.id, { subject: LEAD, 原因: '这条冷下来了' });
     const 降权后 = await memory.query({ subject: LEAD, 类: ['知识'], 项目: P, 文本: '作废' });
     assert.equal(降权后.命中.length, 0, '失效是事实判断，降权是优先级判断，降权不许复活它');
-    assert.equal(降权后.条目.find((e) => e.id === entry.id).状态, '已降权', '但状态读数要如实反映最后一次处置');
+    assert.ok(!降权后.条目.some((e) => e.id === entry.id), '追加降权不能让失效正文重新进入默认读面');
+    const 降权历史 = await memory.query({ subject: LEAD, 类: ['知识'], 项目: P, id: entry.id, 含失效: true });
+    assert.equal(降权历史.条目[0].状态, '已降权', '历史状态如实反映最后一次处置');
   });
 
   it('记忆：作答归档后的可读性矩阵', async () => {

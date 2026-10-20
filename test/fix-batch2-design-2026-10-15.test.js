@@ -31,7 +31,7 @@ import { ReviewProtocol } from '../src/review.js';
 import { RoleRegistry } from '../src/registry.js';
 import { MemoryService } from '../src/memory.js';
 import { appendLines, readJsonl, sleep, withLock } from '../src/kernel/fsx.js';
-import { Denied, Fault, InvalidBody } from '../src/kernel/errors.js';
+import { Denied, Fault, InvalidBody, describeFailure } from '../src/kernel/errors.js';
 
 const P = 'fix-b2';
 const MEMBER_B = { id: 'member-b', kind: '成员', roleId: '插件工程' };
@@ -313,7 +313,18 @@ describe('设计评审 2026-10-15 · #14：settle 补偿审计 与 事件后审�
       await tasks.accept(id, { subject: LEAD, 项目: P, 票: 过.待采纳?.票 });
       await assert.rejects(
         () => tasks.settle(id, { subject: LEAD, 项目: P, 记忆处置: {} }),
-        (e) => e instanceof Fault && e.code === 'AUDIT_APPEND_FAILED_AFTER_EVENT' && /已落线/.test(e.message) && /不要重试/.test(e.message),
+        (e) => {
+          assert.ok(e instanceof Fault && e.code === 'AUDIT_APPEND_FAILED_AFTER_EVENT' && /已落线/.test(e.message) && /不要重试/.test(e.message));
+          const reply = describeFailure(e);
+          assert.equal(reply.提交状态, '已提交');
+          assert.equal(reply.可重试, false);
+          assert.equal(reply.已确认阶段[0].任务, id);
+          assert.equal(reply.已确认阶段[0].事件, 'settled');
+          assert.ok(Number.isSafeInteger(reply.已确认阶段[0].事件序号));
+          assert.match(reply.怎么改, /不要重放任务动作/);
+          assert.doesNotMatch(e.toDecision().howToChange, /修复故障后重试/);
+          return true;
+        },
       );
       assert.equal(注入次数, 1, '故障必须命中结账审计，不是前置路径失败');
       assert.equal((await tasks.get(id, { 项目: P })).状态, '已结账');
@@ -354,7 +365,16 @@ describe('设计评审 2026-10-15 · #14：settle 补偿审计 与 事件后审�
       const bus = new MessageBus({ layout: g.layout, policy: g.policy, audit: 坏审计, clock: g.clock });
       await assert.rejects(
         () => bus.send({ subject: LEAD, 项目: P, 线程: 't-142', 发件: 'lead', 收件: [], 类型: '表态', 内容: '先落线再说' }),
-        (e) => e instanceof Fault && e.code === 'AUDIT_APPEND_FAILED_AFTER_EVENT' && /已落线/.test(e.message) && /不要重试/.test(e.message),
+        (e) => {
+          assert.ok(e instanceof Fault && e.code === 'AUDIT_APPEND_FAILED_AFTER_EVENT' && /已落线/.test(e.message) && /不要重试/.test(e.message));
+          const reply = describeFailure(e);
+          assert.equal(reply.提交状态, '已提交');
+          assert.equal(reply.可重试, false);
+          assert.equal(reply.已确认阶段[0].线程, 't-142');
+          assert.ok(reply.已确认阶段[0].消息id);
+          assert.match(reply.怎么改, /不要重复发送/);
+          return true;
+        },
         '事件后审计失败必须 Fault 且明示「已落线、不可重试」（修前裸抛，调用方会误判没发成而重发）',
       );
       assert.equal((await bus.readRaw({ 项目: P, 线程: 't-142' })).length, 1, '消息本体已经落线（Fault 不是「没写成」）');

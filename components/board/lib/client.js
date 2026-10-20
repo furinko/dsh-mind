@@ -471,6 +471,7 @@ window.__ModuleLoader__.load({
         // ⑦（2026-10-11）：消息总线——投影给什么画什么；会审讨论线程投影已收走正文（盲评保护）。
         消息总线: arr(firstOf(v, ['消息总线', '总线', 'bus'])).map(busThreadRow),
         审计尾: arr(firstOf(v, ['审计尾', '审计', 'audit'])),
+        监控: obj(v.监控),
         // 记忆读数：宿主没给就是 null（不装懂）；给了只取四个标量，数字真伪由投影侧负责。
         记忆: 记忆读数Of(firstOf(v, ['记忆', '记忆读数', 'memory'])),
         // 能力 × 岗位接线（2026-10-13 重做·图谱）。**宿主没给就是 null**（不装懂）：
@@ -1904,6 +1905,7 @@ window.__ModuleLoader__.load({
         { id: 'reviews', 名: '会审', 计数: ctx.会审 ? ctx.会审.length : null },
         { id: 'bus', 名: '总线', 计数: ctx.总线 ? ctx.总线.length : null },
         { id: 'audit', 名: '审计' },
+        { id: 'monitor', 名: '阻塞反馈' },
         { id: 'memory', 名: '记忆', 计数: ctx.记忆 ? ctx.记忆.存量 : null },
       ];
     }
@@ -2061,6 +2063,7 @@ window.__ModuleLoader__.load({
         reviews: [段[1] || null],
         bus: [段[4] || null],
         audit: [段[3] || null],
+        monitor: [h(监控反馈页, { monitor: ctx.view && ctx.view.监控 })],
         memory: 记忆页(ctx),
       };
       var 页节点 = 页清单(ctx).map(function (p) {
@@ -3284,7 +3287,7 @@ window.__ModuleLoader__.load({
      * 七页的 id 与标签（**顺序＝注意力顺序**，与 {@link 页清单} 同源：这里只判合法值）。
      * 这个数组只服务「值合法吗」，标签与计数由 `页清单(ctx)` 给。
      */
-    var 合法页 = { overview: 1, graph: 1, tasks: 1, reviews: 1, bus: 1, audit: 1, memory: 1 };
+    var 合法页 = { overview: 1, graph: 1, tasks: 1, reviews: 1, bus: 1, audit: 1, monitor: 1, memory: 1 };
 
     /** 当前页：**非法值一律落回总览**——切页状态坏掉不许把整块面板画没。 */
     function 当前页() {
@@ -3312,7 +3315,7 @@ window.__ModuleLoader__.load({
     function 当前页名() {
       var 表 = {
         overview: '总览', graph: '图谱', tasks: '任务', reviews: '会审',
-        bus: '总线', audit: '审计', memory: '记忆',
+        bus: '总线', audit: '审计', monitor: '阻塞反馈', memory: '记忆',
       };
       return 表[当前页()] || '总览';
     }
@@ -3738,6 +3741,68 @@ window.__ModuleLoader__.load({
     }
 
     /** 官方根席位只从实际可见引用取会话：主视图mainView、嵌入侧聊sidebarChat；不把后台持有者当正在看的会话。 */
+    /** A small authenticated feedback surface. POST is confirmed by a fresh independent GET. */
+    function 监控反馈页(props) {
+      var monitor = props.monitor;
+      var form = useState({ id: '', reason: '', reference: '', category: '未知', verdict: 'unknown', busy: false, message: '' });
+      var value = form[0]; var set = form[1];
+      var life = useState(function () { return { active: true, generation: 0, busy: false }; })[0];
+      useEffect(function () { life.active = true; return function () { life.active = false; life.generation++; }; }, []);
+      function edit(key, text) { set(function (old) { var next = Object.assign({}, old); next[key] = text; return next; }); }
+      function send(row) {
+        if (life.busy || !value.reason.trim() || !value.reference.trim()) return;
+        life.busy = true; var generation = life.generation;
+        edit('busy', true); edit('message', '提交中，尚未确认');
+        var route = '/plugins/dsh-mind/monitor?sessionId=' + encodeURIComponent(row.subject);
+        runCommand(activeCtx, row.subject, { method: 'POST', path: route, body: { 阻塞引用: row.id, 原因分类: value.category,
+          判定: value.verdict, 原因: value.reason, 来源引用: value.reference } }).then(function (out) {
+          if (!life.active || life.generation !== generation) return;
+          var receipt = obj(out.value);
+          if (!out.ok || !receipt || !receipt.feedbackId || receipt.blockId !== row.id || receipt.source !== 'human_confirmation') {
+            life.busy = false; edit('busy', false); edit('message', '反馈未确认：' + (out.error || '回执不匹配，请回读核查。')); return;
+          }
+          return runCommand(activeCtx, row.subject, { method: 'GET', path: route }).then(function (read) {
+            if (!life.active || life.generation !== generation) return;
+            var data = read.ok && read.value && read.value.数据;
+            var item = data && arr(data.阻塞).find(function (entry) { return entry.id === row.id && entry.subject === row.subject; });
+            var confirmed = item && arr(item.feedback).some(function (f) { return f.eventId === receipt.feedbackId && f.source === 'human_confirmation'; });
+            life.busy = false; edit('busy', false); edit('message', confirmed ? '已回读确认反馈；权限与审批未改变。' : '提交回执已收到，独立回读未确认；请核查后再提交。');
+            if (confirmed) 刷新投影();
+          });
+        });
+      }
+      if (!monitor) return h('p', null, '监控尚未接入，覆盖与分母未知。');
+      var health = monitor.健康 || {};
+      return h('section', { 'data-dshmind': 'monitor-feedback' }, [
+        h('h2', { key: 'title' }, '阻塞与原因反馈'),
+        h('p', { key: 'scope' }, String(monitor.范围 || '范围未知') + ' · 采集 ' + String(health.状态 || '未知') + ' · 已落账尝试 ' + String(monitor.尝试总数 === null ? '未知' : monitor.尝试总数)),
+        h('p', { key: 'coverage' }, JSON.stringify(health.覆盖 || {}) + ' · ' + String(health.分母 || '') + ' · ' + String(health.崩溃窗口 || '')),
+        h('p', { key: 'denom' }, '误拦截率：未知（缺少有效分母）；模型声明与人侧确认分别统计。批准或重试发起不等于恢复。'),
+        h('p', { key: 'paging' }, '阻塞共 ' + String(monitor.阻塞总数) + ' 条，此页展示最近 ' + arr(monitor.阻塞).length + ' 条；模型可用 monitor_query + 监控偏移继续读取。规则共 ' + String(monitor.规则总数) + ' 条，展示上限100；每条仅展示最近10条反馈与跟进。'),
+        h('p', { key: 'timing' }, monitor.耗时口径 || ''),
+        arr(monitor.规则汇总).map(function (r) { return h('p', { key: r.ruleId + r.ruleVersion },
+          r.ruleId + ' · 版本 ' + String(r.ruleVersion).slice(0, 12) + ' · 阻塞 ' + r.blocked + ' · 恢复 ' + r.recovered + ' · 放弃 ' + r.abandoned + ' · 未跟进 ' + r.unresolved
+          + ' · 人侧确认误拦 ' + r.humanFalsePositive + ' · 未确认 ' + r.unconfirmed + ' · 模型声明 ' + r.modelClaims + ' · 按来源的最新原因 ' + JSON.stringify(r.reasonCounts || {})); }),
+        !arr(monitor.阻塞).length ? h('p', { key: 'none' }, '本可见域尚无已落账阻塞；不代表宿主从未拒绝。') : null,
+        arr(monitor.阻塞).map(function (row) { return h('article', { key: row.id, 'data-block-id': row.id }, [
+          h('h3', { key: 'head' }, row.tool + (row.action ? ' / ' + row.action : '') + ' · ' + ({ recovered: '已恢复', abandoned: '已放弃', unresolved: '未跟进' }[row.state] || '未知')),
+          h('p', { key: 'ref' }, row.id + ' · ' + row.subject + ' · 项目 ' + row.project + ' · 规则 ' + (row.block && row.block.ruleId)),
+          h('p', { key: 'recover' }, row.recovery ? '关联成功执行 ' + row.recovery.attemptId + ' · 等待间隔 ' + (row.recovery.recoveryMs === null ? '未知' : row.recovery.recoveryMs + ' ms') : '尚无关联成功执行'),
+          h('p', { key: 'feedback-count' }, '反馈 ' + String(row.feedbackTotal) + ' 条，跟进 ' + String(row.followupsTotal) + ' 条'),
+          arr(row.feedback).map(function (f) { return h('p', { key: f.eventId }, f.source + ' · ' + f.category + ' · ' + f.verdict + ' · ' + f.reason + ' · 来源 ' + f.reference); }),
+          h('button', { key: 'open', type: 'button', className: 'dshmind-set__btn', disabled: value.busy, onClick: function () { edit('id', row.id); } }, '记录原因反馈'),
+          value.id === row.id ? h('form', { key: 'form', onSubmit: function (event) { event.preventDefault(); send(row); } }, [
+            h('label', { key: 'category' }, ['原因分类 ', h('select', { value: value.category, onChange: function (e) { edit('category', e.target.value); } }, ['授权缺口', '规则缺陷疑似', '材料不足', '环境故障', '调用不合法', '主动放弃', '其他', '未知'].map(function (x) { return h('option', { key: x, value: x }, x); }))]),
+            h('label', { key: 'verdict' }, ['人侧判定 ', h('select', { value: value.verdict, onChange: function (e) { edit('verdict', e.target.value); } }, [h('option', { key: 'u', value: 'unknown' }, '尚未确认'), h('option', { key: 'f', value: 'false_positive' }, '确认误拦截'), h('option', { key: 'c', value: 'correct_block' }, '确认正确拦截')])]),
+            h('label', { key: 'reason' }, ['理由 ', h('textarea', { required: true, maxLength: 1000, value: value.reason, onChange: function (e) { edit('reason', e.target.value); } })]),
+            h('label', { key: 'reference' }, ['来源引用 ', h('input', { required: true, maxLength: 500, value: value.reference, onChange: function (e) { edit('reference', e.target.value); } })]),
+            h('button', { key: 'submit', className: 'dshmind-set__btn', type: 'submit', disabled: value.busy || !value.reason.trim() || !value.reference.trim() }, '提交反馈'),
+          ]) : null,
+        ]); }),
+        value.message ? h('p', { key: 'message', role: 'status' }, value.message) : null,
+      ]);
+    }
+
     function 审批覆盖层(props) {
       var useSessions = props && props.useSessions;
       var state = typeof useSessions === 'function' ? useSessions(function (value) { return value; }) : null;

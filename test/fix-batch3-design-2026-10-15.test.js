@@ -426,7 +426,7 @@ describe('设计评审 2026-10-15 批次C · P3-b/P3-c', () => {
       }
       const q = await org.memory.query({ subject: LEAD, 项目: P, 条数上限: 2 });
       assert.equal(q.条目.length, 2, '预算只管条目这一栏');
-      assert.match(q.说明, /只回传账本序最后 2 条（按账本顺序，非按记于时间排序）/, '措辞 = 实际语义（账本扫描序的尾部）');
+      assert.match(q.说明, /浏览从账本尾部偏移 0 条，本页最多 2 条（按账本顺序，非按记于时间排序）/, '措辞 = 实际语义（从尾部计分页，不冒称每页一定回足条数）');
       assert.ok(!/只回传最新/.test(q.说明), '旧措辞「只回传最新 N 条」不许再出现（P3-c）');
     } finally {
       await f.cleanup();

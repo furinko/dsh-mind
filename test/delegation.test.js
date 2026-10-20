@@ -12,13 +12,16 @@ import assert from 'node:assert/strict';
 import { makeFixture, LEAD, MEMBER } from './helpers.mjs';
 import { Org } from '../src/org.js';
 import { DelegationPolicy } from '../src/delegation-policy.js';
+import { projectKeyForPath } from '../src/project-identity.js';
 import { runAction } from '../lib/actions.js';
 import { fakeHost, fakeExec } from './host-harness.mjs';
 import * as kernel from '../components/kernel/lib/index.js';
+import { shareOrg } from '../src/runtime.js';
+import { drainKernelAudit } from './kernel-drain.mjs';
 import { writeUnder } from './helpers.mjs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -38,14 +41,15 @@ function 假宿主({ delegation = new DelegationPolicy(授权配置), agent = { 
     interrupt: (_caller, name) => { calls.interrupts.push(name); return { previousStatus: 'running' }; },
   };
   const subagents = {
-    // 契约桩（2026-10-18 换代后）：只认 startActivation/drainChildren；校验 request.signal 在场（宿主类型里它是必填）。
-    startActivation: async (spec) => {
-      if (!spec?.request?.signal) throw new Error('contract: request.signal required');
+    // 契约桩（2026-10-18 换代后）：只认 startContinuable/drainContinuableChildren；校验顶层 spec.signal 在场（宿主类型里它是必填）。
+    startContinuable: async (spec) => {
+      if (!(spec?.signal instanceof AbortSignal)) throw new Error('contract: spec.signal required');
+      assert.equal(Object.hasOwn(spec.request, 'signal'), false, 'continuable signal belongs to outer spec');
       calls.spawn.push(spec); return { childId: `sub-${calls.spawn.length}`, messageId: 'm0' };
     },
     sendMessage: async (_sender, id, content) => { calls.subSend.push({ id, content }); return `sm-${calls.subSend.length}`; },
     interrupt: (id) => { calls.interrupts.push(id); },
-    drainChildren: async (_parent, ids) => { calls.interrupts.push(...ids); },
+    drainContinuableChildren: async (_parent, ids) => { calls.interrupts.push(...ids); },
     listChildren: async () => kids,
   };
   return { 宿主: { project: P, agent, agents: { get: id => id === agent.id ? agent : undefined }, agentTeams, subagents, delegation }, calls };
@@ -193,7 +197,7 @@ describe('member_* 动作 · 统一治理入口', () => {
     } finally { await f.cleanup(); }
   });
 
-  it('member_spawn（subagent）：走 startActivation 且 parent 是真实 Agent', async () => {
+  it('member_spawn（subagent）：走 startContinuable 且 parent 是真实 Agent', async () => {
     const { f, org } = await 现场Org();
     try {
       const { 宿主, calls } = 假宿主();
@@ -353,10 +357,8 @@ describe('内核接线 · 提示词与创建闸', () => {
   }
 
   it('授权项目：创建闸挡裸 spawn_teammate 并指回 member_spawn；waterfall 原位改写唯一策略段', async () => {
-    // 位置依赖修复（2026-10-17 测试稳定性批）：fakeExec 的 header.cwd = process.cwd()，而
-    // 项目键＝目录名（§14.4-5）⇒ 授权清单写死 'dsh-mind' 只在真仓目录名下绿——TEMP 副本
-    // （校准/复核的常规操作面）跑全量必红。授权**本次实际所在的项目**才是本用例的本意。
-    const 本次项目 = basename(process.cwd());
+    // 授权本次完整工作目录对应的项目身份；不能再用 basename 合并同名项目。
+    const 本次项目 = projectKeyForPath(process.cwd());
     const { home, host } = await 起内核({ mode: 'lead-discretion', projects: [本次项目], authorizationRef: 'test' });
     try {
       const exec = fakeExec({ name: 'spawn_teammate' });
@@ -369,7 +371,11 @@ describe('内核接线 · 提示词与创建闸', () => {
       const out = await listeners[0](assembly, context, async () => assembly);
       assert.ok(out.sections[0].text.startsWith(`[${DelegationPolicy.generation}]`), 'Team 成员（tryMembership 命中）拿到改写后的策略');
       assert.equal(out.sections[1].text, '组织说明');
-    } finally { await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 }); }
+    } finally {
+      host.清理();
+      await drainKernelAudit(await shareOrg({ home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') }));
+      await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
+    }
   });
 
   it('坏配置：响亮告警并按未授权降级（闸不拦、waterfall 不改写）', async () => {
@@ -382,6 +388,10 @@ describe('内核接线 · 提示词与创建闸', () => {
       const assembly = { sections: [{ name: 'team:policy', text: OFFICIAL }], tools: [], contexts: [] };
       const out = await listeners[0](assembly, { agent: { session: { header: { cwd: process.cwd() } } } }, async () => assembly);
       assert.equal(out, assembly, '未授权项目原样返回');
-    } finally { await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 }); }
+    } finally {
+      host.清理();
+      await drainKernelAudit(await shareOrg({ home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') }));
+      await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
+    }
   });
 });

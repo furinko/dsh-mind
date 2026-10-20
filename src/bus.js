@@ -188,6 +188,9 @@ export class MessageBus {
     } catch (error) {
       throw new Fault('AUDIT_APPEND_FAILED_AFTER_EVENT', `消息 ${id}（线程 ${message.线程}）已落线，但审计追加失败：${error instanceof Error ? error.message : String(error)}。不要重试本操作——重试会往线程里再落一条同内容消息；请人工核对审计账本并补记。`, {
         detail: { 消息: id, 线程: message.线程, 项目: message.项目 },
+        outcome: { 提交状态: '已提交', 可重试: false,
+          恢复指引: '按消息id查询原线程并补记缺失审计；不要重复发送。',
+          已确认阶段: [{ 阶段: '消息落线', 项目: message.项目, 线程: message.线程, 消息id: id }] },
       });
     }
     return { id, 状态, 线程: message.线程, 追加于: this.clock.iso() };
@@ -373,6 +376,9 @@ export class MessageBus {
     } catch (error) {
       throw new Fault('AUDIT_APPEND_FAILED_AFTER_EVENT', `消息 ${spec.id}（线程 ${spec.线程}）的投递记录已落线，但审计追加失败：${error instanceof Error ? error.message : String(error)}。不要重试本操作——投递已生效；请人工核对审计账本并补记。`, {
         detail: { 消息: spec.id, 线程: spec.线程, 项目: spec.项目 },
+        outcome: { 提交状态: '已提交', 可重试: false,
+          恢复指引: '按消息id查询原线程的投递记录并补记缺失审计；不要重复投递。',
+          已确认阶段: [{ 阶段: '投递记录落线', 项目: spec.项目, 线程: spec.线程, 消息id: spec.id }] },
       });
     }
     return { id: spec.id, 状态: '已投递' };

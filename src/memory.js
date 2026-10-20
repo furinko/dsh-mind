@@ -11,10 +11,13 @@
  * 偏好 = 部署（永不外流）；作答 = 实例（私有区内部，任务结束归档）。
  */
 import { appendLines, exists, listDirs, readJsonl, readJsonlHealth, readTextOrNull, atomicWrite, withLock } from './kernel/fsx.js';
+import { readTaskLedger } from './task-ledger.js';
 import { stat } from 'node:fs/promises';
 import { InvalidBody, Denied, Fault } from './kernel/errors.js';
 import { objectId } from './kernel/ids.js';
+import { digest } from './kernel/text.js';
 import { buildIndex, formatMiss, search } from './retrieval.js';
+import { memoryResponseOptions, memoryResponsePage, finalizeMemoryResponse } from './memory-response.js';
 import { DIR, MEMORY_KINDS } from './paths.js';
 import { 记忆条目在读域 } from './review-scope.js';
 // 「已被合法采纳」的唯一判据住在任务图（补修K 字段合同），晋升面直接复用、不另抄状态判断。
@@ -644,21 +647,23 @@ export class MemoryService {
 
   /**
    * 检索。默认把归档后的作答排除在检索面之外；`显式: true` 才把它拉回来（§7）。
-   * 默认还按「当前有效视图」召回：已失效 / 被推翻的条目留在 `条目` 里供追溯，但不进 `命中`；
-   * 要看它们就带 `含失效: true`。
+   * 默认按「当前有效视图」召回与浏览，失效正文须明确 `含失效: true` 才返回。
+   * 有查询词只返回命中条目；id 详情复用同一过滤面，不另开跨项目或归档读口。
    *
    * 契约B（主权者裁决 2026-10-09）·只读面收窄：查询也过唯一判定点。
    * `subject` 缺失或未知 ⇒ 引擎按「未知主体」拒绝（fail-closed），这里**不另设默认主体**——
    * 读者可见性（归档作答）仍由 `读者` 承担，判定（能不能查）由 `subject` 承担。
    * 放行条目按「一次调用一条」入账（档位「记汇总」），不随命中条数膨胀。
    *
-   * @param {{ subject: object, 类?: string[], 项目?: string, 岗位?: string, 文本?: string, 显式?: boolean, 含失效?: boolean, 读者?: object, 读域?: object, limit?: number, 条数上限?: number }} query
-   *   `limit` 管 `命中` 条数；`条数上限` 管 `条目` 回传条数（默认 50，超出截断并标注）。
+   * @param {{ subject: object, 类?: string[], 项目?: string, 岗位?: string, 文本?: string, id?: string, 显式?: boolean, 含失效?: boolean, 读者?: object, 读域?: object, limit?: number, 条数上限?: number, 返回模式?: string, 内容预算?: number, 偏移?: number, 正文偏移?: number, 数据版本?: string }} query
+   *   `limit` / `条数上限` 最多100条；总内容预算含全部回传条目与命中元数据。
+   *   工具默认摘要，内部服务保留默认全文；id+全文通过 `正文偏移` 续读长正文。
    *   `读域` 是 `review-scope.复核读域()` 的产物：复核员岗只召回「同一项目 + 来源引用与
    *   读域有交集」的条目（不是 role 全量、不凭会话 cwd 跨库猜）；其它主体传 null/省略。
    * @returns {Promise<{ 命中: object[], 口径: object, 条目: object[], 说明?: string }>}
    */
   async query(query = {}) {
+    const 响应配置 = memoryResponseOptions(query);
     await this.policy.check({
       subject: query.subject,
       action: 'read',
@@ -680,7 +685,7 @@ export class MemoryService {
     // 服务面另允许数组（内部编排一次查多类）。修前这里原样透传 ⇒ 字符串被当数组迭代，
     // `wanted.join('/')` 直接 TypeError——schema 合法参数打崩动作。归一只在这一处做
     // （服务层防御）：字符串包成数组、数组原样、缺席用 MEMORY_KINDS（动作层不用改）。
-    const wanted = typeof query.类 === 'string' ? [query.类] : (Array.isArray(query.类) ? query.类 : MEMORY_KINDS);
+    const wanted = [...new Set(typeof query.类 === 'string' ? [query.类] : (Array.isArray(query.类) ? query.类 : MEMORY_KINDS))].filter((kind) => MEMORY_KINDS.includes(kind));
     const rows = [];
     /** @type {string[]} 本次口径读过的账本（合成签名用；索引缓存按它失效）。 */
     const 账本文件 = [];
@@ -722,12 +727,15 @@ export class MemoryService {
       ? `检索面按复核读域限定（${query.读域.说明}）：本任务读域之外的条目${读域排除 > 0 ? `另有 ${读域排除} 条被排除` : '为 0 条'}。`
       : '';
 
-    // 「当前有效视图」：失效与被推翻的条目**不进召回**，但**仍留在 `条目` 里**供追溯——
-    // 调用方要看到「这条存在过、已经被否掉」，而不是让它悄悄消失（§7 追加状态的本意）。
-    // 要看它们就显式带 `含失效: true`（历史 / 调查口径）。
+    // 当前建议不夹带失效正文；历史仍留原账，明确含失效时才进入同一权限过滤后的读面。
     // 判据实现只有一处：`是否已被否`（模块级，晋升闸与它共用同一条粘性判据）。
     const 撤回 = visible.filter(是否已被否);
     const 可召回 = query.含失效 === true ? visible : visible.filter((entry) => !是否已被否(entry));
+    // 页码不对正在变化的账本承诺无漏重；变化即要求重启，不能拼接两个不同事实快照。
+    const 数据版本 = digest(JSON.stringify({ 类: wanted, 项目: query.项目 ?? null, 岗位: query.岗位 ?? null, 文本: query.文本 ?? '', id: query.id ?? null, 条目: 可召回 }));
+    if (query.数据版本 && query.数据版本 !== 数据版本) {
+      throw new InvalidBody('记忆数据或查询口径已变化，不能继续旧分页；请清除 数据版本，并从偏移0/正文偏移0重新读取。', { detail: { 原因: 'MEMORY_QUERY_SNAPSHOT_CHANGED' } });
+    }
 
     // `排除失效` 只报**实际被排除**的条数：带 `含失效: true` 时一条都没排除，
     // 那里还写个 1 就是一句假读数（这个组织里假读数比没读数更贵）。
@@ -751,38 +759,32 @@ export class MemoryService {
       ...(query.读域?.限定 === true ? { 复核读域排除: 读域排除 } : {}),
     };
 
-    // `条目` 的回传预算：全量 visible 可能把整个账本塞进一次回复
-    // （空 query 分支曾无条件回传全部），于是默认只回账本序最后 N 条并如实标注。
-    // 措辞（P3-c · 设计评审 2026-10-15）：修前写「只回传最新 N 条」——实际取的是
-    // `slice(-N)`（账本顺序的尾部），不是按 `记于` 时间排序的前 N 新。跨类查询时两者
-    // 会分道（不同账本按文件序拼接），说明文字必须与实际语义一致。
-    // 命中（`命中`）与口径（`口径`）不受影响：预算只管 `条目` 这一栏。
-    const 条数上限 = Number.isFinite(query.条数上限) && query.条数上限 > 0 ? Math.floor(query.条数上限) : 50;
-    const 条目截断 = visible.length > 条数上限;
-    const 条目 = 条目截断 ? visible.slice(-条数上限) : visible;
-    const 条目口径 = { 条目截断, 条目总数: visible.length, 条数上限 };
-
-    if (!query.文本) {
-      // 无文本面也要给「被当前有效视图挡住」的读数与拉回办法——只在检索分支说，
-      // 全量浏览的人就会以为「不存在」，而其实是被隔离/失效挡住了（同一句两处用）。
-      const 视图说明 = 撤回.length > 0 && query.含失效 !== true
-        ? `另有 ${撤回.length} 条已失效/被推翻/待删除/已隔离的条目按「当前有效视图」未进召回${口径数.隔离条目数 > 0 ? `（其中 ${口径数.隔离条目数} 条因源对象物理删除被血缘隔离）` : ''}；要看它们请带 含失效: true。`
-        : '';
-      const 说明 = [
-        ...(读域说明 ? [读域说明] : []),
-        ...(条目截断 ? [`条目 共 ${visible.length} 条，超出上限 ${条数上限}，只回传账本序最后 ${条数上限} 条（按账本顺序，非按记于时间排序）；带 条数上限 可调。`] : []),
-        ...(视图说明 ? [视图说明] : []),
-        ...(query.显式 === true ? ['已显式包含归档作答。'] : []),
-      ].join(' ');
-      return {
-        命中: [],
-        条目,
-        条目截断,
-        条目总数: visible.length,
-        条数上限,
-        口径: { 搜索面: '记忆服务', 查询词: '', 范围: wanted.join('/'), ...口径数, 命中数: 0, ...条目口径 },
-        ...(说明 ? { 说明 } : {}),
-      };
+    const 视图说明 = 撤回.length > 0 && query.含失效 !== true
+      ? `另有 ${撤回.length} 条已失效/被推翻/待删除/已隔离的条目按「当前有效视图」未进召回${口径数.隔离条目数 > 0 ? `（其中 ${口径数.隔离条目数} 条因源对象物理删除被血缘隔离）` : ''}；要看它们请带 含失效: true。`
+      : '';
+    const 说明们 = [读域说明, 视图说明, query.显式 === true ? '已显式包含可读归档作答。' : ''].filter(Boolean);
+    const 装配 = (entries, hits, total, 口径, detail = false, fromEnd = false) => {
+      const page = memoryResponsePage({ entries, hits, total, options: 响应配置, detail, fromEnd });
+      if (page.条目截断) 说明们.push(`条目 共 ${total} 条，本页回传 ${page.条目.length} 条；按 下一偏移 继续读取。`);
+      if (page.内容截断) 说明们.push('内容达到预算；元数据缩减与正文截断已标明，可用 id + 返回模式=全文 读取正文，按 下一正文偏移 续读。');
+      return finalizeMemoryResponse({
+        ...page,
+        数据版本,
+        口径: { ...口径, ...口径数, 条目总数: total, 条目截断: page.条目截断, 条数上限: page.条数上限, 回传命中数: page.命中.length, 回传条目数: page.条目.length },
+        ...(说明们.length ? { 说明: 说明们.join(' ') } : {}),
+      });
+    };
+    if (query.id) {
+      const 详情 = 可召回.filter((entry) => entry.id === query.id);
+      return 装配(详情, [], 详情.length, { 搜索面: '记忆服务/id', 查询词: '', 范围: wanted.join('/'), 文档数: 可召回.length, 命中数: 详情.length }, true);
+    }
+    if (!query.文本?.trim()) {
+      // 历史浏览保持账本尾部方向；偏移从尾部计，单页内部仍按原账本序。
+      const end = Math.max(0, 可召回.length - 响应配置.偏移);
+      const start = Math.max(0, end - 响应配置.条数上限);
+      const entries = 可召回.slice(start, end);
+      说明们.push(`浏览从账本尾部偏移 ${响应配置.偏移} 条，本页最多 ${响应配置.条数上限} 条（按账本顺序，非按记于时间排序）；实际回传另受内容预算约束。`);
+      return 装配(entries, [], 可召回.length, { 搜索面: '记忆服务', 查询词: '', 范围: wanted.join('/'), 文档数: 可召回.length, 命中数: 0 }, false, true);
     }
     // 索引缓存（2026-10-13 第四批）：键 = 账本合成签名 + 过滤口径。索引只取决于
     // 「哪些文档进入检索面」，与查询词无关 ⇒ 同一口径下反复检索（看板展开、连续问）
@@ -804,31 +806,12 @@ export class MemoryService {
       if (this.#indexCache.size >= 索引缓存上限) this.#indexCache.delete(this.#indexCache.keys().next().value);
       this.#indexCache.set(索引键, index);
     }
-    const result = search(index, query.文本, { limit: query.limit ?? 10, 范围: `${wanted.join('/')}@${query.项目 ?? '全部项目'}` });
-    // 合并顺序与键名都守着「两个数分开报」：检索面的 `文档数`（候选文档数）保留 search 的实算值，
-    // 账本侧的可见条数走 `条目数`——同名覆盖会让 `formatMiss` 的「候选文档数」虚高（W3 批2）。
-    result.口径 = { ...result.口径, ...口径数 };
-    if (result.命中.length === 0) result.说明 = formatMiss(result.口径);
-    if (读域说明) result.说明 = [result.说明, 读域说明].filter(Boolean).join(' ');
-    if (撤回.length > 0 && query.含失效 !== true) {
-      // 「0 命中」与「有材料但被当前有效视图挡住」是两件事，不许折成同一句话。
-      // 隔离条目单独点名拉回办法（契约A）：被隔离的条目要看也是带 含失效: true。
-      const 隔离数 = 口径数.隔离条目数;
-      result.说明 = [result.说明, `另有 ${撤回.length} 条已失效/被推翻/待删除/已隔离的条目按「当前有效视图」未进召回${隔离数 > 0 ? `（其中 ${隔离数} 条因源对象物理删除被血缘隔离）` : ''}；要看它们请带 含失效: true。`]
-        .filter(Boolean)
-        .join(' ');
-    }
-    result.条目 = 条目;
-    result.条目截断 = 条目截断;
-    result.条目总数 = visible.length;
-    result.条数上限 = 条数上限;
-    result.口径 = { ...result.口径, ...条目口径 };
-    if (条目截断) {
-      result.说明 = [result.说明, `条目 共 ${visible.length} 条，超出上限 ${条数上限}，只回传账本序最后 ${条数上限} 条（按账本顺序，非按记于时间排序）；带 条数上限 可调。`]
-        .filter(Boolean)
-        .join(' ');
-    }
-    return result;
+    // 排名在服务内部算全，回传只取有限一页；不能用回传limit改变总命中读数。
+    const result = search(index, query.文本, { limit: 可召回.length, 范围: `${wanted.join('/')}@${query.项目 ?? '全部项目'}` });
+    const hits = result.命中.slice(响应配置.偏移, 响应配置.偏移 + Math.min(响应配置.limit, 响应配置.条数上限));
+    const byId = new Map(可召回.map((entry) => [entry.id, entry]));
+    if (result.口径.命中数 === 0) 说明们.unshift(formatMiss(result.口径));
+    return 装配(hits.map((hit) => byId.get(hit.id)), hits, result.口径.命中数, result.口径);
   }
 
   /**
@@ -1348,7 +1331,7 @@ export class MemoryService {
     if (!目标) return null;
     const root = this.layout.private(DIR.基础设施, DIR.任务图);
     for (const 项目 of await listDirs(root)) {
-      const rows = await readJsonl(this.layout.taskLog(项目));
+      const rows = await readTaskLedger(this.layout.taskLog(项目));
       const 节点 = foldTaskEvents(rows).get(目标);
       if (节点) return { 项目, 节点 };
     }

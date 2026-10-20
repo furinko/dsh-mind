@@ -21,6 +21,8 @@ import { Org } from '../src/org.js';
 import { readJsonOrNull, readJsonl, stripBom } from '../src/kernel/fsx.js';
 import { fakeHost, fakeExec } from './host-harness.mjs';
 import * as plugin from '../components/kernel/lib/index.js';
+import { shareOrg } from '../src/runtime.js';
+import { drainKernelAudit } from './kernel-drain.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FACTORY = join(here, '..', 'mind');
@@ -115,6 +117,7 @@ describe('BOM 容错读 · 闸层（第二批修复的回归钉）', () => {
       assert.equal(out.成功, true, 'mind 工具照常可用');
     } finally {
       host.清理();
+      await drainKernelAudit(await shareOrg({ home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') }));
       await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
     }
   });
@@ -126,6 +129,7 @@ describe('BOM 容错读 · 闸层（第二批修复的回归钉）', () => {
       assert.match(String(首个理由(fakeExec({ name: 'mind' }))), /工具范围闸故障/, '真坏的 JSON 仍然全拒（§12.1）');
     } finally {
       host.清理();
+      await drainKernelAudit(await shareOrg({ home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') }));
       await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
     }
   });

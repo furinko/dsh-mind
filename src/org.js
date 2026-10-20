@@ -29,6 +29,7 @@ import { CouncilService } from './council.js';
 import { InterventionService } from './intervention.js';
 import { Denied } from './kernel/errors.js';
 import { projectWorkbench, sliceForViewer } from './workbench.js';
+import { ObservabilityService } from './observability.js';
 
 /** 默认项目键。名字即目录名（§14.4-5）。 */
 export const DEFAULT_PROJECT = 'default';
@@ -122,6 +123,7 @@ export class Org {
       project: spec.project ?? DEFAULT_PROJECT,
       logger: spec.logger ?? console,
     });
+    org.observability = new ObservabilityService({ audit, clock, registry, tasks, policy, logger: spec.logger ?? console });
     await org.bootstrap({ 代次: spec.代次 });
     return org;
   }
@@ -268,7 +270,11 @@ export class Org {
       生成于: this.clock.iso(),
     });
     // （读者已在上面解析过——会审盲评遮罩与切片共用同一口径。）
-    return 读者 ? sliceForViewer(view, 读者) : view;
+    const visible = 读者 ? sliceForViewer(view, 读者) : view;
+    // This projection reads the entire verified observation history, independently of the audit tail.
+    try { visible.监控 = await this.observability.query({ subject: 读者, project: 项目 }); }
+    catch { visible.监控 = { 健康: { ...this.observability.health(), 状态: 'unavailable' }, 阻塞: [], 规则汇总: [], 尝试总数: null, 误拦截率: null }; }
+    return visible;
   }
 
   /**

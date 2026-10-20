@@ -37,18 +37,21 @@ export class Denied extends Error {
   }
 }
 
-/** 故障：判定没能完成。fail-closed —— 上层必须当成拒绝处理，且必须响亮告警。 */
+/** 故障不表示操作未提交。授权判定保守拒绝；执行回执另行保留已发生的事实。 */
 export class Fault extends Error {
   /**
    * @param {string} code 稳定的故障码（如 POLICY_LOAD_FAILED）
    * @param {string} message 人读的信息
-   * @param {{ detail?: object, cause?: unknown }} [options]
+   * @param {{ detail?: object, cause?: unknown, howToChange?: string, outcome?: object }} [options]
    */
   constructor(code, message, options = {}) {
     super(message, { cause: options.cause });
     this.name = 'Fault';
     this.code = code;
     this.detail = options.detail ?? {};
+    if (options.howToChange) this.howToChange = String(options.howToChange);
+    // Explicit, small receipts only. A raw detail may contain another task's content or host errors.
+    if (options.outcome) this.outcome = normalizeOutcome(options.outcome);
   }
 
   /** 故障对外的形状与拒绝同构，但带 alarm 标记，让 §3.6「安全闸静默失败」不可能发生。 */
@@ -56,11 +59,12 @@ export class Fault extends Error {
     return {
       verdict: 'deny',
       rule: `fault:${this.code}`,
-      reason: `安全闸故障，按 fail-closed 拒绝：${this.message}`,
+      reason: this.outcome ? `执行未完整收尾：${this.message}` : `安全闸故障，按 fail-closed 拒绝：${this.message}`,
       requireAuthority: '宪章',
-      howToChange: '修复故障后重试；故障期间的拒绝记录已入账，可申诉。',
+      howToChange: this.outcome?.恢复指引 ?? this.howToChange ?? '先诊断故障并核对操作是否已经提交，再按具体恢复指引处理；结果未知时不要盲重试。',
       alarm: true,
       detail: this.detail,
+      ...(this.outcome ? { outcome: this.outcome } : {}),
     };
   }
 }
@@ -129,9 +133,27 @@ export function describeFailure(error) {
     return { 结果: '结构不合规', 理由: error.message, 缺什么: error.missing };
   }
   if (error instanceof Fault) {
-    return { 结果: '安全闸故障（fail-closed）', 故障码: error.code, 理由: error.message };
+    return { 结果: error.outcome ? '执行未完整收尾' : '安全闸故障（fail-closed）', 故障码: error.code, 理由: error.message,
+      ...(error.outcome ? { ...error.outcome, 怎么改: error.outcome.恢复指引 } : error.howToChange ? { 怎么改: error.howToChange } : {}),
+    };
   }
   return { 结果: '错误', 理由: 脱路径(error instanceof Error ? error.message : String(error)) };
+}
+
+/** Submission facts are evidence, not permission to retry. Missing facts stay unknown. */
+function normalizeOutcome(value) {
+  const states = ['未提交', '部分提交', '已提交', '未知'];
+  const keys = ['阶段', '项目', '动作', '对象id', '任务', '实例', '会审', '线程', '条目id', '请求id', '事件id', '事件序号', '事件', '消息id', '操作id', '已请求', '已接收', '已停止', '已封存', '当前驻留已释放'];
+  const receipts = (Array.isArray(value.已确认阶段) ? value.已确认阶段 : []).slice(0, 32).map(row => Object.freeze(Object.fromEntries(
+    keys.filter(key => row && Object.hasOwn(row, key) && ['string', 'number', 'boolean'].includes(typeof row[key]))
+      .map(key => [key, typeof row[key] === 'string' ? row[key].slice(0, 512) : row[key]]),
+  )));
+  return Object.freeze({
+    提交状态: states.includes(value.提交状态) ? value.提交状态 : '未知',
+    可重试: typeof value.可重试 === 'boolean' ? value.可重试 : null,
+    恢复指引: typeof value.恢复指引 === 'string' && value.恢复指引.trim() ? value.恢复指引.slice(0, 2000) : '先查询当前事实；结果未知时不要重复执行。',
+    已确认阶段: Object.freeze(receipts),
+  });
 }
 
 /**

@@ -29,6 +29,7 @@ import { makeFixture, LEAD, writeUnder } from './helpers.mjs';
 import { fakeHost } from './host-harness.mjs';
 import { shareOrg, forgetSharedOrg } from '../src/runtime.js';
 import * as kernel from '../components/kernel/lib/index.js';
+import { drainKernelAudit } from './kernel-drain.mjs';
 import { TaskGraph } from '../src/tasks.js';
 import { MessageBus } from '../src/bus.js';
 import { RoleRegistry } from '../src/registry.js';
@@ -202,6 +203,7 @@ describe('批次6 · P3 后端', () => {
       assert.equal(包.action, 'status', '命令头是权威，参数里的 action 只是普通参数');
     } finally {
       host.清理();
+      await drainKernelAudit(await shareOrg({ home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') }));
       forgetSharedOrg();
       await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
     }
@@ -226,6 +228,7 @@ describe('批次6 · P3 后端', () => {
         "显式=true 必须真生效（修前字符串 'true' 过不了 === true ⇒ 恒假 ⇒ 永远拉不回）");
     } finally {
       host.清理();
+      await drainKernelAudit(await shareOrg({ home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') }));
       forgetSharedOrg();
       await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
     }
@@ -247,6 +250,7 @@ describe('批次6 · P3 后端', () => {
       assert.ok(typeof 首个理由({ name: 'bash' }) === 'string', '白名单外的普通工具照样拒');
     } finally {
       host.清理();
+      await drainKernelAudit(await shareOrg({ home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') }));
       forgetSharedOrg();
       await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
     }
@@ -305,6 +309,7 @@ describe('批次6 · P3 后端', () => {
       }
     } finally {
       host.清理();
+      await drainKernelAudit(await shareOrg({ home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') }));
       forgetSharedOrg();
       await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
     }

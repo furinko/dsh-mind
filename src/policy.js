@@ -16,6 +16,7 @@
  *  兜底   · 无匹配 ⇒ 拒绝
  */
 import { stat } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { readTextOrNull, stripBom } from './kernel/fsx.js';
 import { digest } from './kernel/text.js';
 import { Denied, Fault, NeedsApproval } from './kernel/errors.js';
@@ -160,6 +161,8 @@ export class PolicyEngine {
    * @type {Set<string>}
    */
   #签到路径 = new Set();
+  #loadingAuthBytes = new Map();
+  #publishedAuthBytes = null;
 
   /**
    * @param {{ layout: import('./paths.js').Layout, clock: import('./kernel/time.js').Clock, audit?: { append: Function } }} spec
@@ -278,9 +281,11 @@ export class PolicyEngine {
    * @param {string} file 授权加载路径
    * @returns {Promise<string|null>} 与readTextOrNull相同，不另维护会漂移的候选清单。
    */
-  #readAuth(file) {
+  async #readAuth(file) {
     this.#签到路径.add(file);
-    return readTextOrNull(file);
+    const text = await readTextOrNull(file);
+    this.#loadingAuthBytes.set(file, text);
+    return text;
   }
 
   /**
@@ -297,6 +302,8 @@ export class PolicyEngine {
   }
 
   async #reloadOnce() {
+    this.#loadingAuthBytes = new Map();
+    this.#publishedAuthBytes = null;
     // R05（审查 2026-10-16 · 读前/读后一致才发布）：修前 #loadIdentity（读正文）与
     // identityMtimeMs 的 stat 隔了整个加载流程——两步之间落盘的合法撤回会把【新 mtime】
     // 绑给【旧名单】，decide 的 mtime 快速路从此看不出差异，撤回持续失效到下一次身份写入
@@ -342,6 +349,7 @@ export class PolicyEngine {
       // 留痕失败不让 reload 失败（账本故障另有探针盯着），但用 console 喊出来——
       // 「关闭了却没喊成」比「reload 失败」更接近 §3.6 说的静默失败。
       await this.#warnIfDisclosureDisabled(defaults, defaults来源);
+      this.#publishedAuthBytes = new Map(this.#loadingAuthBytes);
     } catch (error) {
       // fail-closed：加载失败 ⇒ 引擎不健康，之后所有判定走 Fault（拒绝 + 告警）。
       this.state = {
@@ -477,6 +485,28 @@ export class PolicyEngine {
   }
 
   /**
+   * 宿主同步副作用闸：只在全部授权原文与已加载快照逐字一致时复用同一判定本体。
+   * 任一文件变化、读取失败或重载未完成都拒绝，不能等5秒热更新期间借旧权限写文件。
+   * 只读诊断仍走 mind；此方法不追加审计、不启动异步工作，也不消费逐请求放行。
+   */
+  decideCurrentSync(input) {
+    const unavailable = (reason) => deny('策略引擎 · 同步文件资格不可确认', reason, {
+      requireAuthority: 'Lead', howToChange: '通过 mind 的 status / policy_reload 诊断并完成重载，恢复合法配置后再试；禁止用 raw 文件通道修组织配置。',
+    });
+    if (!this.healthy || this.#inFlightReload || !this.#publishedAuthBytes) return unavailable(`策略引擎不健康或授权重载未完成：${this.state.error ?? '快照尚不可用'}。`);
+    try {
+      for (const [file, expected] of this.#publishedAuthBytes) {
+        let current;
+        try { current = readFileSync(file, 'utf8'); }
+        catch (error) { if (error?.code !== 'ENOENT') throw error; current = null; }
+        if (current !== expected) return unavailable('授权依赖原文已变化，旧内存权限立即失效；需先完成策略重载。');
+      }
+      if (this.会挂起(input)) return unavailable('现行介入度要求先经受控动作审批；通用文件工具不能借用组织动作的放行记录。');
+      return this.#evaluate(input);
+    } catch (error) { return unavailable(`同步策略核验失败：${error instanceof Error ? error.message : String(error)}`); }
+  }
+
+  /**
    * 故障路径的拒绝也要入账：Fault.toDecision 的 howToChange 承诺「故障期间的拒绝记录已入账」，
    * 不留痕这句就是假话（留痕是自治的门槛）。入账自身失败只能吞——decide 承诺永不抛，
    * 而账本坏了本来就会让审计链探针见红，那里才是它该响的地方。
@@ -545,15 +575,30 @@ export class PolicyEngine {
     if (名单.length === 0) {
       return { ok: false, reason: '该任务节点负责人名单为空（解析失败 / 手工编辑 / 旧数据）：为防越权，空名单按「无人有任务内全权」处理，由 Lead 先把负责人补齐' };
     }
-    // ① 实例 id 直配（既有路径，行为不变：按实例派的节点仍精确到实例）。
-    // v2（条目11）：负责人保留岗位名时，**已绑实例**同样是「任务内全权」的凭据——
-    // 绑定记的是「此刻是谁在干」，与负责人（这一岗归谁）是两件事。
-    const 绑定实例 = (task.绑定 ?? []).map((b) => b?.实例).filter(Boolean);
-    if (!名单.includes(subject.id) && !绑定实例.includes(subject.id)) {
-      // ② 缺口4（主权者批准 2026-10-12）：直配不中，经身份档案把实例解析成岗位再比。
-      //    成员主体刻意不带 roleId（src/subject.js A 修——岗位由 registry_assign 落在档案），
-      //    「按岗名派发」全靠这条路承重；解析**只信档案真源**：不在册 / 不在岗 ⇒ 不产出岗位；
-      //    自报的 roleId 不参与比对（信自报 = 冒充的第一步）。
+    // 已有真实绑定时，「这一岗」不再代表该岗所有实例。否则旧执行者失效后，同岗新实例
+    // 仍能 resolve / submit 旧节点，甚至以旧任务为凭据写记忆。绑定和当时凭证共同限定执行者；
+    // 负责人 id、岗位名和自报 roleId 均不能绕过它。卡正文校验仍由统一写前凭证闸负责。
+    if (task.绑定 != null && !Array.isArray(task.绑定)) {
+      return { ok: false, reason: '任务实例绑定形状不可用：不能把坏绑定当成无绑定旧任务放行' };
+    }
+    const 绑定 = task.绑定 ?? [];
+    if (绑定.length > 0) {
+      const member = this.state.identity?.members?.[subject.id];
+      const 宿主代次 = typeof member?.代次 === 'string' ? member.代次 : member?.代次?.代 ?? null;
+      const 本人绑定 = 绑定.some((b) => {
+        const pin = b?.凭证;
+        return b?.实例 === subject.id && member?.status === '在岗' && b.岗位 === member.岗位
+          && (名单.includes(b.实例) || 名单.includes(b.岗位))
+          && pin?.版本 === 1 && pin.代 === (member.代 ?? 1)
+          && typeof pin.卡版本摘要 === 'string' && Boolean(pin.卡版本摘要)
+          && pin.卡版本摘要 === member.卡版本?.摘要 && pin.宿主代次 === 宿主代次;
+      });
+      if (!本人绑定) {
+        return { ok: false, reason: `任务已有真实实例绑定，但 ${subject.id} 没有与当前负责人、在岗岗位及实例凭证一致的绑定：同岗、旧代次或旧卡不能继承任务写权` };
+      }
+    } else if (!名单.includes(subject.id)) {
+      // 只有完全无绑定的旧任务保留按负责人 id / 档案岗位寻址的兼容路径。
+      // 档案不在册 / 不在岗不产出岗位；自报 roleId 始终不参与匹配。
       const 岗位 = this.#档案岗位Of(subject.id);
       if (!(岗位 && 名单.includes(岗位))) {
         return { ok: false, reason: `该任务节点负责人是 ${名单.join('、')}，不是 ${subject.id}` };
@@ -707,6 +752,14 @@ export class PolicyEngine {
     if (level === '审批') return true;
     if (level === '预审') return this.#预审高风险(String(action), target, context);
     return false;
+  }
+
+  /**
+   * 领域计划在宿主创建前检查同一条不越授不变式；只读、不落账、不消费审批步骤。
+   * null 仅表示该不变式未拒绝，绝不代表写入已获许可；真实登记仍须完整 check。
+   */
+  delegationBoundary({ subject, action, target, context = {} }) {
+    return this.#不越授(normalizeSubject(subject), String(action ?? ''), target ?? {}, context);
   }
 
   // ── 判定本体 ────────────────────────────────────────────────────────────────
@@ -1172,7 +1225,7 @@ export class PolicyEngine {
    * ⚠️ **本方法的覆盖边界（如实登记，不写成「已完成」）**：
    *  ① **主体种类**（已落）：派活造出的主体不得与 Lead 同级或更高。这一格不需要枚举：
    *     岗位 → 主体种类是封闭映射（`subjectKindForRole`），种类里本就含「包含关系」。
-   *  ② **写域子集**（**未落，缺口已报**）：本组织目前**没有**「任务写域」这种真凭证——
+   *  ② **组织对象写域子集**（**未落，缺口已报**）：本组织目前**没有**「目标类 × 授权档」任务写域凭证——
    *     任务节点只有描述 / 判据（自由文本）与负责人，`target` 上的 authority/kind 说的是
    *     **这次调用**的目标，不是「派出去的活可以在哪些格子里写」。没有真凭证就判不出子集，
    *     所以这里**不判**，也绝不拿两个自造模板冒充「全部写域」（那会把同种类不同岗位 /
@@ -1183,7 +1236,9 @@ export class PolicyEngine {
    *     派活拿不到、也扩不了工具面；因此「给成员额外工具」只能来自调用方多传一个工具范围
    *     参数——那属于「拿不到上游工具范围却扩张」，member_spawn 侧直接响亮拒（见 lib/actions.js）。
    *
-   * 结论：①③ 承重，② 是缺口。判据只落能承重的部分，剩下的报缺口等字段——这是本方法
+   * 通用文件工具边界已另由 tool-file-scope.js 实现：部署者给 Lead 可授根上限，任务派发
+   * 冻结读写子集，宿主同步 guard 按真实绑定验证；文件根不替代这里的组织对象标签权限。
+   * 结论：①③ 承重，② 是组织对象标签域的缺口。判据只落能承重的部分，剩下的报缺口等字段——这是本方法
    * 刻意不做的事，别在别处补一个看起来像的。
    */
   #不越授(subject, action, target, context) {

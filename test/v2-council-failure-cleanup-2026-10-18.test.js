@@ -16,10 +16,10 @@ async function setup() {
   const calls = { spawn: 0, stop: [], drain: [] };
   const agent = { session: { id: 'lead' } };
   const subagents = {
-    async startActivation() { assert.equal(this, subagents); return { childId: `owned-${++calls.spawn}` }; },
+    async startContinuable() { assert.equal(this, subagents); return { childId: `owned-${++calls.spawn}`, messageId: 'initial-accepted' }; },
     async sendMessage() { assert.equal(this, subagents); return { messageId: 'sent' }; },
     async interrupt(id) { assert.equal(this, subagents); calls.stop.push(id); },
-    async drainChildren(parent, ids) { assert.equal(this, subagents); assert.equal(parent, agent); calls.drain.push(...ids); },
+    async drainContinuableChildren(parent, ids) { assert.equal(this, subagents); assert.equal(parent, agent); calls.drain.push(...ids); },
     async listChildren() { return [{ id: 'owned-1', label: 'real child' }, { id: 'unregistered', label: 'unknown child' }]; },
   };
   const host = { agent, subagents, delegation: { authorize: () => ({ fingerprint: 'isolated-failure-test' }) } };
@@ -45,8 +45,8 @@ it('审批第二次spawn失败：冻结补偿意图可预览，只清当前实�
     await s.mode('审批');
     const request = await s.approve(s.openArgs);
     const pending = (await s.org.intervention.人侧待决({ 项目: P })).find(x => x.请求id === request);
-    const start = s.subagents.startActivation;
-    s.subagents.startActivation = async function () { if (s.calls.spawn === 1) throw new Error('second spawn injected'); return start.call(this); };
+    const start = s.subagents.startContinuable;
+    s.subagents.startContinuable = async function () { if (s.calls.spawn === 1) throw new Error('second spawn injected'); return start.call(this); };
     let failure;
     await assert.rejects(() => s.action({ ...s.openArgs, 审批引用: request }), e => (failure = e, e.code === 'COUNCIL_CREATE_FAILED'));
     const members = (await s.org.registry.identity()).members;
@@ -103,19 +103,26 @@ for (const stage of ['会审收敛', '零分歧异常', '介入失败']) it(`con
     const args = { action: 'debate_converge', id: opened.id, 内容: '唯一结论' };
     const request = await s.approve(args);
     s.injectAudit(row => row.动作 === stage || (stage === '介入失败' && row.动作 === '会审收敛') || row.动作 === '会审退役' || row.动作 === '会审退役失败');
-    s.subagents.interrupt = async function (id) { s.calls.stop.push(id); if (id === 'owned-1') throw new Error('first stop injected'); };
+    s.subagents.drainContinuableChildren = async function (parent, ids) { assert.equal(parent.session.id, 'lead'); s.calls.drain.push(...ids); if (ids.includes('owned-1')) throw new Error('first stop injected'); };
     let failure;
     await assert.rejects(() => s.action({ ...args, 审批引用: request }), e => (failure = e, /injected audit/.test(e.message)));
-    assert.deepEqual(s.calls.stop, ['owned-1', 'owned-2']);
+    assert.deepEqual(s.calls.drain, ['owned-1', 'owned-2']);
     assert.equal((await s.org.registry.identity()).members['owned-1'].status, '封存');
     assert.equal((await s.org.registry.identity()).members['owned-2'].status, '封存');
-    assert.match(JSON.stringify(failure.detail), /first stop injected/);
+    const failedRetirement = failure.detail.退役.find(x => x.实例 === 'owned-1');
+    assert.equal(failedRetirement.已退役, false);
+    assert.equal(failedRetirement.故障码, 'COUNCIL_RETIRE_FAILED');
+    assert.ok(failedRetirement.提交回执.已确认阶段.some(x => x.已封存 === true));
+    assert.ok(!failedRetirement.提交回执.已确认阶段.some(x => x.当前驻留已释放 === true || x.已停止 === true));
+    assert.equal(failure.outcome.提交状态, '已提交');
+    assert.equal(failure.outcome.可重试, false);
+    assert.ok(failure.outcome.已确认阶段.some(x => x.实例 === 'owned-2' && x.当前驻留已释放 === true));
     assert.match(JSON.stringify(failure.detail), /会审退役失败/);
     if (stage === '介入失败') assert.match(failure.detail.介入失败记账错误, /injected audit: 介入失败/);
     const rows = await readJsonl(s.org.layout.councilLog(P));
     assert.equal(rows.filter(x => x.kind === 'converged').length, 1);
     await assert.rejects(() => s.action(args));
-    assert.deepEqual(s.calls.stop, ['owned-1', 'owned-2']);
+    assert.deepEqual(s.calls.drain, ['owned-1', 'owned-2']);
   } finally { await s.f.cleanup(); }
 });
 
@@ -177,7 +184,7 @@ it('宿主冒返已有身份时，不改绑、不seal、不停预给与别场', 
     try {
       await s.org.registry.assign({ subject: LEAD, 岗位: '插件工程', 实例: 'other-council', 会审: { id: 'other', 项目: P, 资料: [] } });
       const before = (await s.org.registry.identity()).members[id];
-      s.subagents.startActivation = async () => ({ childId: id });
+      s.subagents.startContinuable = async () => ({ childId: id, messageId: 'initial-accepted' });
       await s.mode('审批');
       const request = await s.approve(s.openArgs);
       await assert.rejects(() => s.action({ ...s.openArgs, 审批引用: request }), e => e.code === 'COUNCIL_CREATE_FAILED');
@@ -194,10 +201,10 @@ for (const mode of ['subagent', 'team']) it(`创建后${mode}停机API消失：�
     let run = s.action;
     let stopCalls = 0;
     if (mode === 'subagent') {
-      const start = s.subagents.startActivation;
-      s.subagents.startActivation = async function (...args) {
+      const start = s.subagents.startContinuable;
+      s.subagents.startContinuable = async function (...args) {
         const result = await start.apply(this, args);
-        delete this.drainChildren;
+        delete this.drainContinuableChildren;
         return result;
       };
     } else {
@@ -214,7 +221,7 @@ for (const mode of ['subagent', 'team']) it(`创建后${mode}停机API消失：�
     await assert.rejects(() => run({ ...s.openArgs, 方式: mode }), e => (failure = e, e.code === 'COUNCIL_CREATE_FAILED'));
     assert.equal(s.calls.spawn, 1, '通过副作用前校验，真实创建后才注入缺接口');
     assert.notEqual(failure.detail.错误详情.补偿失败, null, '缺接口必须有补偿失败证据');
-    assert.match(failure.detail.错误详情.补偿失败, /停机接口.*已不可用.*未停机/);
+    assert.match(failure.detail.错误详情.补偿失败, /公共(?:释放|中断)接口.*不可用/);
     assert.match(failure.detail.错误详情.原因, /registration before write injected/);
     assert.deepEqual(s.calls.drain, []); assert.deepEqual(s.calls.stop, []); assert.equal(stopCalls, 0);
     assert.equal((await s.org.registry.identity()).members['member-a'].status, '在岗');
@@ -231,7 +238,7 @@ it('opened未能提交时如实报未落线，不声称已落或已作废', asyn
     assert.equal(failure.detail.opened已落线, false);
     assert.match(failure.message, /opened 事件未能落线/);
     assert.doesNotMatch(failure.message, /已尝试冻结作废/);
-    assert.deepEqual(s.calls.stop.sort(), ['owned-1', 'owned-2']);
+    assert.deepEqual(s.calls.drain.sort(), ['owned-1', 'owned-2']);
   } finally { s.org.layout.councilLog = councilLog; await s.f.cleanup(); }
 });
 
@@ -257,7 +264,7 @@ it('开场发送阻塞后另一Root先收敛：失败作废不得覆盖已定格
     assert.equal(final.状态, '已收敛');
     assert.equal(final.结论, '另一Root已定格的唯一结论');
     assert.match(error.detail.作废错误, /已收敛/);
-    assert.deepEqual(s.calls.stop.sort(), ['owned-1', 'owned-1', 'owned-2', 'owned-2'], '作废被拒后仍逐个尝试owned清理');
+    assert.deepEqual(s.calls.drain.sort(), ['owned-1', 'owned-1', 'owned-2', 'owned-2'], '作废被拒后仍逐个尝试owned释放');
     assert.equal((await s.org.registry.identity()).members['member-a'].status, '在岗');
     const rows = await readJsonl(s.org.layout.councilLog(P));
     assert.equal(rows.filter(x => x.kind === 'converged').length, 1);

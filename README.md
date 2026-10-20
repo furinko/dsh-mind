@@ -1,319 +1,92 @@
-# dsh-mind · 心智 · 数字组织
+# dsh-mind · 心智
 
-《心智 · 数字组织设计 **v2.0**》的可执行实现。**一张插件卡，三个组件**。
+让工作留下可验证、可复用、可纠错的成果，并在协作有收益时启用组织机制。
 
-> **本轮恢复范围已有实现、门禁与真实宿主链证据。** 工具入口、审批失败清理、Lead真自执行和本人判据读面已补修；会审已实际走到收敛停封。最终采纳以组织任务图为权威，详细范围、独立票与未验边界见[本轮审查跟踪](<docs/技术规格/代码审查报告-m56ik-2026-10-18.md>)，不宣称穷尽全部环境或所有越权入口。
+mind 为 DSH 提供任务与验收、按需协作、记忆与能力、权限与审计，以及工作台。普通问答和已授权的只读调查直接进行；需要正式交付或委派时，再使用任务、复核和采纳。岗位数量、审计条数和知识存量不等于工作效果。
 
-> 设计文档是判据来源，插件是实现。对照表见 [DESIGN-MAP.md](DESIGN-MAP.md)——每一条硬规则都能指到具体文件与测试。
+当前为开发候选。2026-10-20 的成员文件边界、交付内容绑定、账本与项目身份修复，以及本轮流程口径、有界记忆和阻塞反馈均已完成离线验收，尚未部署，见[重整验收](docs/重整验收-2026-10-20.md)。持久目标、跨会话自动接管和目标共享预算仍处于设计阶段，不能当作现有能力。
 
----
+## 从工作开始
 
-## 一张卡，三个组件
-
-「组件」= 插件管理页里那张卡下面的**行**：每行一个独立开关、一个独立状态点。
-本仓库是**单包自洽的 bundle 包**：内核与安全类两行指向本包的**子路径导出**
-（`dsh-mind/kernel` / `dsh-mind/guard`），看板行是**裸包名 `dsh-mind`**（浏览器半区的载体行，
-宿主 apply 刻意为空——见下）；用户只装 `dsh-mind` 一个包，三行全部可达。
-
-> 历史教训（为什么不再是三个独立包）：旧形态靠 profile 手写四行 `link:` 依赖——
-> `link:` 是纯符号链接协议，pnpm **不解析**目标包的 `dependencies`，官方
-> `dsh plugin add` 只写一行主包依赖，组件就「静默不装」（隔离 profile 实测在案）。
-> 子路径导出走标准模块解析（含 Node 自引用），一个包即闭合。
-
-```
-dsh-mind/                        ← 插件列表里的那张卡（不插自己的行）
-  cordis.patch.yml                 insert 三行：内核 / 安全类 / 看板（内核·安全类 name = 子路径；看板 name = 裸包名）
-  package.json                     exports: ./kernel ./guard ./client；dsh.client 在根
-  src/                             八件基础设施实现（组件用相对路径引它）
-  mind/                            出厂区：宪章 / 法律 / 编制 / 岗位卡 / 出厂能力库 / 默认值
-  lib/actions.js                   动作表（内核组件用）
-  scripts/verify-profile-install.mjs  安装自检（防「装到不完整的包」）
-  components/
-    kernel/                        内核组件（宿主入口 = exports ./kernel）
-    guard/                         安全类组件（宿主入口 = exports ./guard）
-    board/                         看板组件（宿主入口 = 裸包名载体行的根入口 `exports "."`；浏览器半区 = exports ./client）
-```
-
-| 组件 | 行 id | 装什么 | 关掉它的后果 |
-|---|---|---|---|
-| **内核** | `dsh-mind-kernel` | 八件基础设施的对外两个面：`mind` 工具 · `/mind` 命令 · 工具范围闸 · 审计钩子 · 系统提示段 | 这张卡只剩空壳，所以别关 |
-| **安全类** | `dsh-mind-guard` | 四道封闭探针 · 探针见红**定位**回滚目标（只定位入账＋告警升级主权者；运行态不自动改文件，装回由主权者经版本管理执行） · 条款级升级裁决（`mind_guard` 工具 · `/mind-guard` 命令） | 判定与记账照常，没有机制自检与升级运维 |
-| **看板** | `dsh-mind-board` | 主内容区独立面板 + 左侧边栏下方入口 | 组织照常跑，只是没有可视化 |
-
-**浏览器半区为什么挂在根包上**：`dsh.client` 与 `exports ./client` 在根包声明，
-宿主按 `<包名>/client` 解析。关掉看板那一行，宿主入口与浏览器半区一起消失——
-「组件可单独启停」的落点不变，只是声明从看板子包上移到了根包（子包不再是包）。
-
-三条纪律写在代码里，也写在断言里：
-
-1. **所有组件共用同一个 `Org`**（`src/runtime.js` 的键控缓存，键 = 私有区根 + 项目）。
-   各持一份的话，探针检查的策略引擎可能不是内核正在用的那一个——那等于白测。
-2. **动作面不重叠**。内核的 `mind` 与安全类的 `mind_guard` 各自枚举自己的动作；
-   内核不在 schema 里列它做不到的事（给个空承诺比不装更糟）。
-3. **主面不吞异常**。工具注册不上就等于组件没生效，必须让装载如实失败；
-   只有次要面（命令、提示段）才降级为告警。吞掉主面只会得到一个「看起来装好了」的假象。
-
-安装 = **一行**：`dsh plugin --profile <名> add dsh-mind`（npm 发布版）或 `add <本仓库路径>`
-（开发版）。装完 `dsh.profile.bundles` 里只有 `dsh-mind` 一张卡，三行组件由本包
-`cordis.patch.yml` 就位——不再需要手写任何 `link:` 依赖。
-
----
-
-## 它实现了什么
-
-八件基础设施，一件不缺：
-
-| 件 | 实现 | 关键保证（可测） |
-|---|---|---|
-| 角色注册表 | [`src/registry.js`](src/registry.js) | 索引可从真源重算 · 封存 ≠ 删除 · 实例权限只来自岗位 |
-| 共享工作台 | [`src/workbench.js`](src/workbench.js) | **无存储的纯投影**：`projectWorkbench` 是纯函数，磁盘上不留痕 |
-| 任务图 | [`src/tasks.js`](src/tasks.js) | 判据必填 · 派发后冻结 · 负责人岗位与实例绑定分离 · 待决项是状态 · 打回≥2 升级主权者；新会审不占任务节点 |
-| 消息总线 | [`src/bus.js`](src/bus.js) | 线程隔离 · 支持暂不投递 · **发件人恒为真实主体**（会审讨论消息线程=`会审-{id}`，见 §10） |
-| 策略引擎 | [`src/policy.js`](src/policy.js) | 唯一判定点 · fail-closed · 拒绝带可执行理由 · 只读标签不读路径 |
-| 能力库 | [`src/capability.js`](src/capability.js) | 双区各一份 · 同名不合并 · 角色卡只存引用（单源） |
-| 记忆服务 | [`src/memory.js`](src/memory.js) | 写入必带「谁记的 + 怎么知道的」 · 不许改写只能追加 |
-| 审计日志 | [`src/audit.js`](src/audit.js) | 只增（链哈希可验篡改）· 写入无条件 · 不承担回滚 |
-
-外加上层机制：对象存储与版本回滚（[`src/store.js`](src/store.js)）、升级的条款级合并（[`src/upgrade.js`](src/upgrade.js)）、安全类探针与回滚目标定位（[`src/probes.js`](src/probes.js)：见红只定位入账并升级主权者，装回由主权者经版本管理执行）、复核（[`src/review.js`](src/review.js)：复核员 = 普通岗位卡，Lead 按任务 `member_spawn` 起实例；独立性 = 冲突排除 + 冻结判据 + 独立上下文 + 采纳权留痕兜底；结论是**硬闸**）、BM25 检索（[`src/retrieval.js`](src/retrieval.js)）。
-
-## 看板显示什么（以及为什么只显示这些）
-
-设计没有给面板一份内容清单，只给了性质与边界。所以这块是**从约束推出来的**：
-
-| 面板上的块 | 依据 |
+| 要做什么 | 如何使用 |
 |---|---|
-| **待你决定**（首屏） | §7 唯一点名「工作台把它投影出来」的东西就是待决项；这里再并上打回升级 / 挂起 diff / 探针见红。每项附**该敲的命令**——§9 硬规则③「工作台只读」，所以给命令不给按钮 |
-| **会审** | §10 + v2：会审页数据源 = 会审自己的存档账本（问题/各答案/分歧/结论/来源会话/时间六要素）。盲评遮罩在服务层（`council.list` 按读者遮：作答中参与者只见他人盲标，交齐解锁才全给）· 分歧清单 · 反例面 · 零分歧告警。**零分歧按异常呈现**，因为「全票一致 = 异常信号」 |
-| **任务** | 投影的两个来源之一（§7「能从任务图 + 日志重算」）：判据 / 冻结 / 打回次数 / 产物引用 / 交卷进度 |
-| **审计尾** | 另一个来源；事实记录，不是讨论 |
-| **状态条** | 闸 / 介入度 / 失联 / 探针——取**已有记录**（探针取最近一次快照），不现场重跑 |
+| 问答、澄清、只读调查 | 直接推进，遵守已有权限，不为对话额外建岗、起成员 |
+| 完成一个正式交付 | 定验收判据，选择 Lead 本人或成员执行；提交产物，经复核后由 Lead 采纳 |
+| 委派可拆分工作 | 使用 `member_spawn`，机制处理登记、钉版、绑定和任务书；文件范围须在部署上限内明确授予 |
+| 获取独立意见 | 按需使用 `debate_*`；会审是咨询，不替代交付复核 |
+| 查已有经验或知识 | `memory_query` 按需检索；区分相关召回、历史浏览和正文详情 |
+| 了解工作为何受阻 | 看板“阻塞反馈”或 `monitor_query` 查看；`monitor_followup` 关联重试/放弃，`monitor_feedback` 提出原因；反馈不改变权限 |
 
-**刻意不显示**：八件基础设施的计数（系统元数据，不是当前状态，且与 `mind status` 重复）、
-主干环路 stepper（§8 的环路是流程定义，画成常驻进度条永远停在某一格）。
-两者都曾经在面板上，已删。
+正式任务的判据派发后冻结，复核票只支持它实际核验过的内容。不能借另一个任务、同岗位身份、旧票或重试声明扩大权限或伪造完成。
 
-## 载体：两区
+## 安装形状
 
-```
-<插件包>/mind/                          ← 出厂区（只读模板，随产品更新）
-  ├─ 集体L0-宪章/宪章.md
-  ├─ 集体L1-法律/{协作协议,权限矩阵,裁决流程,审计要求}.md
-  ├─ 集体L2-集体结构/编制.md
-  ├─ 集体L2-共享基础设施/{能力库/,defaults/,README.md}
-  └─ 集体L3-成员角色卡/{_模板,复核员,插件工程,文档整理,记忆整理}.md
+一个包、一张插件卡、三个组件，无需手写组件依赖：
 
-$DSH_HOME/mind-data/mind-private/       ← 私有区（首次启动自动引导）
-  ├─ 集体L0-宪章/ 集体L1-法律/ 集体L2-集体结构/ 集体L3-成员角色卡/   ← 你的叠加层
-  ├─ 集体L2-共享基础设施/{角色注册表,任务图/<项目>,消息总线/<项目>,
-  │                       能力库,记忆服务/{跨项目,<项目>},审计日志,defaults}
-  ├─ 身份档案/identity.json
-  ├─ 升级/{基线.json,挂起/,探针快照/}
-  └─ 版本历史/<对象id>/<版本>.md
-```
-
-出厂区是**只读模板**，私有区是你的**叠加层**，生效内容是**条款级合并的结果**（§5）。
-判定授权只读标签，不读路径（§4）——所以两个区的同一条目录可以放心同构。
-
-## 用法
-
-装进 profile 后（见下），模型侧多出一个工具，界面侧多一页看板。
-
-**`/mind` 命令**（人用，零 token）：
-
-```
-/mind                       → 工作台投影（看板用的同一份 JSON）
-/mind status                → 组织自述：闸灯 / 失联 / 探针 / 规模
-/mind audit                 → 审计尾
-/mind can 实例=member-a      → 这个身份能碰什么
-```
-
-**`mind` 工具**（模型用，全部动作走策略引擎——含只读面：`memory_query` / `bus_read` /
-`capability_resolve` 也过判定并按「一次调用一条」记汇总审计，契约B 2026-10-09）：
-
-```
-status · workbench · policy_check
-task_create · task_reassign · task_bind · task_attach · task_dispatch · task_start · task_submit · task_review · task_accept · task_disagree · task_criteria · task_pending · task_resolve · task_settle
-review_exempt
-memory_write · memory_query · memory_lineage · memory_lifecycle
-capability_list · capability_resolve · capability_read · capability_publish
-bus_send · bus_read · bus_deliver · audit_tail · audit_verify · audit_correct
-store_rollback
-registry_list · registry_can · registry_assign · registry_seal · registry_revoke
-upgrade_pending · review_zero
-delegation_status · policy_reload
-member_spawn · member_message · member_stop · member_list
-debate_open · debate_answer · debate_unlock · debate_say · debate_round · debate_converge
-```
-
-注：`review_exempt` 要求主权者在设置中开启全局「复核免审」（默认关，变更入审计）；模型不能替主权者开关。`review_zero` 仍按任务图的独立答案现算。
-
-`debate_*` 六动作是 **v2 会话级会审面**：`debate_open` 可点名既有 `参与者`，或用 `参与岗位` 受管创建 N 个咨询实例（不占节点）；`资料` 是它们唯一文件读根，未提供不等于整个工作区。作答 → 交齐解锁 → 可选讨论 → 收敛，答案统一遮罩，实例只作本场咨询并在结束时退役。`bus_unlock` 已退出模型动作清单，旧任务图会审写入口封闭，历史数据不迁移。
-
-命令面还多两个**专属动作**（工具 schema 里没有它们——模型没有这只手）：
-
-```
-/mind presence …                        → 改失联限制 / 响应期限（人用设置入口）
-/mind sovereign_interaction             → 声明主权者在线（失联判定的事实源只能由人声明）
-```
-
-安全类组件另有一个 `mind_guard` 工具（关掉该组件时它不存在）：
-
-```
-probe_run · probe_health · probe_rollback
-upgrade_compare · upgrade_resolve · upgrade_withdraw
-```
-
-被拒绝时结果长这样，照着改就行（§9「拒绝必须带可执行理由」）：
-
-```json
-{ "成功": false, "结果": "拒绝",
-  "规则": "宪章 §3.4 组织给自己发合格证",
-  "理由": "提案者不得自批：本次提案人与批准人是同一个主体。",
-  "要什么授权": "宪章", "怎么改": "换一个未参与提案的主体批准（复核实例或主权者）。" }
-```
-
-## 安装
-
-**装法（2026-10-11 起单包自洽，一行装齐）**：
-
-```powershell
-# 用户（npm 发布版）：
-dsh plugin --profile <名> add dsh-mind
-# 开发者（本仓库路径，装的是当前工作区）：
-dsh plugin --profile <名> add <本仓路径>
-# 官方桌面客户端：在会话里直接让 DSH 装（「帮我装 dsh-mind」）
-```
-
-`dsh plugin add` 是官方安装器（`pnpm add` 薄转发 + 按「已装且声明 `dsh.bundle` 的依赖」
-自动重建 `bundles`）。装完 `dependencies` 里只有 `dsh-mind` 一行，
-`dsh.profile.bundles` 里多一张 `dsh-mind` 卡；三行组件由本包 `cordis.patch.yml`
-就位，`name` 是内核/安全类的子路径（`dsh-mind/kernel` / `dsh-mind/guard`）与看板行的
-裸包名（`dsh-mind`，浏览器半区载体行），经 package.json 的 `exports` 解析——
-**不需要手写任何 `link:` 依赖，不存在「组件静默不装」**。
-
-### 历史教训：为什么曾经要手写四行（现已废除）
-
-旧四包形态靠 profile 写四行 `link:` 依赖才能装齐，因为：
-
-- **`link:` 是纯符号链接协议，pnpm 不解析目标包的 `dependencies`**——包内相对 link
-  在 profile 层完全不生效，官方安装器只写一行主包依赖，组件就静默不装（隔离 profile
-  实测在案：`node_modules` 里只有 `dsh-mind`，三个组件一个都没有，exit=0 假绿）；
-- `portal:` 让 pnpm 顺带解析依赖的路也试过：`ERR_PNPM_SPEC_NOT_SUPPORTED_BY_ANY_RESOLVER`，不可用。
-
-单包化（组件行改子路径导出）从根上消掉了这个问题：标准模块解析 + Node 自引用，
-一个包即闭合，官方安装器的一行写法直接正确。
-
-### 为什么组件不进 `dsh.profile.bundles`
-
-`bundles` 是**插件卡的名单**：每条 = 一张卡 + 一层 patch。组件写进去就变成多张卡，
-而「组件」的定义恰恰是**那张卡下面的行**（一行一个独立开关）。三个组件行的来源是
-`dsh-mind` 自己的 `cordis.patch.yml`，bundles 里写 `dsh-mind` 一项就够。
-
-### DSH 运行时升级后的适配检查（0.2.1 起必做）
-
-**症状**：升级 DSH 桌面版后，插件卡还在、`dependencies` 还在，但 `mind` / `mind_guard`
-工具消失、`/mind` 命令没了、面板空白、`/plugins/dsh-mind/ping` 404——**整个插件一行代码都没跑**，
-也没有任何报错。
-
-**根因**：DSH 0.2.1 的装载器**只按 `dsh.profile.bundles` 清单应用 bundle patch**（见
-`dsh-app-boot` 的 `readBundlePatches`）；旧运行时还会顺带应用「普通 dependency」声明的
-`dsh.bundle.patch`。运行时升级 + profile 迁移/插件操作后，`dsh.profile.bundles` 里丢掉了
-`dsh-mind` 这一项，于是 patch 不再应用——**依赖还在、卡没了**，且 fail 得很安静。
-
-**修法**（二选一，改完 HMR 会热重组，未开 HMR 则重启 App）：
-
-- 插件管理器（推荐）：Web 侧边栏「插件」页把 `dsh-mind` 的开关打开（它会追加回 `bundles`）；
-- 手工：在 `profiles/<名>/package.json` 的 `dsh.profile.bundles` 数组里补 `"dsh-mind"`
-  （备份原文件；只加这一项，不要动其它项）。
-
-**必检**：升级后跑一次安装自检——「bundles 缺卡」这条就是本症状的探针：
-
-```powershell
-node scripts/verify-profile-install.mjs %USERPROFILE%\.dsh\profiles\desktop
-```
-
-### 装完自检（防「装到不完整的包」）
-
-```powershell
-node scripts/verify-profile-install.mjs %USERPROFILE%\.dsh\profiles\desktop
-node scripts/verify-profile-install.mjs --selftest   # 反例自测
-```
-
-逐条检查：dependencies 与 bundles 有 `dsh-mind` · `node_modules/dsh-mind` 非 private、
-无 dependencies · exports 的 `./kernel ./guard ./client` 每一项都落盘 · 出厂区
-`mind/` 与 `src/` 在包里 · patch 三行逐行在场（内核 / 安全类两行的 `name` 是
-`dsh-mind/<sub>` 子路径，看板那一行是**裸包名 `dsh-mind` 载体行**）且
-`./kernel ./guard ./client` 三个子路径从 profile 上下文 `require.resolve` 得到。
-全过 exit 0，任一条红 exit 1 并逐条说明。
-
-装完是**一张卡**，三个组件是那张卡下面的三行，各有独立开关（关一行 = 那个组件不进
-roster，它的工具 / 命令 / 界面一起消失）；每行的 `config` 是各组件自己的（如安全类
-那一行的 `开机自检`），**不是**卡上的 `config.components`。运行时不 import 任何
-`@deepseek-ai/*`，因此不会被出厂包的解析规则挡住（`peerDependencies` 里的
-`@deepseek-ai/dsh` 是 optional，只作版本声明）。
-
-### 发布
-
-```powershell
-npm pack            # 产物完整性先过一遍（files 白名单：lib/src/mind/components/*/lib/patch/README/icon）
-npm publish         # 需要 npm 账号登录；发布名 dsh-mind（2026-10-11 查册未占用）
-```
-
-## 验证
-
-```powershell
-npm test                                             # preflight + 根测试 + board测试 + client-harness
-node scripts/verify-profile-install.mjs --selftest   # 安装形状的反例自测
-```
-
-| 范围 | 单独运行 | 本轮最终合并门禁（2026-10-18） |
+| 组件 | 入口 | 职责 |
 |---|---|---|
-| 根测试 | `node --test "test/*.test.js"` | 893/893 |
-| 看板结构与设置 | `node --test "components/board/test/*.test.js"` | 21/21 |
-| 浏览器行为 | `node components/board/test/client-harness.mjs` | 503 条断言 |
-| 真加载与安装反例 | `node test/preflight.mjs`；安装 selftest | 均 exit 0 |
+| 内核 | `dsh-mind/kernel` | `mind` 工具、`/mind` 命令、真实工具 guard、审计与上下文 |
+| 安全类 | `dsh-mind/guard` | 四项安全探针、升级比较与回滚目标定位 |
+| 看板 | 根包载体与 `dsh-mind/client` | 当前工作、待决定事项、审计与相关读面 |
 
-数字以该次脚本输出及源码哈希为准，不能借给后续版本。本版另有17项独立副本变异、四闭探针绿→红校准及当前宿主两实例咨询全生命周期证据；真实审批网页/任意越权入口全覆盖等没有被本轮夹具替代。[完整记录](<docs/技术规格/代码审查报告-m56ik-2026-10-18.md>)。看板入口在 `components/board/test/`，不是根 `test/`。
+组件共用同一个 `Org`。关闭内核会失去 Mind 的工具边界；安全类只定位回滚目标、记账并告警，不自动替用户改运行文件。看板从服务端投影读取事实，受控按钮调用正式命令入口。
 
-`preflight` 是门禁：出厂件结构、岗位卡的能力引用、**组件名册与装载行配置对得上**、
-清单里每个被引用的路径都在 `exports` 里、`client.js` 的经典脚本约束、
-全部内核与组件模块可加载、出厂件不含用户特定信息。任一项失败即拒绝交付。
+在目标 profile 中按宿主支持的安装方式安装本地包或已发布包，例如：
 
-## 设计上刻意保留的取舍
+```powershell
+dsh plugin --profile <名> add <包或本地包路径>
+node scripts/verify-profile-install.mjs <profile绝对路径>
+```
 
-- **失联从第一次交互起算**：全新部署由「启动」本身记为第一次交互；否则自治档从第一天就被冻住。
-- **复核员岗的写动作由策略引擎按岗位名一律拒**（v2）：`#preGrantBoundary` 按 `roleId` 判，且前移到授权块之前——一条 grant 绕不过它。复核员卡**不再是任命例外**：Lead 可建 / 改，但改卡在「预审 / 审批」档是高风险动作，要等主权者放行。
-- **复核硬闸不在 Lead 手里**：`task_review(过)` 只生成当前有效的 `rv-N` 票，不自动采纳；Lead 另用 `task_accept` 引用该任务的有效票。合法免审与旧账显式承接有独立资格检查；新交卷/新成果会使旧票失效。「未验」不得采纳；Lead 只能追加不同意，不能改结论或冻结判据。
-- **检索的证据门槛**：CJK 单字会让几乎任何查询都「命中」点什么，于是 0 命中永不出现。
-  因此含双字词或拉丁词的查询必须至少命中一个同级词——这是精度修复，不是排序偏好。
-- **工具范围闸用 `tools.guard()` 而非 `tools/pre-execute`**：前者单调，后来的监听者翻不回放行（§12.1）。
-- **组件的主面不吞异常**：工具注册不上就等于组件没生效，必须让名册如实写「未装载」；
-  只有次要面（命令、提示段）才降级为告警。吞掉主面只会得到一个「看起来装好了」的假象。
-- **只读面也过判定，但档位是「记汇总」（契约B 2026-10-09）**：`memory.query` / `bus.read` /
-  `capability.resolve` 的调用链带 subject 过 `policy.check`，放行**一次调用一条**审计——
-  查询命中 50 条 ≠ 50 条审计。介入度只罩自治写，读取不因「预审 / 审批」自动变成待批；读取仍受身份、项目和任务读域约束。
-- **知识晋升先过披露机械检查（契约C 2026-10-09）**：`memory_lifecycle op=promote` 对
-  标题+内容+标签 跑敏感模式（盘符/UNC 路径、`%环境变量%`、email、凭据词表），命中即拒；
-  清单可在私有 `部署.json` 的 `披露敏感模式` 键整体覆盖（非法正则 = 引擎 fail-closed，不静默）。
-  豁免参数 `披露豁免=true` **仅 Lead**（主权者也不在豁免面——裁决原文如此）；豁免与命中
-  模式名一起进审计，但**不抄敏感原文**（抄进账本等于二次披露）。机械检查宁可误拦：
-  被拦的内容走豁免或改写，不需要放宽默认清单。
-- **记忆有完整血缘（契约A 2026-10-09，评审稿 §C2/§C8）**：条目带 `来源引用`（证据链，
-  写入时存在性校验——悬空引用当场拒；`artifact-` 前缀本批不校验）与 `派生自`（推翻
-  替换链，`overturn` 自动写、不可自报）。`memory_lineage` 查上下游闭包（≤3 层、环安全）；
-  索引是纯投影，从账本重算，不另立真源。**物理删除三步化**：先给源记「待删除」、
-  按血缘把下游（引用它的+派生自它的）逐条「隔离」（退出默认召回、粘性、`含失效: true`
-  可拉回、口径单报 `隔离条目数`），再物理抹源——「删了源头、引用它的下游还顶着有效
-  知识的面目」这个空窗从此关死。
-- **披露拦截与显式关闭都留痕（契约C 骑手①② 2026-10-09）**：命中被拒记「披露拦截」
-  （记汇总：主体+命中模式名，不抄原文）——拦截企图是安全信号；部署.json
-  `披露敏感模式: []` 是主权者显式关闭这道闸——合法且生效，但引擎按状态迁移记一条
-  告警档审计（持续关闭不刷屏，再关再喊），不许静默关闭。
-- **会审 = 会话级独立功能（v2 2026-10-18 条目18/19 已落地）**：Lead `debate_open` 抛问题点名参与者
-  （在册在岗实例，≥2 人），成员 `debate_answer` 各交独立答案（盲评：未交齐互不可见），齐后
-  `debate_unlock` 揭名（仅 Lead）；讨论段**默认关闭**，Lead 第一次 `debate_round` 显式开启，
-  成员 `debate_say` 落 分歧/表态/答复（线程=`会审-{id}`，预算现算：每轮消息数与每人每轮字符
-  双闸，超限拒并给 `x/y` 读数）；`debate_converge` 仅 Lead，分歧清单=各答案反例面∪讨论分歧，
-  零分歧命中即审计报警。预算默认 `{轮次2·人数8·每轮24条·每人4000字}`，部署.json `会审讨论`
-  键部分覆盖（坏值 fail-closed）；**发起时冻结快照**。存档在会审自己的事件流（六要素：
-  问题/各答案/分歧/结论/来源会话/时间），会审页读它；旧任务图讨论段原地只读不迁移。
+安装后核对 profile 的依赖与 `dsh.profile.bundles`、三组件及各导出。安装自检检查包与 profile 形状；真实工具链是否生效仍须在目标宿主核验。旧安装故障与历史证据见[重整前 README](docs/归档/设计史/README-2026-10-20-重整前.md)。
+
+## 部署者需要配置的边界
+
+- `memberFileAccess` 给出成员可授文件域的上限，缺省为空。Lead 通过任务的 `工具文件范围` 授予其中子集；任务绑定本身不授予任意文件或 shell 权限。
+- 新项目默认使用规范完整路径派生的键。旧 basename 项目需通过可信 `projectBindings` 明确认领；同名目录不自动共用账本。
+- 复核免审为用户控制的全局设置，默认关闭；模型不能代开。审批、撤权和失联规则继续生效。
+- 受控实验默认关闭，仅接受部署者审读并冻结的可信候选、封闭配方与单独许可；它的实际隔离能力不等于 OS 沙箱。
+
+详见[成员工具边界](docs/design/成员通用文件工具边界-2026-10-20.md)、[项目身份](docs/design/任务账本与项目身份边界-2026-10-20.md)和[接口合同](INTERFACES.md)。
+
+## 系统如何分工
+
+LLM 理解意图、选择方案和判断内容；机器检查身份、授权、任务归属、版本和证据一致性。流程策略与界面选择可以按真实收益调整；反馈不能自行授予权限。
+
+| 职责 | 实现位置 |
+|---|---|
+| 领域服务与事实 | `src/`：任务、身份、策略、产物、记忆、会审、审计 |
+| 工具与命令适配 | `lib/`、`components/kernel/lib/` |
+| 安全运维 | `components/guard/lib/` |
+| 界面 | `components/board/lib/` |
+| 出厂规则、岗位与能力 | `mind/`；用户叠加及运行事实保存在私有区 |
+
+治理对象的标签授权与文件工具的真实路径边界共同生效。任务账本、身份和审计各有职责，工作台与指标从事实重建，不另建授权来源。完整职责、限制与真源见[当前架构](ARCHITECTURE.md)。
+
+## 验证与开发
+
+```powershell
+node test/preflight.mjs
+node --test "test/*.test.js" "components/board/test/*.test.js"
+node components/board/test/client-harness.mjs
+node scripts/verify-profile-install.mjs --selftest
+git diff --check
+```
+
+测试数字只属于对应源码和运行，不在入口维护易过期总数。开发、提交、发布和部署分别留证；源码测试不替代真实 GUI 或宿主验证。工作区、验证和部署说明见[开发指南](docs/DEVELOPMENT.md)。
+
+## 文档入口
+
+下列工程文档在源码仓库维护；发布包的实际资源范围以 `package.json` 的 `files` 为准。
+
+| 文档 | 用途 |
+|---|---|
+| [ARCHITECTURE](ARCHITECTURE.md) | 当前产品主路径、职责、真源及缺口 |
+| [ROADMAP](docs/ROADMAP.md) | 已实现、开发候选和待实现能力，以及后续验收条件 |
+| [INTERFACES](INTERFACES.md) | 命令与服务合同；历史段落按日期和变更说明阅读 |
+| [DESIGN-MAP](DESIGN-MAP.md) | 组织条款与源码、测试的对照，不代表当前运行已部署 |
+| [组织设计 v2](docs/design/组织设计.md) | 已确认的组织约束及其设计背景 |
+| [产品与效用验证](docs/design/产品方向与效用验证-2026-10-20.md) | 为什么做、如何判断质量与成本收益 |
+| [端到端场景](docs/design/端到端场景推演-2026-10-20.md) | 尚未实现的目标、恢复与预算应满足什么判据 |
+
+本地开发候选的已知边界见[第一批验收](docs/design/第一批边界修复验收-2026-10-20.md)：严格格式读取不能证明账本未被合法删行或整本回滚；内容摘要与同步 guard 不能冻结外部进程或替代 OS 隔离。

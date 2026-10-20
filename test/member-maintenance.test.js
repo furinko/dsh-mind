@@ -4,6 +4,7 @@ import {makeFixture,LEAD,MEMBER} from './helpers.mjs';
 import {Org} from '../src/org.js';
 import {runAction} from '../lib/actions.js';
 import {DelegationPolicy} from '../src/delegation-policy.js';
+import {describeFailure} from '../src/kernel/errors.js';
 const P='maintenance';const CHILD='precise-child';const SECRET='PRIVATE-MESSAGE-NOT-IN-AUDIT';
 async function scene(fn,{role='插件工程'}={}){
  const f=await makeFixture();try{
@@ -47,7 +48,10 @@ test('宿主冷恢复缺持久描述符须响亮失败，不制造已接收或�
 test('列表只列自己的本项目现行绑定实例，未知/别父/未登记不扩张',()=>scene(async s=>{await s.org.registry.assign({subject:LEAD,岗位:'插件工程',实例:'foreign'});const readIdentity=s.org.registry.identity.bind(s.org.registry);s.org.registry.identity=async()=>{const x=await readIdentity();return {...x,members:{...x.members,foreign:{...x.members.foreign,委派者:{id:'other-parent',kind:'Lead'}}}};};s.host.subagents.listChildren=async()=>[{id:CHILD,mode:'continuable',label:'owned',status:'inactive'},{id:'unknown',mode:'continuable',label:'PRIVATE-OTHER'},{id:'foreign',mode:'continuable'}];const r=await s.act({action:'member_list'});assert.deepEqual(r.成员.map(x=>x.实例),[CHILD]);assert.equal(r.成员[0].状态,'inactive');assert.deepEqual(r.成员[0].任务,[s.node.id]);assert.ok(!JSON.stringify(r).includes('PRIVATE-OTHER'));}));
 test('列表Team去重优先；子目录失败须明确不可用且不得冒认来源',()=>scene(async s=>{s.host.agentTeams.listMembers=()=>[{id:CHILD,role:'teammate',name:'team-name',status:'inactive'}];let r=await s.act({action:'member_list'});assert.equal(r.成员.length,1);assert.equal(r.成员[0].来源,'team');s.host.agentTeams.listMembers=()=>[];s.host.subagents.listChildren=async()=>{throw Error('private-source');};r=await s.act({action:'member_list'});assert.equal(r.可用,false);assert.equal(r.成员[0].来源,null);assert.equal(r.成员[0].状态,null);assert.ok(r.不可用.includes('subagent目录'));assert.ok(!JSON.stringify(r).includes('private-source'));}));
 test('正常消息审计有父子/项目/任务和接收id，无正文，未声称已经执行',()=>scene(async s=>{await send(s);await s.act({action:'member_list'});const rows=(await s.org.audit.read({})).filter(r=>['成员消息','成员列表'].includes(r.动作));assert.equal(rows.length,3);assert.equal(rows[0].结果,'意图');assert.equal(rows[1].结果,'已接收');assert.equal(rows[1].详情.任务,s.node.id);assert.equal(rows[1].详情.父,LEAD.id);assert.equal(rows[1].详情.子,CHILD);assert.equal(rows[1].详情.消息id,'accepted-inbox-id');assert.ok(rows.every(r=>r.项目===P));assert.ok(!JSON.stringify(rows).includes(SECRET));}));
-test('接收后审计失败返回已接收+不可盲重试，不回滚也不自动重发',()=>scene(async s=>{const append=s.org.audit.append.bind(s.org.audit);s.org.audit.append=async row=>{if(row.动作==='成员消息'&&row.结果==='已接收')throw Error('audit disk');return append(row);};await assert.rejects(send(s),e=>e.code==='AUDIT_APPEND_FAILED_AFTER_MEMBER_MESSAGE'&&e.detail?.已接收===true&&e.detail?.可重试===false&&e.detail?.消息id==='accepted-inbox-id');assert.equal(s.calls.sub.length,1);}));
+test('接收后审计失败返回已接收+不可盲重试，不回滚也不自动重发',()=>scene(async s=>{const append=s.org.audit.append.bind(s.org.audit);s.org.audit.append=async row=>{if(row.动作==='成员消息'&&row.结果==='已接收')throw Error('audit disk');return append(row);};await assert.rejects(send(s),e=>{
+ assert.ok(e.code==='AUDIT_APPEND_FAILED_AFTER_MEMBER_MESSAGE'&&e.detail?.已接收===true&&e.detail?.可重试===false&&e.detail?.消息id==='accepted-inbox-id');
+ const reply=describeFailure(e);assert.equal(reply.提交状态,'已提交');assert.equal(reply.可重试,false);assert.equal(reply.已确认阶段[0].消息id,'accepted-inbox-id');assert.equal(reply.已确认阶段[0].已接收,true);assert.ok(!JSON.stringify(reply).includes(SECRET));return true;
+});assert.equal(s.calls.sub.length,1);}));
 test('意图审计失败零发送；关闭调度维护即拒；查询途中封存也零发送',()=>scene(async s=>{const append=s.org.audit.append.bind(s.org.audit);s.org.audit.append=async row=>{if(row.动作==='成员消息'&&row.结果==='意图')throw Error('audit disk');return append(row);};await assert.rejects(send(s),/audit disk/);assert.equal(s.calls.sub.length,0);s.org.audit.append=append;s.host.delegation.close();await assert.rejects(send(s),e=>e.code==='DELEGATION_DISPOSED');s.host.delegation=new DelegationPolicy({});s.host.subagents.listChildren=async()=>{await s.org.registry.seal({subject:LEAD,实例:CHILD,理由:'mid-query revoke'});return [{id:CHILD,mode:'continuable'}];};await assert.rejects(send(s),/不在册|不在岗/);assert.equal(s.calls.sub.length,0);}));
 test('复核员实例正控：显式复核对象/冻结判据/正式读根齐全方能续发',()=>scene(async s=>{assert.equal((await send(s)).已接收,true);s.tasks(n=>({...n,复核读根:[]}));await assert.rejects(send(s),/绑定|现行任务/);s.tasks(n=>({...n,复核对象:[]}));await assert.rejects(send(s),/绑定|现行任务/);},{role:'复核员'}));
 test('真实任务生命周期：执行中、已交卷和打回返工仍可维护，终态不靠旧绑定放行',()=>scene(async s=>{
@@ -59,7 +63,10 @@ test('真实任务生命周期：执行中、已交卷和打回返工仍可维�
 }));
 test('消息接收凭据未知不是成功：空回执不重发且审计明确接收未知',()=>scene(async s=>{
  s.host.subagents.sendMessage=async()=>{s.calls.sub.push('attempt');return {};};
- await assert.rejects(send(s),e=>e.code==='MEMBER_MESSAGE_RECEIPT_UNKNOWN'&&e.detail?.已接收===null&&e.detail?.可重试===false);
+ await assert.rejects(send(s),e=>{
+  assert.ok(e.code==='MEMBER_MESSAGE_RECEIPT_UNKNOWN'&&e.detail?.已接收===null&&e.detail?.可重试===false);
+  const reply=describeFailure(e);assert.equal(reply.提交状态,'未知');assert.equal(reply.可重试,false);assert.ok(reply.已确认阶段[0].操作id);assert.ok(!JSON.stringify(reply).includes(SECRET));return true;
+ });
  assert.equal(s.calls.sub.length,1);assert.ok((await s.org.audit.read({})).some(r=>r.动作==='成员消息'&&r.结果==='接收未知'));
 }));
 test('缺live校验服务/消息服务、子会话伪父、重复目录均零发送',()=>scene(async s=>{

@@ -179,10 +179,18 @@ describe('W3 批3 · 入口与边界', () => {
 
   it('⑤components/kernel：死条目 / 恒等三元 / 轮键统一 / mind* 放行理由（源码级钉住）', async () => {
     const 源码 = await readFile(new URL('../components/kernel/lib/index.js', import.meta.url), 'utf8');
+    const 审计钩子 = await readFile(new URL('../components/kernel/lib/observability-hooks.js', import.meta.url), 'utf8');
     assert.doesNotMatch(源码, /'probe_health'/, 'probe_health 是安全类组件的工具名，不在本工具动作面里（死条目已清）');
     assert.doesNotMatch(源码, /=== 'lead' \? 'lead'/, '恒等三元是重构残留，不许再出现');
-    assert.doesNotMatch(源码, /callId/, '轮键不许拿单次调用的 callId 当轮（每次调用一个桶 ⇒ turn/end 找不到、Map 只增不减）');
-    assert.equal((源码.match(/轮键\(/g) ?? []).length >= 3, true, '轮键必须两处共用同一份实现（定义 + 两个钩子各一次）');
+    assert.match(源码, /from '\.\/observability-hooks\.js'/, '内核必须接入实际抽取的工具审计模块');
+    assert.doesNotMatch(源码, /function 轮键\(/, '内核不再另存一套轮键实现');
+    const 轮键定义 = /function 轮键\(source\)\s*\{([^}]+)\}/.exec(审计钩子)?.[1];
+    assert.ok(轮键定义, '轮键实现必须存在于真实审计钩子模块');
+    assert.doesNotMatch(轮键定义, /callId/, '轮键不许拿单次调用的 callId 当轮（每次调用一个桶 ⇒ turn/end 找不到、Map 只增不减）');
+    assert.equal((审计钩子.match(/function 轮键\(/g) ?? []).length, 1, '轮键只能有一个定义');
+    assert.equal((审计钩子.match(/轮键\(/g) ?? []).length, 3, '轮键必须两处共用同一份实现（定义 + 两个钩子各一次）');
+    assert.match(审计钩子, /ctx\.on\('tools\/result',[\s\S]*?const key = 轮键\(exec\)/, '最终结果钩子必须使用同一轮键');
+    assert.match(审计钩子, /ctx\.on\('turn\/end',[\s\S]*?const key = 轮键\(payload\)/, '轮结束钩子必须使用同一轮键');
     assert.match(源码, /`mind\*` 为什么无条件放行/, 'mind* 无条件放行处必须写明理由（闸白名单）');
     assert.match(源码, /工具总范围管的是\*\*宿主工具\*\*/, '理由要说清管的是宿主工具，不是组织自己的入口');
   });

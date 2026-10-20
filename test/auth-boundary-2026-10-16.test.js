@@ -25,12 +25,14 @@ import { fileURLToPath } from 'node:url';
 import { makeFixture, LEAD, writeUnder, seedLegacyIndependentCouncil, seedReviewRelation } from './helpers.mjs';
 import { Org } from '../src/org.js';
 import { runAction } from '../lib/actions.js';
-import { Denied } from '../src/kernel/errors.js';
+import { Denied, Fault } from '../src/kernel/errors.js';
 import { MessageBus } from '../src/bus.js';
 import { appendLines } from '../src/kernel/fsx.js';
 import { slug } from '../src/kernel/ids.js';
 import { fakeHost, fakeExec } from './host-harness.mjs';
 import * as kernel from '../components/kernel/lib/index.js';
+import { shareOrg } from '../src/runtime.js';
+import { drainKernelAudit } from './kernel-drain.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FACTORY = join(here, '..', 'mind');
@@ -64,7 +66,11 @@ describe('A · R01：工具范围按配置键继承（缺省 ≠ 显式空数组
     await kernel.apply(host.ctx, { home, factoryRoot: factory, privateRoot: join(home, 'mind-private') });
     return { home, host };
   }
-  const 清理 = async (home, host) => { host.清理(); await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 }); };
+  const 清理 = async (home, host) => {
+    host.清理();
+    await drainKernelAudit(await shareOrg({ home, factoryRoot: join(home, 'mind-factory'), privateRoot: join(home, 'mind-private') }));
+    await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
+  };
   const 首个理由 = (host, exec) => host.闸.map((g) => g(exec)).find(Boolean);
 
   it('私有部署只有 presence 键（失联设置写同文件的真形态）⇒ 出厂收紧清单逐键继承，未被冲掉', async () => {
@@ -498,14 +504,21 @@ describe('C · R06：宿主闸注册失败 ⇒ 拒绝激活/记红；真实回�
   }
   const 清理 = async (home, host) => { host.清理(); await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 }); };
 
-  it('范围闸注册失败 ⇒ 拒绝激活（只读自述），不许继续运行', async () => {
-    const { home, host } = await 起内核(1);
+  for (const mode of ['注册抛错', 'guard接口缺失']) it(`首道范围闸${mode} ⇒ 组件加载抛稳定Fault，无工具/命令/提示词副作用`, async () => {
+    const home = await mkdtemp(join(tmpdir(), 'mind-r06-required-'));
+    const host = fakeHost();
+    const cause = new Error('注入：首道 guard 注册失败');
+    if (mode === '注册抛错') host.ctx.tools.guard = () => { throw cause; };
+    else host.ctx.tools.guard = undefined;
     try {
-      const tool = host.工具.get('mind');
-      assert.ok(tool, '降级自述工具在位（mind 这个名字保留，但只回报原因）');
-      const out = JSON.parse(await tool.execute({ action: 'status' }, fakeExec({ name: 'mind' })));
-      assert.equal(out.成功, false);
-      assert.match(JSON.stringify(out), /范围闸/, '自述要点名范围闸');
+      await assert.rejects(() => kernel.apply(host.ctx, { home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') }),
+        (error) => error instanceof Fault && error.code === 'KERNEL_REQUIRED_GUARD_UNAVAILABLE'
+          && (mode === '注册抛错' ? error.cause === cause : error.cause instanceof TypeError));
+      assert.equal(host.闸.length, 0, '如实保留首道注册失败事实，不能声称宿主原生工具已被阻断');
+      assert.equal(host.工具.size, 0, '不注册降级mind工具伪装加载成功');
+      assert.equal(host.命令.size, 0);
+      assert.equal(host.段落.length, 0);
+      assert.equal(host.钩子.size, 0, '失败在装配和任何异步副作用之前');
       assert.ok(host.日志.some((l) => l.startsWith('error') && /拒绝激活/.test(l)), 'error 级日志（不再是 warn 后装没事）');
     } finally {
       await 清理(home, host);

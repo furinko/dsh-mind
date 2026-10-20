@@ -14,7 +14,7 @@
  *  ⑤ 免审是合法依据：开关开 + 本代豁免 + 已交卷 ⇒ Lead 可采纳（引 ex-N）；开关关 / 未交卷 ⇒ 拒。
  *  ⑥ Lead 可采纳自己执行但被独立复核过的任务（采纳闸不误用「提审分离」挡采纳本人活）。
  *  ⑦ 采纳不改票、不改冻结判据（只增 accepted；reviewed 行字节不变）。
- *  ⑧ 历史：旧账「复核即采纳」保原行；成员复核的需 Lead 显式确认，前向依赖/结账不许误用；
+ *  ⑧ 历史：旧账「复核即采纳」保原行；缺交付内容清单不得以显式确认补造旧票证据，前向依赖/结账不许误用；
  *     当时 Lead 复核的与已结账的尊重历史；不伪造旧签名；已结账不复活。
  *  ⑨ 并发采纳恰一条成功。
  *  ⑩ 三面入口：ACTIONS 有 task_accept；工作台「待采纳」带真票命令；异议单独可记且不改票。
@@ -369,7 +369,7 @@ describe('⑥ 历史兼容：保原行、需确认、不伪造签名、不复活
     return spec.id;
   }
 
-  it('成员复核即采纳的旧节点：保原行、标需 Lead 确认；依赖/结账不许误用；确认后才放行', async () => {
+  it('成员复核即采纳的旧节点：保原行、保旧签名；缺内容清单时确认也不能放行依赖/结账', async () => {
     const { f, org } = await 起组织();
     try {
       const id = await 播种(f, { id: 'task-历史成员采纳', 复核人: 'reviewer', 复核人类型: '成员' });
@@ -388,18 +388,24 @@ describe('⑥ 历史兼容：保原行、需确认、不伪造签名、不复活
         () => org.tasks.settle(id, { subject: LEAD, 项目: P, 记忆处置: {} }),
         (e) => e instanceof Denied && /未经 Lead 确认/.test(e.rule),
       );
-      // 显式确认：不带票，落 accepted（依据=历史确认、票沿用旧票、by=真实 Lead）。
-      const 确认 = await 跑(org, LEAD, { action: 'task_accept', id });
-      assert.equal(确认.节点.状态, '已采纳');
-      assert.equal(确认.采纳.依据, '历史确认');
-      assert.equal(确认.采纳.由, 'lead', '确认人是这次真实执行的 Lead');
-      assert.match(String(确认.采纳.票), /^rv-\d+$/, '如实引用旧票，不重签');
-      assert.equal((await org.tasks.get(id, { 项目: P })).需Lead确认, undefined, '确认后标记消失');
-      // 确认后依赖放行，工作台也不再把它列成待确认。
-      const 依赖 = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '依赖旧账2', 负责人: ['member-a'], 判据: ['x'], 依赖: [id] });
-      assert.ok(依赖.id);
+      // 2026-10-20：没有当时内容证据，不能把「现在确认」伪装成「旧票已经验过这些内容」。
+      const 前 = JSON.stringify(await org.tasks.events({ 项目: P }));
+      await assert.rejects(() => 跑(org, LEAD, { action: 'task_accept', id }), (e) => e instanceof Denied && /内容清单/.test(e.message));
+      const 保留 = await org.tasks.get(id, { 项目: P });
+      assert.equal(保留.需Lead确认, true, '拒绝不能静默解除旧节点限制');
+      assert.equal(保留.采纳.依据, '历史复核即采纳');
+      assert.equal(保留.采纳.由, 'reviewer', '旧签名保持真实，不补成 Lead');
+      assert.equal(保留.采纳.票, 节点.采纳.票, '原票不重签');
+      assert.equal(JSON.stringify(await org.tasks.events({ 项目: P })), 前, '失败确认零写入');
+      await assert.rejects(() => org.tasks.create({ subject: LEAD, 项目: P, 描述: '依赖旧账2', 负责人: ['member-a'], 判据: ['x'], 依赖: [id] }), Denied);
       const view = projectWorkbench({ 项目: P, 节点: await org.tasks.list({ 项目: P }) });
-      assert.ok(!view.待你决定.some((x) => x.类型 === '历史采纳待确认' && x.节点 === id), '确认后不再投待你决定');
+      assert.ok(view.待你决定.some((x) => x.类型 === '历史采纳待确认' && x.节点 === id), '旧节点仍显示其历史限制');
+      const 指路 = view.待你决定.find((x) => x.类型 === '历史采纳待确认' && x.节点 === id);
+      assert.equal(指路.命令, undefined, '不再给出运行时必拒的补证确认命令');
+      assert.match(指路.原因, /另立节点交新卷/);
+      const 行 = view.任务.节点.find((x) => x.id === id);
+      assert.equal(行.确认命令, undefined);
+      assert.match(行.交付物待补证, /另立节点/);
     } finally { await f.cleanup(); }
   });
 

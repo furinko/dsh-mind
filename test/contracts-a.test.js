@@ -99,15 +99,14 @@ describe('契约A · 完整血缘（2026-10-09 方案②）', () => {
     assert.ok(purged.下游隔离.includes(B.id), `B（引用 A）必须隔离，实际 ${JSON.stringify(purged.下游隔离)}`);
     assert.ok(purged.下游隔离.includes(C), 'C（派生自 B）必须隔离（传递第 2 层）');
 
-    // 默认召回：B/C 退出；条目里仍在（供追溯）；含失效拉回。
+    // 默认读面：B/C 正文退出，历史仍可经含失效明确拉回。
     const 默认 = await memory.query({ subject: LEAD, 类: ['知识'], 项目: 'default' });
-    const bView = 默认.条目.find((x) => x.id === B.id);
-    const cView = 默认.条目.find((x) => x.id === C);
-    assert.equal(bView?.状态, '已隔离', '隔离判据粘性：后来状态不许覆盖（B 先被推翻再被隔离，最终已隔离）');
-    assert.equal(cView?.状态, '已隔离');
+    assert.ok(!默认.条目.some((x) => [B.id, C].includes(x.id)), '失效正文不能混入默认当前建议');
     assert.ok(!默认.条目.some((x) => x.id === A.id), '源条目行已物理抹掉，fold 不到');
     const 拉回 = await memory.query({ subject: LEAD, 类: ['知识'], 项目: 'default', 含失效: true });
     assert.ok(拉回.条目.some((x) => x.id === B.id) && 拉回.条目.some((x) => x.id === C), '含失效: true 要能拉回被隔离条目');
+    assert.equal(拉回.条目.find((x) => x.id === B.id)?.状态, '已隔离', '隔离判据粘性：B先被推翻再隔离，历史最终状态仍为已隔离');
+    assert.equal(拉回.条目.find((x) => x.id === C)?.状态, '已隔离');
 
     // 口径：隔离条目数 单独报；说明给拉回办法。
     assert.equal(默认.口径.隔离条目数, 2, '隔离条目数如时报（B+C；源 A 已抹不计）');

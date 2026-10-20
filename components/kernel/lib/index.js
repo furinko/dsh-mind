@@ -13,13 +13,17 @@
  */
 import { readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, basename, join, resolve as resolvePath, sep } from 'node:path';
+import { isAbsolute, join, resolve as resolvePath, sep } from 'node:path';
 import { shareOrg } from '../../../src/runtime.js';
 import { subjectFor, DEFAULT_PROJECT } from '../../../src/org.js';
 import { kernelFactoryRoot } from '../../../src/paths.js';
 import { agentSubject } from '../../../src/subject.js';
 import { readInstanceSnapshot } from '../../../src/instance-snapshot.js';
-import { describeFailure, Denied, InvalidBody } from '../../../src/kernel/errors.js';
+import { readTaskLedgerSync } from '../../../src/task-ledger.js';
+import { assertFileSearchTree, assertSingleLinkTarget } from '../../../src/tool-file-scope.js';
+import { createProjectResolver } from '../../../src/project-identity.js';
+import { serializeMemoryEnvelope } from '../../../src/memory-response.js';
+import { describeFailure, Denied, Fault, InvalidBody } from '../../../src/kernel/errors.js';
 import { atomicWrite, stripBom } from '../../../src/kernel/fsx.js';
 import { ACTIONS, READ_ONLY_ACTIONS, 是写动作, runAction, 会审参与动作闸 } from '../../../lib/actions.js';
 // 复核读域单源（v2 条目6）：guard 是同步的 ⇒ 直接同步读任务账本 + fold，不另造一套范围判据。
@@ -33,9 +37,10 @@ import { MESSAGE_TYPES } from '../../../src/bus.js';
 import { 挂同源路由, 看板包 } from './routes.js';
 import { createDelegationSettings } from './delegation-settings.js';
 // Lead 自主调度（2026-10-15 主权者授权）：提示词、创建闸与成员入口共用同一份授权判据。
-import { DelegationPolicy } from '../../../src/delegation-policy.js';
+import { DelegationPolicy, isCreationTool } from '../../../src/delegation-policy.js';
 import { ReviewExperimentService } from '../../../src/review-experiments.js';
 import { EXPERIMENT_RECIPES } from '../../../src/review-experiment-files.js';
+import { createKernelObservations } from './observability-hooks.js';
 
 export const name = 'dsh-mind-kernel';
 export const inject = ['tools'];
@@ -51,10 +56,17 @@ let 上次告警键 = null;
 
 /**
  * @param {any} ctx cordis 上下文
- * @param {{ project?: string, home?: string, factoryRoot?: string, privateRoot?: string, audit工具调用?: boolean, reviewExperiments?: object }} [config]
+ * @param {{ project?: string, home?: string, factoryRoot?: string, privateRoot?: string, projectBindings?: object[], memberFileAccess?: {read?: string[], write?: string[]}, audit工具调用?: boolean, reviewExperiments?: object }} [config]
  */
 export async function apply(ctx, config = {}) {
   const logger = ctx?.logger ?? console;
+  // 在第一个 await/配置解析之前先承重；坏配置不能通过早退把原生工具留在无闸状态。
+  let 启动范围闸;
+  try { 启动范围闸 = 装配期范围闸(ctx); }
+  catch (error) {
+    logger.error?.(`[dsh-mind] 工具范围闸注册失败，拒绝激活：${错误消息(error)}`);
+    throw new Fault('KERNEL_REQUIRED_GUARD_UNAVAILABLE', `Mind 内核必需的工具范围闸不可用，组件加载失败：${错误消息(error)}`, { cause: error });
+  }
   let org = null;
   try {
     org = await shareOrg({
@@ -64,7 +76,9 @@ export async function apply(ctx, config = {}) {
       project: config.project ?? DEFAULT_PROJECT,
       logger,
     });
+    org.tasks.configureToolFiles(config.memberFileAccess);
   } catch (error) {
+    启动范围闸.degrade(error);
     // 装配失败必须响亮，但**不许**让宿主起不来：注册一个把原因说清楚的自述工具。
     logger.warn?.(`[dsh-mind] 组织装配失败，已降级为只读自述：${error instanceof Error ? error.message : String(error)}`);
     ctx.tools.register(degradedTool(error));
@@ -72,6 +86,18 @@ export async function apply(ctx, config = {}) {
   }
 
   const 项目 = config.project ?? DEFAULT_PROJECT;
+  let 解析项目;
+  try { 解析项目 = createProjectResolver({ bindings: config.projectBindings, layout: org.layout }); }
+  catch (error) {
+    启动范围闸.degrade(error);
+    logger.error?.(`[dsh-mind] 项目身份配置不可用，已降级为只读自述：${错误消息(error)}`);
+    ctx.tools.register(degradedTool(error));
+    return;
+  }
+  const 当前项目键 = (exec) => 解析项目(会话工作目录(exec, { ctx }), 项目);
+  const observations = createKernelObservations({ org, projectOf: 当前项目键, logger, enabled: config.audit工具调用 !== false });
+  try { observations.attach(ctx); }
+  catch (error) { org.observability.setCoverage({ nativeTools: 'hook-registration-failed' }); logger.warn?.('[dsh-mind] 监控钩子不可用，覆盖不完整。'); }
   刷新工具总范围(org, logger);
   // 主权者随时可能改工具总范围：定时重读，让改动生效而不必重启。
   // R04（审查 2026-10-16 · 生效闭环）：同一节拍也刷**策略引擎**——修前只刷工具范围，
@@ -89,7 +115,7 @@ export async function apply(ctx, config = {}) {
   // R06（审查 2026-10-16）：安全必需依赖（宿主工具闸）注册失败 ⇒ 拒绝激活——修前仅 warn
   // 后继续：guards=0、mind 工具照常在、探针还绿（审查实证，最需要红灯的时候它绿着）。
   // 两件事：① 注册**回执**写给探针（org.toolGuardReceipts，闸在位探针从此查真实宿主链）；
-  // ② 范围闸注册失败 ⇒ 走装配失败同款降级（只读自述 + error 日志），不装「看起来装好了」。
+  // ② 首道范围闸注册失败已在最前抛装载故障；已有承重闸后的接通/回执失败可有闸降级自述。
   const 闸回执 = {
     范围闸: { registered: null, error: null },
     调度创建闸: { registered: null, error: null },
@@ -106,10 +132,14 @@ export async function apply(ctx, config = {}) {
   try {
     // 单调闸：只读部署偏好，不读路径，不接受任何人的「通融」。
     // v2 条目6/7 补修：同一个 guard 里先判**复核员角色边界**（见 闸判定），不新注册平行 guard。
-    ctx.tools.guard((exec) => 闸判定(exec, 项目, { org, ctx }));
+    启动范围闸.activate((exec) => observations.guard(exec, 'kernel.tool-scope', (observationBlock) => {
+      try { return 闸判定(exec, 项目, { org, ctx, 项目键: 当前项目键, observationBlock }); }
+      catch (error) { return `[dsh-mind] 工具闸无法确认项目/任务权限，按 fail-closed 拒绝：${错误消息(error)}`; }
+    }));
     闸回执.范围闸 = { registered: true, error: null };
     await atomicWrite(org.layout.guardReceiptFile(), `${JSON.stringify(闸回执, null, 2)}\n`);
   } catch (error) {
+    启动范围闸.degrade(error);
     闸回执.范围闸 = { registered: false, error: 错误消息(error) };
     try {
       await atomicWrite(org.layout.guardReceiptFile(), `${JSON.stringify(闸回执, null, 2)}\n`);
@@ -143,7 +173,7 @@ export async function apply(ctx, config = {}) {
       // 那类 preset 不在本授权的兼容范围（delegation_status 读数里如实标注）。
       撤销器.push(ctx.on('system-prompt/assemble', async (assembly, context, next) => {
         const out = await next();
-        const 已接调度 = delegation.assemble(out, { project: 项目键(context?.agent, 项目), isTeam: 是Team成员(ctx, context?.agent) });
+        const 已接调度 = delegation.assemble(out, { project: 当前项目键({ agent: context?.agent }), isTeam: 是Team成员(ctx, context?.agent) });
         // v2 条目10（W7 实证）：Root 实例在**首个真实组织上下文装配前**出生/钉版，并把
         // 它钉住的那版 Lead 规程注入；子会话/伪 Lead 形状不在此列（agentSubject 判）。
         return 注入Lead已钉规程(已接调度, context?.agent, org, logger);
@@ -157,7 +187,11 @@ export async function apply(ctx, config = {}) {
       // R06：注册失败不再仅 warn——回执记红（闸在位探针见红）；若调度授权在本项目生效，
       // 裸创建闸缺席 = 授权面无闸 ⇒ 拒绝激活（降级只读自述）；未授权项目的创建闸本就
       // 不承重，记红继续（异常本身仍值得看见）。
-      撤销器.push(ctx.tools.guard((exec) => delegation.creationGuard(exec, { subject: agentSubject(exec), project: 项目键(exec?.agent, 项目) })));
+      撤销器.push(ctx.tools.guard((exec) => observations.guard(exec, 'kernel.delegation', () => {
+        if (!isCreationTool(exec?.name)) return undefined;
+        try { return delegation.creationGuard(exec, { subject: agentSubject(exec), project: 当前项目键(exec) }); }
+        catch (error) { return `[dsh-mind] 调度项目身份不可判定，按 fail-closed 拒绝：${错误消息(error)}`; }
+      })));
       闸回执.调度创建闸 = { registered: true, error: null };
       调度接线回执.creationGuardRegistered = true;
       // effect 回调是同步的（宿主的 disposer 契约）：首写即发即忘，确认写兜覆写竞态与瞬态失败。
@@ -168,7 +202,7 @@ export async function apply(ctx, config = {}) {
       闸回执.调度创建闸 = { registered: false, error: 错误消息(error) };
       落闸回执(1);
       logger.error?.(`[dsh-mind] 调度创建闸注册失败（闸在位探针将见红）：${闸回执.调度创建闸.error}`);
-      if (delegation.status(项目).authorized) {
+      if (delegation.config.mode === 'lead-discretion') {
         拒绝激活 = `调度创建闸注册失败：${闸回执.调度创建闸.error}。调度授权已生效而创建闸缺席 = 授权面无闸，按 fail-closed 拒绝激活（R06）。`;
       }
     }
@@ -180,6 +214,7 @@ export async function apply(ctx, config = {}) {
     };
   }, 'dsh-mind: Lead 调度授权');
   if (拒绝激活) {
+    启动范围闸.degrade(new Error(拒绝激活));
     logger.error?.(`[dsh-mind] 拒绝激活内核：${拒绝激活}`);
     ctx.tools.register(degradedTool(new Error(拒绝激活)));
     return;
@@ -207,7 +242,7 @@ export async function apply(ctx, config = {}) {
     agent: exec?.agent ?? null,
     get project() {
       const cwd = 会话工作目录(exec, { ctx });
-      return cwd ? basename(cwd) : null; // 独立于 args.project；目录变化须在提交前重新核对。
+      return cwd ? 解析项目(cwd, 项目) : null; // 独立于 args.project；目录变化须在提交前重新核对。
     },
     signal: exec?.signal ?? null,
     agentTeams: 取服务(ctx, 'agentTeams'),
@@ -219,11 +254,11 @@ export async function apply(ctx, config = {}) {
 
   // 主面（工具）**不吞异常**：注册不上就等于这个组件没生效，
   // 让宿主如实报出装载失败，而不是留下一个「看起来装好了」的假象。
-  ctx.tools.register(mindTool({ org, 项目, 项目键: (exec) => 项目键(exec?.agent, 项目), 宿主服务, logger }));
+  ctx.tools.register(mindTool({ org, 项目, 项目键: 当前项目键, 宿主服务, logger, observations }));
 
   ctx.inject?.(['commands'], (scoped) => {
     try {
-      scoped.commands.register(mindCommand({ org, 项目, 项目键: (agent) => 项目键(agent, 项目), 宿主服务, logger }));
+      scoped.commands.register(mindCommand({ org, 项目, 项目键: (agent) => 当前项目键({ agent }), 宿主服务, logger }));
     } catch (error) {
       logger.warn?.(`[dsh-mind] 注册 /mind 命令失败：${error instanceof Error ? error.message : String(error)}`);
     }
@@ -251,14 +286,6 @@ export async function apply(ctx, config = {}) {
 
   // （范围闸注册已上移至装配早期并带 R06 回执/降级——见上方 闸回执 块，此处不再重复注册。）
 
-  if (config.audit工具调用 !== false) {
-    try {
-      挂审计(ctx, org, logger);
-    } catch (error) {
-      logger.warn?.(`[dsh-mind] 注册审计钩子失败：${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
   try {
     挂主权者交互(ctx, org, logger);
   } catch (error) {
@@ -269,6 +296,25 @@ export async function apply(ctx, config = {}) {
 }
 
 export default { name, inject, apply };
+
+/**
+ * 宿主只注册这一道范围闸：启动时闭合，配置与真实判定就绪后切换，不增平行闸或故障窗口。
+ * 降级只放精确的 mind 自述读入口；主体缺失/Lead/成员均不能因此取得原生工具豁免。
+ */
+function 装配期范围闸(ctx) {
+  let 判定 = null;
+  let 原因 = '组织装配尚未完成';
+  ctx.tools.guard((exec) => {
+    if (判定) return 判定(exec);
+    const action = exec?.arguments?.action;
+    if (exec?.name === 'mind' && (action === undefined || action === 'status')) return undefined;
+    return `[dsh-mind] 组织未就绪，工具范围闸按 fail-closed 拒绝：${原因}。仅 mind status 自述可用；修复部署配置后重新启动内核。`;
+  });
+  return {
+    activate(handler) { 判定 = handler; },
+    degrade(error) { 判定 = null; 原因 = 错误消息(error); },
+  };
+}
 
 /**
  * 出问题时的自述工具：宁可让模型看到「组织没起来 + 原因」，
@@ -297,7 +343,7 @@ export function degradedTool(error) {
  * 返回 JSON 文本，于是模型与工作台读的是同一份字节。
  * @param {{ org: object, 项目: string, 项目键: (exec: object) => string, 宿主服务?: (exec: object) => object }} spec
  */
-function mindTool({ org, 项目, 项目键, 宿主服务, logger }) {
+function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }) {
   return {
     name: 'mind',
     description: [
@@ -313,6 +359,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger }) {
         project: { type: 'string', description: '项目键；省略则用当前项目' },
         role: { type: 'string', description: '以哪个岗位身份执行（Lead / 复核员 / 成员岗位名）' },
         实例: { type: 'string', description: 'registry_assign / task_bind 的实例 id（必填；省略会被拒，不再按岗位推断）' },
+        工具文件范围: { type: 'object', properties: { 读: { type: 'array', items: { type: 'string' } }, 写: { type: 'array', items: { type: 'string' } } }, additionalProperties: false, description: 'task_dispatch / member_spawn：派发时冻结的通用文件读写绝对根。须在部署者 memberFileAccess 可授上限内；不从 cwd 授权，不允许 shell/未知执行类。' },
         id: { type: 'string', description: '对象 id（任务节点 / 记忆条目 / 挂起项 / 能力名——capability_read 按 id 读，不读 名）' },
         // 描述/原因 的分工按动作实际消费面写（设计评审 F2b 普查 · 2026-10-15）：task_pending
         // 的 handler 读的是 原因（服务层 markPending 的 待决原因），不读 描述——修前 描述
@@ -340,6 +387,10 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger }) {
         复核者: { type: 'string', description: '复核结论归属的复核者 id（task_review）；省略取主体' },
         待决类型: { type: 'string', description: '待决类型（task_pending）；省略取「升级差异」' },
         产出物引用: { type: 'string' },
+        阻塞引用: { type: 'string', description: 'monitor_* 返回的真实 at-* 阻塞编号；不授予权限或审批' },
+        监控偏移: { type: 'integer', minimum: 0, description: 'monitor_query 阻塞分页的偏移；默认0，limit 默认50且最大100，统计仍基于全部已验证观测' },
+        跟进: { type: 'string', enum: ['retry', 'abandon'], description: 'monitor_followup：登记下一次相同调用为重试，或记录主动放弃；不能声明恢复成功' },
+        原因分类: { type: 'string', enum: ['授权缺口', '规则缺陷疑似', '材料不足', '环境故障', '调用不合法', '主动放弃', '其他', '未知'], description: 'monitor_feedback 的原因声明，来源强制标记为模型；误拦截确认只在人侧认证入口' },
         类: { type: 'string', enum: ['知识', '经历', '偏好', '作答'] },
         对象类: { type: 'string', description: '对象库的种类（store_rollback 用：能力/规则/身份/产物…；与记忆类的「类」不是一个字段）' },
         version: { type: 'number', description: 'store_rollback 的回滚目标版本号（正整数）' },
@@ -351,6 +402,11 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger }) {
         岗位: { type: 'string', description: '岗位名（registry_assign / memory_* / capability_* / member_spawn）；记忆写入时 = 知识双标签的岗位标签（受限晋升必填：这条知识对哪个岗位可召回，不是整理它的人）；member_spawn 时须已有岗位卡' },
         标签: { type: 'string' },
         文本: { type: 'string', description: '检索查询词' },
+        返回模式: { type: 'string', enum: ['摘要', '全文'], description: 'memory_query 默认摘要；按 id 查看全文仍受内容预算、项目与读域限制' },
+        内容预算: { type: 'number', description: 'memory_query 的命中与条目两数组 JSON 字符预算（UTF-16代码单元）；默认12000，512至32000整数，元数据同样计入' },
+        偏移: { type: 'number', description: 'memory_query 列表分页偏移；按返回的 下一偏移 继续，有文本时只在实际命中中分页' },
+        正文偏移: { type: 'number', description: 'memory_query 按 id 且返回模式=全文时续读正文；使用返回的 下一正文偏移，与列表偏移分开' },
+        数据版本: { type: 'string', description: 'memory_query 续页必须带上一页返回的64位SHA256数据版本；可见数据或查询口径变化时从0重新读取，不默默拼接不同版本' },
         显式: { type: 'boolean', description: '检索时是否显式包含归档作答' },
         含失效: { type: 'boolean', description: '检索时是否包含已失效/被推翻的记忆（默认 false：只召回当前有效视图）' },
         全量: { type: 'boolean', description: 'workbench 是否越过「成员只读自己那片」的切片' },
@@ -392,7 +448,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger }) {
         代: { type: 'number' },
         审计条数: { type: 'number' },
         limit: { type: 'number', description: '返回条数上限（memory_query 的命中 / bus_read / audit_tail）' },
-        条数上限: { type: 'number', description: 'memory_query 返回 条目 的回传条数上限（默认 50；超出截断并附 条目截断: true 与总数）' },
+        条数上限: { type: 'number', description: 'memory_query 返回条目上限（默认50，1至100整数）；内容预算可能进一步缩小本页，按 下一偏移 续读' },
         方式: { type: 'string', enum: ['team', 'subagent'], description: 'member_spawn / debate_open 的执行体：持久团队成员（team）或普通持续子会话（subagent）；直接执行不调该动作' },
         节点: { type: 'string', description: 'member_spawn 绑定的任务节点 id（须待派发且已定判据）' },
         任务书: { type: 'string', description: 'member_spawn 的开工任务书（判据与岗位要点由机制自动附上）' },
@@ -413,10 +469,10 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger }) {
     isConcurrencySafe: (args) => READ_ONLY_ACTIONS.includes(args?.action),
     async execute(args, exec) {
       const 主体 = agentSubject(exec);
-      try {
+      try { return await observations.execute(exec, async () => {
         // 项目键省略时取**当前工作区目录名**（§14.4-5：目录名即项目键）——
         // 否则面板永远只显示默认项目，而任务建在别的项目里，看起来就是"一块空白"。
-        const 本次项目 = args.project ?? 项目键(exec);
+        const 本次项目 = 项目键(exec);
         // `主体` 必须显式传下去（W3 批3 的 `spec.主体` 优先那条路）—— 这是门② 的**落地点**：
         // 只改 `agentSubject` 而不把它传进 `runAction`，会话事实判据就是一条**死代码**
         // （`runAction` 会回落到 `subjectFor({根会话: subject?.kind === 'Lead'})`，
@@ -440,12 +496,13 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger }) {
             },
           );
         }
-        return JSON.stringify({
+        const 响应 = {
           成功: true,
           ...(登记 && 登记.就绪 === false ? { 实例登记: 登记 } : {}),
           ...(await runAction({ org, 项目: 本次项目, subject: 主体, 主体, args: 本次入参, ...(宿主服务 ? { 宿主: 宿主服务(exec) } : {}) })),
-        }, null, 1);
-      } catch (error) {
+        };
+        return 本次入参.action === 'memory_query' ? serializeMemoryEnvelope(响应) : JSON.stringify(响应, null, 1);
+      }); } catch (error) {
         return JSON.stringify({ 成功: false, ...describeFailure(error) }, null, 1);
       }
     },
@@ -467,8 +524,8 @@ function mindCommand(spec) {
     input: { hint: '[status|workbench|audit|presence|...] [参数JSON 或 键=值]' },
     handler: async ({ agent, rawInput }) => {
       const line = String(rawInput ?? '').trim();
-      const 本次项目 = spec.项目键(agent);
       try {
+        const 本次项目 = spec.项目键(agent);
         if (line === '' || line === 'dashboard' || line === 'workbench') {
           // 看板走的也是「按身份切片」的同一条路：Lead 看全量，成员只读自己那片。
           // 投影本体与同源路由**共用**（`看板包`）：同一份 JSON，客户端只换传输层。
@@ -487,8 +544,9 @@ function mindCommand(spec) {
         // P1-12（全面审查 2026-10-17）：宿主服务束读 `exec.agent`；命令面手里只有 agent 本身，
         // 修前把 agent 当 exec 传 ⇒ 宿主.agent 恒 null，/mind member_* 全抛 NO_AGENT。
         // 两个面统一成 exec 形状：命令面显式包成 { agent }（无工具调用的 signal）。
-        const result = await runAction({ org: spec.org, 项目: args.project ?? 本次项目, subject: 主体, 主体, args: { ...args, action }, 面: 'command', ...(spec.宿主服务 ? { 宿主: spec.宿主服务({ agent }) } : {}) });
-        return { kind: 'success', text: JSON.stringify({ 成功: true, ...(登记 && 登记.就绪 === false ? { 实例登记: 登记 } : {}), ...result }, null, 1) };
+        const result = await runAction({ org: spec.org, 项目: 本次项目, subject: 主体, 主体, args: { ...args, action }, 面: 'command', ...(spec.宿主服务 ? { 宿主: spec.宿主服务({ agent }) } : {}) });
+        const 响应 = { 成功: true, ...(登记 && 登记.就绪 === false ? { 实例登记: 登记 } : {}), ...result };
+        return { kind: 'success', text: action === 'memory_query' ? serializeMemoryEnvelope(响应) : JSON.stringify(响应, null, 1) };
       } catch (error) {
         return { kind: 'error', text: JSON.stringify({ 成功: false, ...describeFailure(error) }, null, 1) };
       }
@@ -508,27 +566,14 @@ const ALIASES = {
 };
 
 /**
- * 项目键：**目录名即项目键**（§14.4-5）。
- *
- * 为什么不能固定用 `config.project` 的默认值：§7.5 要求工作台按项目隔离，
- * 而「当前在哪个项目」的真相是**工作区目录**。固定默认值会让面板永远显示 default，
- * 于是你在自己的项目里建了任务，面板却是一片空白——看起来就是「没用」。
+ * 无宿主解析器时的保守后备；正常入口统一使用 apply 创建的可信路径绑定解析器。
  *
  * @param {{ session?: { header?: { cwd?: string } } }} [agent]
  * @param {string} 兜底 取不到工作区时用（来自 config.project）
  * @returns {string}
  */
 function 项目键(agent, 兜底) {
-  try {
-    const cwd = agent?.session?.header?.cwd;
-    if (typeof cwd === 'string' && cwd.trim()) {
-      const 尾 = cwd.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).pop();
-      if (尾) return 尾;
-    }
-  } catch {
-    // 取不到工作区就用兜底：这里不该因为读不到 cwd 而让整个动作失败。
-  }
-  return 兜底;
+  return createProjectResolver()(agent?.session?.header?.cwd, 兜底);
 }
 
 /**
@@ -584,22 +629,29 @@ function 解析参数(raw) {
 function 闸判定(exec, 项目, deps = {}) {
   const 工具 = exec?.name;
   if (!工具) return undefined;
+  刷新工具总范围(deps.org, deps.ctx?.logger ?? console);
   // 补修I：会审参与实例的**闭名单**先于复核员/范围闸；有绑定即由它收口（预给参与者无绑定⇒不收紧）。
   const 咨询 = 咨询参与工具闸(exec, 项目, deps);
-  if (咨询?.拒 !== undefined) return 咨询.拒;
+  if (咨询?.拒 !== undefined) { deps.observationBlock?.('kernel.council-scope'); return 咨询.拒; }
   const 角色拒 = 咨询?.命中 ? undefined : 复核员工具闸(exec, 项目, deps);
-  if (角色拒 !== undefined) return 角色拒;
+  if (角色拒 !== undefined) { deps.observationBlock?.('kernel.reviewer-scope'); return 角色拒; }
+  const 成员拒 = 咨询?.命中 ? undefined : 普通成员工具闸(exec, 项目, deps);
+  if (成员拒 !== undefined) { deps.observationBlock?.('kernel.member-files'); return 成员拒; }
   if (ENVELOPE_STATE.状态 === '未配置') return undefined;
   if (ENVELOPE_STATE.状态 === '故障') {
+    if (工具 === 'mind' && exec?.arguments?.action === 'status') return undefined;
+    deps.observationBlock?.('kernel.tool-envelope-fault');
     return `[dsh-mind] 工具范围闸故障：${ENVELOPE_STATE.错误}。按 fail-closed 拒绝全部工具调用（§12.1 闸不许 fail-open）。修复 mind/集体L2-共享基础设施/defaults/工具总范围.json 后重试。`;
   }
   if (ENVELOPE_STATE.拒绝.includes(工具)) {
+    deps.observationBlock?.('kernel.tool-envelope-deny', JSON.stringify(ENVELOPE_STATE));
     return `[dsh-mind] 工具「${工具}」在工具总范围之外：工具总范围由主权者设定（§4）。要改请让主权者修改 工具总范围.json。`;
   }
   // 自家工具用**精确名单**（2026-10-12 评审 P3）：startsWith('mind') 会把任何
   // 「mind*」开头的第三方工具一起放行进白名单模式——前缀不是身份。
   const 自家工具 = 工具 === 'mind' || 工具 === 'mind_guard';
   if (ENVELOPE_STATE.允许.length > 0 && !ENVELOPE_STATE.允许.includes(工具) && !自家工具) {
+    deps.observationBlock?.('kernel.tool-envelope-allowlist', JSON.stringify(ENVELOPE_STATE));
     return `[dsh-mind] 工具「${工具}」未被允许：当前工具总范围是白名单模式。要改请让主权者修改 工具总范围.json。`;
   }
   // `mind*` 为什么无条件放行（W3 批3 补的注释，此前只有一行代码、没有理由）：
@@ -616,6 +668,31 @@ function 闸判定(exec, 项目, deps = {}) {
 
 /** 会审实例无任务写域：闭名单只留问答、规范读取、明确资料与派发者报告。 */
 const 咨询只读工具 = new Set(['read', 'read_image', 'glob', 'grep', 'skill', 'mind']);
+
+/** 普通成员只认本人真实绑定的活动任务，不从岗位、cwd、产物引用推导通用文件权限。 */
+function 普通成员工具闸(exec, 项目, deps) {
+  const 主体 = agentSubject(exec);
+  if (主体?.kind !== '成员' || !主体.id) return undefined;
+  const 快照 = readInstanceSnapshot(deps.org?.layout?.identityFile?.());
+  if (!快照.ok) return '[dsh-mind] 成员工具闸 · 身份快照不可用（unknown ⇒ 拒）。';
+  const member = 快照.成员?.[主体.id];
+  // 复核/会审由它们自己的更窄边界处理。
+  if (member?.岗位 === '复核员' || member?.会审绑定) return undefined;
+  if (exec.name === 'send_message' && member) return 成员报告通道(exec, 快照, member);
+  if (!member?.就绪) return `[dsh-mind] 成员工具闸 · 实例未就绪：${member?.未就绪原因 ?? '缺身份'}；仅可向可信派发 Lead 报告。`;
+  if (['mind', 'mind_guard', 'skill'].includes(exec.name)) return undefined;
+  const parent = 快照.成员?.[member.委派者id];
+  if (!parent?.就绪 || parent.岗位 !== 'Lead') return '[dsh-mind] 成员工具闸 · 派发 Lead 未就绪或已封存，无法确认上游权限，通用工具拒绝。';
+  try {
+    const project = deps.项目键 ? deps.项目键(exec) : 项目键(exec.agent, 项目);
+    const 节点 = [...fold(readTaskLedgerSync(deps.org.layout.taskLog(project))).values()].map((node) => ({ ...node, 项目: project }));
+    const authority = deps.org.tasks.toolFileAuthority();
+    authority.check({ tool: exec.name, args: exec.arguments, cwd: 会话工作目录(exec, deps), nodes: 节点, instance: 主体.id, parent: member.委派者id, member });
+  } catch (error) {
+    return `[dsh-mind] 成员工具闸 · ${error.rule ?? error.code ?? '范围不可判'}：${错误消息(error)}（fail-closed）。`;
+  }
+  return undefined;
+}
 
 function 咨询参与工具闸(exec, 项目, deps) {
   const 主体 = agentSubject(exec);
@@ -636,8 +713,7 @@ function 咨询参与工具闸(exec, 项目, deps) {
     return 拒(`实例未就绪：${member.未就绪原因 ?? '咨询实例不是普通成员岗'}；仅可向派发 Lead 报告。`);
   }
   if (绑定.无效 || 绑定.来源会话 !== member.委派者id) return 拒(`绑定不可用（${绑定.无效 ?? '来源会话与真实委派者冲突'}），unknown ⇒ 拒；请报告派发 Lead。`);
-  const 当前目录 = 会话工作目录(exec, deps);
-  const 当前项目 = 当前目录 ? basename(当前目录) : 项目键(exec.agent, 项目);
+  const 当前项目 = deps.项目键 ? deps.项目键(exec) : 项目键(exec.agent, 项目);
   if (当前项目 !== 绑定.项目) return 拒(`会话项目 ${当前项目} 不是绑定项目 ${绑定.项目}，目录变化不扩大咨询权限。`);
   if (!咨询只读工具.has(exec.name)) return 拒(`工具「${exec.name}」不在咨询只读闭名单；写文件、子进程、再派活、能力发布及未知工具一律拒。`);
   if (exec.name === 'mind') {
@@ -670,7 +746,9 @@ function 咨询读路径(exec, deps, 绑定) {
     .filter((x) => {
       try { return 规范路径(realpathSync(x)) === x; } catch { return false; }
     });
-  return 根.some((x) => 在目录内(目标, x)) ? undefined : 拒('目标不在本场会审明确授权的资料根内；没有资料不等于整个工作区可读。');
+  if (!根.some((x) => 在目录内(目标, x))) return 拒('目标不在本场会审明确授权的资料根内；没有资料不等于整个工作区可读。');
+  if (搜索) assertFileSearchTree(目标);
+  return undefined;
 }
 
 /**
@@ -792,6 +870,7 @@ function 规范路径(路径) {
   const 绝对 = resolvePath(路径);
   let 真 = 绝对;
   try { 真 = realpathSync(绝对); } catch { /* 不存在的路径按词法判：写入类本就已被闭名单拦掉 */ }
+  assertSingleLinkTarget(真);
   return process.platform === 'win32' ? 真.toLowerCase() : 真;
 }
 
@@ -855,6 +934,7 @@ function 复核读路径(exec, deps) {
       拒: `[dsh-mind] 复核员读路径 · 「${目标}」不在本复核任务的授权产出引用范围内（目录变化不扩大授权）：请 Lead 在复核任务上 attach 明确源码目录/产物文件（产出物引用，绝对路径），或改用 mind 的 scoped 动作（workbench / task_criteria / memory_query / audit_tail / bus_read）。`,
     };
   }
+  if (工具 === 'glob' || 工具 === 'grep') assertFileSearchTree(规范目标);
   return {};
 }
 
@@ -870,15 +950,12 @@ function 复核读路径(exec, deps) {
 function 复核授权读根(exec, deps) {
   const org = deps.org;
   if (!org?.layout?.taskLog) return { 拒: '[dsh-mind] 复核员读路径 · 任务图接口不可用，无法确认授权产出引用（unknown ⇒ 拒）。' };
-  // 项目键 = **已提交工作目录**的目录名（§14.4-5 目录名即项目键）；拿不到才退回配置默认。
-  // 不用 header.cwd 当唯一真源（目录可变），也不把「目录变了」变成授权扩张——授权仍来自该
-  // 项目任务图上的真实绑定。
-  const 提交目录 = 会话工作目录(exec, deps);
-  const 项目名 = 提交目录 ? basename(提交目录) : 项目键(exec?.agent, deps.项目 ?? DEFAULT_PROJECT);
+  // 与模型面共享已提交 cwd 的稳定项目身份；目录尾名和模型 project 参数不能扩大读权。
+  let 项目名;
   let rows;
   try {
-    const 文本 = readFileSync(org.layout.taskLog(项目名), 'utf8');
-    rows = 文本.trim() === '' ? [] : 文本.trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    项目名 = deps.项目键 ? deps.项目键(exec) : 项目键(exec?.agent, deps.项目 ?? DEFAULT_PROJECT);
+    rows = readTaskLedgerSync(org.layout.taskLog(项目名));
   } catch (error) {
     return { 拒: `[dsh-mind] 复核员读路径 · 读不到项目 ${项目名} 的任务账本（unknown ⇒ 拒，不拿「没读到」当「没有引用」）：${error instanceof Error ? error.message : String(error)}。若尚无复核任务/授权产出引用，请 Lead 先建复核任务并 attach 源码目录/产物文件（授权产出引用，绝对路径）。` };
   }
@@ -964,103 +1041,6 @@ function 刷新工具总范围(org, logger) {
 }
 
 // ── 审计 ──────────────────────────────────────────────────────────────────────
-
-/** 只读工具不逐次记；写工具的成功按轮汇总，失败全记。 */
-const READ_ONLY_TOOLS = new Set(['read', 'glob', 'grep', 'list_agents', 'mind', 'skill', 'load_workspace_dependencies', 'list_subagent_models', 'job_list', 'job_output']);
-
-/**
- * 把工具调用记进审计（§7 分级）。
- *
- * `tools/result` 是**唯一**在成功与失败两条路上都会触发一次的钩子，
- * 所以「失败全记」与「成功按轮汇总」在这里一并实现。
- * @param {any} ctx @param {any} org @param {any} logger
- */
-function 挂审计(ctx, org, logger) {
-  /** @type {Map<string, {成功: number, 失败: number, 工具: Map<string, number>}>} */
-  const 轮 = new Map();
-
-  /**
-   * 轮键：**两处取法必须同一份**（W3 批3·2026-10-09）。
-   *
-   * 此前 `tools/result` 的兜底用的是**单次调用的 id**（形如 `call-xxxx`），而 `turn/end`
-   * 用的是「会话 id 取不到就一个固定兜底键」：两边算出不同的键，于是 `tools/result` 存的桶
-   * 在 `turn/end` 里**永远找不到、也永远删不掉**——Map 只增不减（长时间运行就是缓慢泄漏），
-   * 而且汇总条目永远不会落。
-   * 现在只认「会话 id」（单次调用的 id 拿它当轮键本来就错：每次调用会开一个新桶），
-   * 取不到就都用 `'unknown-turn'`，两端必然对齐。
-   *
-   * @param {any} source `tools/result` 的 exec 或 `turn/end` 的 payload
-   * @returns {string}
-   */
-  function 轮键(source) {
-    return String(source?.agent?.session?.id ?? source?.session?.id ?? source?.sessionId ?? 'unknown-turn');
-  }
-
-  ctx.on('tools/result', (exec, result) => {
-    try {
-      const 工具 = exec?.name ?? 'unknown';
-      const key = 轮键(exec);
-      const bucket = 轮.get(key) ?? { 成功: 0, 失败: 0, 工具: new Map() };
-      const 失败 = result?.isError === true;
-      if (失败) {
-        bucket.失败 += 1;
-        org.audit
-          .append({
-            动作: '工具调用失败',
-            // 主体取**真实调用者**（W3 批3）：此前恒记 `{id:'lead'}`，任何一次失败看起来
-            // 都是 Lead 干的——成员踩的坑被记到 Lead 头上，排障与追责都跟着错。
-            主体: agentSubject(exec),
-            对象: { id: 工具, kind: '工具' },
-            依据: '审计要求：失败全记（失败是最贵的学习信号）',
-            结果: '失败',
-            轮: key,
-            详情: { 原因: result?.error?.message ?? '未提供原因', 码: result?.error?.info ?? null },
-          })
-          .catch((error) => logger.warn?.(`[dsh-mind] 失败记账写入失败：${error.message}`));
-      } else if (!READ_ONLY_TOOLS.has(工具)) {
-        bucket.成功 += 1;
-        bucket.工具.set(工具, (bucket.工具.get(工具) ?? 0) + 1);
-      }
-      // 只记有内容的桶（2026-10-14 审查 P2-14）：修前 `轮.set` 无条件执行，只跑只读工具
-      // 的会话也会留下零计数桶——turn/end 里「空桶直接 return」又不删它，Map 只增不减。
-      // 现在只读结果根本不进 Map，空桶 delete 兜底留在 turn/end（双保险）。
-      if (bucket.成功 > 0 || bucket.失败 > 0) 轮.set(key, bucket);
-    } catch (error) {
-      logger.warn?.(`[dsh-mind] 工具结果记账异常：${error instanceof Error ? error.message : String(error)}`);
-    }
-  });
-
-  // 轮 = 一次任务实例从派发到交卷的一次执行段；交卷（回合结束）时落一条汇总。
-  ctx.on('turn/end', (payload) => {
-    try {
-      const key = 轮键(payload);
-      const bucket = 轮.get(key);
-      // 空桶也要删掉（2026-10-14 审查 P2-14 的双保险）：历史版本/异常路径留下的零计数
-      // 桶不许在 Map 里永久残留。
-      if (!bucket || (bucket.成功 === 0 && bucket.失败 === 0)) {
-        轮.delete(key);
-        return;
-      }
-      轮.delete(key);
-      org.audit
-        .append({
-          动作: '工具调用成功',
-          // 汇总条目的主体同样取真实会话（此前恒记 Lead：轮汇总与失败记录一样会张冠李戴）。
-          // P2-04（全面审查 2026-10-17）：主体与轮键必须同源——宿主用 agent 形状发
-          // turn/end 时，轮键取到了成员会话，主体却回落到 Lead。这里复用轮键的同一优先级。
-          主体: agentSubject({ agent: payload?.agent ?? { session: payload?.session ?? (payload?.sessionId ? { id: payload.sessionId } : undefined) } }),
-          对象: { id: key, kind: '轮' },
-          依据: '轮定义：一次任务实例从派发到交卷的一次执行段；成功的工具调用按轮汇总',
-          结果: `成功 ${bucket.成功} / 失败 ${bucket.失败}`,
-          轮: key,
-          详情: { 成功调用: bucket.成功, 失败调用: bucket.失败, 工具分布: Object.fromEntries(bucket.工具) },
-        })
-        .catch((error) => logger.warn?.(`[dsh-mind] 轮汇总写入失败：${error.message}`));
-    } catch (error) {
-      logger.warn?.(`[dsh-mind] 轮汇总异常：${error instanceof Error ? error.message : String(error)}`);
-    }
-  });
-}
 
 /**
  * 主权者交互：自最后一次交互起超过响应期限未响应 ⇒ 系统自动标记失联。
@@ -1154,9 +1134,11 @@ function 组织说明(org) {
     // 项目键不点名（设计评审 F2 · 2026-10-15）：修前这里钉 `${org.project}`（装配期项目，
     // 恒 default），而工具面每次调用都按工作区目录重新解析项目键——提示词说一个、
     // 实际操作另一个。静态句子只教解析规则，不替会话猜项目。
-    '项目键：省略 project 参数时取会话工作区目录名（§14.4-5 目录名即项目键）。',
-    '身份约定：根会话执行者 = Lead（可派活、可建卡、可汇总验收）；复核者只读数、不改、不提案；成员任务内全权、任务外无。',
-    '派活流程：接需求→定判据（写不出判据就不开工）→查岗位（有需要即建卡/改卡）→Lead 按需选择直接执行或 member_spawn 委派（方式=team/subagent＋岗位＋节点＋任务书；机制完成 registry_assign 登记→绑定节点→装载岗位与判据→发开工消息，不等待成员确认）→复核→采纳/打回→落记忆→结账。',
+    '项目键：省略 project 时由完整工作目录生成稳定路径键；同名目录隔离。历史项目须由部署者通过 projectBindings 明确绑定目录归属。',
+    '先推进用户目标：普通问答、需求澄清和已授权的只读调查可直接进行；需要正式交付、委派或验收证据时建立任务。目标持久化与跨会话自动接管尚未提供，不声称自动恢复。',
+    '身份约定：根会话执行者 = Lead（可派活、可建卡、可汇总验收）；复核者只读数、不改、不提案；成员以真实任务绑定、有效岗位凭证和现行授权执行，绑定任务不会自动授予任意工具或文件域。',
+    '派活流程（仅正式任务）：定判据→判权限→Lead 直接执行或按需 member_spawn（方式=team/subagent＋岗位＋节点＋任务书；机制完成 registry_assign 登记→绑定节点→装载岗位与判据→发开工消息，不等待成员确认）→交卷→复核→采纳/打回→记忆处置→结账。',
+    '推进方式由任务需要决定，不为流程额外建岗或起实例。任务判据派发后冻结；信息不足只停依赖它的动作，继续其他已授权工作；被拦时说明恢复条件，不自行绕闸。',
     '纪律：写操作一律先过策略引擎；被拒绝时结果里会带「哪条规则 + 改它要什么授权」，照着改，不要绕。',
     '按需拉取：需要组织状态时调 `mind` 的 status / workbench；需要知识时调 memory_query；需要技能规程时调 capability_list。不要假设历史会出现在上下文里。',
     '留痕是自治的门槛：无留痕的自治变更 = 无效。',
@@ -1272,6 +1254,10 @@ function normalizeArgs(args) {
   for (const key of BOOLEAN_ARGS) {
     if (out[key] === 'true') out[key] = true;
     else if (out[key] === 'false') out[key] = false;
+  }
+  // 命令键值对没有 JSON 数字类型；只转换已声明的读面数字参数，不改自由文本。
+  for (const key of ['limit', '条数上限', '内容预算', '偏移', '正文偏移']) {
+    if (typeof out[key] === 'string' && /^(0|[1-9]\d*)$/.test(out[key])) out[key] = Number(out[key]);
   }
   for (const key of ['负责人', '判据', '依赖', '复核对象', '分歧清单', '反例面', '产出物引用', '适用岗位', '收件', '标签', '来源引用', '知识候选', '参与者']) {
     const value = out[key];

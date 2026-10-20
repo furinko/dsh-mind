@@ -30,7 +30,7 @@ import { subjectFor } from './org.js';
  * notify.js:311/368、session-budget.js:293/337、mind-mood.js:418）用的都是
  * `header.origin === 'subagent'`（types.d.ts:81，全文只有这一个取值；写入端唯一一处是
  * dsh-subagent 的 childSessionMeta，三条创建路径共用 ⇒ **所有 in-process 子会话都带它，
- * 而顶层会话这个字段缺席**）。成员子会话正是子代理：`startActivation`（旧名 startContinuable）起的成员走的就是
+ * 而顶层会话这个字段缺席**）。成员子会话正是子代理：公共 `startContinuable` 起的成员走的就是
  * 这条路。于是这里用**同一份事实**，与那四处同口径；`delegationDepth` 只作佐证
  * （types.d.ts:82-87：顶层缺席、子会话 = 父+1）。
  *

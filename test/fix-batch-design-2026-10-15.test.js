@@ -118,7 +118,7 @@ describe('设计评审 2026-10-15 · F1：memory_query 的 类 是单选字符�
       const tool = host.工具.get('mind');
       const 根 = fakeExec({ name: 'mind' });
       for (const [类, 内容] of [['知识', '发布规程要求先冻结端口'], ['经历', '冻结端口晚了导致回滚']]) {
-        const w = JSON.parse(await tool.execute({ action: 'memory_write', 类, 内容, 来源: '测试', project: 'proj-f1-tool' }, 根));
+        const w = JSON.parse(await tool.execute({ action: 'memory_write', 类, 内容, 来源: '测试', project: 'proj-f1-tool', 依据: 'F1工具接口回归的显式跨项目知识写入' }, 根));
         assert.equal(w.成功, true, `写入 ${类} 要成功：${JSON.stringify(w)}`);
       }
       const q = JSON.parse(await tool.execute({ action: 'memory_query', 类: '知识', 文本: '冻结端口', project: 'proj-f1-tool' }, 根));

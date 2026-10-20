@@ -3544,14 +3544,14 @@ export async function runHarness() {
       const r11 = await 挂(接线视图());
       const 页容器 = findAllByClass(r11.tree, 'dshmind-pageBox');
       const 页序 = 页容器.map((el) => el.props['data-dshmind-page']);
-      passed.push(check(页序.join(',') === 'overview,graph,tasks,reviews,bus,audit,memory',
-        '⑪a 七个页容器按注意力顺序在树里（总览→图谱→任务→会审→总线→审计→记忆）', 页序.join(',')));
+      passed.push(check(页序.join(',') === 'overview,graph,tasks,reviews,bus,audit,monitor,memory',
+        '⑪a 八个页容器按注意力顺序在树里（总览→图谱→任务→会审→总线→审计→阻塞反馈→记忆）', 页序.join(',')));
       const 显示中 = 页容器.filter((el) => !(el.props.style && el.props.style.display === 'none'));
       passed.push(check(显示中.length === 1 && 显示中[0].props['data-dshmind-page'] === 'overview',
         '⑪a 默认只显示总览，其余六页 display:none（节点仍在树里 ⇒ 内容口径断言不受页影响）',
         显示中.map((el) => el.props['data-dshmind-page']).join(',')));
       const 导航钮 = findAllByClass(r11.tree, 'dshmind-navBtn');
-      passed.push(check(导航钮.length === 7, '⑪a 导航七个钮（一页一个）', String(导航钮.length)));
+      passed.push(check(导航钮.length === 8, '⑪a 导航八个钮（一页一个）', String(导航钮.length)));
       passed.push(check(findAllByClass(r11.tree, 'dshmind-navBtnOn').length === 1
         && textOf(findAllByClass(r11.tree, 'dshmind-navBtnOn')[0]).indexOf('总览') >= 0,
         '⑪a 当前页那一个带 On（且是总览）'));
@@ -3567,7 +3567,7 @@ export async function runHarness() {
       passed.push(check(显示中2.length === 1 && 显示中2[0].props['data-dshmind-page'] === 'graph',
         '⑪a 点了「图谱」⇒ 只有图谱页可见（总览收起）',
         显示中2.map((el) => el.props['data-dshmind-page']).join(',')));
-      passed.push(check(findAllByClass(r11.tree, 'dshmind-navBtn').length === 7, '⑪a 切页后导航仍在（渲染没崩）'));
+      passed.push(check(findAllByClass(r11.tree, 'dshmind-navBtn').length === 8, '⑪a 切页后导航仍在（渲染没崩）'));
 
       // ── ⑪b 可视化：甜甜圈与统计砖 ──
       const 图 = findAllByClass(r11.tree, 'dshmind-donut');

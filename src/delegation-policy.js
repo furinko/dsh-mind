@@ -12,6 +12,8 @@ import { assertPathSegment } from './paths.js';
 // 锚取首行+次段开头：够长能咬住所认的契约，上游再漂移即硬拒（fail-closed，不静默适配）。
 const OFFICIAL_TEAM_OPENER = 'Agent Teams is available in this session\n\nThe Team Lead and all teammates share the same working directory and filesystem.';
 const CREATION_TOOLS = new Set(['spawn_teammate', 'subagent', 'subagent_fork', 'role_spawn', 'workflow']);
+/** @param {string|undefined} name @returns {boolean} 只读查询创建工具闭名单，无副作用。 */
+export const isCreationTool = name => CREATION_TOOLS.has(name);
 
 /** 唯一授权判据；不负责猜测任务是否值得委派，那是 Lead 的职责。 */
 export class DelegationPolicy {

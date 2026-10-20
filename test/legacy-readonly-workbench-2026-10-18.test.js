@@ -67,7 +67,9 @@ test('四个非旧会审历史采纳待确认及真正待采纳/待决不能一�
   assert.equal(result.待你决定.filter(x => x.类型 === '待采纳').length, 1);
   assert.equal(result.待你决定.filter(x => x.类型 === '待决项').length, 1);
   assert.match(result.任务.节点[4].采纳命令, /票=rv-7/);
-  assert.match(result.任务.节点[0].确认命令, /task_accept/);
+  assert.equal(result.任务.节点[0].确认命令, undefined, '旧票缺内容绑定时不提供无效确认命令');
+  assert.match(result.任务.节点[0].交付物待补证, /另立节点/);
+  assert.ok(result.待你决定.filter(x => x.类型 === '历史采纳待确认').every(x => !x.命令 && /另立节点/.test(x.原因)));
 });
 
 test('并行分担历史模式不是只读旧会审且合法已采纳仍可催结账', () => {

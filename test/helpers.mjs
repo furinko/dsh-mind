@@ -316,7 +316,15 @@ export async function makeFixture(options = {}) {
     // maxRetries（2026-10-17 测试稳定性批）：Windows 下 rm -r 会撞「目录刚清空但句柄未释」
     // 的瞬态 ENOTEMPTY——设计债批基线跑实测踩中一次（单文件复跑即绿，纯环境噪声）。
     // 仓内先例：host.test.js after 钩子 / delegation.test.js 的 rm 都带同款参数。
-    cleanup: () => rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 }),
+    cleanup: async () => {
+      // A real kernel guard/result can enqueue asynchronous observation/legacy audit writes.
+      // The same audit write locks provide a drain barrier without creating another shared Org.
+      // Deliberate corrupt-audit fixtures may fail verification; their business assertions already
+      // checked that failure, and cleanup still removes the isolated directory after the lock barrier.
+      try { await audit.readVerified(); }
+      catch (error) { if (error?.code !== 'INVALID_BODY') throw error; }
+      finally { await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 }); }
+    },
   };
 }
 

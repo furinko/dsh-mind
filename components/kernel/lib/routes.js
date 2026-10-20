@@ -37,6 +37,7 @@ export const 路由前缀 = '/plugins/dsh-mind';
 export const 端点表 = Object.freeze({
   presence: `${路由前缀}/presence`,
   workbench: `${路由前缀}/workbench`,
+  monitor: `${路由前缀}/monitor`,
   ping: `${路由前缀}/ping`,
   delegation: `${路由前缀}/delegation`,
   // v2 条目14/17（2026-10-18 补修F）：介入度待决清单与主权者逐请求决议。
@@ -443,6 +444,32 @@ export function ping路由({ org, ctx }) {
  *
  * @param {{ org: object, 项目: string, ctx?: object }} spec
  */
+export function monitor路由({ org, ctx }) {
+  return async function monitor端点(req, res) {
+    const method = String(req?.method ?? 'GET').toUpperCase();
+    if (!['GET', 'POST'].includes(method)) return 回方法不对(res, method, 'GET 或 POST');
+    const connection = ctx?.get?.('connection');
+    if (!connection || typeof connection.requestRejection !== 'function') return 回JSON(res, 503, { 成功: false, 理由: '宿主 Connection 认证不可用；反馈入口不会退回无认证通道。' });
+    const rejection = connection.requestRejection(req);
+    if (rejection !== undefined) return 回JSON(res, rejection === 401 ? 401 : 403, { 成功: false, 理由: '需要已认证的同源人侧入口。' });
+    const gate = method === 'GET' ? 读栅栏(req) : 写栅栏(req);
+    if (!gate.ok) return 回JSON(res, 403, { 成功: false, 理由: '同源请求被拒绝。' });
+    const url = new URL(req.url, 'http://localhost');
+    const session = url.searchParams.get('sessionId');
+    if (!session?.trim()) return 回JSON(res, 400, { 成功: false, 理由: '必须指定当前会话 sessionId；不返回其他会话。' });
+    try {
+      if (method === 'GET') return 回JSON(res, 200, { 成功: true, 数据: await org.observability.query({ project: null, session,
+        limit: Number(url.searchParams.get('limit') ?? 50), offset: Number(url.searchParams.get('offset') ?? 0) }) });
+      if (取头(req, 'content-type').split(';')[0].trim().toLowerCase() !== 'application/json') return 回JSON(res, 415, { 成功: false, 理由: '只接受 application/json。' });
+      const body = JSON.parse(await 读请求体(req));
+      // Provenance comes only from this authenticated route. No arbitrary action, actor or permission fields are forwarded.
+      const result = await org.observability.feedback({ human: true, session, project: null,
+        blockId: body.阻塞引用, category: body.原因分类, verdict: body.判定, reason: body.原因, reference: body.来源引用 });
+      return 回JSON(res, 200, { 成功: true, ...result });
+    } catch (error) { return 回失败(res, error); }
+  };
+}
+
 export function intervention路由({ org, ctx }) {
   return async function intervention端点(req, res) {
     const 方法 = String(req?.method ?? 'GET').toUpperCase();
@@ -620,6 +647,7 @@ export function 挂同源路由(spec) {
         新挂.push(ws.register({ kind: 'exact', path: 端点表.ping, handler: ping路由({ org, ctx }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.delegation, handler: delegation路由({ ctx, settings: spec.调度设置 }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.intervention, handler: intervention路由({ org, 项目, ctx }) }));
+        新挂.push(ws.register({ kind: 'exact', path: 端点表.monitor, handler: monitor路由({ org, ctx }) }));
       } catch (error) {
         // 挂到一半失败：把已挂的撤掉，别在宿主的注册表里留半个我们。
         for (const 撤 of 新挂) {

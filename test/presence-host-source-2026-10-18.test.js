@@ -15,6 +15,8 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { makeFixture } from './helpers.mjs';
 import { fakeHost } from './host-harness.mjs';
 import * as plugin from '../components/kernel/lib/index.js';
+import { shareOrg } from '../src/runtime.js';
+import { drainKernelAudit } from './kernel-drain.mjs';
 
 const 旧时刻 = '2020-01-01T00:00:00.000Z';
 
@@ -46,9 +48,18 @@ describe('v2 条目13：失联时钟只认可信人类来源', () => {
     const f = await makeFixture();
     const host = fakeHost();
     const identityFile = f.layout.identityFile();
+    const pendingInteractions = [];
+    let org;
     try {
       await 钉旧交互(identityFile);
       await plugin.apply(host.ctx, { home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot });
+      org = await shareOrg({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot });
+      const markInteraction = org.registry.markInteraction.bind(org.registry);
+      org.registry.markInteraction = (...args) => {
+        const operation = markInteraction(...args);
+        pendingInteractions.push(operation);
+        return operation;
+      };
       assert.equal(await 读交互(identityFile), 旧时刻, '前提：起点是旧时刻');
 
       // 正例：真实人类（rpcId 由用户 RPC 带来）。
@@ -85,6 +96,7 @@ describe('v2 条目13：失联时钟只认可信人类来源', () => {
       assert.notEqual(await 读交互(identityFile), 旧时刻, 'event.event 包装形状同样识别真实 user');
     } finally {
       host.清理();
+      if (org) await drainKernelAudit(org, pendingInteractions);
       await f.cleanup();
     }
   });

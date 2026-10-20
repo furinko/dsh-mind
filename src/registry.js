@@ -10,8 +10,9 @@
  *  2. **随时能答「这身份能碰什么」** —— `canTouch()` 把卡的分段与策略引擎的判定拼成一张表。
  *  3. **实例权限只来自岗位** —— `assign()` 拒绝一个不存在的岗位。
  */
-import { listDirs, listFiles, readJsonOrNull, readJsonl, readTextOrNull, atomicWrite, exists, withLock } from './kernel/fsx.js';
+import { listDirs, listFiles, readJsonOrNull, readTextOrNull, atomicWrite, exists, withLock } from './kernel/fsx.js';
 import { readInstanceSnapshot } from './instance-snapshot.js';
+import { readTaskLedger } from './task-ledger.js';
 import {
   CARD_SEGMENTS as SEGMENTS,
   cardDigest,
@@ -166,12 +167,7 @@ export class RoleRegistry {
     const 项目们 = new Set(await listDirs(根));
     for (const 项目 of 项目们) {
       if (!项目) continue;
-      let 行 = [];
-      try {
-        行 = await readJsonl(this.layout.taskLog(项目));
-      } catch {
-        continue; // 该项目没有任务账本（正常形态，不是错误）
-      }
+      const 行 = await readTaskLedger(this.layout.taskLog(项目));
       for (const row of 行) {
         const 节点 = row?.id;
         if (!节点) continue;

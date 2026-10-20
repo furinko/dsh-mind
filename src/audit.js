@@ -9,11 +9,13 @@
  *  3. **归档 takes precedence over 状态** —— §7 明确「不承担回滚、不做状态」，
  *     所以这里没有任何 `update`/`delete` 方法，将来也不加。
  */
-import { appendLines, atomicWrite, ensureDirPath, listFiles, readJsonl, readJsonlHealth, readJsonOrNull, withLock, serializeByKey } from './kernel/fsx.js';
+import { appendLines, atomicWrite, ensureDirPath, listDirs, listFiles, readJsonl, readJsonlHealth, readJsonOrNull, withLock, serializeByKey } from './kernel/fsx.js';
+import { readTaskLedger } from './task-ledger.js';
 import { chainHash } from './kernel/text.js';
 import { monthKey } from './kernel/time.js';
 import { Denied, InvalidBody } from './kernel/errors.js';
 import { DIR } from './paths.js';
+import { observeAudit } from './observability.js';
 
 /** §7 审计记录分级：全记 / 记汇总 / 不逐次记。 */
 export const GRADE = { 全记: '全记', 记汇总: '记汇总', 不逐次记: '不逐次记' };
@@ -128,6 +130,8 @@ export class AuditLog {
    * @returns {Promise<{ seq: number, hash: string, 时间: string, 月: string }>}
    */
   async append(entry) {
+    // Observation is separate from authorization and cannot alter the original audit outcome.
+    try { observeAudit(entry); } catch { /* observer failure never changes the audited operation */ }
     const at = this.clock.iso();
     const month = monthKey(at);
     const file = this.layout.auditLog(month);
@@ -304,6 +308,28 @@ export class AuditLog {
     return query.limit ? rows.slice(-query.limit) : rows;
   }
 
+  /** A monitoring snapshot must not race an append between ledger, anchor and manifest writes. */
+  async readVerified(query = {}) {
+    const months = [...new Set([...(await this.months()), monthKey(this.clock.iso())])].sort();
+    await ensureDirPath(this.layout.auditDir());
+    const lock = (index) => {
+      if (index < months.length) {
+        const file = this.layout.auditLog(months[index]);
+        return serializeByKey(file, () => withLock(`${file}.lock`, () => lock(index + 1)));
+      }
+      return (async () => {
+        const verified = await this.verify();
+        if (!verified.ok) throw new InvalidBody('审计完整性未确认，监控不能报告完整分母');
+        const rows = await this.read(query);
+        if (!months.includes(monthKey(this.clock.iso())) || (await this.months()).some(month => !months.includes(month))) {
+          throw new InvalidBody('核验期间出现未加锁的新月份；监控快照未确认，请重新读取');
+        }
+        return rows;
+      })();
+    };
+    return lock(0);
+  }
+
   /**
    * 更正声明（缺口2a · 主权者裁决 2026-10-12 采用「追加更正」方案）。
    *
@@ -398,10 +424,9 @@ export class AuditLog {
    * @param {string} id
    */
   async 授权依据存在(id) {
-    // listFiles 顶部已静态导入（2026-10-14 审查 P3：修前这里又动态 import 一次，冗余）。
     const root = this.layout.private(DIR.基础设施, DIR.任务图);
-    for (const rel of await listFiles(root, { recursive: true, filter: (n) => n.endsWith('tasks.jsonl') })) {
-      const rows = await readJsonl(`${root}/${rel}`);
+    for (const project of await listDirs(root)) {
+      const rows = await readTaskLedger(this.layout.taskLog(project));
       if (rows.some((row) => row?.id === id)) return true;
     }
     return false;

@@ -14,7 +14,7 @@ function act(s,kind,action,args={}){
   return runAction({org:s.org,项目:REVIEW_PROJECT,主体:spec.subject,面:'tool',宿主:spec.host,args:spec.args});
 }
 async function withKernel(s,fn,{configured=true}={}){
-  const disposers=[],config={home:s.f.home,factoryRoot:s.f.factoryRoot,privateRoot:s.f.privateRoot,project:REVIEW_PROJECT,audit工具调用:false,...(configured?{reviewExperiments:s.config}:{})};
+  const disposers=[],config={home:s.f.home,factoryRoot:s.f.factoryRoot,privateRoot:s.f.privateRoot,project:REVIEW_PROJECT,projectBindings:[{path:path.join(s.root,REVIEW_PROJECT),project:REVIEW_PROJECT}],audit工具调用:false,...(configured?{reviewExperiments:s.config}:{})};
   const host=fakeHost({提供服务:['tools','commands','systemPrompt','agents','workingDirectory','subagents','sandbox','subprocess'],服务:{agents:s.parentHost.agents,workingDirectory:{get:()=>path.join(s.root,REVIEW_PROJECT)},subagents:s.parentHost.subagents,sandbox:s.services.sandbox,subprocess:s.services.subprocess}});
   host.ctx.effect=fn=>{const disposer=fn();disposers.push(disposer);return disposer;};
   try{await applyKernel(host.ctx,config);const tool=host.工具.get('mind');const invoke=async(args,child=false)=>JSON.parse(await tool.execute({project:REVIEW_PROJECT,...args},{name:'mind',agent:child?s.childAgent:s.parentAgent}));await fn({host,tool,invoke,disposers});}

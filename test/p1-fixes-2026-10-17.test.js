@@ -22,7 +22,8 @@ import { 盲标分配 } from '../src/review.js';
 import { fakeHost } from './host-harness.mjs';
 import * as kernel from '../components/kernel/lib/index.js';
 import { appendLines } from '../src/kernel/fsx.js';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
+import { projectKeyForPath } from '../src/project-identity.js';
 
 const P = 'p1-fixes';
 const 岗位卡 = '集体L3-成员角色卡/插件工程.md';
@@ -247,12 +248,12 @@ describe('P1-12 命令面宿主服务形状', () => {
             spawnTeammate: async () => ({ member: { id: 'team-1', name: 'member-x' } }),
             sendMessage: async () => ({}),
           },
-          subagents: { startActivation: async () => ({ childId: 'sub-1' }), sendMessage: async () => ({}), listChildren: async () => [] },
+          subagents: { startContinuable: async () => ({ childId: 'sub-1' }), sendMessage: async () => ({}), listChildren: async () => [] },
         },
       });
       await kernel.apply(host.ctx, {
         home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot,
-        delegation: { mode: 'lead-discretion', projects: [basename(process.cwd())], authorizationRef: 'p1-12' },
+        delegation: { mode: 'lead-discretion', projects: [projectKeyForPath(process.cwd())], authorizationRef: 'p1-12' },
       });
       const invoke = async args => {
         const result = JSON.parse(await host.工具.get('mind').execute(args, { name: 'mind', agent }));
@@ -272,8 +273,8 @@ describe('P1-12 命令面宿主服务形状', () => {
       assert.match(cross.理由, /跨项目|会话项目/);
       currentCwd = join(process.cwd(), 'changed-workspace');
       const changed = JSON.parse(await host.工具.get('mind').execute({ action: 'member_list' }, { name: 'mind', agent }));
-      assert.equal(changed.成功, false, '提交的workingDirectory变化优先于旧header.cwd');
-      assert.match(changed.理由, /跨项目|会话项目/);
+      assert.equal(changed.成功, true, '当前项目按已提交workingDirectory重新解析，旧项目绑定不得跟随header漂移');
+      assert.deepEqual(changed.成员, [], '新项目没有旧项目任务名册');
     } finally { await f.cleanup(); }
   });
 });

@@ -22,6 +22,10 @@ import * as kernel from '../components/kernel/lib/index.js';
 const here = dirname(fileURLToPath(import.meta.url));
 /** 出厂区：断言 ⑤ 读的是**仓库里的真文件**，不是夹具。 */
 const FACTORY = join(here, '..', 'mind');
+async function 排空工具审计(home) {
+  const org = await shareOrg({ home, factoryRoot: FACTORY, privateRoot: join(home, 'mind-private') });
+  await org.observability.flush();
+}
 const 出厂响应期限 = join(FACTORY, '集体L2-共享基础设施', 'defaults', '响应期限.json');
 const 出厂介入度 = join(FACTORY, '集体L2-共享基础设施', 'defaults', '介入度.json');
 /** 私有部署偏好（叠加层，最后覆盖出厂）。 */
@@ -39,6 +43,10 @@ const 夹具响应期限 = '集体L2-共享基础设施/defaults/响应期限.js
  * 两条路一起走：schema 的 enum 必须等于这份清单，`ACTIONS` 本体也必须等于它。
  */
 const 冻结动作表 = [
+  // 三个 monitor 动作只读/追加观测事实，不写设置，不授予权限，不执行审批重放。
+  'monitor_query',
+  'monitor_followup',
+  'monitor_feedback',
   'status',
   'workbench',
   'policy_check',
@@ -297,6 +305,7 @@ describe('失联限制：出厂件是真源，开关可关', () => {
       assert.equal(工作台.数据.状态条.失联, '已关闭', '关了开关 ⇒ 状态条要说「已关闭」，不许说「已失联」也不许说「在位」');
     } finally {
       host.清理();
+      await 排空工具审计(home);
       await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
     }
   });
@@ -360,6 +369,7 @@ describe('失联限制：出厂件是真源，开关可关', () => {
       }
     } finally {
       host.清理();
+      await 排空工具审计(home);
       await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
     }
   });
@@ -386,6 +396,7 @@ describe('失联限制：出厂件是真源，开关可关', () => {
       assert.match(props.类型.description, /机制保留字/, '「系统」保留字警示要在');
     } finally {
       host.清理();
+      await 排空工具审计(home);
       await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
     }
   });
@@ -434,6 +445,7 @@ describe('失联限制：出厂件是真源，开关可关', () => {
       );
     } finally {
       host.清理();
+      await 排空工具审计(home);
       await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
     }
   });
@@ -617,6 +629,7 @@ describe('失联限制：出厂件是真源，开关可关', () => {
       assert.equal(自述.defaults来源.响应期限小时, '私有', '来源要看得出生效值来自私有层');
     } finally {
       host.清理();
+      await 排空工具审计(home);
       await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 60 });
     }
   });

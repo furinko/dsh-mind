@@ -27,10 +27,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { makeFixture, writeUnder } from './helpers.mjs';
+import { makeFixture, writeUnder, LEAD } from './helpers.mjs';
 import { Denied } from '../src/kernel/errors.js';
 import { parseRefs, section } from '../src/capability.js';
 import { deriveCardFaces } from '../src/card-credential.js';
+import { TaskGraph } from '../src/tasks.js';
 
 const P = 'proj-j';
 const 主权者 = { id: 'sovereign', kind: '主权者' };
@@ -70,9 +71,19 @@ ${能力.map((c) => `- \`${c}\``).join('\n')}
 `;
 }
 
-/** 成员写动作的合法任务上下文（policy 只读 负责人 / 绑定 / 状态 三格）。 */
+/** 卡拒绝反例的最小上下文；合法写正控另走下面的真实任务绑定准备。 */
 function 任务上下文(实例, 岗位 = '插件工程') {
   return { task: { 负责人: [岗位], 绑定: [{ 实例 }], 状态: '执行中' } };
+}
+
+/** 写放行正控要先由真实绑定钉住当时凭证，不能用 {实例} 冒充完整授权事实。 */
+async function 真实任务上下文(f, 实例, 岗位 = '插件工程') {
+  const tasks = new TaskGraph(f);
+  const node = await tasks.create({ subject: LEAD, 项目: P, 描述: `卡凭证正控-${实例}`, 负责人: [岗位], 判据: ['合法钉版可在本人真实任务内写'] });
+  await tasks.bind(node.id, { subject: LEAD, 项目: P, 实例, 岗位 });
+  await tasks.dispatch(node.id, { subject: LEAD, 项目: P });
+  await tasks.start(node.id, { subject: { id: 实例, kind: '成员', roleId: 岗位 }, 项目: P });
+  return { task: await tasks.get(node.id, { 项目: P }) };
 }
 
 /** 写目标：任务节点，自治档（与真实任务写同形）。 */
@@ -304,6 +315,7 @@ describe('⑥ 合法旧已钉卡不因现行卡变动换脸（正例对照）', 
       // 先落一张私有 v1 卡（内容由本用例控制），再登记 ⇒ 钉的就是这张。
       await writeUnder(f.privateRoot, '集体L3-成员角色卡/插件工程.md', 岗位卡('插件工程', { 版本: 1, 规则: '1. 先搜后写。' }));
       await 登记成员(f, 'm-old', '插件工程');
+      const 本人任务 = await 真实任务上下文(f, 'm-old');
       const 旧钉 = (await 读身份(f)).members['m-old'].卡版本.摘要;
       assert.equal((await f.registry.cardOf('m-old')).段['个体L1'], '1. 先搜后写。');
 
@@ -316,7 +328,7 @@ describe('⑥ 合法旧已钉卡不因现行卡变动换脸（正例对照）', 
       assert.equal(卡?.就绪, true, '合法旧钉卡照样就绪');
       assert.equal(卡?.卡版本?.摘要, 旧钉, '仍读钉住的那一版');
       assert.equal(卡?.段?.['个体L1'], '1. 先搜后写。', '规则面没有被现行卡替换');
-      await f.policy.check({ subject: { id: 'm-old', kind: '成员', roleId: '插件工程' }, action: 'write', target: 任务目标(), context: 任务上下文('m-old') });
+      await f.policy.check({ subject: { id: 'm-old', kind: '成员', roleId: '插件工程' }, action: 'write', target: 任务目标(本人任务.task.id), context: 本人任务 });
 
       await 登记成员(f, 'm-new', '插件工程');
       const 新钉 = (await 读身份(f)).members['m-new'].卡版本.摘要;
@@ -374,6 +386,7 @@ describe('⑧ 旧 schema 与来源路径差异：不误判合法旧钉版，也�
     try {
       await writeUnder(f.privateRoot, '集体L3-成员角色卡/插件工程.md', 岗位卡('插件工程', { 版本: 1, 规则: '1. 先搜后写。' }));
       await 登记成员(f, 'm-old-schema', '插件工程', { id: 'lead', kind: 'Lead', roleId: 'Lead' });
+      const 本人任务 = await 真实任务上下文(f, 'm-old-schema');
       const doc = await 读身份(f);
       const 摘要 = doc.members['m-old-schema'].卡版本.摘要;
       // 旧 schema：钉版元记录只有版本 + 摘要，没有岗位 / 生效来源。
@@ -387,7 +400,7 @@ describe('⑧ 旧 schema 与来源路径差异：不误判合法旧钉版，也�
       assert.equal(卡?.段?.['个体L1'], '1. 先搜后写。');
       await f.policy.check({
         subject: { id: 'm-old-schema', kind: '成员', roleId: '插件工程' },
-        action: 'write', target: 任务目标(), context: 任务上下文('m-old-schema'),
+        action: 'write', target: 任务目标(本人任务.task.id), context: 本人任务,
       });
 
       assert.equal(await readFile(f.layout.identityFile(), 'utf8'), 档案基线, '读/写前闸不得顺手补字段改生产身份');
@@ -400,6 +413,7 @@ describe('⑧ 旧 schema 与来源路径差异：不误判合法旧钉版，也�
     try {
       await writeUnder(f.privateRoot, '集体L3-成员角色卡/插件工程.md', 岗位卡('插件工程', { 版本: 1, 规则: '1. 先搜后写。' }));
       await 登记成员(f, 'm-src', '插件工程', { id: 'lead', kind: 'Lead', roleId: 'Lead' });
+      const 本人任务 = await 真实任务上下文(f, 'm-src');
       const doc = await 读身份(f);
       const 摘要 = doc.members['m-src'].卡版本.摘要;
       const 快照 = await 读快照(f, 摘要);
@@ -412,7 +426,7 @@ describe('⑧ 旧 schema 与来源路径差异：不误判合法旧钉版，也�
       assert.equal(卡?.就绪, true, '来源路径不是凭证的一部分：同正文同摘要不得因来源标注差异判坏');
       await f.policy.check({
         subject: { id: 'm-src', kind: '成员', roleId: '插件工程' },
-        action: 'write', target: 任务目标(), context: 任务上下文('m-src'),
+        action: 'write', target: 任务目标(本人任务.task.id), context: 本人任务,
       });
     } finally { await f.cleanup(); }
   });
@@ -451,7 +465,8 @@ describe('⑨ 任意摘要字符串不构成凭证：四个消费者同一把尺
       const 卡 = await f.registry.cardOf('member-a');
       assert.equal(卡?.就绪, true, '夹具的合法成员本来就该就绪');
       assert.ok(卡?.卡版本?.摘要);
-      await f.policy.check({ subject: { id: 'member-a', kind: '成员', roleId: '插件工程' }, action: 'write', target: 任务目标(), context: 任务上下文('member-a') });
+      const 本人任务 = await 真实任务上下文(f, 'member-a');
+      await f.policy.check({ subject: { id: 'member-a', kind: '成员', roleId: '插件工程' }, action: 'write', target: 任务目标(本人任务.task.id), context: 本人任务 });
       assert.equal(f.registry.snapshotSync().成员['member-a'].就绪, true);
     } finally { await f.cleanup(); }
   });

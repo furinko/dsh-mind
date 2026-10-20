@@ -183,11 +183,12 @@ export class CouncilService {
         }
       }
     } catch (error) {
-      const 补偿 = await this.#补偿创建(创建实例, spec.退役实例, id);
+      const 补偿阶段 = [];
+      const 补偿 = await this.#补偿创建(创建实例, spec.退役实例, id, 补偿阶段);
       const 审计错误 = await this.#记创建失败(spec.项目, spec.subject, id, 'create', 创建实例, 补偿, error);
       throw 受管创建失败('COUNCIL_CREATE_FAILED', `会审 ${id} 创建第 ${创建实例.length + 1} 个实例失败：${错误信息(error)}。已尝试清理本次已建实例（${创建实例.map((x) => x.实例).join('、') || '无'}）。`, {
         会审: id, 阶段: 'create', 已创建: 创建实例.map((x) => x.实例), 失败岗位: 参与岗位[创建实例.length] ?? null, 补偿失败: 补偿, 原因: 错误信息(error), ...(error?.detail ? { 错误详情: error.detail } : {}), ...(审计错误 ? { 审计错误 } : {}),
-      });
+      }, error, spec.项目, 补偿阶段);
     }
 
     // 2) 锁内只落 opened（状态权威）；锁外不持锁等宿主。
@@ -206,27 +207,31 @@ export class CouncilService {
       const 已落线 = error?.detail?.kind === 'opened';
       const 作废错误 = 已落线
         ? await this.#作废(spec.项目, spec.subject, id, 'open', error) : null;
-      const 补偿 = await this.#补偿创建(创建实例, spec.退役实例, id);
+      const 补偿阶段 = [];
+      const 补偿 = await this.#补偿创建(创建实例, spec.退役实例, id, 补偿阶段);
       const 审计错误 = await this.#记创建失败(spec.项目, spec.subject, id, 'open', 创建实例, 补偿, error, 作废错误);
       throw 受管创建失败('COUNCIL_OPEN_FAILED', `会审 ${id} 的实例创建已完成，${已落线 ? 'opened 事件已落线，但发起审计失败' : 'opened 事件未能落线'}：${错误信息(error)}。已尝试${已落线 ? '冻结作废并' : ''}清理本次已建实例；不要重试同一动作。`, {
         会审: id, 阶段: 'open', opened已落线: 已落线, 已创建: 创建实例.map((x) => x.实例), 补偿失败: 补偿, 作废错误, 原因: 错误信息(error), ...(审计错误 ? { 审计错误 } : {}),
-      });
+      }, error, spec.项目, 补偿阶段);
     }
 
     // 3) 锁外逐条发会审任务书；失败则落 aborted（作答状态冻结）再清理。
     let 已发 = 0;
+    const 已接收书 = [];
     try {
       for (const 项 of 创建实例) {
-        await spec.发开场书({ 会审: id, 问题, 资料, 来源会话, 实例: 项.实例, 岗位: 项.岗位, 钉卡: 项.钉卡, 模型路由: spec.模型路由 ?? null });
+        const 回执 = await spec.发开场书({ 会审: id, 问题, 资料, 来源会话, 实例: 项.实例, 岗位: 项.岗位, 钉卡: 项.钉卡, 模型路由: spec.模型路由 ?? null });
+        if (typeof 回执?.messageId === 'string' && 回执.已接收 === true) 已接收书.push({ 阶段: '会审任务书inbox已接收', 项目: spec.项目, 会审: id, 实例: 项.实例, 消息id: 回执.messageId, 已接收: true });
         已发 += 1;
       }
     } catch (error) {
       const 作废错误 = await this.#作废(spec.项目, spec.subject, id, 'send', error, { 已发 });
-      const 补偿 = await this.#补偿创建(创建实例, spec.退役实例, id);
+      const 补偿阶段 = [];
+      const 补偿 = await this.#补偿创建(创建实例, spec.退役实例, id, 补偿阶段);
       const 审计错误 = await this.#记创建失败(spec.项目, spec.subject, id, 'send', 创建实例, 补偿, error, 作废错误, { 已发 });
       throw 受管创建失败('COUNCIL_SEND_FAILED', `会审 ${id} 已落线，但任务书发送失败（已发 ${已发}/${创建实例.length}）：${错误信息(error)}。已尝试落 aborted 并清理本次实例；不要重试同一动作。`, {
         会审: id, 阶段: 'send', 已发, 已创建: 创建实例.map((x) => x.实例), 补偿失败: 补偿, 作废错误, 原因: 错误信息(error), ...(审计错误 ? { 审计错误 } : {}),
-      });
+      }, error, spec.项目, [...已接收书, ...补偿阶段]);
     }
     return { 会审: view, id, 参与者: view.参与者, 创建实例: 创建实例.map(({ 实例, 岗位, 钉卡 }) => ({ 实例, 岗位, 卡版本: 钉卡?.卡版本?.摘要 ?? null })), 来源会话: view.来源会话 };
   }
@@ -462,8 +467,12 @@ export class CouncilService {
               内容: `${ROUND_BOUNDARY_MARK} ${结果.轮次}`,
             });
           } catch (error) {
-            throw new Fault('DEBATE_BOUNDARY_MISSING', `会审 ${spec.id} 轮次已推进到 ${结果.轮次}（事件已落线），但轮边界消息落线失败：${error instanceof Error ? error.message : String(error)}。不要重试 debate_round——请人工核对该线程并补记边界消息。`, {
+            throw new Fault('DEBATE_BOUNDARY_MISSING', `会审 ${spec.id} 轮次已推进到 ${结果.轮次}（事件已落线），但轮边界消息流程未完整收尾。不要重试 debate_round——请先核对线程及审计，不能直接重复补发边界。`, {
+              cause: error,
               detail: { 会审: spec.id, 轮次: 结果.轮次 },
+              outcome: { 提交状态: '部分提交', 可重试: false,
+                恢复指引: '轮次已推进。先核对该线程的轮边界消息；消息已存在时补审计，确认缺失后再决定补记边界，不要重放 debate_round。',
+                已确认阶段: [{ 阶段: '会审轮次已推进', 项目: spec.项目, 会审: spec.id, 事件: 'rounded' }, ...(error.outcome?.已确认阶段 ?? [])] },
             });
           }
         },
@@ -652,6 +661,9 @@ export class CouncilService {
           } catch (error) {
             throw new Fault('AUDIT_APPEND_FAILED_AFTER_EVENT', `会审 ${spec.id} 的收敛事件已落线，但「零分歧异常」审计追加失败：${error instanceof Error ? error.message : String(error)}。不要重试 debate_converge——结论已定格；请人工核对审计账本并补记。`, {
               detail: { 会审: spec.id, 项目: spec.项目 },
+              outcome: { 提交状态: '已提交', 可重试: false,
+                恢复指引: '查询会审当前结论并补记零分歧异常审计；不要重放 debate_converge。',
+                已确认阶段: [{ 阶段: '会审收敛落线', 项目: spec.项目, 会审: spec.id, 事件: 'converged' }] },
             });
           }
         },
@@ -691,6 +703,14 @@ export class CouncilService {
     if (收敛错误) {
       throw new Fault(收敛错误.code ?? 'COUNCIL_CONVERGE_FAILED_AFTER_EVENT', `${错误信息(收敛错误)}；已逐个尝试本场退役，结论不可重试。`, {
         detail: { ...收敛错误.detail, 会审: spec.id, 结论已定格: true, 退役, 退役事件错误, 退役审计错误, 存档读取错误 },
+        outcome: { 提交状态: '已提交', 可重试: false,
+          恢复指引: '收敛结论已定格，查询会审存档并逐实例核对退役回执；不要重新收敛或重放业务。',
+          已确认阶段: [...(收敛错误.outcome?.已确认阶段 ?? [{ 阶段: '会审收敛落线', 项目: spec.项目, 会审: spec.id, 事件: 'converged' }]),
+            ...退役.flatMap(项 => 项.提交回执?.已确认阶段 ?? [
+              ...(项.回执?.已封 ? [{ 阶段: '组织身份已封存', 项目: spec.项目, 会审: spec.id, 实例: 项.实例, 已封存: true }] : []),
+              ...(项.回执?.当前驻留已释放 ? [{ 阶段: '宿主当前驻留已释放', 实例: 项.实例, 会审: spec.id, 当前驻留已释放: true }] : []),
+              ...(项.回执?.已请求中断 ? [{ 阶段: '宿主中断已请求', 实例: 项.实例, 会审: spec.id, 已请求: true }] : []),
+            ])] },
       });
     }
     return {
@@ -826,12 +846,16 @@ export class CouncilService {
   }
 
   /** 失败补偿：只退役**本次创建**的实例（逆序 seal→stop），返回逐条失败（不吞）。 */
-  async #补偿创建(创建实例, 退役实例, 会审) {
+  async #补偿创建(创建实例, 退役实例, 会审, 确认阶段 = []) {
     const 失败 = [];
     for (const 项 of [...创建实例].reverse()) {
       try {
-        await 退役实例({ 实例: 项.实例, 会审, 原因: '会审创建失败补偿（本次 owned）' });
+        const 回执 = await 退役实例({ 实例: 项.实例, 会审, 原因: '会审创建失败补偿（本次 owned）' });
+        if (回执?.已封 === true) 确认阶段.push({ 阶段: '组织身份已封存', 会审, 实例: 项.实例, 已封存: true });
+        if (回执?.当前驻留已释放 === true) 确认阶段.push({ 阶段: '宿主当前驻留已释放', 会审, 实例: 项.实例, 当前驻留已释放: true });
+        if (回执?.已请求中断 === true) 确认阶段.push({ 阶段: '宿主中断已请求', 会审, 实例: 项.实例, 已请求: true });
       } catch (error) {
+        确认阶段.push(...(error.outcome?.已确认阶段 ?? []));
         失败.push({ 实例: 项.实例, 原因: 错误信息(error) });
       }
     }
@@ -909,7 +933,7 @@ export class CouncilService {
         const 回执 = await 退役实例({ 实例, 会审: view.id, 原因: '会审已收敛，退役临时参与实例' });
         结果.push({ 实例, 已退役: true, 回执: 回执 ?? null });
       } catch (error) {
-        结果.push({ 实例, 已退役: false, 原因: 错误信息(error) });
+        结果.push({ 实例, 已退役: false, 原因: 错误信息(error), ...(error.code ? { 故障码: error.code } : {}), ...(error.outcome ? { 提交回执: error.outcome } : {}) });
       }
     }
     return 结果;
@@ -973,6 +997,9 @@ export class CouncilService {
       } catch (error) {
         throw new Fault('AUDIT_APPEND_FAILED_AFTER_EVENT', `会审 ${event.id} 的事件（${event.kind}）已落线，但审计追加失败：${error instanceof Error ? error.message : String(error)}。不要重试同一动作（重复事件会撞锁内复检或覆盖状态）——请人工核对审计账本并补记。`, {
           detail: { 会审: event.id, kind: event.kind, 项目 },
+          outcome: { 提交状态: '已提交', 可重试: false,
+            恢复指引: '查询会审事件账本及当前状态，核对后补记缺失审计；不要重放会审动作。',
+            已确认阶段: [{ 阶段: '会审事件落线', 项目, 会审: event.id, 事件: event.kind, 事件id: eventId }] },
         });
       }
       if (afterAppend) await afterAppend(view, current);
@@ -1030,8 +1057,17 @@ function 复核岗不能参会(岗位) {
 }
 
 /** 受管创建失败的统一故障形状（阶段、已建清单、补偿失败都进 detail，便于可追）。 */
-function 受管创建失败(code, message, detail) {
-  return new Fault(code, message, { detail });
+function 受管创建失败(code, message, detail, cause, 项目, 已有回执 = []) {
+  const 已确认阶段 = [
+    ...(detail.已创建 ?? []).map(实例 => ({ 阶段: '受管实例已创建并登记', 项目, 会审: detail.会审, 实例 })),
+    ...((detail.opened已落线 || detail.阶段 === 'send') ? [{ 阶段: '会审发起事件已落线', 项目, 会审: detail.会审, 事件: 'opened' }] : []),
+    ...(cause?.outcome?.已确认阶段 ?? []),
+    ...已有回执,
+  ];
+  return new Fault(code, message, { detail, cause,
+    outcome: { 提交状态: 已确认阶段.length ? '部分提交' : '未知', 可重试: false,
+      恢复指引: '按会审及实例id核对登记、会审事件、inbox 和逐实例补偿结果；补偿不是业务回滚，未知停止或接收状态不得推断，不要重复本次 debate_open。', 已确认阶段 },
+  });
 }
 
 /**
