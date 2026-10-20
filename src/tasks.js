@@ -17,6 +17,8 @@ import { Denied, Fault, InvalidBody } from './kernel/errors.js';
 import { 复核对象引用 } from './review-scope.js';
 import { artifactReferences, captureArtifactManifest, verifyArtifactManifest } from './artifact-manifest.js';
 import { ToolFileAuthority } from './tool-file-scope.js';
+import { GoalService } from './goals.js';
+import { assertGoalAllowsAdvance } from './goal-constraints.js';
 import { canonical, digest } from './kernel/text.js';
 import { TASK_TERMINAL_STATES, TASK_RECOVERY_RELATION_FIELDS as RECOVERY_RELATION_FIELDS } from './task-state.js';
 
@@ -176,7 +178,8 @@ export class TaskGraph {
     this.clock = spec.clock;
     this.memory = spec.memory ?? null;
     this.registry = spec.registry ?? null;
-    this.#toolFileAuthority = new ToolFileAuthority({ layout: this.layout, policy: this.policy });
+    this.goals = spec.goals ?? new GoalService({ ...spec, tasks: this });
+    this.#toolFileAuthority = new ToolFileAuthority({ layout: this.layout, policy: this.policy, goals: this.goals });
     /**
      * 每次权威读取都读真实字节，只缓存完全相同原文的解析结果。
      * mtime/size 是性能提示而不是完整性证明：同尺寸改坏或恢复mtime不能继续沿用旧授权。
@@ -192,7 +195,7 @@ export class TaskGraph {
 
   /** 仅装配期消费部署者配置；mind 动作不提供修改此上限的入口。 */
   configureToolFiles(config) {
-    this.#toolFileAuthority = new ToolFileAuthority({ layout: this.layout, policy: this.policy, config });
+    this.#toolFileAuthority = new ToolFileAuthority({ layout: this.layout, policy: this.policy, config, goals: this.goals });
     return this.#toolFileAuthority;
   }
   toolFileAuthority() { return this.#toolFileAuthority; }
@@ -1308,7 +1311,7 @@ export class TaskGraph {
     // 任务图与总线此前没有——同一竞态对 tasks.jsonl 意味着可能的双行事件，且任务图没有
     // 审计链那样的自检兜底。进程内这条 await 链保证同 key 的写绝不重叠。
     // 注意 withLock 不可重入（fsx.js 头注释）：serializeByKey 的 fn 里不得再拿同一把锁。
-    await serializeByKey(file, () =>
+    await this.goals.withProjectLock(项目, () => serializeByKey(file, () =>
       withLock(this.layout.taskLock(项目), async () => {
         // 锁内必须重读真源（fresh）：缓存可能落后于别的进程刚写下的行，
         // 状态机复检/依赖校验都建立在锁内折叠视图上，读旧表就是判错。
@@ -1318,6 +1321,13 @@ export class TaskGraph {
         if (eventBuilder) finalEvent = await eventBuilder(node, rows);
         // 恢复回执或被终态截断的升级后半笔返回 null；不补事件或审计。
         if (finalEvent === null) { 新节点 = node ?? null; return; }
+        // 只阻止新推进；已发生的成果、复核与终止事实仍可收尾记录。
+        // 新后继沿前序读取同一当前目标，不能换节点洗掉暂停或限制。
+        if (['dispatched', 'started'].includes(finalEvent.kind) || (finalEvent.kind === 'created' && finalEvent.前序任务)) {
+          const current = finalEvent.kind === 'created' ? { ...finalEvent } : node;
+          const goal = this.goals.constraintsForTask(current, fold(rows), 项目);
+          assertGoalAllowsAdvance(goal);
+        }
         // 判据冻结：派发之后任何想动判据的事件都被拒绝。这是 §7 那一条的可执行形态。
         // 查 builder **之后**的 finalEvent（2026-10-14 审查 P3）：builder 有权改写事件，
         // 只查入参会漏掉 builder 产出里夹带的判据。
@@ -1336,7 +1346,7 @@ export class TaskGraph {
         this.#bumpWrite(项目);
         新节点 = fold([...rows, 落线行]).get(event.id) ?? null;
       }),
-    );
+    ));
     if (finalEvent === null) return { 事件: null, 节点: 新节点 };
     // 事件已落线、审计是第二笔（2026-10-14 审查 P2-9）：审计追加失败时状态已变、链上
     // 缺条——调用方若只收到裸错误可能误判「没写成」而重试（submit 重试 = 洗自己答案的

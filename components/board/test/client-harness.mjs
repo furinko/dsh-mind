@@ -3951,6 +3951,28 @@ export async function runHarness() {
     passed.push(check(textOf(next).includes('未确认原升级事件') && textOf(next).includes('接续不代表已裁决'), '后继保留旧升级阈值和待决处置未知，不冒称已解决'));
   }
 
+  {
+    const goalView = sampleView();
+    goalView.目标 = { 健康: '可用', 总数: 12, hasMore: true, 摘要: true, 目标: [{
+      id: 'goal-preview', 修订: 4, 状态: '暂停', 期望结果: { 文本: '实现导出预览', 省略: false },
+      下一步: { 文本: '核对预览结果', 省略: false }, 等待原因: { 文本: '', 省略: false },
+      禁止工具: ['write', 'edit'], 文本约束条数: 2, 来源声明: { 用户意图: '未核验' },
+      任务进展: { 关联: 3, 合法采纳: 2 }, 详情指引: 'goal_query id=goal-preview；摘要不含完整约束和完成依据。',
+    }] };
+    const rendered = await renderView(goalView);
+    const card = rendered.elements.find(el => el.props['data-goal-id'] === 'goal-preview');
+    const text = textOf(card);
+    passed.push(check(text.includes('实现导出预览') && text.includes('暂停 · 修订 4'), '持续目标消费服务器当前状态与修订'));
+    passed.push(check(text.includes('原计划（当前不推进）') && text.includes('核对预览结果'), '暂停目标不把旧下一步显示为可立即推进'));
+    passed.push(check(text.includes('write、edit') && text.includes('2 条文本约束') && text.includes('goal_query'), '目标限制保持工具精确名单并明确全文读取入口'));
+    passed.push(check(text.includes('关联任务 3；已合法采纳 2') && text.includes('不代表目标自动完成'), '目标不按任务计数自动宣布完成'));
+    passed.push(check(text.includes('意图来源：未核验') && rendered.text.includes('在途宿主操作是否停止须另行核对'), '目标不冒认真人来源或宿主已停止'));
+    passed.push(check(rendered.text.includes('共 12 个目标，展示 1 个摘要') && rendered.text.includes('还有目标未展示'), '目标概览明确摘要覆盖与剩余目标'));
+    goalView.目标 = { 健康: '不可用', 总数: null, 目标: [] };
+    const unavailable = await renderView(goalView);
+    passed.push(check(unavailable.text.includes('目标记录暂不可读，当前状态未知') && !unavailable.text.includes('尚未登记持续目标'), '坏目标读面呈现未知，不冒充空目标'));
+  }
+
   return { passed, liveElements: c1.elements.length, liveTexts: c1.texts.length };
 }
 

@@ -30,6 +30,7 @@ import { InterventionService } from './intervention.js';
 import { Denied } from './kernel/errors.js';
 import { projectWorkbench, sliceForViewer } from './workbench.js';
 import { ObservabilityService } from './observability.js';
+import { projectGoalSnapshot } from './goal-view.js';
 
 /** 默认项目键。名字即目录名（§14.4-5）。 */
 export const DEFAULT_PROJECT = 'default';
@@ -69,6 +70,7 @@ export class Org {
     // 而归档逻辑只有一处（MemoryService.archiveAnswers）——不在任务图里再写一份。
     const memory = new MemoryService({ layout, policy, audit, clock });
     const tasks = new TaskGraph({ layout, policy, audit, clock, memory, registry });
+    const goals = tasks.goals;
     const bus = new MessageBus({ layout, policy, audit, clock, tasks });
     const capability = new CapabilityLibrary({ layout, policy, audit, clock, store });
     const upgrade = new UpgradeManager({ layout, policy, audit, clock });
@@ -111,6 +113,7 @@ export class Org {
       policy,
       store,
       tasks,
+      goals,
       bus,
       memory,
       capability,
@@ -271,6 +274,13 @@ export class Org {
     });
     // （读者已在上面解析过——会审盲评遮罩与切片共用同一口径。）
     const visible = 读者 ? sliceForViewer(view, 读者) : view;
+    // 成员目前没有目标全文读域；不从任务可见性推导整个目标/其他任务的可读性。
+    const 可读目标 = !读者 || 读者.kind === '主权者' || (读者.kind === 'Lead' && identity.members?.[读者.id]?.岗位 === 'Lead' && identity.members?.[读者.id]?.status === '在岗');
+    if (!可读目标) visible.目标 = null;
+    else {
+      try { visible.目标 = projectGoalSnapshot(this.goals, this.goals.rawSnapshot(项目), snapshot.节点); }
+      catch (error) { visible.目标 = { 健康: '不可用', 故障码: error.code ?? 'GOAL_READ_FAILED', 总数: null, 目标: [] }; }
+    }
     // This projection reads the entire verified observation history, independently of the audit tail.
     try { visible.监控 = await this.observability.query({ subject: 读者, project: 项目 }); }
     catch { visible.监控 = { 健康: { ...this.observability.health(), 状态: 'unavailable' }, 阻塞: [], 规则汇总: [], 尝试总数: null, 误拦截率: null }; }

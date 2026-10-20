@@ -50,6 +50,14 @@ const 冻结动作表 = [
   'status',
   'workbench',
   'policy_check',
+  // 持久目标只追加意图、限制、进度和证据关系，不改部署设置、不授予权限。
+  // 用户目标变更及暂停/取消/恢复由命令面goal_decide独立隔离，不能混入本表。
+  'goal_create',
+  'goal_query',
+  'goal_revise',
+  'goal_progress',
+  'goal_complete',
+  'goal_link_task',
   'task_create',
   // task_reassign（task-机制缺口-10th0 · 裁决③ · 2026-10-13）：改派负责人。
   // 过这一关时回答「是不是改设置的动作」：不是——它改的是任务图节点的负责人名单，

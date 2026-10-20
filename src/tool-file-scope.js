@@ -69,9 +69,11 @@ export class ToolFileAuthority {
   #write = [];
   #layout;
   #policy;
-  constructor({ layout, config, policy } = {}) {
+  #goals;
+  constructor({ layout, config, policy, goals } = {}) {
     this.#layout = layout;
     this.#policy = policy;
+    this.#goals = goals;
     if (config === undefined) return; // 没有部署者上限 ⇒ 不能向成员授任何通用文件权限。
     if (!config || typeof config !== 'object' || Array.isArray(config) || Object.keys(config).some((x) => !['read', 'write'].includes(x))) throw new InvalidBody('memberFileAccess 只接受 read / write 数组（部署者配置，不接受模型自报）。');
     this.#read = roots(config.read ?? [], 'memberFileAccess.read');
@@ -135,10 +137,25 @@ export class ToolFileAuthority {
     const grants = nodes.filter((n) => ['已派发', '执行中'].includes(n.状态)
       && (n.绑定 ?? []).some((b) => matchingBinding(b, instance, member))
       && n.工具文件范围?.版本 === 1 && n.工具文件范围.授予者 === parent);
-    const scoped = grants.filter((n) => Array.isArray(n.工具文件范围[key]) && n.工具文件范围[key].some((root) => typeof root === 'string'
-      && this.#rootStillValid(root) && insideFileRoot(target, root)
-      && ceiling.some((up) => this.#rootStillValid(up) && insideFileRoot(root, up))));
+    const matches = (task, intersect = false) => Array.isArray(task.工具文件范围[key]) && task.工具文件范围[key].some((root) => typeof root === 'string'
+      && this.#rootStillValid(root) && (insideFileRoot(target, root) || (intersect && insideFileRoot(root, target)))
+      && ceiling.some((up) => this.#rootStillValid(up) && insideFileRoot(root, up)));
+    const scoped = grants.filter(task => matches(task));
     if (!scoped.length) throw new Denied('成员通用工具 · 任务文件范围', `目标不在本人真实绑定的活动任务所冻结的${key}根内，或绑定岗位/实例凭证已变化、父 Lead 可授上限已撤回；工作目录、负责人岗位名和产物引用不构成授权。`);
+    // 宿主没有可信的本次任务归因。命中同一路径的任务不能借另一条重叠授权
+    // 洗掉目标限制；不相关路径的独立工作仍按各自范围判定。
+    // 递归搜索还会触及目标目录下的更窄任务根：反向包含只用于附加限制，绝不授予搜索权限。
+    const constrained = recursive ? grants.filter(task => matches(task, true)) : scoped;
+    for (const task of constrained) {
+      const goal = this.#goals?.constraintsForTask(task, nodes, task.项目);
+      if (!goal) continue;
+      if ((writing && goal.状态 !== '进行中') || goal.禁止工具.includes(tool)) {
+        throw new Denied('目标 · 当前文件工具限制', `目标 ${goal.目标} 的当前修订 ${goal.修订} 不允许本次 ${tool}（状态：${goal.状态}）。本路径命中的目标约束不能借重叠任务绕过。`, {
+          howToChange: '读取当前目标及限制；需要处理独立工作时使用无冲突的任务输出范围。放宽限制或恢复用户暂停须走人侧目标决议。',
+          detail: { 目标: goal.目标, 修订: goal.修订, 工具: tool, 状态: goal.状态 },
+        });
+      }
+    }
     const decisions = scoped.map((task) => this.#decision({ id: instance, kind: '成员', roleId: member?.岗位 }, task, writing ? 'write' : 'read'));
     if (!decisions.some((d) => d.verdict === 'allow')) throw new Denied(decisions[0].rule, decisions[0].reason);
     // 宿主 glob/grep 的未来选项可能跟随链接；在无法沙箱时拒绝含链接的搜索树。

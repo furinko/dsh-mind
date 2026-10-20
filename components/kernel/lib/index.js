@@ -360,7 +360,20 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         role: { type: 'string', description: '兼容字段，不授予身份或岗位权限；实际主体由宿主会话与身份档案确定，自报 Lead 会被拒绝' },
         实例: { type: 'string', description: 'registry_assign / task_bind 的实例 id（必填；省略会被拒，不再按岗位推断）' },
         工具文件范围: { type: 'object', properties: { 读: { type: 'array', items: { type: 'string' } }, 写: { type: 'array', items: { type: 'string' } } }, additionalProperties: false, description: 'task_dispatch / member_spawn：派发时冻结的通用文件读写绝对根。须在部署者 memberFileAccess 可授上限内；不从 cwd 授权，不允许 shell/未知执行类。' },
-        id: { type: 'string', description: '对象 id（任务节点 / 记忆条目 / 挂起项 / 能力名——capability_read 按 id 读，不读 名）' },
+        id: { type: 'string', description: '对象 id（持久目标 / 任务节点 / 记忆条目 / 挂起项 / 能力名——capability_read 按 id 读，不读 名）' },
+        期望结果: { type: 'string', maxLength: 4000, description: 'goal_create 的用户期望结果；Lead goal_revise不能改目标本意，人侧改动走goal_decide' },
+        约束: { type: 'array', maxItems: 32, items: { type: 'string', maxLength: 1000 }, description: '持久目标的约束；Lead仅可追加，移除或替换需人侧goal_decide。命令使用JSON数组' },
+        禁止工具: { type: 'array', maxItems: 6, items: { type: 'string', enum: ['read', 'read_image', 'glob', 'grep', 'write', 'edit'] }, description: '持久目标关联任务的额外原生工具禁止项；只能收紧，不能授予或扩张任何权限' },
+        完成依据: { type: 'array', maxItems: 32, items: { type: 'string', maxLength: 1000 }, description: '持久目标完成时逐条核对的依据；Lead不能删除或改写，用户变更走goal_decide' },
+        下一步: { type: 'string', maxLength: 2000, description: '持久目标已记录的下一步计划，不代表宿主正在执行' },
+        请求键: { type: 'string', maxLength: 128, description: 'goal_create可选幂等键；同主体、项目、规范输入认回同一目标，冲突不覆盖' },
+        修订: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: '持久目标写入必填的当前修订（创建除外）；陈旧修订拒绝，防止并发覆盖' },
+        等待原因: { type: 'string', maxLength: 2000, description: 'goal_progress状态=等待时必填；恢复进行中会清除等待原因' },
+        状态: { type: 'string', enum: ['进行中', '等待', '暂停', '已完成', '取消'], description: 'goal_progress仅进行中/等待；人侧goal_decide仅暂停/取消/恢复进行中。完成只走goal_complete；已完成或取消不能恢复' },
+        说明: { type: 'string', maxLength: 2000, description: 'goal_complete必填：基于逐条证据的完成判断说明' },
+        证据: { type: 'array', maxItems: 32, items: { type: 'string' }, description: 'goal_complete的精确task id；须关联本目标且真源已合法采纳，产物清单仍有效' },
+        完成核对: { type: 'array', maxItems: 32, items: { type: 'object', properties: { 依据: { type: 'string', maxLength: 1000 }, 任务: { type: 'array', minItems: 1, maxItems: 32, items: { type: 'string' } } }, required: ['依据', '任务'], additionalProperties: false }, description: 'goal_complete逐条核对当前完成依据；每项精确出现一次，关联任务须包含于证据并覆盖全部证据。语义核对仍由执行者负责' },
+        条数: { type: 'integer', minimum: 1, maximum: 50, description: 'goal_query列表摘要每页条数，默认20最大50；按偏移续页' },
         // 描述/原因 的分工按动作实际消费面写（设计评审 F2b 普查 · 2026-10-15）：task_pending
         // 的 handler 读的是 原因（服务层 markPending 的 待决原因），不读 描述——修前 描述
         // 的说明写着「task_create / task_pending」两用，照它传参会静默落空。
@@ -395,9 +408,9 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         对象类: { type: 'string', description: '对象库的种类（store_rollback 用：能力/规则/身份/产物…；与记忆类的「类」不是一个字段）' },
         version: { type: 'number', description: 'store_rollback 的回滚目标版本号（正整数）' },
         内容: { type: 'string', description: '正文内容（bus_send 的消息正文 / memory_write 的条目内容）' },
-        来源: { type: 'string', description: '怎么知道的；记忆写入必填（谁记的默认取主体）' },
+        来源: { type: 'string', description: '怎么知道的；记忆写入必填（谁记的默认取主体）。goal_create/goal_revise及人侧目标修订必填，记录意图转述或修订来源；来源声明不等于用户已核验或授权' },
         来源引用: { type: 'string', description: '证据/来源对象 id，多个用逗号分隔（契约A 血缘）；know-/exp-/pref-/answ- 查账本、task- 查任务图、artifact- 本批不校验，悬空拒写。记忆整理岗写知识（受限晋升）必须恰好带 1 个 task-* 且该任务已被合法采纳（同项目）' },
-        任务: { type: 'string', description: '任务节点 id（memory_write / memory_lifecycle / capability_publish 的成员调用必填：声明本次写入归属的任务上下文——「任务内全权」靠它判定；策略引擎仍按节点负责人名单比对，传别人的节点照拒）。记忆整理岗写知识时= 绑着你的执行中任务' },
+        任务: { type: 'string', description: 'goal_link_task关联的精确任务id；只建立追溯关系，不授权限。memory_write / memory_lifecycle / capability_publish 的成员调用必填：声明本次写入归属的任务上下文；策略引擎仍按节点负责人名单比对。记忆整理岗写知识时=绑着你的执行中任务' },
         授权引用: { type: 'string', description: '主权者授权依据 id（audit_correct 必填：决议 / 任务节点 id；原样进链接受复核。v2 起复核员任命/复核豁免不再用授权引用——复核员是普通岗位卡，豁免走部署设置「复核免审」开关）' },
         岗位: { type: 'string', description: '岗位名（registry_assign / memory_* / capability_* / member_spawn）；记忆写入时 = 知识双标签的岗位标签（受限晋升必填：这条知识对哪个岗位可召回，不是整理它的人）；member_spawn 时须已有岗位卡' },
         标签: { type: 'string' },
@@ -1255,8 +1268,8 @@ function normalizeArgs(args) {
     if (out[key] === 'true') out[key] = true;
     else if (out[key] === 'false') out[key] = false;
   }
-  // 命令键值对没有 JSON 数字类型；只转换已声明的读面数字参数，不改自由文本。
-  for (const key of ['limit', '条数上限', '内容预算', '偏移', '正文偏移']) {
+  // 命令键值对没有 JSON 数字类型；只转换显式数字参数（读分页及目标修订），不改自由文本。
+  for (const key of ['limit', '条数上限', '内容预算', '偏移', '正文偏移', '条数', '修订']) {
     if (typeof out[key] === 'string' && /^(0|[1-9]\d*)$/.test(out[key])) out[key] = Number(out[key]);
   }
   for (const key of ['负责人', '判据', '依赖', '复核对象', '分歧清单', '反例面', '产出物引用', '适用岗位', '收件', '标签', '来源引用', '知识候选', '参与者']) {

@@ -223,6 +223,16 @@ export class Layout {
     return this.private(DIR.基础设施, DIR.任务图, assertPathSegment(project, '项目'), '.tasks.lock');
   }
 
+  /** 目标事实独立追加；只引用任务，不复制任务状态。 */
+  goalLog(project) {
+    return this.private(DIR.基础设施, DIR.任务图, assertPathSegment(project, '项目'), 'goals.jsonl');
+  }
+
+  /** 跨账本顺序固定为目标锁、任务锁。 */
+  goalLock(project) {
+    return this.private(DIR.基础设施, DIR.任务图, assertPathSegment(project, '项目'), '.goals.lock');
+  }
+
   /** 会审存档（v2 条目18）：`任务图/<项目>/councils.jsonl`——与任务图同目录的独立事件流。 */
   councilLog(project) {
     return this.private(DIR.基础设施, DIR.任务图, assertPathSegment(project, '项目'), 'councils.jsonl');

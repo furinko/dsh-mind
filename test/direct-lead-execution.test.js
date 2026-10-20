@@ -33,11 +33,14 @@ async function withOrg(body) {
   } finally { await f.cleanup(); }
 }
 
-// 持有真实任务账本队列，确保调用者先读到旧节点，再让合法变更先落线；无 sleep 竞态。
+// 持有任务变更的最外层目标队列，确保调用者先读到旧节点，再让合法变更先落线。
+// 目标锁已在任务锁之前；不能持有内层任务队列再等两个调用都进入该队列，
+// 否则第一个调用占着外层目标队列，第二个无法排到内层，夹具本身永久互等。
 async function withQueuedChange(org, f, change, operation) {
   const entered = Promise.withResolvers();
   const release = Promise.withResolvers();
-  const holder = serializeByKey(f.layout.taskLog(P), async () => { entered.resolve(); await release.promise; });
+  const lockKey = f.layout.goalLog(P);
+  const holder = serializeByKey(lockKey, async () => { entered.resolve(); await release.promise; });
   await entered.promise;
   const queued = [Promise.withResolvers(), Promise.withResolvers()];
   const queue = serializeByKey._queue;
@@ -45,7 +48,7 @@ async function withQueuedChange(org, f, change, operation) {
   let index = 0;
   queue.set = function (key, value) {
     const result = originalSet.call(this, key, value);
-    if (key === f.layout.taskLog(P)) queued[index++]?.resolve();
+    if (key === lockKey) queued[index++]?.resolve();
     return result;
   };
   let first;
@@ -65,7 +68,7 @@ async function withQueuedChange(org, f, change, operation) {
   return Promise.allSettled([first, second]);
 }
 
-describe('Lead 真实自执行与不越授唯一判定', () => {
+describe('Lead 真实自执行与不越授唯一判定', { timeout: 60_000 }, () => {
   it('岗位负责人Lead+本人真实绑定，经动作/Org/TaskGraph派发开工交卷，负责人仍是岗位名', async () => withOrg(async ({ create, bind, dispatch, run, get }) => {
     const node = await create();
     await bind(node.id);

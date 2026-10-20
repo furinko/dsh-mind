@@ -472,6 +472,7 @@ window.__ModuleLoader__.load({
         消息总线: arr(firstOf(v, ['消息总线', '总线', 'bus'])).map(busThreadRow),
         审计尾: arr(firstOf(v, ['审计尾', '审计', 'audit'])),
         监控: obj(v.监控),
+        目标: obj(v.目标),
         // 记忆读数：宿主没给就是 null（不装懂）；给了只取四个标量，数字真伪由投影侧负责。
         记忆: 记忆读数Of(firstOf(v, ['记忆', '记忆读数', 'memory'])),
         // 能力 × 岗位接线（2026-10-13 重做·图谱）。**宿主没给就是 null**（不装懂）：
@@ -2058,7 +2059,7 @@ window.__ModuleLoader__.load({
       var 现在 = 当前页();
       var 页体 = {
         // ① 总览＝注意力顺序：状态头 → **注意力区（要我做什么）** → 数字 → 「待你决定」明细 → 最近动态
-        overview: [头, 状态区(ctx), 可视化块(ctx), 段[0] || null, 动态时间线(ctx)],
+        overview: [头, 状态区(ctx), 目标概览({ goals: ctx.view && ctx.view.目标 }), 可视化块(ctx), 段[0] || null, 动态时间线(ctx)],
         graph: 图谱页(ctx),
         tasks: [段[2] || null],
         reviews: [段[1] || null],
@@ -3744,6 +3745,39 @@ window.__ModuleLoader__.load({
 
     /** 官方根席位只从实际可见引用取会话：主视图mainView、嵌入侧聊sidebarChat；不把后台持有者当正在看的会话。 */
     /** A small authenticated feedback surface. POST is confirmed by a fresh independent GET. */
+    function 目标概览(props) {
+      var goals = props.goals;
+      if (!goals) return null;
+      if (goals.健康 !== '可用') return h('section', { 'data-dshmind': 'goal-summary' }, [
+        h('h3', { key: 'h' }, '持续目标'), h('p', { key: 'e' }, '目标记录暂不可读，当前状态未知。'),
+      ]);
+      return h('section', { 'data-dshmind': 'goal-summary' }, [
+        h('h3', { key: 'h' }, '持续目标'),
+        h('p', { key: 'count' }, '共 ' + String(goals.总数) + ' 个目标，展示 ' + arr(goals.目标).length + ' 个摘要。'),
+        !arr(goals.目标).length ? h('p', { key: 'empty' }, '尚未登记持续目标。') : null,
+        arr(goals.目标).map(function (goal) {
+          var result = obj(goal.期望结果) || {};
+          var next = obj(goal.下一步) || {};
+          var waiting = obj(goal.等待原因) || {};
+          var progress = obj(goal.任务进展) || {};
+          var source = obj(goal.来源声明) || {};
+          var nextLabel = goal.状态 === '等待' ? '等待原因：' : goal.状态 === '进行中' ? '下一步：' : '原计划（当前不推进）：';
+          var step = goal.状态 === '等待' ? waiting : next;
+          return h('article', { key: goal.id, 'data-goal-id': goal.id }, [
+            h('h4', { key: 'result' }, String(result.文本 || goal.id) + (result.省略 ? '…（摘要）' : '')),
+            h('p', { key: 'state' }, String(goal.状态) + ' · 修订 ' + String(goal.修订)),
+            h('p', { key: 'next' }, nextLabel + String(step.文本 || '见目标详情') + (step.省略 ? '…（摘要）' : '')),
+            h('p', { key: 'limits' }, '禁用文件工具：' + (arr(goal.禁止工具).join('、') || '无') + '；另有 ' + String(goal.文本约束条数) + ' 条文本约束，使用 goal_query 读取全文。'),
+            h('p', { key: 'progress' }, '关联任务 ' + String(progress.关联) + '；已合法采纳 ' + String(progress.合法采纳) + '。任务进度不代表目标自动完成。'),
+            h('p', { key: 'source' }, '意图来源：' + String(source.用户意图 || '未核验')),
+            h('p', { key: 'detail', className: 'dshmind-mono' }, String(goal.详情指引 || '')),
+          ]);
+        }),
+        goals.hasMore ? h('p', { key: 'more' }, '还有目标未展示，可用 goal_query 分页读取。') : null,
+        h('p', { key: 'stop' }, '暂停或取消保留已发生事实；在途宿主操作是否停止须另行核对。'),
+      ]);
+    }
+
     function 监控反馈页(props) {
       var monitor = props.monitor;
       var form = useState({ id: '', reason: '', reference: '', category: '未知', verdict: 'unknown', busy: false, message: '' });
