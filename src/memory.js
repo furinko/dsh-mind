@@ -48,6 +48,7 @@ function memoryEntryVisible(entry, query) {
  */
 const 内部通道 = Symbol('dsh-mind-memory-internal');
 const 反馈提交点 = Symbol('dsh-mind-feedback-commit-guard');
+const 知识观察帧 = Symbol('dsh-mind-request-knowledge-read');
 
 /** 披露正则编译缓存（#disclosureHits 用，按正则源键控，带上限防长胖）。 */
 const 披露正则缓存 = new Map();
@@ -102,6 +103,7 @@ export const DEFAULT_DISCLOSURE_PATTERNS = [
 
 export class MemoryService {
   #feedbackPlans = new WeakMap();
+  #knowledgeReadFrames = new WeakMap();
   /** id 用的严格递增时刻（只在内存里；见 `#nextStamp`）。 */
   #lastStamp;
 
@@ -675,30 +677,35 @@ export class MemoryService {
    * 只证明捕获时读到一个有效版本；与交卷、purge没有跨账本原子事务。
    * 来源不确定统一未核验，不返回原因、正文或路径，不阻塞合法交卷。
    */
-  async readKnowledgeEvidence({ subject, 项目, ids } = {}) {
+  async readKnowledgeEvidence(spec = {}) {
+    const { subject, 项目, ids } = spec;
+    const frame = this.#observationFrame(spec);
     if (!Array.isArray(ids) || ids.length > 16 || ids.some(id => typeof id !== 'string' || !id.trim() || id.length > 256)) throw new InvalidBody('知识来源观察每次只接受至多16个精确id。');
     const requested = [...new Set(ids)];
     const unknown = () => new Map(requested.map(id => [id, { 状态: '来源未核验' }]));
+    const unavailable = () => { if (frame) frame.invalid = true; return unknown(); };
     if (!requested.length) return unknown();
     try {
-      const now = new Date(this.clock.now());
-      if (typeof 项目 !== 'string' || !项目.trim() || !subject?.id || !['成员', 'Lead', '主权者'].includes(subject.kind)) return unknown();
-      if (!this.policy?.refreshIfStale || !this.policy?.decideCurrentSync) return unknown();
+      const now = frame?.now ?? new Date(this.clock.now());
+      if (typeof 项目 !== 'string' || !项目.trim() || !subject?.id || !['成员', 'Lead', '主权者'].includes(subject.kind)) return unavailable();
+      if (!this.policy?.refreshIfStale || !this.policy?.decideCurrentSync) return unavailable();
       await this.policy.refreshIfStale();
       let actor = { ...subject };
       if (actor.kind !== '主权者') {
-        if (!this.registry?.identity || !this.registry?.cardOf) return unknown();
+        if (!this.registry?.identity || !this.registry?.cardOf) return unavailable();
         const member = (await this.registry.identity()).members?.[actor.id];
-        if (member?.status !== '在岗' || (await this.registry.cardOf(actor.id))?.就绪 !== true) return unknown();
-        if ((actor.kind === 'Lead' && member.岗位 !== 'Lead') || (actor.kind === '成员' && member.岗位 === 'Lead') || (actor.roleId !== undefined && actor.roleId !== member.岗位)) return unknown();
+        if (member?.status !== '在岗' || (await this.registry.cardOf(actor.id))?.就绪 !== true) return unavailable();
+        if ((actor.kind === 'Lead' && member.岗位 !== 'Lead') || (actor.kind === '成员' && member.岗位 === 'Lead') || (actor.roleId !== undefined && actor.roleId !== member.岗位)) return unavailable();
         actor = { ...actor, roleId: member.岗位 };
       }
       const permission = { subject: actor, action: 'read', target: { id: `记忆/检索/${项目}`, kind: '记忆', authority: '自治', zone: '私有', domain: '集体', project: 项目 }, context: { 类: '知识' } };
-      if (this.policy.decideCurrentSync(permission)?.verdict !== 'allow') return unknown();
+      if (this.policy.decideCurrentSync(permission)?.verdict !== 'allow') return unavailable();
       const 域 = await 取复核读域({ tasks: this.tasks, 项目, subject: actor });
-      const sources = [];
-      const rows = [];
-      for (const scope of await this.#scopesFor('知识', 项目)) {
+      const snapshot = frame ? await this.#observationSnapshot(frame) : null;
+      if (snapshot && !snapshot.evidenceValid) { frame.invalid = true; return unknown(); }
+      const sources = snapshot?.files ?? [];
+      const rows = snapshot?.rows ?? [];
+      for (const scope of snapshot ? [] : await this.#scopesFor('知识', 项目)) {
         const file = this.layout.memoryLog(scope, '知识');
         const text = await readTextOrNull(file);
         sources.push({ file, text });
@@ -715,17 +722,54 @@ export class MemoryService {
         }
       }
       const result = unknown();
-      for (const entry of fold(rows)) {
+      if (frame) for (const id of requested) frame.requestedEvidence.add(id);
+      for (const entry of snapshot ? requested.map((id) => snapshot.byId.get(id)).filter(Boolean) : fold(rows)) {
         if (!result.has(entry.id) || entry.类 !== '知识' || !memoryEntryVisible(entry, { 项目, 读者: actor }) || !记忆条目在读域(entry, 域) || 是否已被否(entry) || ['待复验', '说明不可判'].includes(knowledgeReviewStatus(entry, now))) continue;
-        const metadata = Object.fromEntries(['id', '类', '标题', '来源', '来源引用', '派生自', '归属', '项目', '岗位', '标签', '状态', '历史', '记于'].map(key => [key, entry[key] ?? null]));
-        if (Object.hasOwn(entry, '知识说明')) metadata.知识说明 = structuredClone(entry.知识说明);
-        result.set(entry.id, { 状态: '可核来源版本', 内容哈希: digest(entry.内容), 元数据哈希: digest(canonical(metadata)), 捕获于: this.clock.iso() });
+        try { this.#feedbackRead(actor, memoryTarget('知识', entry.归属, entry.项目), { id: entry.id, 类: '知识' }); } catch { continue; }
+        let version = frame?.versions.get(entry.id);
+        if (!version) {
+          const metadata = Object.fromEntries(['id', '类', '标题', '来源', '来源引用', '派生自', '归属', '项目', '岗位', '标签', '状态', '历史', '记于'].map(key => [key, entry[key] ?? null]));
+          if (Object.hasOwn(entry, '知识说明')) metadata.知识说明 = structuredClone(entry.知识说明);
+          version = { 内容哈希: digest(entry.内容), 元数据哈希: digest(canonical(metadata)) };
+          if (frame) frame.versions.set(entry.id, version);
+        }
+        result.set(entry.id, { 状态: '可核来源版本', ...version, 捕获于: frame ? now.toISOString() : this.clock.iso() });
+        if (frame) frame.confirmedEvidence.add(entry.id);
       }
       // 读取期间变化立即降为未知；之后的变化由查询重新裁剪，不宣称跨账本原子性。
-      for (const source of sources) if (await readTextOrNull(source.file) !== source.text) return unknown();
-      if (this.policy.decideCurrentSync(permission)?.verdict !== 'allow') return unknown();
+      if (!frame) for (const source of sources) if (await readTextOrNull(source.file) !== source.text) return unknown();
+      if (this.policy.decideCurrentSync(permission)?.verdict !== 'allow') return unavailable();
+      if (!frame) for (const entry of fold(rows)) if (result.get(entry.id)?.状态 === '可核来源版本') {
+        try { this.#feedbackRead(actor, memoryTarget('知识', entry.归属, entry.项目), { id: entry.id, 类: '知识' }); } catch { return unknown(); }
+      }
       return result;
-    } catch { return unknown(); }
+    } catch { if (frame) frame.invalid = true; return unknown(); }
+  }
+
+  /** 单次治理查询的读帧；不暴露原文/JSON凭据，不用于任何写准备或提交点。 */
+  async withKnowledgeReadSnapshot({ subject, 项目 } = {}, callback) {
+    if (!feedbackId(项目) || typeof callback !== 'function') throw new InvalidBody('知识观察快照需要项目和内部回调。');
+    const frame = { active: true, acceptingReads: true, subject: structuredClone(subject), project: 项目, now: new Date(this.clock.now()), snapshotPromise: null, invalid: false, visits: 0,
+      requestedEvidence: new Set(), confirmedEvidence: new Set(), confirmedDisposition: new Set(), confirmedReplacements: new Set(), versions: new Map() };
+    const token = Object.freeze({});
+    this.#knowledgeReadFrames.set(token, frame);
+    const reader = Object.freeze({
+      readKnowledgeEvidence: (spec) => this.#scopedObservationRead('readKnowledgeEvidence', spec, token),
+      readFeedbackDispositions: (spec) => this.#scopedObservationRead('readFeedbackDispositions', spec, token),
+    });
+    try {
+      // 回调的业务异常原样传播；只有观察复验失败才能降为匿名未知。
+      const result = await callback(reader);
+      frame.acceptingReads = false;
+      let valid = false;
+      try { valid = await this.#finishObservationFrame(frame); } catch { valid = false; }
+      return valid ? { 有效: true, 结果: result } : { 有效: false, 结果: null };
+    } finally {
+      frame.active = false;
+      frame.acceptingReads = false;
+      this.#knowledgeReadFrames.delete(token);
+      frame.versions.clear();
+    }
   }
 
   /**
@@ -976,39 +1020,43 @@ export class MemoryService {
   }
 
   /** 仅内部有界观察；未知、删除、不可读与坏源保持同形，不暗示未处理。 */
-  async readFeedbackDispositions({ subject, 项目, items } = {}) {
+  async readFeedbackDispositions(spec = {}) {
+    const { subject, 项目, items } = spec;
+    const frame = this.#observationFrame(spec);
     if (!feedbackId(项目) || !Array.isArray(items) || items.length > 16 || items.some((item) => !feedbackExact(item, ['知识id', '反馈指纹']) || !feedbackId(item.知识id) || !feedbackHash(item.反馈指纹))) throw new InvalidBody('反馈处置观察每次只接受同项目至多16个精确知识id与服务器指纹。');
     const args = { subject: structuredClone(subject), 项目, items: structuredClone(items) };
     const unknown = () => new Map(args.items.map((item) => [item.反馈指纹, feedbackUnknown()]));
     try {
       await this.#feedbackActor(args.subject);
       this.#feedbackRead(args.subject, { id: `记忆/检索/${项目}`, kind: '记忆', authority: '自治', zone: '私有', domain: '集体', project: 项目 }, { 类: '知识' });
-      const snapshot = await this.#feedbackKnowledgeSnapshot(项目);
+      const snapshot = frame ? await this.#observationSnapshot(frame) : await this.#feedbackKnowledgeSnapshot(项目);
+      if (frame && !snapshot.feedbackValid) { frame.invalid = true; return unknown(); }
       const result = unknown();
       for (const item of args.items) {
-        const entry = snapshot.entries.find((candidate) => candidate.id === item.知识id);
+        const entry = snapshot.byId ? snapshot.byId.get(item.知识id) : snapshot.entries.find((candidate) => candidate.id === item.知识id);
         if (!entry || !memoryEntryVisible(entry, { 项目, 读者: args.subject }) || ['物理删除', '待删除'].includes(entry.状态)) continue;
         try { this.#feedbackRead(args.subject, memoryTarget('知识', entry.归属, entry.项目), { id: entry.id, 类: '知识' }); } catch { continue; }
-        const matches = snapshot.rows.filter((row) => row.指向 === item.知识id && ['invalid', '降权', '推翻'].includes(row.追加) && row.反馈关联?.版本 === 1 && row.反馈关联.指纹 === item.反馈指纹)
+        const matches = snapshot.dispositions ? (snapshot.dispositions.get(canonical([item.知识id, item.反馈指纹])) ?? []) : snapshot.rows.filter((row) => row.指向 === item.知识id && ['invalid', '降权', '推翻'].includes(row.追加) && row.反馈关联?.版本 === 1 && row.反馈关联.指纹 === item.反馈指纹)
           .map((row, scan) => ({ row, scan })).sort((a, b) => Date.parse(a.row.追于) - Date.parse(b.row.追于) || a.scan - b.scan);
         const receipts = [];
         for (const { row } of matches.slice(-5)) {
           const receipt = { 动作: row.追加 === 'invalid' ? '失效' : row.追加 === '降权' ? '降权' : '替代', 记录摘要: digest(canonical(row)), 处置于: row.追于, 主体: row.主体.id };
           if (row.追加 === '推翻' && feedbackId(row.新条目)) {
-            const replacement = snapshot.entries.find((candidate) => candidate.id === row.新条目);
+            const replacement = snapshot.byId ? snapshot.byId.get(row.新条目) : snapshot.entries.find((candidate) => candidate.id === row.新条目);
             if (replacement && memoryEntryVisible(replacement, { 项目, 读者: args.subject }) && !['物理删除', '待删除'].includes(replacement.状态)) {
-              try { this.#feedbackRead(args.subject, memoryTarget('知识', replacement.归属, replacement.项目), { id: replacement.id, 类: '知识' }); receipt.替代知识 = replacement.id; } catch { /* 替代id独立读域不许由旧关联授予。 */ }
+              try { this.#feedbackRead(args.subject, memoryTarget('知识', replacement.归属, replacement.项目), { id: replacement.id, 类: '知识' }); receipt.替代知识 = replacement.id; if (frame) frame.confirmedReplacements.add(replacement.id); } catch { /* 替代id独立读域不许由旧关联授予。 */ }
             }
           }
           receipts.push(receipt);
         }
         result.set(item.反馈指纹, validateFeedbackDispositionObservation({ 状态: '可核对', 记录: receipts, 总数: matches.length, 截断: matches.length > receipts.length }));
+        if (frame) frame.confirmedDisposition.add(entry.id);
       }
       await this.#feedbackActor(args.subject);
       this.#feedbackRead(args.subject, { id: `记忆/检索/${项目}`, kind: '记忆', authority: '自治', zone: '私有', domain: '集体', project: 项目 }, { 类: '知识' });
-      await this.#feedbackSnapshotUnchanged(snapshot);
+      if (!frame) await this.#feedbackSnapshotUnchanged(snapshot);
       return result;
-    } catch { return unknown(); }
+    } catch { if (frame) frame.invalid = true; return unknown(); }
   }
 
   /**
@@ -1768,6 +1816,92 @@ export class MemoryService {
     }
     return { files, rows, entries: fold(rows) };
   }
+  #observationFrame(spec) {
+    if (!Object.hasOwn(spec, 知识观察帧)) return null;
+    const frame = this.#knowledgeReadFrames.get(spec[知识观察帧]);
+    if (!frame?.active || !frame.acceptingReads || spec.项目 !== frame.project || canonical(spec.subject) !== canonical(frame.subject)) throw new InvalidBody('知识观察读帧已关闭或主体/项目不一致。');
+    frame.visits++;
+    return frame;
+  }
+  async #scopedObservationRead(method, spec, token) {
+    const frame = this.#knowledgeReadFrames.get(token);
+    if (!frame?.active || !frame.acceptingReads) throw new InvalidBody('知识观察读帧已关闭，不能逃逸到后续请求。');
+    if (!spec || typeof spec !== 'object' || spec.项目 !== frame.project || canonical(spec.subject) !== canonical(frame.subject)) {
+      frame.invalid = true;
+      throw new InvalidBody('知识观察读帧不能切换主体或项目。');
+    }
+    const visits = frame.visits;
+    try {
+      // 仍调用公开的旧观察方法，保留扩展/测试的故障接缝；仅传不可解读的私有令牌。
+      const result = await this[method]({ ...spec, subject: structuredClone(frame.subject), [知识观察帧]: token });
+      if (!frame.active || !frame.acceptingReads) throw new InvalidBody('知识观察读帧已关闭，迟到结果不能继续使用。');
+      if (frame.visits === visits) frame.invalid = true;
+      return structuredClone(result);
+    } catch (error) { frame.invalid = true; throw error; }
+  }
+  async #observationSnapshot(frame) {
+    if (!frame.active || !frame.acceptingReads) throw new InvalidBody('知识观察读帧已关闭。');
+    frame.snapshotPromise ??= (async () => {
+      const files = [], rows = [];
+      let evidenceValid = true, feedbackValid = true;
+      for (const scope of await this.#scopesFor('知识', frame.project)) {
+        const file = this.layout.memoryLog(scope, '知识');
+        const text = await readTextOrNull(file);
+        files.push({ file, text });
+        if (text === null || text === '') continue;
+        if (!text.endsWith('\n')) { evidenceValid = false; feedbackValid = false; continue; }
+        for (const line of text.split('\n')) {
+          if (!line.trim()) continue;
+          let row;
+          try { row = JSON.parse(line.replace(/^\uFEFF/, '')); } catch { evidenceValid = false; feedbackValid = false; continue; }
+          if (!validEvidenceKnowledgeRow(row)) evidenceValid = false;
+          try { validateFeedbackKnowledgeRow(row); } catch { feedbackValid = false; }
+          rows.push(row);
+        }
+      }
+      // 两个旧观察面的历史格式资格分别保留；原字节只解析一次，当前投影只折叠一次。
+      const entries = evidenceValid || feedbackValid ? fold(rows) : [];
+      const byId = new Map(entries.map((entry) => [entry.id, entry]));
+      const dispositions = new Map();
+      if (feedbackValid) for (const [scan, row] of rows.entries()) {
+        if (!['invalid', '降权', '推翻'].includes(row.追加) || row.反馈关联?.版本 !== 1) continue;
+        const key = canonical([row.指向, row.反馈关联.指纹]);
+        if (!dispositions.has(key)) dispositions.set(key, []);
+        dispositions.get(key).push({ row, scan });
+      }
+      for (const matches of dispositions.values()) matches.sort((a, b) => Date.parse(a.row.追于) - Date.parse(b.row.追于) || a.scan - b.scan);
+      return { files, rows, entries, byId, dispositions, evidenceValid, feedbackValid };
+    })();
+    const snapshot = await frame.snapshotPromise;
+    if (!frame.active || !frame.acceptingReads) throw new InvalidBody('知识观察读帧已关闭。');
+    return snapshot;
+  }
+  async #finishObservationFrame(frame) {
+    if (!frame.active || frame.invalid) return false;
+    await this.#feedbackActor(frame.subject);
+    this.#feedbackRead(frame.subject, { id: `记忆/检索/${frame.project}`, kind: '记忆', authority: '自治', zone: '私有', domain: '集体', project: frame.project }, { 类: '知识' });
+    // 无声明、无来源的查询保持懒加载，不制造多余知识文件读取。
+    if (!frame.snapshotPromise) return true;
+    const snapshot = await frame.snapshotPromise;
+    const files = (await this.#scopesFor('知识', frame.project)).map((scope) => this.layout.memoryLog(scope, '知识'));
+    if (canonical(files) !== canonical(snapshot.files.map(({ file }) => file))) return false;
+    await this.#feedbackSnapshotUnchanged(snapshot);
+    await this.#feedbackActor(frame.subject);
+    this.#feedbackRead(frame.subject, { id: `记忆/检索/${frame.project}`, kind: '记忆', authority: '自治', zone: '私有', domain: '集体', project: frame.project }, { 类: '知识' });
+    const domain = await 取复核读域({ tasks: this.tasks, 项目: frame.project, subject: frame.subject });
+    const currentNow = new Date(this.clock.now());
+    for (const id of frame.requestedEvidence) {
+      const entry = snapshot.byId.get(id);
+      if (entry && knowledgeReviewStatus(entry, frame.now) !== knowledgeReviewStatus(entry, currentNow)) return false;
+    }
+    for (const id of new Set([...frame.confirmedEvidence, ...frame.confirmedDisposition, ...frame.confirmedReplacements])) {
+      const entry = snapshot.byId.get(id);
+      if (!entry || !memoryEntryVisible(entry, { 项目: frame.project, 读者: frame.subject }) || ['物理删除', '待删除'].includes(entry.状态)) return false;
+      this.#feedbackRead(frame.subject, memoryTarget('知识', entry.归属, entry.项目), { id, 类: '知识' });
+      if (frame.confirmedEvidence.has(id) && (!记忆条目在读域(entry, domain) || 是否已被否(entry) || ['待复验', '说明不可判'].includes(knowledgeReviewStatus(entry, currentNow)))) return false;
+    }
+    return frame.active && !frame.invalid;
+  }
   async #feedbackSnapshotUnchanged(snapshot) { for (const { file, text } of snapshot.files) if (await readTextOrNull(file) !== text) throw new Denied('知识反馈 · 知识源读取期间变化', '知识原文在读取期间变化，不能将旧观察当作当前见证。'); }
 }
 
@@ -1986,6 +2120,18 @@ function feedbackInputDigest(id, args) { return digest(canonical({ 版本: 1, �
 function feedbackWriteContext(id, state, args) { return { id, 状态: state, task: args.任务 ?? null, ...(args.op === 'overturn' ? {} : { 介入写: `记忆:${state}:${id}` }) }; }
 function deepFreezeFeedback(value) { if (value && typeof value === 'object' && !Object.isFrozen(value)) { Object.values(value).forEach(deepFreezeFeedback); Object.freeze(value); } return value; }
 function stripFeedbackProof(value) { if (Array.isArray(value)) return value.map(stripFeedbackProof); if (value !== null && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([key]) => key !== '反馈关联').map(([key, child]) => [key, stripFeedbackProof(child)])); return value; }
+function validEvidenceKnowledgeRow(row) {
+  if (!row || typeof row !== 'object' || Array.isArray(row) || typeof row.id !== 'string' || !row.id.trim()) return false;
+  if (isStateRow(row)) return ['invalid', '降权', '推翻', '归档', '物理删除', '隔离', '待删除'].includes(row.追加) && typeof row.追于 === 'string';
+  return row.类 === '知识' && typeof row.内容 === 'string' && !Object.hasOwn(row, '指向') && !Object.hasOwn(row, '追加');
+}
+function validateFeedbackKnowledgeRow(row) {
+  if (!row || typeof row !== 'object' || Array.isArray(row) || !feedbackId(row.id)) throw new Fault('KNOWLEDGE_FEEDBACK_SOURCE_INVALID', '知识账本行标识无效。');
+  if (isStateRow(row)) {
+    if (!['invalid', '降权', '推翻', '归档', '物理删除', '隔离', '待删除'].includes(row.追加) || !feedbackId(row.指向) || !feedbackIso(row.追于)) throw new Fault('KNOWLEDGE_FEEDBACK_SOURCE_INVALID', '知识账本有不可识别状态。');
+    if (Object.hasOwn(row, '反馈关联') && (!['invalid', '降权', '推翻'].includes(row.追加) || !feedbackExact(row.反馈关联, ['版本', '指纹']) || row.反馈关联.版本 !== 1 || !feedbackHash(row.反馈关联.指纹) || !feedbackId(row.主体?.id) || !['Lead', '主权者'].includes(row.主体?.kind))) throw new Fault('KNOWLEDGE_FEEDBACK_SOURCE_INVALID', '知识状态的私有反馈关联结构不可核对。');
+  } else if (row.类 !== '知识' || typeof row.内容 !== 'string' || Object.hasOwn(row, '指向') || Object.hasOwn(row, '追加') || Object.hasOwn(row, '反馈关联')) throw new Fault('KNOWLEDGE_FEEDBACK_SOURCE_INVALID', '知识账本有不可识别条目或伪造关联。');
+}
 function parseFeedbackKnowledgeRows(text) {
   if (text === null || text === '') return [];
   if (!text.endsWith('\n')) throw new Fault('KNOWLEDGE_FEEDBACK_SOURCE_INVALID', '知识账本末尾撕裂，不能签反馈关联或报告未见处置。');
@@ -1994,11 +2140,7 @@ function parseFeedbackKnowledgeRows(text) {
     if (!line.trim()) continue;
     let row;
     try { row = JSON.parse(line.replace(/^\uFEFF/, '')); } catch (cause) { throw new Fault('KNOWLEDGE_FEEDBACK_SOURCE_INVALID', '知识账本有坏JSON，不能跳行核对反馈。', { cause }); }
-    if (!row || typeof row !== 'object' || Array.isArray(row) || !feedbackId(row.id)) throw new Fault('KNOWLEDGE_FEEDBACK_SOURCE_INVALID', '知识账本行标识无效。');
-    if (isStateRow(row)) {
-      if (!['invalid', '降权', '推翻', '归档', '物理删除', '隔离', '待删除'].includes(row.追加) || !feedbackId(row.指向) || !feedbackIso(row.追于)) throw new Fault('KNOWLEDGE_FEEDBACK_SOURCE_INVALID', '知识账本有不可识别状态。');
-      if (Object.hasOwn(row, '反馈关联') && (!['invalid', '降权', '推翻'].includes(row.追加) || !feedbackExact(row.反馈关联, ['版本', '指纹']) || row.反馈关联.版本 !== 1 || !feedbackHash(row.反馈关联.指纹) || !feedbackId(row.主体?.id) || !['Lead', '主权者'].includes(row.主体?.kind))) throw new Fault('KNOWLEDGE_FEEDBACK_SOURCE_INVALID', '知识状态的私有反馈关联结构不可核对。');
-    } else if (row.类 !== '知识' || typeof row.内容 !== 'string' || Object.hasOwn(row, '指向') || Object.hasOwn(row, '追加') || Object.hasOwn(row, '反馈关联')) throw new Fault('KNOWLEDGE_FEEDBACK_SOURCE_INVALID', '知识账本有不可识别条目或伪造关联。');
+    validateFeedbackKnowledgeRow(row);
     rows.push(row);
   }
   return rows;

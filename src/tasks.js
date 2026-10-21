@@ -1858,9 +1858,11 @@ export class TaskGraph {
  *
  * 投影是纯函数：同一份日志永远给出同一个状态，于是「状态权威」与「重启可重建」是同一件事。
  * @param {object[]} rows
+ * @param {Function|null} [visitor] 可信内部同步观察器；每个原全局位置一次，只读当前任务的前后浅投影。
  * @returns {Map<string, object>}
  */
-export function fold(rows) {
+export function fold(rows, visitor = null) {
+  if (visitor !== null && typeof visitor !== 'function') throw new InvalidBody('任务事件观察器必须是内部同步函数。');
   /** @type {Map<string, object>} */
   const nodes = new Map();
   // 补修K 的票/成果进度：**投影内部记账**，不落成节点字段。
@@ -1870,7 +1872,11 @@ export function fold(rows) {
   // 读根授权与异议不是成果，不进这条线。
   const 记账 = new Map();
   for (const [索引, row] of rows.entries()) {
-    if (!row?.id || !row?.kind) continue;
+    if (!row?.id || !row?.kind) {
+      if (visitor) visitor({ row, index: 索引, before: null, after: null });
+      continue;
+    }
+    const before = visitor ? 任务前缀浅投影(nodes.get(row.id), 记账.get(row.id)) : null;
     // 票 = rv-<seq>（seq 由 #append 分配）；无 seq 的旧行按位置补，仍可稳定引用。
     const 序 = Number.isInteger(row.seq) ? row.seq : 索引 + 1;
     let node = nodes.get(row.id);
@@ -2134,20 +2140,29 @@ export function fold(rows) {
         break;
     }
     node.最近事件于 = row.at;
+    if (visitor) visitor({ row, index: 索引, before, after: 任务前缀浅投影(node, 进度) });
   }
   // 补修K · 派生「已过待 Lead 采纳」：只有**当前代**最后一条复核是「过」、且票之后没有
   // 再改被验成果（新交卷 / 非读根挂载）时才成立。工作台据此给**真票命令**——复核结论不代采纳。
   // 未验也收：复核先判未验、补材料后再核出「过」时，状态停在未验不等于这张过票失效。
   for (const node of nodes.values()) {
-    const 进度 = 记账.get(node.id) ?? {};
-    const 最后 = 进度.最后复核;
-    if (['已交卷', '未验'].includes(node.状态) && 最后 && 最后.三态 === '过' && 最后.代 === (node.代 ?? 1) && 最后.序 > (进度.最近改成果序 ?? 0)) {
-      if (node.已复核交付物摘要 && node.已复核交付物摘要 === node.交付物清单?.摘要) {
-        node.待采纳 = { 票: 最后.票, 复核者: 最后.复核者 ?? null, 于: 最后.于 ?? null, 代: 最后.代 };
-      } else node.交付物待补证 = '旧复核票未绑定交卷内容清单，必须交新卷后重新复核。';
-    }
+    Object.assign(node, 派生任务采纳(node, 记账.get(node.id)));
   }
   return nodes;
+}
+
+/** 当前前缀与最终fold共用票有效性；观察器不把派生字段写回仍在折叠的节点。 */
+function 派生任务采纳(node, 进度 = {}) {
+  const 最后 = 进度.最后复核;
+  if (['已交卷', '未验'].includes(node.状态) && 最后 && 最后.三态 === '过' && 最后.代 === (node.代 ?? 1) && 最后.序 > (进度.最近改成果序 ?? 0)) {
+    if (node.已复核交付物摘要 && node.已复核交付物摘要 === node.交付物清单?.摘要) return { 待采纳: { 票: 最后.票, 复核者: 最后.复核者 ?? null, 于: 最后.于 ?? null, 代: 最后.代 } };
+    return { 交付物待补证: '旧复核票未绑定交卷内容清单，必须交新卷后重新复核。' };
+  }
+  return {};
+}
+
+function 任务前缀浅投影(node, 进度) {
+  return node ? Object.freeze({ ...node, ...派生任务采纳(node, 进度) }) : null;
 }
 
 /** @param {string|string[]|undefined} value */

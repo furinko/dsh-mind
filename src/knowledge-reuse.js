@@ -1,10 +1,11 @@
 /** 知识采用的历史声明读面；不排行、不改写记忆，不把采纳或自报帮助当作语义证明。 */
-import { readTaskLedger } from './task-ledger.js';
-import { fold, 已被合法采纳 } from './tasks.js';
+import { parseTaskLedger } from './task-ledger.js';
+import { readTextOrNull } from './kernel/fsx.js';
+import { 已被合法采纳 } from './tasks.js';
 import { canonical, digest } from './kernel/text.js';
 import { Denied, Fault, InvalidBody } from './kernel/errors.js';
 import { validateStoredKnowledgeAdoption, validateKnowledgeEvidenceSource } from './knowledge-reuse-contract.js';
-import { resolveKnowledgeFeedback, validateFeedbackDispositionObservation } from './knowledge-feedback.js';
+import { createKnowledgeFeedbackResolver, validateFeedbackDispositionObservation } from './knowledge-feedback.js';
 
 export const KNOWLEDGE_REUSE_COVERAGE = Object.freeze({ 来源: '任务原始submitted事件中的采用知识声明',
   声明: '省略为未知，显式空与有声明分列；使用结果是交卷者声明，不证明知识正确或无效。',
@@ -58,8 +59,11 @@ export class KnowledgeReuseService {
   }
 
   async #records(project, subject, filters, scoped) {
-    const rows = await readTaskLedger(this.layout.taskLog(project));
-    const nodes = fold(rows);
+    const taskFile = this.layout.taskLog(project);
+    const taskText = await readTextOrNull(taskFile);
+    const rows = parseTaskLedger(taskText, taskFile);
+    const projection = projectSubmissions(rows, project);
+    const nodes = projection.nodes;
     if (filters.任务 !== undefined && !nodes.has(filters.任务)) throw new InvalidBody('任务筛选必须引用当前项目真实存在的任务。');
     const readable = new Set();
     for (const node of nodes.values()) {
@@ -67,14 +71,30 @@ export class KnowledgeReuseService {
       if (!scoped || this.#decision(subject, taskTarget(node.id, project), { task: node })?.verdict === 'allow') readable.add(node.id);
     }
     if (filters.任务 !== undefined && !readable.has(filters.任务)) throw new Denied('知识复用 · 任务不在当前读域', '该任务的当前读判定未放行，知识id或分页不能扩大任务读域。');
-    const records = projectSubmissions(rows).filter((record) => readable.has(record.任务) && (filters.知识id === undefined || record.采用知识.some((item) => item.id === filters.知识id)));
+    const records = projection.records.filter((record) => readable.has(record.任务) && (filters.知识id === undefined || record.采用知识.some((item) => item.id === filters.知识id)));
     const ids = [...new Set(records.flatMap((record) => record.采用知识.map((item) => item.id)))];
-    const current = await this.#evidence(subject, project, ids);
-    const dispositions = await this.#dispositions(subject, project, rows, records);
+    let current = new Map(ids.map(id => [id, unknownSource()]));
+    let dispositions = new Map(records.flatMap(record => record.采用知识.filter(isNegative).map(item => [feedbackKey(record, item), unknownDisposition()])));
+    const observe = async reader => ({ current: await this.#evidence(subject, project, ids, reader), dispositions: await this.#dispositions(subject, project, projection.resolveFeedback, records, reader) });
+    if (subject && typeof this.memory?.withKnowledgeReadSnapshot === 'function') {
+      try {
+        const observed = await this.memory.withKnowledgeReadSnapshot({ subject, 项目: project }, observe);
+        if (observed?.有效 === true && observed.结果?.current instanceof Map && observed.结果?.dispositions instanceof Map) ({ current, dispositions } = observed.结果);
+      } catch { /* 来源观察故障保留原声明，但不得带回早批的哈希或回执。 */ }
+    } else ({ current, dispositions } = await observe(this.memory));
+    if (scoped) {
+      await this.#reader(subject);
+    }
+    if (await readTextOrNull(taskFile) !== taskText) throw new Denied('知识复用 · 查询期间任务版本变化', '任务事件在读取期间变化，请重新查询，不能把旧声明分母与后来的观察混合。');
+    if (scoped) {
+      const returnedTasks = new Set(records.map(record => record.任务));
+      if (filters.任务 !== undefined) returnedTasks.add(filters.任务);
+      if (this.#decision(subject, readTarget(project))?.verdict !== 'allow' || [...returnedTasks].some(id => this.#decision(subject, taskTarget(id, project), { task: nodes.get(id) })?.verdict !== 'allow')) throw new Denied('知识复用 · 查询期间读域变化', '当前治理或任务读域已收紧，请重新核对，未返回开头许可下的旧声明。');
+    }
     return records.map((record) => ({ ...record, 采用知识: record.采用知识.map((item) => ({ ...visibleAdoption(item, current.get(item.id)), ...(isNegative(item) ? { 反馈处置: dispositions.get(feedbackKey(record, item)) ?? unknownDisposition() } : {}) })) })).sort((a, b) => b.提交序 - a.提交序 || a.任务.localeCompare(b.任务));
   }
 
-  async #dispositions(subject, project, rows, records) {
+  async #dispositions(subject, project, resolveFeedback, records, reader = this.memory) {
     const result = new Map();
     const targets = [];
     for (const record of records) for (const item of record.采用知识) {
@@ -84,15 +104,15 @@ export class KnowledgeReuseService {
       try {
         const source = record[SUBMITTED_SOURCE]?.row;
         if (!positive(source?.seq) || source.seq !== record.提交序) continue;
-        const proof = resolveKnowledgeFeedback({ rows, 项目: project, 任务: record.任务, 提交序: record.提交序, 知识id: item.id });
+        const proof = resolveFeedback({ 任务: record.任务, 提交序: record.提交序, 知识id: item.id });
         targets.push({ key, 知识id: item.id, 反馈指纹: proof.指纹 });
       } catch { /* 旧代缺证、歧义seq或坏声明不能被补造为一份可关联反馈。 */ }
     }
-    if (!subject || typeof this.memory?.readFeedbackDispositions !== 'function') return result;
+    if (!subject || typeof reader?.readFeedbackDispositions !== 'function') return result;
     for (let start = 0; start < targets.length; start += 16) {
       const batch = targets.slice(start, start + 16);
       try {
-        const observed = await this.memory.readFeedbackDispositions({ subject, 项目: project, items: batch.map(({ 知识id, 反馈指纹 }) => ({ 知识id, 反馈指纹 })) });
+        const observed = await reader.readFeedbackDispositions({ subject, 项目: project, items: batch.map(({ 知识id, 反馈指纹 }) => ({ 知识id, 反馈指纹 })) });
         if (!(observed instanceof Map)) continue;
         for (const target of batch) {
           try {
@@ -105,13 +125,13 @@ export class KnowledgeReuseService {
     return result;
   }
 
-  async #evidence(subject, project, ids) {
+  async #evidence(subject, project, ids, reader = this.memory) {
     const result = new Map(ids.map((id) => [id, unknownSource()]));
-    if (!subject || typeof this.memory?.readKnowledgeEvidence !== 'function') return result;
+    if (!subject || typeof reader?.readKnowledgeEvidence !== 'function') return result;
     for (let start = 0; start < ids.length; start += 16) {
       const batch = ids.slice(start, start + 16);
       try {
-        const evidence = await this.memory.readKnowledgeEvidence({ subject, 项目: project, ids: batch });
+        const evidence = await reader.readKnowledgeEvidence({ subject, 项目: project, ids: batch });
         if (!(evidence instanceof Map)) continue;
         for (const id of batch) {
           try { result.set(id, validateKnowledgeEvidenceSource(evidence.get(id))); }
@@ -137,10 +157,10 @@ export class KnowledgeReuseService {
 }
 
 /** 只读原事件：同人复交和代由事件定位，不从最终答案、继承关系或当前状态回填历史。 */
-function projectSubmissions(rows) {
+function projectSubmissions(rows, project) {
   const submissions = [];
   const latest = new Map();
-  for (const [index, row] of rows.entries()) {
+  const resolver = createKnowledgeFeedbackResolver({ rows, 项目: project, visit: ({ row, index, before, after }) => {
     if (row.kind === 'submitted') {
       let adoption;
       if (Object.hasOwn(row, '采用知识')) {
@@ -153,20 +173,20 @@ function projectSubmissions(rows) {
       // 原文只在本次投影内定位，不序列化。旧位置序号不能冒充后来同数值的真实seq。
       Object.defineProperty(record, SUBMITTED_SOURCE, { value: { row, index } });
       submissions.push(record);
-      if (record.提交人 !== null) latest.set(canonical([row.id, record.提交人]), record);
-    } else if (row.kind === 'accepted' && acceptanceMatchesPrefix(rows, index)) {
-      for (const record of latest.values()) if (record.任务 === row.id && record.代 === row.代) record.关联采纳.push({ 采纳序: positive(row.seq) ? row.seq : index + 1, 于: typeof row.at === 'string' ? row.at : null, 代: row.代 });
+      if (record.提交人 !== null) {
+        const byAuthor = latest.get(row.id) ?? new Map();
+        byAuthor.set(record.提交人, record); latest.set(row.id, byAuthor);
+      }
+    } else if (row.kind === 'accepted' && acceptanceMatchesPrefix(row, before, after)) {
+      for (const record of latest.get(row.id)?.values() ?? []) if (record.代 === row.代) record.关联采纳.push({ 采纳序: positive(row.seq) ? row.seq : index + 1, 于: typeof row.at === 'string' ? row.at : null, 代: row.代 });
     }
-  }
-  return submissions;
+  } });
+  return { records: submissions, nodes: resolver.nodes, resolveFeedback: resolver.resolve };
 }
 
 /** fold的accepted分支只投影，不代替引用验证；当前策略开关也不能伪造历史许可。 */
-function acceptanceMatchesPrefix(rows, index) {
-  const row = rows[index];
+function acceptanceMatchesPrefix(row, before, after) {
   if (!positive(row.代) || !isId(row.by?.id) || !['Lead', '主权者'].includes(row.by.kind)) return false;
-  const before = fold(rows.slice(0, index)).get(row.id);
-  const after = fold(rows.slice(0, index + 1)).get(row.id);
   if (!before || before.代 !== row.代 || !已被合法采纳(after) || after.代 !== row.代 || after.采纳?.代 !== row.代 || typeof row.交付物摘要 !== 'string' || row.交付物摘要 !== before.交付物清单?.摘要) return false;
   if (row.依据 === '复核结论') return ['已交卷', '未验'].includes(before.状态) && typeof row.票 === 'string' && row.票 === before.待采纳?.票 && before.待采纳?.代 === row.代 && before.已复核交付物摘要 === row.交付物摘要;
   if (row.依据 === '复核免审') return before.状态 === '已交卷' && before.复核豁免?.代 === row.代 && typeof row.豁免 === 'string' && row.豁免 === before.复核豁免.票 && row.票 === null;
