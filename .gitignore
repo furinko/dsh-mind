@@ -11,5 +11,8 @@ Thumbs.db
 .w*-*.txt
 .tasks-fixed-draft.js
 
-# 官方 SDK 抽取物：第三方代码，不进仓；需要时用 .recovery/asar.mjs 重新抽取
-.recovery/asar-out/
+# 一次性取证、旧源码副本与运维材料放到仓外 audits/，当前目录只留归档指引。
+.recovery/*
+!.recovery/README.md
+ops/*
+!ops/README.md

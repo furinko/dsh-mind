@@ -1,1 +1,0 @@
-Evidence only. Relative scripts originated in the named isolated trees; do not execute this archive as a product source. No mutant directories were archived. Original uncommitted bytes are retained for sovereign-directed recovery, not automatic rollback.
