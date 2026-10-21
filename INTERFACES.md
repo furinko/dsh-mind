@@ -976,7 +976,7 @@ await runAction({ org, 项目, subject, 主体, args: { action, ...args }, 面: 
 | `/plugins/dsh-mind/workbench` | GET只读同一工作台投影，不另造状态真源 |
 | `/plugins/dsh-mind/ping` | GET诊断当前内核与通道，不以历史探针绿代替入口在位 |
 | `/plugins/dsh-mind/delegation` | 已认证GET/POST调度设置，正式ConfigEditor保存；认证缺失即不可用 |
-| `/plugins/dsh-mind/intervention` | 已认证同源读待审批、POST/PUT只接请求id/决定/理由；只落人侧决议，不执行原写；模型不能调用成主权者 |
+| `/plugins/dsh-mind/intervention` | 已认证同源、精确sessionId范围读待审批，POST/PUT接请求id/决定/理由/审阅指纹；只落人侧决议，不执行原写；模型不能调用成主权者 |
 | `/plugins/dsh-mind/monitor` | 已认证同源 GET 查询指定 `sessionId` 的监控投影，可带 `limit/offset`；POST 仅收阻塞引用/原因分类/判定/原因/来源引用，追加人侧确认，不改权限或任务 |
 
 介入挂起冻结原主体、项目、动作参数与底层步骤。批准不替申请人执行：原申请者带 `审批引用` 重放同一请求；参数/计划漂移、被占用或已执行均拒。会审失败条件seal必须出现在冻结预览，并严格绑定本请求实际首登与对应创建步，不是全局豁免。

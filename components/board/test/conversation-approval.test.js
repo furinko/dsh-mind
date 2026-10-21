@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { loadClient, makeSlots, makeCtx, makeSessions, makeStrictRequire, createRenderer, collect, textOf, jsonResponse, settle } from './client-harness.mjs';
+import { loadClient, makeSlots, makeCtx, makeSessions, makeStrictRequire, createRenderer, collect, textOf, jsonResponse, settle, sampleView } from './client-harness.mjs';
 import { createApprovalRenderer } from './approval-renderer.mjs';
 import { makeFixture } from '../../../test/helpers.mjs';
 import { Org } from '../../../src/org.js';
@@ -10,264 +10,166 @@ const A = 'session-owner-a-exact'; const B = 'owner-b-no-prefix';
 function row(id = 'r1', owner = A, extra = {}) {
   return { 请求id: id, 项目: 'plugins', 原主体: { id: owner, kind: 'Lead', 卡版本: 'card-v1' }, 目标: { id: 'task1', kind: '任务', 代: 4 }, 动作: 'task_submit', 档位: '审批', 状态: '待放行', 冻结于: '2026-10-18T12:00:00Z', 审阅指纹: 'preview-'+id, 内容摘要: 'digest-'+id, 完整请求: { id: 'task1', 结论: '完整正文尾：NEVER-TRUNCATE' }, 步骤: [{ 序: 1, 动作: 'write', 说明: '冻结计划', 目标: { kind: '任务', id: 'task1' }, 预览: { 正文: '计划尾：STEP-END' } }], 可选项: ['批准','拒绝','撤销'], ...extra };
 }
+function summary(id = 'r1', session = A) { return { 类型: '介入审批', 请求id: id, 会话: session, 描述: '更新任务', 原因: '审批档', 可选项: ['批准','拒绝'], 命令: '/mind intervention_resolve' }; }
 function env(handler, options = {}) {
-  const calls = []; const pending = new Set(); const loaded = loadClient({ fetch: async (url, init) => {
+  const calls = []; const pending = new Set();
+  const state = { summaries: [summary()], failProjection: false };
+  const loaded = loadClient({ fetch: async (url, init) => {
     if (url.startsWith('/plugins/dsh-mind/intervention')) {
       const req = { url, method: init.method, body: init.body ? JSON.parse(init.body) : undefined }; calls.push(req);
       const work = Promise.resolve().then(() => handler(req)); pending.add(work);
       try { return await work; } finally { pending.delete(work); }
     }
+    if (url.startsWith('/plugins/dsh-mind/workbench')) {
+      if (state.failProjection) return jsonResponse({成功:false,理由:'投影暂不可读'},503);
+      return jsonResponse({...sampleView(), 项目:'plugins', 待你决定:state.summaries});
+    }
     return jsonResponse({ 成功: true });
   }, ...options });
   const strict = makeStrictRequire(); const plugin = loaded.definition.factory(strict.require); const {slots, calls: registrations} = makeSlots();
-  const native = { name: 'conversation.input.dock', id: 'native-action' }; slots.register(native, () => null);
+  slots.register({name:'conversation.input.dock',id:'native-action'},()=>null);
   const dispose = plugin.apply(makeCtx({ slots, sessions: makeSessions([{id: 'wrong-global-last', main: true}]) }));
-  const entry = registrations.register.find(x => x.options.id === 'dsh-mind-intervention'); assert.ok(entry, '必须注册真实会话入口');
-  return { loaded, calls, entry, registrations, dispose, async drain() {
+  const entry = registrations.register.find(x => x.options.name === 'main'); assert.ok(entry);
+  return { state, loaded, calls, entry, registrations, dispose, async drain() {
     for (let i = 0; i < 20; i += 1) { await Promise.all([...pending]); await settle(30); if (!pending.size) return; }
-    throw Error('真实传输未收敛，不能清理夹具或宣称完成');
-  }, mount(sessionId = A, blank = false) {
-    const props = { sessionId, session: { blank }, input: {} };
-    const renderer = createApprovalRenderer(entry.Component, props);
-    renderer.flush(); return {renderer,props};
-  }, mountPane(props) {
-    // 已安装 ConversationContent 只在实际会话和 input 就绪时挂载 additive dock。
-    const HostMain = p => p.panel === 'conversation' && p.ready !== false ? {type:entry.Component,key:p.sessionId,props:{sessionId:p.sessionId,session:{},input:{}}} : null;
-    const renderer=createApprovalRenderer(HostMain,props);renderer.flush();return renderer;
-  } };
+    throw Error('真实传输未收敛');
+  }, mount() { const r = createApprovalRenderer(entry.Component, {}); r.flush(); return r; } };
 }
 async function flush(r) { await settle(30); r.flush(); await settle(20); r.flush(); }
 function elements(r) { return collect(r.tree, {skipStyle:true}).elements; }
 function button(r, text) { return elements(r).find(x => x.type === 'button' && textOf(x) === text); }
-function dialog(r) { return elements(r).find(x => x.props.role === 'dialog'); }
+function review(r) { return elements(r).find(x => x.props['data-dshmind'] === 'approval-review'); }
 function click(r, text) { const b = button(r,text); assert.ok(b, 'button missing: '+text); assert.ok(!b.props.disabled, 'button disabled: '+text); b.props.onClick(); r.flush(); }
 function response(sessionId, rows) { return jsonResponse({ 成功:true, 会话:sessionId, 待决:rows }); }
 function tick(e) { for (const t of e.loaded.timers.intervals) t.fn(); }
+async function select(r, id = 'r1') { await flush(r); const b=elements(r).find(x=>x.type==='button'&&x.props['data-review-request']===id);assert.ok(b,'real summary navigation '+id);assert.ok(!b.props.disabled);b.props.onClick();r.flush();await flush(r); }
+async function open(e, id = 'r1', session = A) { e.state.summaries=[summary(id,session)];const r=e.mount();await select(r,id);return r; }
 
-test('普通与blank会话共用真实input.dock入口，header隐藏不退回全局overlay', async()=>{
-  for(const blank of [false,true]){
-    const e=env(()=>response(A,[row('hidden-header-valid')]));assert.equal(e.entry.options.name,'conversation.input.dock');
-    const r=e.mount(A,blank).renderer;await flush(r);assert.ok(dialog(r));assert.match(textOf(r.tree),/hidden-header-valid/);
-    assert.ok(!e.registrations.register.some(x=>x.options.name==='shell.overlay'));r.unmount();e.dispose();
-  }
+// Tests execute Dashboard and the real keyed review child. No private component is extracted.
+test('只注册心智工作台、侧栏和设置；聊天输入区、Git与全局浮层均无审批入口',async()=>{
+  const e=env(()=>{throw Error('未打开请求不应读私有计划');});const r=e.mount();await flush(r);
+  assert.deepEqual(e.registrations.inject.slice().sort(),['main','settings.section','sidebar.panellist']);
+  assert.equal(e.registrations.register.filter(x=>x.options.name==='conversation.input.dock').length,1,'只保留宿主原action');
+  assert.equal(e.calls.length,0);assert.ok(!review(r));assert.ok(!button(r,'批准'));assert.ok(!elements(r).some(x=>x.props.role==='dialog'));r.unmount();e.dispose();
 });
 
-test('会话或输入未就绪不挂dock，不靠retained引用为后台会话取数', async()=>{
-  const e=env(()=>{throw Error('未就绪输入区不可取数');});
-  const r=e.mountPane({panel:'conversation',sessionId:B,ready:false,retainedBy:{mainView:1}});await flush(r);
-  assert.equal(e.calls.length,0);assert.ok(!dialog(r));r.unmount();e.dispose();
-});
-
-test('Git主面板仍保留mainView/sidebarChat会话时不挂审批，返回实际会话区域才取数', async()=>{
-  const e=env(req=>{const id=new URL(req.url,'http://local').searchParams.get('sessionId');return response(id,[row(id===A?'PRIVATE-A':'PRIVATE-B',id)]);});
-  const props={panel:'git',sessionId:A,retainedBy:{[A]:{mainView:1},[B]:{sidebarChat:1}}};
-  const r=e.mountPane(props);await flush(r);assert.equal(e.calls.length,0);assert.ok(!dialog(r));
-  props.panel='conversation';r.render();r.flush();await flush(r);assert.ok(dialog(r));assert.match(textOf(r.tree),/PRIVATE-A/);assert.ok(!textOf(r.tree).includes('PRIVATE-B'));
-  props.panel='git';r.render();r.flush();const count=e.calls.length;tick(e);await flush(r);assert.equal(e.calls.length,count);assert.ok(!dialog(r));
-  r.unmount();e.dispose();
-});
-
-test('无session的实际席位只显示轻量失败，不能拿后台末条会话冒充归属', async()=>{
-  const e=env(()=>{throw Error('未知归属不得取数');});const r=e.mount('').renderer;await flush(r);
-  assert.ok(button(r,'审批暂不可用'));assert.equal(e.calls.length,0);assert.ok(!dialog(r));
-  click(r,'审批暂不可用');assert.match(textOf(r.tree),/缺少所属会话/);assert.ok(!button(r,'批准'));r.unmount();e.dispose();
-});
-
-test('真实sessionId席位不要求全局useSessions，不读取ctx全局错误末条会话', async()=>{
-  const e=env(()=>response(A,[row()]));const r=e.mount().renderer;await flush(r);
-  assert.ok(dialog(r));assert.ok(e.calls.every(req=>new URL(req.url,'http://local').searchParams.get('sessionId')===A));
-  assert.ok(!e.calls.some(req=>req.url.includes('wrong-global-last')));r.unmount();e.dispose();
-});
-
-test('POST确认必须等已有旧GET结束再发全新GET，single-flight不能拿批准前快照假确认',async()=>{
-  let read=0;let release;let approved=false;
-  const e=env(req=>{if(req.method==='POST'){approved=true;return jsonResponse({成功:true,请求id:'r1',决定:'批准'});}read++;if(read===2)return new Promise(resolve=>{release=resolve;});return response(A,[row('r1',A,{状态:approved?'已批准待重放':'待放行',可选项:approved?['撤销']:['批准','拒绝']})]);});
-  const r=e.mount().renderer;await flush(r);tick(e);await flush(r);assert.equal(read,2);click(r,'批准');await flush(r);assert.equal(read,2,'旧读未完成前不并发发读，也不据旧读宣称成功');assert.ok(!textOf(r.tree).includes('已回读确认'));
-  release(response(A,[row()]));await e.drain();await flush(r);assert.equal(read,3,'必须有POST之后新发的读取');assert.match(textOf(r.tree),/已回读确认「已批准待重放」/);r.unmount();e.dispose();
-});
-
-test('持续4秒成功响应配3秒轮询最终呈现且不饥饿，延迟小于原8秒超时', async () => {
-  let now=0;let completed=0;let maxActive=0;const queued=[];
-  const e=env(()=>new Promise(resolve=>{queued.push({due:now+4000,resolve,done:false});maxActive=Math.max(maxActive,queued.filter(x=>!x.done).length);}));
-  const r=e.mount().renderer;await flush(r);
-  try {
-    for(now=1000;now<=24000;now+=1000){if(now%3000===0)tick(e);await flush(r);for(const q of queued.filter(x=>!x.done&&x.due<=now)){q.done=true;completed++;q.resolve(response(A,[row('slow-valid')]));}await flush(r);if(now>=4000){assert.ok(dialog(r),'4秒有效响应必须进入视图，不能每3秒被新票淘汰');assert.match(textOf(r.tree),/slow-valid/);}}
-    assert.ok(completed>=4,'持续慢响应须真实完成至少4次而非只验首帧');assert.equal(maxActive,1,'同会话GET不重叠，poll复用在途请求');
-  } finally {r.unmount();e.dispose();}
-});
-
-test('4秒失败响应不被3秒轮询淘汰，明确错误并可在下一次请求恢复', async () => {
-  const pending=[];const e=env(()=>new Promise(resolve=>pending.push(resolve)));const r=e.mount().renderer;await flush(r);
-  tick(e);await flush(r);pending[0](jsonResponse({成功:false,理由:'慢响应可读失败'},503));await flush(r);
-  assert.ok(!dialog(r));click(r,'审批暂不可用');assert.match(textOf(r.tree),/慢响应可读失败/);assert.ok(!button(r,'批准'));
-  tick(e);await flush(r);pending.at(-1)(response(A,[row('recovered')]));await flush(r);assert.match(textOf(r.tree),/recovered/);assert.ok(dialog(r));r.unmount();e.dispose();
-});
-
-test('只追加真实input.dock入口，不注册全局overlay或接管composer且不覆盖原action', async () => {
-  const e = env(req => response(new URL(req.url,'http://local').searchParams.get('sessionId'), [row()])); const {renderer:r} = e.mount(); await flush(r);
-  assert.equal(e.entry.options.name,'conversation.input.dock');
-  assert.equal(e.registrations.register.filter(x=>x.options.name==='conversation.input.dock'&&x.options.id==='dsh-mind-intervention').length,1);
-  assert.ok(!e.registrations.inject.includes('shell.overlay'));
-  assert.equal(e.registrations.register.filter(x=>x.options.id==='native-action').length,1);
-  assert.ok(!e.registrations.inject.includes('conversation.composer') && !e.registrations.inject.includes('conversation.input.overlay'));
-  assert.ok(e.calls.every(x=>new URL(x.url,'http://local').searchParams.get('sessionId')===A));
-  assert.equal(dialog(r).props.style.position,'relative');
-  assert.equal(dialog(r).props.style.width,'100%');assert.equal(dialog(r).props.style.minWidth,0);
-  assert.equal(dialog(r).props.style.maxWidth,'100%');assert.equal(dialog(r).props.style.overflow,'auto');
-  assert.equal(dialog(r).props.style.overflowWrap,'anywhere');
-  assert.ok(!elements(r).some(node=>['fixed','absolute'].includes(node.props.style?.position)));
-  assert.ok(dialog(r)); r.unmount(); e.dispose();
-});
-
-test('不打开设置页也主动读取并弹完整冻结计划；只有真实组件点击才发送决议', async () => {
-  const e = env(() => response(A,[row()])); const {renderer:r} = e.mount(); await flush(r);
-  assert.ok(dialog(r)); const text = textOf(r.tree);
-  for (const field of ['plugins',A,'r1','card-v1','task1','NEVER-TRUNCATE','STEP-END','preview-r1']) assert.ok(text.includes(field),field);
+test('实时待办显式打开独立页；完整字段和执行步骤不截断，设置页没有重复决议入口',async()=>{
+  const e=env(()=>response(A,[row()]));const r=await open(e);
+  assert.ok(review(r));assert.equal(review(r).type,'main');assert.ok(!elements(r).some(x=>x.props.role==='dialog'));
+  for(const field of ['plugins',A,'r1','card-v1','task1','NEVER-TRUNCATE','STEP-END','preview-r1','操作参数','执行计划'])assert.ok(textOf(r.tree).includes(field),field);
   assert.equal(e.calls.filter(x=>x.method==='POST').length,0);
-  assert.ok(button(r,'批准') && button(r,'拒绝'));
-  const settings=e.registrations.register.find(x=>x.options.name==='settings.section'); const sr=createRenderer(settings.Component,{});sr.flush(); await flush(sr);
-  assert.equal(elements(sr).filter(x=>x.props['data-dshmind']==='intervention-approvals').length,0);
-  assert.ok(!button(sr,'批准') && !button(sr,'拒绝')); assert.match(textOf(sr.tree),/所属会话/);
-  sr.unmount();r.unmount();e.dispose();
+  const sr=createRenderer(e.registrations.register.find(x=>x.options.name==='settings.section').Component,{});sr.flush();await flush(sr);
+  assert.ok(!button(sr,'批准')&&!button(sr,'拒绝'));assert.match(textOf(sr.tree),/待你决定/);sr.unmount();r.unmount();e.dispose();
 });
 
-test('稍后处理不被每次轮询强制重弹，同会话入口可重开，新请求再主动弹出', async () => {
-  let rows=[row()]; const e=env(()=>response(A,rows));const {renderer:r}=e.mount();await flush(r);
-  click(r,'稍后处理'); assert.ok(!dialog(r));tick(e);await flush(r);assert.ok(!dialog(r));
-  click(r,'待你确认 · 1');await flush(r);assert.ok(dialog(r));
-  click(r,'稍后处理');rows=[row(),row('new-request')];tick(e);await flush(r);assert.ok(dialog(r));assert.match(textOf(r.tree),/new-request/);
-  const count=e.calls.length;r.unmount();const cleared=e.loaded.timers.cleared.length;assert.ok(cleared>=1);tick(e);await settle(20);assert.equal(e.calls.length,count);e.dispose();
+test('私有计划只按显式会话取数，拒绝猜测全局末条会话；同会话其他请求不混入审阅',async()=>{
+  const e=env(()=>response(A,[row(),row('OTHER-PRIVATE')]));const r=await open(e);
+  assert.ok(e.calls.every(x=>new URL(x.url,'http://local').searchParams.get('sessionId')===A));
+  assert.ok(!e.calls.some(x=>x.url.includes('wrong-global-last')));assert.ok(!textOf(r.tree).includes('OTHER-PRIVATE'));r.unmount();e.dispose();
 });
 
-test('会话切换的慢响应不会显示或覆盖另一个会话；原样id不增删前缀', async () => {
-  let release; const e=env(req=>new URL(req.url,'http://local').searchParams.get('sessionId')===A ? new Promise(resolve=>{release=resolve;}) : response(B,[row('only-b',B)]));
-  const {renderer:r,props}=e.mount();props.sessionId=B;r.render();assert.ok(!textOf(r.tree).includes('r1'));r.flush();await flush(r);assert.match(textOf(r.tree),/only-b/);
-  release(response(A,[row('late-a',A)]));await flush(r);assert.ok(!textOf(r.tree).includes('late-a'));assert.ok(!textOf(r.tree).includes(A));r.unmount();e.dispose();
+test('缺请求或会话导航标识不提供打开按钮，不能从描述或命令推断归属',async()=>{
+  const e=env(()=>{throw Error('无范围不应取数');});e.state.summaries=[{...summary(),会话:''},{...summary('r2'),请求id:''}];const r=e.mount();await flush(r);
+  assert.ok(!button(r,'查看请求'));assert.equal(e.calls.length,0);r.unmount();e.dispose();
 });
 
-test('两个会话消费者各自隔离；卸载重连从同一服务恢复待决，不消费其他会话数据', async () => {
+test('缓存或读取失败的投影不可导航；已捕获旧按钮也不能绕过实时检查',async()=>{
+  const e=env(()=>response(A,[row()]));const r=e.mount();await flush(r);const old=button(r,'查看请求');assert.ok(old);
+  e.state.failProjection=true;tick(e);await flush(r);assert.equal(button(r,'查看请求').props.disabled,true);
+  old.props.onClick();r.flush();await flush(r);assert.ok(!review(r));assert.equal(e.calls.length,0);r.unmount();e.dispose();
+});
+
+test('返回列表停止私有轮询，新请求不会自动打开；重开才重新读取',async()=>{
+  const e=env(()=>response(A,[row(),row('new')]));const r=await open(e);click(r,'← 返回待你决定');await flush(r);
+  const count=e.calls.length;e.state.summaries.push(summary('new'));tick(e);await flush(r);assert.equal(e.calls.length,count);assert.ok(!review(r));
+  await select(r,'new');assert.match(textOf(r.tree),/preview-new/);assert.ok(!textOf(r.tree).includes('preview-r1'));r.unmount();const before=e.calls.length;tick(e);await settle(20);assert.equal(e.calls.length,before);e.dispose();
+});
+
+test('超过首屏8项仍可展开并打开后续请求；轮询不重置展开态',async()=>{
+  const e=env(()=>response(A,[row('r12')]));e.state.summaries=Array.from({length:12},(_,i)=>summary('r'+(i+1)));
+  const r=e.mount();await flush(r);assert.ok(!elements(r).some(x=>x.props['data-review-request']==='r12'));
+  click(r,'查看全部 12 项');tick(e);await flush(r);await select(r,'r12');assert.match(textOf(r.tree),/preview-r12/);
+  click(r,'← 返回待你决定');await flush(r);assert.ok(button(r,'收起待办'));assert.ok(elements(r).some(x=>x.props['data-review-request']==='r12'));r.unmount();e.dispose();
+});
+
+test('切换不同会话或同会话另一请求时迟到响应不覆盖新选择',async()=>{
+  for(const session of [A,B]){
+    let release;const e=env(req=>{const id=new URL(req.url,'http://local').searchParams.get('sessionId');return id===A&&!release?new Promise(resolve=>{release=resolve;}):response(session,[row('new',session)]);});
+    const r=await open(e);click(r,'← 返回待你决定');e.state.summaries=[summary('new',session)];tick(e);await select(r,'new');
+    release(response(A,[row('r1',A,{完整请求:{text:'LATE-OLD-PRIVATE'}})]));await flush(r);
+    assert.ok(!textOf(r.tree).includes('LATE-OLD-PRIVATE'));assert.match(textOf(r.tree),/preview-new/);r.unmount();e.dispose();
+  }
+});
+
+test('两个工作台消费者隔离；卸载重开从同一服务恢复，不显示其他会话内容',async()=>{
   const e=env(req=>{const id=new URL(req.url,'http://local').searchParams.get('sessionId');return response(id,[row(id===A?'only-a':'only-b',id)]);});
-  const {renderer:a}=e.mount(A);const {renderer:b}=e.mount(B);await flush(a);await flush(b);
+  const a=await open(e,'only-a',A);const b=await open(e,'only-b',B);await flush(a);
   assert.match(textOf(a.tree),/only-a/);assert.ok(!textOf(a.tree).includes('only-b'));assert.match(textOf(b.tree),/only-b/);assert.ok(!textOf(b.tree).includes('only-a'));
-  a.unmount();const {renderer:reconnected}=e.mount(A);await flush(reconnected);assert.match(textOf(reconnected.tree),/only-a/);
-  b.unmount();reconnected.unmount();e.dispose();
+  a.unmount();const again=await open(e,'only-a',A);assert.match(textOf(again.tree),/only-a/);b.unmount();again.unmount();e.dispose();
 });
 
-test('缺会话/401/403/坏响应与超时明确可见，不静默空列表，也不缓存完整正文', async () => {
-  for (const status of [401,403]) {
-    const e=env(()=>jsonResponse({成功:false,理由:'认证失败 HTTP '+status},status));const {renderer:r}=e.mount();await flush(r);
-    assert.ok(button(r,'审批暂不可用'));assert.ok(!dialog(r));click(r,'审批暂不可用');await flush(r);
-    assert.match(textOf(r.tree),new RegExp(String(status)));assert.ok(!button(r,'批准'));assert.ok([...e.loaded.store.values()].every(value => !String(value).includes('NEVER-TRUNCATE') && !String(value).includes('preview-r1')), '看板缓存不得包含私有审批正文或审阅指纹');r.unmount();e.dispose();
-  }
-  const e=env(()=>{throw Error('缺session不得取数');});const {renderer:r}=e.mount('');await flush(r);assert.ok(!dialog(r));click(r,'审批暂不可用');assert.match(textOf(r.tree),/缺少所属会话/);assert.equal(e.calls.length,0);r.unmount();e.dispose();
-  for(const body of [{成功:true,会话:A,待决:[row('wrong-session',B)]},{成功:true,会话:B,待决:[row('wrong-session',A)]},{成功:true,项目:'plugins',待决:[row('old-backend',A)]}]){
-    const bad=env(()=>jsonResponse(body));const br=bad.mount().renderer;await flush(br);assert.ok(!dialog(br));click(br,'审批暂不可用');assert.match(textOf(br.tree),/范围不符/);assert.ok(!textOf(br.tree).includes('wrong-session'));assert.ok(!textOf(br.tree).includes('old-backend'));assert.ok(!button(br,'批准'));br.unmount();bad.dispose();
-  }
-  const hang=env(()=>new Promise(()=>{}));const hr=hang.mount().renderer;hang.loaded.timers.fireTimeouts();await flush(hr);assert.ok(!dialog(hr));click(hr,'审批暂不可用');assert.match(textOf(hr.tree),/读取会话审批失败|无回应/);hr.unmount();hang.dispose();
+test('401/403/坏响应/跨会话范围错误直接显示于已打开的页面；私有正文不缓存',async()=>{
+  const bodies=[jsonResponse({成功:false,理由:'认证失败 HTTP 401'},401),jsonResponse({成功:false,理由:'认证失败 HTTP 403'},403),jsonResponse({成功:true,会话:A,待决:[row('wrong-session',B)]}),jsonResponse({成功:true,会话:B,待决:[row()]}),jsonResponse({成功:true,项目:'old',待决:[row()]})];
+  for(const body of bodies){const e=env(()=>body);const r=await open(e);assert.ok(review(r));assert.ok(elements(r).some(x=>x.props.role==='alert'));assert.ok(!button(r,'批准'));assert.ok(!textOf(r.tree).includes('wrong-session'));assert.ok(!textOf(r.tree).includes('NEVER-TRUNCATE'));assert.ok([...e.loaded.store.values()].every(x=>!String(x).includes('NEVER-TRUNCATE')&&!String(x).includes('preview-r1')));r.unmount();e.dispose();}
 });
 
-test('读取错误及错误变化不主动展开，手动查看后收起保持轻量，只有有效新待决才主动开',async()=>{
-  let mode=0;
-  const e=env(()=>mode===0?jsonResponse({成功:true,项目:'old',待决:[row('PRIVATE-OLD')]}):mode===1?jsonResponse({成功:false,理由:'新的读取故障'},503):response(A,[row('fresh-valid')]));
-  const r=e.mount().renderer;await flush(r);assert.ok(!dialog(r));assert.ok(!textOf(r.tree).includes('PRIVATE-OLD'));
-  tick(e);await flush(r);assert.ok(!dialog(r));
-  click(r,'审批暂不可用');assert.match(textOf(r.tree),/范围不符/);click(r,'稍后处理');
-  mode=1;tick(e);await flush(r);assert.ok(!dialog(r));assert.ok(button(r,'审批暂不可用'));
-  mode=2;tick(e);await flush(r);assert.ok(dialog(r));assert.match(textOf(r.tree),/fresh-valid/);r.unmount();e.dispose();
+test('超时、错误恢复和空记录在独立页可读，其他新请求不代替选中的请求',async()=>{
+  let mode='hang';const e=env(()=>mode==='hang'?new Promise(()=>{}):mode==='error'?jsonResponse({成功:false,理由:'暂时不可读'},503):response(A,mode==='empty'?[]:[row('other')]));const r=await open(e);
+  assert.match(textOf(r.tree),/正在读取当前请求/);e.loaded.timers.fireTimeouts();await flush(r);assert.match(textOf(r.tree),/读取会话审批失败|无回应/);
+  mode='error';tick(e);await flush(r);assert.match(textOf(r.tree),/暂时不可读/);mode='empty';tick(e);await flush(r);assert.match(textOf(r.tree),/当前请求已不可用/);
+  mode='other';tick(e);await flush(r);assert.match(textOf(r.tree),/当前请求已不可用/);assert.ok(!textOf(r.tree).includes('preview-other'));r.unmount();e.dispose();
 });
 
-test('空待决是确定零而非读取中；缺完整记录禁用决议不能盲批', async () => {
-  const empty=env(()=>response(A,[]));const er=empty.mount().renderer;await flush(er);assert.equal(er.tree,null);er.unmount();empty.dispose();
-  const e=env(()=>response(A,[row('missing',A,{完整请求:undefined,步骤:[],审阅指纹:undefined,记录问题:'完整记录缺失'})]));const r=e.mount().renderer;await flush(r);
-  assert.match(textOf(r.tree),/完整记录缺失/);assert.equal(button(r,'批准').props.disabled,true);assert.equal(e.calls.filter(x=>x.method==='POST').length,0);r.unmount();e.dispose();
+test('不完整冻结记录禁用所有决议；重复请求标识拒绝展示',async()=>{
+  const e=env(()=>response(A,[row('r1',A,{完整请求:undefined,步骤:[],审阅指纹:undefined,记录问题:'完整记录缺失'})]));const r=await open(e);assert.match(textOf(r.tree),/完整记录缺失/);assert.equal(button(r,'批准').props.disabled,true);assert.equal(e.calls.filter(x=>x.method==='POST').length,0);r.unmount();e.dispose();
+  const d=env(()=>response(A,[row(),row()]));const dr=await open(d);assert.match(textOf(dr.tree),/请求标识重复/);assert.ok(!button(dr,'批准'));dr.unmount();d.dispose();
 });
 
-test('首读和空闲不占输入区，后台读取保留，有有效新请求再显示', async()=>{
-  let release;let rows=[];
-  const e=env(()=>release?response(A,rows):new Promise(resolve=>{release=resolve;}));
-  const r=e.mount().renderer;
-  try {
-    await flush(r);assert.equal(r.tree,null,'未取得结果时不显示常驻读取入口');
-    release(response(A,[]));await flush(r);assert.equal(r.tree,null);
-    const reads=e.calls.length;tick(e);await flush(r);assert.ok(e.calls.length>reads);assert.equal(r.tree,null);
-    rows=[row('new-action')];tick(e);await flush(r);assert.ok(dialog(r));assert.ok(button(r,'待你确认 · 1'));
-    assert.match(textOf(r.tree),/new-action/);assert.equal(e.calls.filter(req=>req.method==='POST').length,0);
-  } finally {r.unmount();e.dispose();}
+test('4秒成功响应配3秒轮询不饥饿，GET始终single-flight',async()=>{
+  let now=0,completed=0,maxActive=0;const queued=[];
+  const e=env(()=>new Promise(resolve=>{queued.push({due:now+4000,resolve,done:false});maxActive=Math.max(maxActive,queued.filter(x=>!x.done).length);}));const r=await open(e,'slow-valid');
+  try{for(now=1000;now<=24000;now+=1000){if(now%3000===0)tick(e);await flush(r);for(const q of queued.filter(x=>!x.done&&x.due<=now)){q.done=true;completed++;q.resolve(response(A,[row('slow-valid')]));}await flush(r);if(now>=4000)assert.match(textOf(r.tree),/preview-slow-valid/);}assert.ok(completed>=4);assert.equal(maxActive,1);}finally{r.unmount();e.dispose();}
 });
 
-test('手动展开过也不能保留空面板，收口历史隐藏且下一次待决仍主动出现', async()=>{
-  let rows=[row()];const e=env(()=>response(A,rows));const r=e.mount().renderer;
-  try {
-    await flush(r);click(r,'稍后处理');click(r,'待你确认 · 1');assert.ok(dialog(r));
-    rows=[row('closed-request',A,{状态:'已完成',可选项:[]})];tick(e);await flush(r);
-    assert.equal(r.tree,null,'只有已收口历史时，即使手动展开标记仍在，也不渲染空面板');
-    rows=[row('next-action')];tick(e);await flush(r);assert.ok(dialog(r));assert.match(textOf(r.tree),/next-action/);
-    assert.ok(!textOf(r.tree).includes('closed-request'));
-  } finally {r.unmount();e.dispose();}
+test('4秒失败响应不被3秒轮询淘汰，下一次请求可恢复',async()=>{
+  const pending=[];const e=env(()=>new Promise(resolve=>pending.push(resolve)));const r=await open(e);tick(e);await flush(r);assert.equal(pending.length,1);pending[0](jsonResponse({成功:false,理由:'慢响应可读失败'},503));await flush(r);assert.match(textOf(r.tree),/慢响应可读失败/);assert.ok(!button(r,'批准'));
+  tick(e);await flush(r);pending.at(-1)(response(A,[row()]));await flush(r);assert.ok(button(r,'批准'));r.unmount();e.dispose();
 });
 
-test('故障手动展开后恢复为空自动消失，拒绝回执仅轻量确认且可关闭', async()=>{
-  let mode='error';const e=env(req=>{
-    if(req.method==='POST'){mode='closed';return jsonResponse({成功:true,请求id:'r1',决定:'拒绝'});}
-    if(mode==='error')return jsonResponse({成功:false,理由:'暂时不可读'},503);
-    return response(A,mode==='empty'?[]:[row('r1',A,{状态:mode==='closed'?'已拒绝':'待放行',可选项:mode==='closed'?[]:['批准','拒绝']})]);
-  });const r=e.mount().renderer;
-  try {
-    await flush(r);assert.ok(!dialog(r));click(r,'审批暂不可用');assert.ok(dialog(r));
-    mode='empty';tick(e);await flush(r);assert.equal(r.tree,null);
-    mode='pending';tick(e);await flush(r);click(r,'拒绝');await flush(r);
-    assert.ok(!dialog(r));assert.match(textOf(r.tree),/已回读确认「已拒绝」/);
-    assert.ok(elements(r).some(el=>el.props['data-dshmind']==='approval-receipt'));
-    assert.ok(!textOf(r.tree).includes('NEVER-TRUNCATE'));click(r,'关闭');assert.equal(r.tree,null);
-    tick(e);await flush(r);assert.equal(r.tree,null);
-  } finally {r.unmount();e.dispose();}
+test('POST确认等待旧GET完成后再发全新GET，不能用批准前快照宣称成功',async()=>{
+  let read=0,release,approved=false;
+  const e=env(req=>{if(req.method==='POST'){approved=true;return jsonResponse({成功:true,请求id:'r1',决定:'批准'});}read++;if(read===2)return new Promise(resolve=>{release=resolve;});return response(A,[row('r1',A,{状态:approved?'已批准待重放':'待放行',可选项:approved?['撤销']:['批准','拒绝']})]);});const r=await open(e);
+  tick(e);await flush(r);assert.equal(read,2);click(r,'批准');await flush(r);assert.equal(read,2);assert.ok(!textOf(r.tree).includes('已回读确认'));
+  release(response(A,[row()]));await e.drain();await flush(r);assert.equal(read,3);assert.match(textOf(r.tree),/已回读确认「已批准待重放」/);r.unmount();e.dispose();
 });
 
-test('批准只发冻结请求id与审阅版本，双击不重发；POST后独立GET确认才给成功', async () => {
-  let state='待放行';const e=env(req=>{if(req.method==='POST'){state=req.body.决定==='撤销'?'已撤销':'已批准待重放';return jsonResponse({成功:true,请求id:req.body.请求id,决定:req.body.决定});}return response(A,[row('r1',A,{状态:state,可选项:state==='待放行'?['批准','拒绝']:state==='已批准待重放'?['撤销']:[],审阅指纹:state==='待放行'?'preview-r1':'approved-preview'})]);});
-  const r=e.mount().renderer;await flush(r);const fn=button(r,'批准').props.onClick;fn();fn();await flush(r);
-  const post=e.calls.findIndex(x=>x.method==='POST');assert.equal(e.calls.filter(x=>x.method==='POST').length,1);
-  assert.deepEqual(e.calls[post].body,{请求id:'r1',决定:'批准',审阅指纹:'preview-r1'});assert.equal(e.calls[post+1].method,'GET');assert.match(textOf(r.tree),/已回读确认「已批准待重放」/);
-  assert.ok(button(r,'撤销') && !button(r,'批准'), '已批未重放保留原撤销入口，不误画执行完成');
-  click(r,'撤销');await flush(r);assert.match(textOf(r.tree),/已回读确认「已撤销」/);assert.ok(!button(r,'批准') && !button(r,'撤销'), '收口态无可重复决议');
-  assert.ok(!e.calls.some(x=>x.url.includes('task_submit')));r.unmount();e.dispose();
+test('批准只发原请求id和审阅指纹，双击只POST一次；批准不执行原业务，仍可撤销',async()=>{
+  let state='待放行';const e=env(req=>{if(req.method==='POST'){state=req.body.决定==='撤销'?'已撤销':'已批准待重放';return jsonResponse({成功:true,请求id:req.body.请求id,决定:req.body.决定});}return response(A,[row('r1',A,{状态:state,可选项:state==='待放行'?['批准','拒绝']:state==='已批准待重放'?['撤销']:[],审阅指纹:state==='待放行'?'preview-r1':'approved-preview'})]);});const r=await open(e);
+  const fn=button(r,'批准').props.onClick;fn();fn();await flush(r);const post=e.calls.findIndex(x=>x.method==='POST');assert.equal(e.calls.filter(x=>x.method==='POST').length,1);assert.deepEqual(e.calls[post].body,{请求id:'r1',决定:'批准',审阅指纹:'preview-r1'});assert.equal(e.calls[post+1].method,'GET');assert.match(textOf(r.tree),/已回读确认「已批准待重放」/);assert.ok(button(r,'撤销')&&!button(r,'批准'));
+  click(r,'撤销');await flush(r);assert.match(textOf(r.tree),/已回读确认「已撤销」/);assert.ok(!button(r,'批准')&&!button(r,'撤销'));assert.ok(!e.calls.some(x=>x.url.includes('task_submit')));r.unmount();e.dispose();
 });
 
-test('拒绝回读可见；POST假成功/失败/冻结版本冲突均不得显示已确认', async () => {
-  for(const mode of ['no-save','refused','wrong-reply']) {
-    const e=env(req=>req.method==='POST'?jsonResponse(mode==='refused'?{成功:false,理由:'审阅版本已变化'}:{成功:true,请求id:mode==='wrong-reply'?'wrong':'r1',决定:'批准'}):response(A,[row()]));
-    const r=e.mount().renderer;await flush(r);click(r,'批准');await flush(r);assert.match(textOf(r.tree),/决议未确认/);assert.ok(!textOf(r.tree).includes('已回读确认'));r.unmount();e.dispose();
-  }
-  let rejected=false;const e=env(req=>{if(req.method==='POST'){rejected=true;return jsonResponse({成功:true,请求id:'r1',决定:'拒绝'});}return response(A,[row('r1',A,{状态:rejected?'已拒绝':'待放行',可选项:rejected?[]:['批准','拒绝']})]);});const r=e.mount().renderer;await flush(r);click(r,'拒绝');await flush(r);assert.match(textOf(r.tree),/已回读确认「已拒绝」/);r.unmount();e.dispose();
+test('POST假成功/失败/冻结版本冲突与错误回执均不得显示确认，拒绝成功仍可返回列表',async()=>{
+  for(const mode of ['no-save','refused','wrong-request','wrong-decision']){let posted=false;const e=env(req=>{if(req.method==='POST'){posted=true;return jsonResponse(mode==='refused'?{成功:false,理由:'审阅版本已变化'}:{成功:true,请求id:mode==='wrong-request'?'wrong':'r1',决定:mode==='wrong-decision'?'拒绝':'批准'});}return response(A,[row('r1',A,{状态:posted&&mode!=='no-save'?'已批准待重放':'待放行'})]);});const r=await open(e);click(r,'批准');await flush(r);assert.match(textOf(r.tree),/决议未确认/);assert.ok(!textOf(r.tree).includes('已回读确认'));r.unmount();e.dispose();}
+  let rejected=false;const e=env(req=>{if(req.method==='POST'){rejected=true;return jsonResponse({成功:true,请求id:'r1',决定:'拒绝'});}return response(A,[row('r1',A,{状态:rejected?'已拒绝':'待放行',可选项:rejected?[]:['批准','拒绝']})]);});const r=await open(e);click(r,'拒绝');await flush(r);assert.match(textOf(r.tree),/已回读确认「已拒绝」/);assert.ok(!button(r,'批准'));click(r,'← 返回待你决定');assert.ok(!review(r));r.unmount();e.dispose();
 });
 
-test('POST回执必须精确匹配原请求和决定，即使独立GET已到目标状态也不能冒认本次成功', async () => {
-  for (const reply of [
-    { 成功: true, 请求id: 'other-request', 决定: '批准' },
-    { 成功: true, 请求id: 'r1', 决定: '拒绝' },
-    { 成功: false, 理由: '当前请求未获确认' },
-  ]) {
-    let posted = false;
-    const e = env(req => {
-      if (req.method === 'POST') { posted = true; return jsonResponse(reply); }
-      return response(A, [row('r1', A, { 状态: posted ? '已批准待重放' : '待放行', 可选项: posted ? ['撤销'] : ['批准', '拒绝'] })]);
-    });
-    const r = e.mount().renderer;
-    try { await flush(r); click(r, '批准'); await flush(r); assert.match(textOf(r.tree), /决议未确认/); assert.ok(!textOf(r.tree).includes('已回读确认')); }
-    finally { r.unmount(); e.dispose(); }
-  }
+test('侧栏图标随实时当前项目待办计数，过期投影不报确定数量',async()=>{
+  const e=env(()=>response(A,[row()]));const r=e.mount();await flush(r);const icon=createRenderer(e.registrations.register.find(x=>x.options.name==='sidebar.panellist').Component,{size:18});icon.flush();
+  assert.equal(collect(icon.tree).elements.find(x=>x.type==='text').props.children,'1');assert.match(textOf(icon.tree),/当前项目有 1/);
+  e.state.summaries=[];tick(e);await flush(r);icon.flush();assert.ok(!collect(icon.tree).elements.some(x=>x.type==='text'));
+  e.state.summaries=[summary(),summary('r2')];tick(e);await flush(r);icon.flush();assert.equal(collect(icon.tree).elements.find(x=>x.type==='text').props.children,'2');
+  e.state.failProjection=true;tick(e);await flush(r);icon.flush();assert.ok(!collect(icon.tree).elements.some(x=>x.type==='text'));icon.unmount();r.unmount();e.dispose();
 });
 
-test('真客户端完整模块→真HTTP路由→真Intervention/账本闭环，非提取函数或复刻状态机', async () => {
-  const f=await makeFixture({defaults:{介入度:'审批'}});
-  let e;let r;
-  try {
-    const org=await Org.open({home:f.home,factoryRoot:f.factoryRoot,privateRoot:f.privateRoot,project:'default'});
+test('真Dashboard→人侧HTTP路由→Intervention账本；只决议不执行业务，无测试私门',async()=>{
+  const f=await makeFixture({defaults:{介入度:'审批'}});let e,r;
+  try{const org=await Org.open({home:f.home,factoryRoot:f.factoryRoot,privateRoot:f.privateRoot,project:'default'});
     const req=await org.intervention.记请求({subject:{id:A,kind:'Lead'},action:'write',args:{内容:'TRUE-SERVICE-END'},项目:'plugins',档位:'审批',步骤:[{动作:'write',目标:{kind:'产物',id:'artifact-one'},说明:'真模块消费者',预览:{内容:'TRUE-SERVICE-END'}}]});
     const route=intervention路由({org,项目:'default',ctx:{get:name=>name==='connection'?{requestRejection:()=>undefined}:undefined}});
-    e=env(async request=>{let status;let body;await route({method:request.method,url:request.url,headers:{host:'127.0.0.1:7710','sec-fetch-site':'same-origin','content-type':'application/json'},async *[Symbol.asyncIterator](){if(request.body)yield Buffer.from(JSON.stringify(request.body));}},{writeHead:s=>{status=s;},end:b=>{body=b;}});return jsonResponse(JSON.parse(body),status);});
-    r=e.mount(A).renderer;await e.drain();await flush(r);assert.ok(dialog(r));assert.match(textOf(r.tree),/TRUE-SERVICE-END/);click(r,'批准');await e.drain();await flush(r);
+    e=env(async request=>{let status,body;await route({method:request.method,url:request.url,headers:{host:'127.0.0.1:7710','sec-fetch-site':'same-origin','content-type':'application/json'},async *[Symbol.asyncIterator](){if(request.body)yield Buffer.from(JSON.stringify(request.body));}},{writeHead:s=>{status=s;},end:b=>{body=b;}});return jsonResponse(JSON.parse(body),status);});
+    r=await open(e,req.请求id);await e.drain();await flush(r);assert.match(textOf(r.tree),/TRUE-SERVICE-END/);click(r,'批准');await e.drain();await flush(r);
     assert.match(textOf(r.tree),/已回读确认「已批准待重放」/);assert.equal((await org.intervention.投影({项目:'plugins'})).find(x=>x.请求id===req.请求id).状态,'已批准待重放');
     assert.equal((await org.audit.read({})).filter(x=>x.动作==='介入决议').length,1);assert.equal((await org.audit.read({})).filter(x=>x.动作==='介入放行占用').length,0);
-  } finally {if(r)r.unmount();if(e)e.dispose();await f.cleanup();}
+  }finally{if(r)r.unmount();if(e)e.dispose();await f.cleanup();}
 });

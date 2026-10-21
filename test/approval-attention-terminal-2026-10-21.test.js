@@ -100,6 +100,12 @@ test('真实待放行、已批准待重放、占用未报告和失败仍计入�
   assert.equal(items.length, 4);
   assert.deepEqual(items.map(row => row.状态).sort(), ['待放行', '已批准待重放', '占用未报告', '失败'].sort());
   for (const item of items) assert.ok(item.命令.includes('intervention_resolve'));
+  for (const item of items) {
+    assert.ok(item.请求id, '待办给出结构化请求标识以导航，不能从命令猜测');
+    assert.equal(item.会话, LEAD.id, '导航必须绑定原申请者会话');
+    for (const privateField of ['完整请求', '步骤', '审阅指纹']) assert.equal(item[privateField], undefined, '只读投影不带私有计划：' + privateField);
+    assert.match(item.说明, /待你决定.*审阅页/);
+  }
   assert.deepEqual(items.find(row => row.状态 === '失败').可选项, ['批准', '拒绝', '撤销']);
   assert.deepEqual(items.find(row => row.状态 === '占用未报告').可选项, ['撤销']);
   assert.match(items.find(row => row.状态 === '占用未报告').原因, /人工复核.*不自动重跑/);
