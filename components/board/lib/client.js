@@ -1624,98 +1624,33 @@ window.__ModuleLoader__.load({
      * 并按 `style[data-plugin='<id>']` 判重，所以热重载不会叠出第二份。
      */
     var SETTINGS_CSS = [
-      // 前缀 `.dshmind-set__*`（BEM 风），**另起一套、不与看板的 `.dshmind-*` 混用**：
-      // 设置页住在官方设置面板里，与看板面板是两件东西，样式也该各归各的。
-      //
-      // 目标：与官方设置页其它分区（通用 / 模型 / 插件 …）**长得像一家人**。
-      // 参考实现是另一插件的参考实现（同一个宿主、同一个槽位，
-      // 已在官方客户端跑通）：它的做法是 —— 每行「左标题 + 说明 / 右控件」、行间用
-      // 那条 `border-l2` 别名令牌画 `1px solid` 分隔、圆角与淡背景也走别名令牌、
-      // 说明用 `label-tertiary`、控件给类名而不是裸默认样式。这里照同一套做法。
-      //
-      // 令牌纪律照旧：每个 `var(--dsw-*)` 都带兜底值（令牌改名只掉外观，不掉功能）。
-      '.dshmind-set__{box-sizing:border-box;display:flex;flex-direction:column;gap:4px;width:100%;',
-      'padding:2px 0 12px;color:var(--dsw-alias-label-primary,#1a2233);font-size:13px;line-height:20px;',
-      "font-family:var(--ds-font-family-sans,-apple-system,'Segoe UI',system-ui,sans-serif)}",
-      '.dshmind-set__ *{box-sizing:border-box}',
-      // 标题与说明：标题与官方分区标题同尺，说明只留一句（原来那一大段收短）。
-      '.dshmind-set__title{margin:0 0 2px;font-size:15px;line-height:24px;font-weight:600;',
-      'color:var(--dsw-alias-label-primary,#1a2233)}',
-      '.dshmind-set__lede{margin:0 0 10px;font-size:12.5px;line-height:19px;',
-      'color:var(--dsw-alias-label-tertiary,#6b7a99);overflow-wrap:anywhere}',
-      // 未接入：**一条紧凑提示**，不抢主版面（原来它占的比正式内容还大）。
-      '.dshmind-set__notice{display:flex;flex-direction:column;gap:6px;margin:0 0 10px;padding:10px 12px;',
-      'border:1px solid var(--dsw-alias-border-l2,#d3dcea);border-left:3px solid var(--dsw-alias-state-warn-primary,#c47f17);',
-      'border-radius:8px;background:var(--dsw-alias-bg-layer-2,#fff);font-size:12.5px;line-height:19px}',
-      '.dshmind-set__noticeText{color:var(--dsw-alias-label-secondary,#4a5a78);overflow-wrap:anywhere}',
-      '.dshmind-set__noticeCmd{margin:0;padding:6px 8px;border-radius:6px;cursor:text;-webkit-user-select:text;user-select:text;',
-      'background:var(--dsw-alias-markdown-code-block,#f5f5f5);border:.5px solid var(--dsw-alias-border-l1,#0000001f);',
-      'font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:11.5px;',
-      'color:var(--dsw-alias-label-secondary,#4a5a78);overflow-wrap:anywhere}',
-      // 行：与官方分区同款「左标题 + 说明 / 右控件」，行间细分隔线。
-      '.dshmind-set__rows{display:flex;flex-direction:column;border-top:1px solid var(--dsw-alias-border-l2,#d3dcea)}',
-      '.dshmind-set__row{display:flex;align-items:center;gap:16px;padding:12px 0;',
-      'border-bottom:1px solid var(--dsw-alias-border-l2,#d3dcea)}',
-      '.dshmind-set__texts{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:2px}',
-      '.dshmind-set__label{font-size:14px;line-height:22px;color:var(--dsw-alias-label-primary,#1a2233)}',
-      '.dshmind-set__hint{font-size:12.5px;line-height:18px;color:var(--dsw-alias-label-tertiary,#6b7a99);',
-      'overflow-wrap:anywhere}',
-      '.dshmind-set__control{flex:0 0 auto;display:flex;align-items:center;gap:8px;min-width:0}',
-      '.dshmind-set__value{min-width:0;display:flex;align-items:center;gap:6px;flex-wrap:wrap;overflow-wrap:anywhere}',
-      // 控件：圆角 / 边框 / 背景 / focus 态对齐宿主观感，且**都有类名**（不许裸默认样式）。
-      '.dshmind-set__select,.dshmind-set__number{height:32px;padding:0 10px;border-radius:8px;font-size:13px;',
-      'font-family:inherit;color:var(--dsw-alias-label-primary,#1a2233);background:var(--dsw-alias-bg-layer-2,#fff);',
-      'border:1px solid var(--dsw-alias-border-l2,#d3dcea)}',
-      '.dshmind-set__number{width:112px}',
-      '.dshmind-set__select:focus,.dshmind-set__number:focus{outline:none;',
-      'border-color:var(--dsw-alias-brand-primary,#4D6BFE)}',
+      '.dshmind-set__{box-sizing:border-box;width:100%;max-width:880px;padding:4px 0 20px;color:var(--dsw-alias-label-primary,#1a2233);font:13px/1.6 var(--ds-font-family-sans,system-ui,sans-serif)}',
+      '.dshmind-set__ *{box-sizing:border-box}.dshmind-set__header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:24px}',
+      '.dshmind-set__title{margin:0 0 4px;font-size:18px;line-height:26px;font-weight:600}.dshmind-set__lede{margin:0;color:var(--dsw-alias-label-secondary,#61666b);font-size:13px}',
+      '.dshmind-set__section{margin:0 0 28px;padding-top:20px;border-top:1px solid var(--dsw-alias-border-l2,#d3dcea)}',
+      '.dshmind-set__subtitle{font-size:15px;line-height:24px;font-weight:600;margin:0 0 6px}.dshmind-set__groupTitle{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:22px 0 0;font-size:13px;font-weight:600}',
+      '.dshmind-set__rows{display:flex;flex-direction:column}.dshmind-set__row{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:15px 0;border-bottom:1px solid var(--dsw-alias-border-l2,#d3dcea)}',
+      '.dshmind-set__texts{flex:1 1 auto;min-width:0}.dshmind-set__label{display:block;margin-bottom:3px;font-size:14px;font-weight:500;color:var(--dsw-alias-label-primary,#1a2233)}',
+      '.dshmind-set__hint{font-size:12px;line-height:1.65;color:var(--dsw-alias-label-secondary,#61666b);overflow-wrap:anywhere}',
+      '.dshmind-set__control{display:flex;align-items:center;gap:8px;flex:0 0 auto;min-width:0;max-width:100%}.dshmind-set__value{display:flex;align-items:center;gap:7px;min-width:0;flex-wrap:wrap;overflow-wrap:anywhere}',
+      '.dshmind-set__select,.dshmind-set__number{height:34px;max-width:100%;padding:0 10px;font:inherit;border-radius:6px;border:1px solid var(--dsw-alias-border-l2,#d3dcea);background:var(--dsw-alias-bg-layer-2,#fff);color:inherit}',
+      '.dshmind-set__select{min-width:160px}.dshmind-set__number{width:96px}.dshmind-set__select:focus-visible,.dshmind-set__number:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4d6bfe);outline-offset:2px}',
       '.dshmind-set__select:disabled,.dshmind-set__number:disabled{opacity:.55;cursor:default}',
-      // 按钮：主次分档 —— 保存＝主（实心），重新读取 / 关闭＝次（描边）。
-      '.dshmind-set__actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:14px}',
-      '.dshmind-set__btn{height:32px;padding:0 14px;border-radius:8px;cursor:pointer;font-size:13px;',
-      'font-family:inherit;border:1px solid var(--dsw-alias-border-l2,#d3dcea);',
-      'background:var(--dsw-alias-bg-layer-2,#fff);color:var(--dsw-alias-label-primary,#1a2233);',
-      'transition:background .15s,border-color .15s,color .15s}',
-      '.dshmind-set__btn:hover{background:var(--dsw-alias-interactive-bg-hover,#eff1f5)}',
-      '.dshmind-set__btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4D6BFE);outline-offset:1px}',
-      '.dshmind-set__btn:disabled{opacity:.55;cursor:default}',
-      '.dshmind-set__btn--primary{border-color:transparent;font-weight:500;',
-      'background:var(--dsw-alias-brand-primary,#4D6BFE);color:var(--dsw-alias-label-primary-inverted,#fff)}',
-      '.dshmind-set__btn--primary:hover{background:var(--dsw-alias-brand-primary-hover,#3F5BE8)}',
-      // 坏值 / 提示条：告警与成功各一色，两者都必须**一眼可见**。
-      '.dshmind-set__bad{margin:10px 0 0;padding:9px 11px;border-radius:8px;font-size:12.5px;line-height:19px;',
-      'border:1px solid var(--dsw-alias-state-error-primary,#d54941);',
-      'background:var(--dsw-alias-state-error-tertiary,#fdecea);color:var(--dsw-alias-state-error-primary,#d54941);',
-      'overflow-wrap:anywhere}',
-      '.dshmind-set__toast{margin:12px 0 0;padding:9px 11px;border-radius:8px;font-size:12.5px;line-height:19px;',
-      'overflow-wrap:anywhere}',
-      '.dshmind-set__toast--warn{border:1px solid var(--dsw-alias-state-error-primary,#d54941);',
-      'background:var(--dsw-alias-state-error-tertiary,#fdecea);color:var(--dsw-alias-state-error-primary,#d54941)}',
-      '.dshmind-set__toast--ok{border:1px solid var(--dsw-alias-state-success-primary,#2f9e44);',
-      'background:var(--dsw-alias-state-success-tertiary,#eaf7ec);color:var(--dsw-alias-state-success-primary,#2f9e44)}',
-      // 页脚：命令与设置文件路径 —— 字号最小、色最淡，属于"想看才看"的信息。
-      '.dshmind-set__foot{display:flex;gap:12px;flex-wrap:wrap;margin-top:14px;padding-top:10px;',
-      'border-top:1px solid var(--dsw-alias-border-l2,#d3dcea);font-size:11.5px;line-height:17px;',
-      'color:var(--dsw-alias-label-caption,#8b93a7)}',
-      '.dshmind-set__mono{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Menlo,monospace);',
-      'overflow-wrap:anywhere}',
-      // ── 2026-10-17 设置页优化批（视觉/交互收口）──
-      // 态点：设置页**自己**的点。原来复用看板的 `.dshmind-dot`，可那条规则住在看板子树的
-      // <style> 里 —— 看板没挂载时设置页的点**没有尺寸**（截图实测：右栏只剩文字没有点）。
-      '.dshmind-set__dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex:0 0 auto}',
-      // 分区边界：失联保险与 Lead 调度授权是两块业务，要有看得见的分隔与标题层级
-      // （原来 h3 与 h2 同尺同样式、紧跟页脚，两区挤成一团）。
-      '.dshmind-set__section{margin-top:26px;padding-top:18px;border-top:1px solid var(--dsw-alias-border-l2,#d3dcea)}',
-      '.dshmind-set__subtitle{margin:0 0 2px;font-size:13.5px;line-height:20px;font-weight:600;',
-      'color:var(--dsw-alias-label-primary,#1a2233)}',
-      // 长文本字段行：标题与输入框**上下**排，输入框吃满行宽 —— 右栏定宽会被 flex 挤到截断
-      // （实测「对话 2026-10-16」在 340px 右栏里显示不全）。
-      '.dshmind-set__row--field{flex-direction:column;align-items:stretch;gap:6px}',
-      '.dshmind-set__row--field .dshmind-set__control{width:100%}',
-      // ⚠️ 必须排在 `.dshmind-set__number{width:112px}` **之后**（同权重后写的赢）。
-      '.dshmind-set__text{width:100%;max-width:420px}',
-      // 页脚里的「关闭」钮靠右（与左侧的命令/设置文件信息分开）。
-      '.dshmind-set__foot .dshmind-set__btn{margin-left:auto}',
+      '.dshmind-set__row--field{display:block}.dshmind-set__row--field .dshmind-set__control{width:100%;margin-top:9px}.dshmind-set__text{width:100%;max-width:none}',
+      '.dshmind-set__actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:16px}.dshmind-set__editState{font-size:12px;color:var(--dsw-alias-label-secondary,#61666b);margin-right:auto}',
+      '.dshmind-set__btn{min-height:32px;padding:5px 13px;font:inherit;font-size:12px;border-radius:6px;border:1px solid var(--dsw-alias-border-l2,#d3dcea);background:var(--dsw-alias-bg-layer-2,#fff);color:inherit;cursor:pointer}',
+      '.dshmind-set__btn:hover{background:var(--dsw-alias-interactive-bg-hover,#eff1f5)}.dshmind-set__btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4d6bfe);outline-offset:2px}.dshmind-set__btn:disabled{opacity:.45;cursor:default}',
+      '.dshmind-set__btn--primary{background:var(--dsw-alias-brand-primary,#4d6bfe);border-color:transparent;color:var(--dsw-alias-label-primary-inverted,#fff);font-weight:500}.dshmind-set__btn--primary:hover{background:var(--dsw-alias-brand-primary-hover,#3f5be8)}',
+      '.dshmind-set__notice,.dshmind-set__bad,.dshmind-set__toast{margin:12px 0;padding:10px 12px;border-radius:6px;font-size:12px;line-height:1.7;overflow-wrap:anywhere}',
+      '.dshmind-set__notice{border:1px solid var(--dsw-alias-border-l2,#d3dcea);background:var(--dsw-alias-bg-layer-2,#f7f8fa)}.dshmind-set__noticeText{color:var(--dsw-alias-label-secondary,#61666b)}',
+      '.dshmind-set__noticeCmd{display:block;margin-top:6px;font-family:var(--ds-font-family-code,ui-monospace,monospace);font-size:11px;overflow-wrap:anywhere;user-select:text}',
+      '.dshmind-set__bad,.dshmind-set__toast--warn{border:1px solid var(--dsw-alias-state-error-primary,#d54941);color:var(--dsw-alias-state-error-primary,#d54941);background:var(--dsw-alias-state-error-tertiary,#fdecea)}',
+      '.dshmind-set__toast--ok{border:1px solid var(--dsw-alias-state-success-primary,#2f9e44);color:var(--dsw-alias-state-success-primary,#2f9e44);background:var(--dsw-alias-state-success-tertiary,#eaf7ec)}',
+      '.dshmind-set__details{margin-top:16px;color:var(--dsw-alias-label-secondary,#61666b);font-size:12px}.dshmind-set__details>summary{cursor:pointer;padding:4px 0;max-width:100%}.dshmind-set__details[open]>summary{margin-bottom:8px}.dshmind-set__details p{margin:7px 0}',
+      '.dshmind-set__details .dshmind-set__row{align-items:flex-start;padding:9px 0}.dshmind-set__details .dshmind-set__control{flex:1 1 55%;overflow-wrap:anywhere}.dshmind-set__details .dshmind-set__label{font-size:12px}',
+      '.dshmind-set__status{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:400;color:var(--dsw-alias-label-secondary,#61666b)}.dshmind-set__dot{display:inline-block;width:7px;height:7px;border-radius:50%;flex:0 0 auto}',
+      '.dshmind-set__foot{display:flex;align-items:center;gap:12px;justify-content:space-between;padding-top:16px;border-top:1px solid var(--dsw-alias-border-l2,#d3dcea)}.dshmind-set__foot p{margin:0}.dshmind-set__mono{font-family:var(--ds-font-family-code,ui-monospace,monospace);overflow-wrap:anywhere}',
+      '@media(max-width:560px){.dshmind-set__row{align-items:flex-start;flex-direction:column;gap:10px}.dshmind-set__row .dshmind-set__control{width:100%}.dshmind-set__select{width:100%}.dshmind-set__header{gap:12px}.dshmind-set__actions{gap:8px}.dshmind-set__editState{flex-basis:100%}.dshmind-set__details .dshmind-set__control{flex:auto}.dshmind-set__groupTitle{align-items:flex-start;flex-wrap:wrap}}',
     ].join('');
 
     /** 注入设置页样式的 `<style>` 标记（判重用），与宿主里 `installStyle` 的做法同源。 */
@@ -4798,13 +4733,18 @@ window.__ModuleLoader__.load({
      * （右栏定宽会被 flex 挤到截断，2026-10-17 截图实测）。
      */
     function 设置行(key, 标题, 说明, 控件, 变体) {
+      var id = 'dshmind-setting-' + key;
+      var controls = arr(Array.isArray(控件) ? 控件 : [控件]).map(function (control) {
+        return control && control.props && ['input', 'select', 'textarea'].indexOf(control.type) >= 0
+          ? h(control.type, Object.assign({}, control.props, { id: id, 'aria-describedby': 说明 ? id + '-hint' : undefined }), control.props.children) : control;
+      });
       return h('div', { key: key, className: 'dshmind-set__row' + (变体 === 'field' ? ' dshmind-set__row--field' : '') }, [
         h('div', { key: 't', className: 'dshmind-set__texts' }, [
-          h('div', { key: 'l', className: 'dshmind-set__label' }, 标题),
-          说明 ? h('div', { key: 'h', className: 'dshmind-set__hint' }, 说明) : null,
-        ].filter(Boolean)),
-        控件 ? h('div', { key: 'c', className: 'dshmind-set__control' }, 控件) : null,
-      ].filter(Boolean));
+          h('label', { key: 'l', className: 'dshmind-set__label', htmlFor: id }, 标题),
+          说明 ? h('div', { key: 'h', id: id + '-hint', className: 'dshmind-set__hint' }, 说明) : null,
+        ]),
+        控件 ? h('div', { key: 'c', className: 'dshmind-set__control' }, controls) : null,
+      ]);
     }
     /** 只读读数行：值是文字，没有控件（也不产生空的右侧栏）。与 `设置行` 同排法。 */
     function 设置读数行(key, 标题, 说明, 值节点) {
@@ -4838,6 +4778,8 @@ window.__ModuleLoader__.load({
       // ⚠️ 读数来自**模块级 store**（由 `apply` 的裸 setInterval 轮询喂），**不来自 effect**：
       // 这个宿主的 `useEffect` 很可能是空实现 ⇒ 挂在它上面的取数永远不会跑。
       var snap = useStore(设置store);
+      var actionLocks = useState(function () { return { policy: false, delegation: false, refreshing: false }; })[0];
+      var refreshing = useState(false);
       // ══ 调度授权区：订阅 / 草稿 / 保存链 ══
       调度页已访问 = true;
       var 调度快照 = useStore(调度store);
@@ -4858,15 +4800,34 @@ window.__ModuleLoader__.load({
       }
 
       function 改调度表(key, value) {
-        if (调度提示.saving) return;
+        if (actionLocks.delegation || 调度提示.saving) return;
         var next = Object.assign({}, 调度表);
         next[key] = value;
-        设调度已改(true);
+        var nextConfig = { mode: next.mode, projects: String(next.projects).split(/[,，\s]+/).filter(Boolean).filter(function (p, i, list) { return list.indexOf(p) === i; }).sort(), authorizationRef: String(next.authorizationRef).trim() };
+        设调度已改(!调度读数 || JSON.stringify(nextConfig) !== JSON.stringify(调度读数.persistence.config));
         设调度表(next);
       }
 
+      function 调度配置草稿() {
+        return { mode: 调度表.mode, projects: String(调度表.projects).split(/[,，\s]+/).filter(Boolean).filter(function (p, i, list) { return list.indexOf(p) === i; }).sort(), authorizationRef: String(调度表.authorizationRef).trim() };
+      }
+      var 调度有修改 = !!调度读数 && JSON.stringify(调度配置草稿()) !== JSON.stringify(调度读数.persistence.config);
+      var 调度外部更新 = !!调度读数 && 调度已改 && 调度表.fingerprint !== 调度读数.persistence.fingerprint;
+      function 重置调度() {
+        if (!调度读数 || actionLocks.delegation) return;
+        var config = 调度读数.persistence.config;
+        设调度表({ mode: config.mode, projects: arr(config.projects).join(', '), authorizationRef: config.authorizationRef || '', fingerprint: 调度读数.persistence.fingerprint });
+        设调度已改(false);
+        设调度提示({ saving: false, text: '', ok: false });
+      }
+
       function 保存调度(撤回) {
-        if (调度提示.saving || !调度表.fingerprint || !调度读数) return;
+        if (actionLocks.delegation || 调度提示.saving || !调度表.fingerprint || !调度读数) return;
+        if (!撤回 && 调度外部更新) {
+          设调度提示({ saving: false, text: '授权配置已在别处更新，草稿已保留。请先采用当前配置再修改。', ok: false });
+          return;
+        }
+        if (!撤回 && !调度有修改) return;
         var projects = String(调度表.projects).split(/[,，\s]+/).filter(Boolean).filter(function (p, i, list) { return list.indexOf(p) === i; }).sort();
         if (撤回) projects = arr(调度读数.persistence.config.projects).slice();
         var config = { mode: 撤回 ? 'explicit-user' : 调度表.mode, projects: projects, authorizationRef: 撤回 ? 调度读数.persistence.config.authorizationRef : String(调度表.authorizationRef).trim() };
@@ -4874,6 +4835,7 @@ window.__ModuleLoader__.load({
           设调度提示({ saving: false, text: '未提交：Lead 按需调度必须填写项目范围和授权依据。', ok: false });
           return;
         }
+        actionLocks.delegation = true;
         设调度提示({ saving: true, text: '提交后将重新读取新的运行策略；超时不表示没有保存。', ok: false });
         writeDelegation(config, 调度表.fingerprint).then(function (out) {
           var post = out.post;
@@ -4905,6 +4867,7 @@ window.__ModuleLoader__.load({
             }
             text += ' 审计：' + (audit.state === 'recorded' ? '已记录' : audit.state === 'failed' ? '失败' : '未知') + '。';
           }
+          actionLocks.delegation = false;
           设调度提示({ saving: false, text: text, ok: ok });
         });
       }
@@ -4943,13 +4906,46 @@ window.__ModuleLoader__.load({
         }
       }
 
+      function 当前策略表() {
+        if (!读) return null;
+        return { 开关: 开关态Of(读) === false ? '否' : '是', 小时: numOf(读.生效响应期限小时) === null ? '' : String(numOf(读.生效响应期限小时)), 介入度: line(读.介入度, '') || '放权', 复核免审: boolOf(读.复核免审) === true ? '是' : '否' };
+      }
+      var 当前策略 = 当前策略表();
+      var 策略有修改 = !!当前策略 && JSON.stringify(form) !== JSON.stringify(当前策略);
+      var 当前策略键 = 当前策略 ? String(开关态Of(读)) + '/' + String(numOf(读.生效响应期限小时)) + '/' + 当前策略.介入度 + '/' + 当前策略.复核免审 : '';
+      var 策略外部更新 = !!读 && 人改过 && 同步.键 !== 当前策略键;
+      function 改策略(key, value) {
+        if (actionLocks.policy || !读) return;
+        var next = Object.assign({}, form); next[key] = value;
+        setForm(next);
+        set人改过(JSON.stringify(next) !== JSON.stringify(当前策略));
+      }
+      function 重置策略() {
+        if (!当前策略 || actionLocks.policy) return;
+        setForm(当前策略);
+        set同步(Object.assign({ 键: 当前策略键 }, 当前策略));
+        set人改过(false);
+        set提示({ 保存中: false, 提示: '', 提示调: 'warn' });
+      }
+      function 手动刷新() {
+        if (actionLocks.refreshing || actionLocks.policy || actionLocks.delegation) return;
+        actionLocks.refreshing = true; refreshing[1](true);
+        Promise.all([刷新设置(), 刷新调度()]).then(function () { actionLocks.refreshing = false; refreshing[1](false); });
+      }
+
       function 保存() {
+        if (actionLocks.policy || 提示.保存中) return;
         // 未接入时没有回读真源：框里的值只是硬编码草稿，拿它去写等于"替盘上瞎编"。
         // 按钮已禁用，这道守的是 Enter 键那条旁路。
         if (!snap.读数) {
           set提示({ 保存中: false, 提示: '没写进去：还没读到当前设置（未接入），先「重新读取」。', 提示调: 'warn' });
           return;
         }
+        if (策略外部更新) {
+          set提示({ 保存中: false, 提示: '当前设置已在别处更新，草稿已保留。请先采用当前配置再修改。', 提示调: 'warn' });
+          return;
+        }
+        if (!策略有修改) return;
         var ctx = activeCtx;
         var session = resolveSessionId(ctx);
         if (!session.id) {
@@ -4991,6 +4987,7 @@ window.__ModuleLoader__.load({
         // 只在**人改了这一项**时才写：不把部署原本没写过的键（生效值来自出厂层）顺手写进私有层。
         var 读档 = line(obj(读) && 读.介入度, '') || '放权';
         var 读免 = boolOf(obj(读) && 读.复核免审) === true;
+        actionLocks.policy = true;
         set提示({ 保存中: true, 提示: '', 提示调: 'warn' });
         writePresence({
           ctx: ctx,
@@ -5000,6 +4997,7 @@ window.__ModuleLoader__.load({
           介入度: 介入度 !== 读档 ? 介入度 : undefined,
           复核免审: (form.复核免审 === '是') !== 读免 ? (form.复核免审 === '是') : undefined,
         }).then(function (out) {
+          actionLocks.policy = false;
           if (!out.ok) {
             // 拒绝也要**照旧显示盘上现在是什么**（走 store 的最近一次读数），并明说没写进去。
             set提示({ 保存中: false, 提示: '没写进去：宿主拒绝了（' + out.error + '）', 提示调: 'warn' });
@@ -5019,7 +5017,11 @@ window.__ModuleLoader__.load({
             提示: 差 ? 差 : ('已保存，且回读一致：' + 生效读数行(out.回读.读数)),
             提示调: 差 ? 'warn' : 'ok',
           });
-          if (!差) set人改过(false); // 回读已确认 ⇒ 表单可以重新跟着读数走
+          if (!差) {
+            // 回读可能只规范了输入格式（如 072→72），也要用已确认值清除草稿。
+            set同步(Object.assign({}, 同步, { 键: '' }));
+            set人改过(false);
+          }
         });
       }
 
@@ -5074,7 +5076,7 @@ window.__ModuleLoader__.load({
 
       // 有读数才渲染读数与表单：没读数时不留空块（空块在版面上就是"坏了"）。
       // 读数只留「当前生效值」一行：附注里已含开关/期限/来源/当前态，
-      // 原来的「来源」行是同一份信息的第二次排版（层序说明挪进顶部 lede）。
+      // 来源、路径与层序一起放进配置详情，主界面只保留当前状态。
       var 读数块 = 读
         ? h('div', { key: 'rows', className: 'dshmind-set__rows' }, [
             设置读数行('now', '当前生效值', 读数附注(读), [
@@ -5103,8 +5105,8 @@ window.__ModuleLoader__.load({
       // 未接入 ⇒ 控件给空值 + 「未读到」占位；真值只在有回读时出现。
       var 显示开关 = 未接入 ? '' : form.开关;
       var 显示小时 = 未接入 ? '' : form.小时;
-      var 表单块 = h('div', { key: 'rows2', className: 'dshmind-set__rows' }, [
-        设置行('sw', '失联保险', '关掉后不再判定失联（机制停用会被如实记录）', [
+      var 策略行 = [
+        设置行('sw', '失联保险', '超过响应期限未交互时，暂停自治操作。', [
           h('select', {
             key: 'sel', className: 'dshmind-set__select',
             'aria-label': '失联保险',
@@ -5112,16 +5114,15 @@ window.__ModuleLoader__.load({
             disabled: 表单禁用,
             onChange: function (event) {
               var next = event && event.target ? String(event.target.value) : '是';
-              set人改过(true); // 2026-10-14 审查 P1-10：人碰过 ⇒ 轮询回读不许再刷掉表单
-              setForm({ 开关: next === '否' ? '否' : '是', 小时: form.小时, 介入度: form.介入度, 复核免审: form.复核免审 });
+              改策略('开关', next === '否' ? '否' : '是');
             },
           }, [
             ...(未接入 ? [h('option', { key: 'x', value: '' }, '未读到（未接入）')] : []),
-            h('option', { key: 'y', value: '是' }, '是（开启）'),
-            h('option', { key: 'n', value: '否' }, '否（关闭）'),
+            h('option', { key: 'y', value: '是' }, '开启'),
+            h('option', { key: 'n', value: '否' }, '关闭'),
           ]),
         ]),
-        设置行('hrs', '响应期限小时', '自最后一次交互起超过这个时长未响应 ⇒ 自动标记失联', [
+        设置行('hrs', '响应期限', '自最后一次交互起计算；关闭保险后不判定失联。', [
           h('input', {
             key: 'inp', className: 'dshmind-set__number',
             type: 'number', min: 1, step: 1,
@@ -5130,24 +5131,23 @@ window.__ModuleLoader__.load({
             value: 显示小时,
             disabled: 表单禁用,
             onChange: function (event) {
-              set人改过(true); // 2026-10-14 审查 P1-10：同上，人碰过就不再被回读覆盖
-              setForm({ 开关: form.开关, 小时: event && event.target ? String(event.target.value) : '', 介入度: form.介入度, 复核免审: form.复核免审 });
+              改策略('小时', event && event.target ? String(event.target.value) : '');
             },
             onKeyDown: function (event) {
               if (event && event.key === 'Enter') 保存();
             },
           }),
+          h('span', { key: 'unit', className: 'dshmind-set__hint' }, '小时'),
         ]),
         // v2 条目14/17：介入度三档 + 复核免审全局开关（设置项的语义见条目14/17/24）。
-        设置行('intervention', '介入度', '放权=自治写直落留痕；预审=四类高风险（改岗位卡/发布能力/物理删除记忆/改设置）等主权者放行；审批=每条自治写都等放行', [
+        设置行('intervention', '介入度', 未接入 ? '读取后可选择操作的确认方式。' : ({ 放权: '自治写入直接执行并留痕。', 预审: '改岗位、发布能力、物理删除记忆和改设置需先确认。', 审批: '每次自治写入都需先确认。' }[form.介入度] || '请选择确认方式。'), [
           h('select', {
             key: 'sel', className: 'dshmind-set__select',
             'aria-label': '介入度',
             value: 未接入 ? '' : form.介入度,
             disabled: 表单禁用,
             onChange: function (event) {
-              set人改过(true);
-              setForm({ 开关: form.开关, 小时: form.小时, 介入度: event && event.target ? String(event.target.value) : '放权', 复核免审: form.复核免审 });
+              改策略('介入度', event && event.target ? String(event.target.value) : '放权');
             },
           }, [
             ...(未接入 ? [h('option', { key: 'x', value: '' }, '未读到（未接入）')] : []),
@@ -5156,113 +5156,106 @@ window.__ModuleLoader__.load({
             h('option', { key: 'a', value: '审批' }, '审批'),
           ]),
         ]),
-        设置行('exempt', '复核免审', '全局开关：允许 Lead 对节点登记复核豁免（不按任务风险分档）', [
+        设置行('exempt', '复核免审', '允许 Lead 为任务登记复核豁免；关闭时仍须复核。', [
           h('select', {
             key: 'sel', className: 'dshmind-set__select',
             'aria-label': '复核免审',
             value: 未接入 ? '' : form.复核免审,
             disabled: 表单禁用,
             onChange: function (event) {
-              set人改过(true);
-              setForm({ 开关: form.开关, 小时: form.小时, 介入度: form.介入度, 复核免审: event && event.target && event.target.value === '是' ? '是' : '否' });
+              改策略('复核免审', event && event.target && event.target.value === '是' ? '是' : '否');
             },
           }, [
             ...(未接入 ? [h('option', { key: 'x', value: '' }, '未读到（未接入）')] : []),
-            h('option', { key: 'n', value: '否' }, '否（默认）'),
-            h('option', { key: 'y', value: '是' }, '是（允许豁免）'),
+            h('option', { key: 'n', value: '否' }, '关闭（默认）'),
+            h('option', { key: 'y', value: '是' }, '允许豁免'),
           ]),
         ]),
-      ]);
+      ];
 
-      var 调度块 = h('section', { key: 'delegation', 'data-dshmind': 'delegation-settings', className: 'dshmind-set__section' }, [
-        h('h3', { key: 'h', className: 'dshmind-set__subtitle' }, 'Lead 调度授权'),
-        h('p', { key: 'scope', className: 'dshmind-set__lede' }, '写入当前 profile 的部署级授权，仅影响以后新派工的准入与后续提示词；撤回不会终止已有成员。'),
-        h('p', { key: 'boundary', className: 'dshmind-set__hint' }, '仅人侧设置入口提供写入，模型工具不提供改授权动作；本机 shell 与凭据的隔离仍由宿主权限负责。'),
-        !调度读数 ? h('div', { key: 'error', className: 'dshmind-set__notice' }, 调度快照.phase === 'reading' ? '正在读取调度授权…' : '调度设置未接入：' + 调度快照.error) : null,
-        调度读数 ? h('div', { key: 'readings', className: 'dshmind-set__rows' }, [
-          设置读数行('delegation-current', '当前运行授权', '预览项目 ' + line(调度读数.runtime.project, '未知'), (调度读数.runtime.mode === 'lead-discretion' ? 'Lead 按需选择' : '仅用户点名') + ' · ' + (调度读数.runtime.disposed ? '已卸载' : 调度读数.application && 调度读数.application.state === 'confirmed' ? '盘面与运行一致' : '运行应用未确认')),
-          设置读数行('delegation-source', '授权真源', '不另存组织私有配置', 调度读数.persistence.source),
-          设置读数行('delegation-fingerprint', '盘面 / 运行指纹', '保存后必须重新 GET 两面核对，提示词实际应用仍待下一轮验证', 调度读数.persistence.fingerprint.slice(0, 12) + ' / ' + 调度读数.runtime.fingerprint.slice(0, 12)),
-        ]) : null,
+      var 调度块 = h('section', { key: 'delegation', 'data-dshmind': 'delegation-settings', className: 'dshmind-set__section', 'aria-labelledby': 'dshmind-delegation-title', 'aria-busy': 调度提示.saving }, [
+        h('h3', { key: 'h', id: 'dshmind-delegation-title', className: 'dshmind-set__subtitle' }, 'Lead 调度授权'),
+        h('p', { key: 'scope', className: 'dshmind-set__lede' }, '决定 Lead 是否可自行创建成员；撤回不会终止已有成员。'),
+        !调度读数 ? h('div', { key: 'error', role: 调度快照.phase === 'reading' ? 'status' : 'alert', className: 'dshmind-set__notice' }, 调度快照.phase === 'reading' ? '正在读取调度授权…' : '调度设置未接入：' + 调度快照.error) : null,
+        调度读数 ? h('p', { key: 'runtime', className: 'dshmind-set__hint' }, '当前运行：' + (调度读数.runtime.mode === 'lead-discretion' ? 'Lead 按需选择' : '仅用户点名') + ' · ' + (调度读数.runtime.disposed ? '插件已卸载' : 调度读数.application && 调度读数.application.state === 'confirmed' ? '运行配置已同步' : '等待运行端确认')) : null,
         h('div', { key: 'fields', className: 'dshmind-set__rows' }, [
-          设置行('delegation-mode', '调度模式', '仅用户点名 = 官方默认，不是强制终止或禁用所有成员', h('select', {
-            className: 'dshmind-set__select', 'aria-label': '调度模式', value: 调度表.mode, disabled: 调度提示.saving || !调度读数,
+          设置行('delegation-mode', '调度模式', !调度读数 ? '读取后可选择成员派工方式。' : 调度表.mode === 'lead-discretion' ? '在授权项目内按需要派工。' : '按用户的明确指令派工。', h('select', {
+            className: 'dshmind-set__select', 'aria-label': '调度模式', value: 调度读数 ? 调度表.mode : '', disabled: 调度提示.saving || !调度读数,
             onChange: function (event) { 改调度表('mode', event.target.value); },
-          }, [h('option', { value: 'explicit-user' }, '仅用户点名（官方默认）'), h('option', { value: 'lead-discretion' }, 'Lead 按需选择')])),
-          设置行('delegation-projects', '授权项目', '项目键用逗号分隔；* 表示所有项目', h('input', {
-            type: 'text', className: 'dshmind-set__number dshmind-set__text', 'aria-label': '授权项目',
-            value: 调度表.projects, disabled: 调度提示.saving || !调度读数,
-            onChange: function (event) { 改调度表('projects', event.target.value); },
-            onKeyDown: function (event) { if (event && event.key === 'Enter') 保存调度(false); },
-          }), 'field'),
-          设置行('delegation-ref', '授权依据', '由部署者填写或确认，不由模型从记忆补造', h('input', {
-            type: 'text', className: 'dshmind-set__number dshmind-set__text', 'aria-label': '授权依据',
-            value: 调度表.authorizationRef, disabled: 调度提示.saving || !调度读数,
-            onChange: function (event) { 改调度表('authorizationRef', event.target.value); },
-            onKeyDown: function (event) { if (event && event.key === 'Enter') 保存调度(false); },
-          }), 'field'),
+          }, [!调度读数 ? h('option', { value: '' }, '未读到（未接入）') : null, h('option', { value: 'explicit-user' }, '仅用户点名'), h('option', { value: 'lead-discretion' }, 'Lead 按需选择')])),
+          h('details', { key: 'scope-fields', className: 'dshmind-set__details', open: !!调度读数 && 调度表.mode === 'lead-discretion' }, [
+            h('summary', { key: 'label' }, '项目范围与授权依据'),
+            设置行('delegation-projects', '授权项目', '项目键用逗号分隔；* 表示所有项目。', h('input', {
+              type: 'text', className: 'dshmind-set__number dshmind-set__text', 'aria-label': '授权项目', placeholder: '例如 plugins, my-project',
+              value: 调度读数 ? 调度表.projects : '', disabled: 调度提示.saving || !调度读数,
+              onChange: function (event) { 改调度表('projects', event.target.value); },
+              onKeyDown: function (event) { if (event && event.key === 'Enter') 保存调度(false); },
+            }), 'field'),
+            设置行('delegation-ref', '授权依据', '填写本次授权的来源或说明。', h('input', {
+              type: 'text', className: 'dshmind-set__number dshmind-set__text', 'aria-label': '授权依据', placeholder: '例如：本次对话中确认的授权',
+              value: 调度读数 ? 调度表.authorizationRef : '', disabled: 调度提示.saving || !调度读数,
+              onChange: function (event) { 改调度表('authorizationRef', event.target.value); },
+              onKeyDown: function (event) { if (event && event.key === 'Enter') 保存调度(false); },
+            }), 'field'),
+          ]),
         ]),
-        String(调度表.projects).split(/[,，\s]+/).indexOf('*') >= 0 ? h('div', { key: 'global', className: 'dshmind-set__notice' }, '⚠ 全项目授权：* 会命中当前 profile 下的所有项目。') : null,
+        调度表.mode === 'lead-discretion' && String(调度表.projects).split(/[,，\s]+/).indexOf('*') >= 0 ? h('div', { key: 'global', className: 'dshmind-set__notice' }, '全项目授权：* 会命中当前 profile 下的所有项目。') : null,
+        调度外部更新 ? h('p', { key: 'changed', role: 'status', className: 'dshmind-set__notice' }, '授权配置已在别处更新，当前草稿已保留。采用当前配置后可继续修改。') : null,
         h('div', { key: 'actions', className: 'dshmind-set__actions' }, [
-          h('button', { type: 'button', className: 'dshmind-set__btn dshmind-set__btn--primary', disabled: 调度提示.saving || !调度读数 || !调度表.fingerprint, onClick: function () { 保存调度(false); } }, 调度提示.saving ? '调度提交中…' : '保存调度授权'),
-          h('button', { type: 'button', className: 'dshmind-set__btn', disabled: 调度提示.saving || !调度读数, onClick: function () { 保存调度(true); } }, '撤回自主调度'),
-          h('button', { type: 'button', className: 'dshmind-set__btn', onClick: function () { 刷新调度(); } }, '重新读取调度'),
-          h('button', { type: 'button', className: 'dshmind-set__btn', disabled: 调度提示.saving || !调度读数, onClick: function () {
-            if (!调度读数) return;
-            var config = 调度读数.persistence.config;
-            设调度表({ mode: config.mode, projects: arr(config.projects).join(', '), authorizationRef: config.authorizationRef || '', fingerprint: 调度读数.persistence.fingerprint });
-            设调度已改(false);
-          } }, '采用当前配置'),
+          h('span', { key: 'dirty', className: 'dshmind-set__editState' }, 调度提示.saving ? '正在提交并核对…' : 调度有修改 ? '有未保存的调度修改' : '调度授权单独保存'),
+          调度有修改 || 调度外部更新 ? h('button', { key: 'reset', type: 'button', className: 'dshmind-set__btn', disabled: 调度提示.saving || !调度读数, onClick: 重置调度 }, 调度外部更新 ? '采用当前配置' : '取消调度修改') : null,
+          h('button', { key: 'save', type: 'button', className: 'dshmind-set__btn dshmind-set__btn--primary', disabled: 调度提示.saving || !调度读数 || !调度表.fingerprint || !调度有修改 || 调度外部更新, onClick: function () { 保存调度(false); } }, 调度提示.saving ? '调度提交中…' : '保存调度授权'),
         ]),
-        调度提示.text ? h('div', { key: 'receipt', role: 'status', className: 'dshmind-set__toast ' + (调度提示.ok ? 'dshmind-set__toast--ok' : 'dshmind-set__toast--warn') }, 调度提示.text) : null,
+        调度提示.text ? h('div', { key: 'receipt', role: 调度提示.ok ? 'status' : 'alert', className: 'dshmind-set__toast ' + (调度提示.ok ? 'dshmind-set__toast--ok' : 'dshmind-set__toast--warn') }, [
+          h('span', { key: 'summary' }, 调度提示.ok ? '已保存，当前运行授权已核对。' : 调度提示.text.split('。')[0] + '。'),
+          h('details', { key: 'details', className: 'dshmind-set__details' }, [h('summary', { key: 'title' }, '提交详情'), h('p', { key: 'text' }, 调度提示.text)]),
+        ]) : null,
+        h('details', { key: 'diagnostics', className: 'dshmind-set__details' }, [
+          h('summary', { key: 'label' }, '授权详情与更多操作'),
+          h('p', { key: 'boundary' }, '仅人侧设置入口提供写入，模型工具不提供改授权动作；仅用户点名不终止或禁用已有成员。本机 shell 与凭据的隔离由宿主权限负责。'),
+          调度读数 ? h('div', { key: 'readings', className: 'dshmind-set__rows' }, [
+            设置读数行('delegation-source', '配置位置', '预览项目 ' + line(调度读数.runtime.project, '未知'), 调度读数.persistence.source),
+            设置读数行('delegation-fingerprint', '盘面 / 运行指纹', '提示词实际应用仍待下一轮验证', 调度读数.persistence.fingerprint.slice(0, 12) + ' / ' + 调度读数.runtime.fingerprint.slice(0, 12)),
+          ]) : null,
+          h('button', { key: 'revoke', type: 'button', className: 'dshmind-set__btn', disabled: 调度提示.saving || !调度读数 || 调度读数.persistence.config.mode !== 'lead-discretion', onClick: function () { 保存调度(true); } }, '撤回自主调度'),
+        ]),
       ]);
 
-      // ══ 组装 ══
-      // 顺序：标题 → 说明 → 失联保险区（未接入提示 → 表单 → 操作 → 回执 → 坏值 → 读数）→ 调度授权区 → 页脚。
       var 操作块 = h('div', { key: 'acts', className: 'dshmind-set__actions' }, [
-        h('button', {
-          key: 'save', type: 'button', className: 'dshmind-set__btn dshmind-set__btn--primary',
-          disabled: 表单禁用,
-          onClick: function () { 保存(); },
-        }, 提示.保存中 ? '保存中…' : '保存'),
-        h('button', {
-          key: 'read', type: 'button', className: 'dshmind-set__btn',
-          onClick: function () { 立即刷新(); },
-        }, '重新读取'),
-      ].filter(Boolean));
-
-      // 写失败 / 回读不一致：**明说没写进去**，绝不许显示成功。
-      var 提示块 = 提示.提示
-        ? h('div', {
-            key: 'toast',
-            className: 'dshmind-set__toast ' + (提示.提示调 === 'ok' ? 'dshmind-set__toast--ok' : 'dshmind-set__toast--warn'),
-          }, 提示.提示)
-        : null;
-
-      var 页脚块 = h('div', { key: 'foot', className: 'dshmind-set__foot' }, [
-        h('span', { key: 'c' }, '命令 ' + PRESENCE_COMMAND),
-        snap.设置文件 ? h('span', { key: 'f', className: 'dshmind-set__mono' }, '设置文件 ' + snap.设置文件) : null,
-        // 「关闭」是整页的动作，收在页脚右端 —— 原来它停在失联保险区的操作行里，
-        // 页面中段就出现一个"结束"钮，而它后面还有整个调度授权区。
-        close
-          ? h('button', { key: 'close', type: 'button', className: 'dshmind-set__btn', onClick: function () { close(); } }, '关闭')
-          : null,
-      ].filter(Boolean));
-
-      /** 失联保险区的渲染件汇总（纯装配，顺序即版面顺序）。 */
-      function 失联保险区() {
-        return [未接入块, 表单块, 操作块, 提示块, 坏值块, 读数块].filter(Boolean);
-      }
-
-      return h('section', { className: 'dshmind-set__' }, [
-        h('h2', { key: 'h', className: 'dshmind-set__title' }, '心智'),
-        h('p', { key: 's', className: 'dshmind-set__lede' },
-          '失联限制与响应期限：写入本部署的私有设置，随时可关；生效值层序：私有 ＞ 出厂 ＞ 内置兜底。'),
-        失联保险区(),
+        h('span', { key: 'dirty', className: 'dshmind-set__editState' }, 提示.保存中 ? '正在保存并核对…' : 策略有修改 ? '有未保存的策略修改' : '修改后保存'),
+        策略有修改 || 策略外部更新 ? h('button', { key: 'reset', type: 'button', className: 'dshmind-set__btn', disabled: 表单禁用, onClick: 重置策略 }, 策略外部更新 ? '采用当前策略' : '取消修改') : null,
+        h('button', { key: 'save', type: 'button', className: 'dshmind-set__btn dshmind-set__btn--primary', disabled: 表单禁用 || !策略有修改 || 策略外部更新, onClick: function () { 保存(); } }, 提示.保存中 ? '保存中…' : '保存'),
+      ]);
+      var 提示块 = 提示.提示 ? h('div', { key: 'toast', role: 提示.提示调 === 'ok' ? 'status' : 'alert', className: 'dshmind-set__toast ' + (提示.提示调 === 'ok' ? 'dshmind-set__toast--ok' : 'dshmind-set__toast--warn') }, 提示.提示调 === 'ok' ? [
+        h('span', { key: 'summary' }, '已保存，且回读一致。'), h('details', { key: 'details', className: 'dshmind-set__details' }, [h('summary', { key: 'title' }, '生效详情'), h('p', { key: 'text' }, 提示.提示)]),
+      ] : 提示.提示) : null;
+      return h('section', { className: 'dshmind-set__', 'aria-label': '心智设置' }, [
+        h('header', { key: 'header', className: 'dshmind-set__header' }, [
+          h('div', { key: 'title' }, [h('h2', { key: 'h', className: 'dshmind-set__title' }, '心智'), h('p', { key: 's', className: 'dshmind-set__lede' }, '配置审批方式、失联保护与成员调度。')]),
+          h('button', { key: 'read', type: 'button', className: 'dshmind-set__btn', disabled: refreshing[0] || 提示.保存中 || 调度提示.saving, onClick: 手动刷新 }, refreshing[0] ? '读取中…' : '重新读取'),
+        ]),
+        h('section', { key: 'policy', className: 'dshmind-set__section', 'data-dshmind': 'policy-settings', 'aria-labelledby': 'dshmind-policy-title', 'aria-busy': 提示.保存中 }, [
+          h('h3', { key: 'title', id: 'dshmind-policy-title', className: 'dshmind-set__subtitle' }, '运行与审批'),
+          未接入块, 坏值块,
+          h('h4', { key: 'presence-title', className: 'dshmind-set__groupTitle' }, [h('span', { key: 'title' }, '失联保护'), 读 ? h('span', { key: 'status', className: 'dshmind-set__status' }, [h('span', { key: 'dot', className: 'dshmind-set__dot', style: { background: 态色 } }), 态文本]) : null]),
+          h('div', { key: 'presence-fields', className: 'dshmind-set__rows' }, 策略行.slice(0, 2)),
+          h('h4', { key: 'review-title', className: 'dshmind-set__groupTitle' }, '审批与复核'),
+          h('div', { key: 'review-fields', className: 'dshmind-set__rows' }, 策略行.slice(2)),
+          策略外部更新 ? h('p', { key: 'changed', role: 'status', className: 'dshmind-set__notice' }, '当前设置已在别处更新，草稿已保留。采用当前策略后可继续修改。') : null,
+          操作块, 提示块,
+          h('details', { key: 'diagnostics', className: 'dshmind-set__details' }, [
+            h('summary', { key: 'label' }, '配置详情'), 读数块,
+            h('p', { key: 'source' }, '写入本部署的私有设置。生效顺序：私有设置 ＞ 出厂设置 ＞ 内置兜底。'),
+            snap.设置文件 ? h('p', { key: 'path', className: 'dshmind-set__mono' }, '设置文件 ' + snap.设置文件) : null,
+            h('p', { key: 'command', className: 'dshmind-set__mono' }, '命令 ' + PRESENCE_COMMAND),
+          ]),
+        ]),
         调度块,
-        h('p', { key: 'approval-location', className: 'dshmind-set__hint' }, '逐请求批准/拒绝请到心智「待你决定」打开请求；本页仅管理配置。'),
-        页脚块,
-      ].filter(Boolean));
+        h('footer', { key: 'foot', className: 'dshmind-set__foot' }, [
+          h('p', { key: 'location', className: 'dshmind-set__hint' }, '审批请求在心智「待你决定」处理。'),
+          close ? h('button', { key: 'close', type: 'button', className: 'dshmind-set__btn', onClick: function () { close(); } }, '关闭') : null,
+        ]),
+      ]);
     }
 
     // ── 插件体 ──────────────────────────────────────────────────────────────

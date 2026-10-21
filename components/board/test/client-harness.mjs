@@ -1421,8 +1421,8 @@ export async function runHarness() {
   passed.push(check(设置文本.includes('期限来自 出厂') && 设置文本.includes('开关来自 出厂'),
     '⑤ 页面把两个键的来源都显示出来（2026-10-17 改形：独立的「来源」行并入「当前生效值」一行，'
     + '同一份信息不再排两遍；断言词随之从「期限 出厂 · 开关 出厂」换成附注里的「期限来自/开关来自」）'));
-  passed.push(check(设置文本.includes('私有 ＞ 出厂 ＞ 内置兜底'),
-    '⑤ 生效值层序说明仍在（挪进顶部 lede，不丢信息）'));
+  passed.push(check(设置文本.includes('私有设置 ＞ 出厂设置 ＞ 内置兜底'),
+    '⑤ 生效值层序说明收进配置详情，保留排障信息'));
   passed.push(check(设置文本.includes('失联保险 开'),
     '⑤ 页面显示「失联限制」的生效值（真源 = 读数里的布尔），且用新词「失联保险」'));
   passed.push(check(设置文本.includes('心智'), '⑤ 设置页有标题'));
@@ -2980,6 +2980,10 @@ export async function runHarness() {
     }) });
     const 保存渲染 = mountSettings(保存挂死);
     await textAfterLoad(保存渲染);
+    // 未修改时保存禁用；先形成真实草稿再验证写链超时，不能靠空提交绕过新交互。
+    collect(保存渲染.tree, { skipStyle: true }).elements.find((el) => el.props['aria-label'] === '响应期限小时')
+      .props.onChange({ target: { value: '168' } });
+    保存渲染.flush();
     collect(保存渲染.tree, { skipStyle: true }).elements.find((el) => el.type === 'button'
       && String(el.props.children).indexOf('保存') >= 0).props.onClick();
     await settle();

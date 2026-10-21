@@ -81,7 +81,7 @@ describe('调度设置浏览器闭环（独立真形状夹具，presence-only 49
       assert.equal(t.field('调度模式').props.value, INITIAL.mode);
       assert.equal(t.field('授权项目').props.value, 'plugins');
       assert.equal(t.field('授权依据').props.value, INITIAL.authorizationRef);
-      assert.match(t.text(), /盘面与运行一致/);
+      assert.match(t.text(), /运行配置已同步/);
       assert.match(t.text(), /撤回不会终止已有成员/);
       assert.match(t.text(), /模型工具不提供改授权动作/);
       assert.ok(t.button('撤回自主调度'));
@@ -123,7 +123,7 @@ describe('调度设置浏览器闭环（独立真形状夹具，presence-only 49
     } finally { t.close(); }
   });
 
-  it('草稿不被轮询吞掉；过期指纹冲突后须显式采用当前配置', async () => {
+  it('草稿不被轮询吞掉；已知过期指纹禁用保存并引导采用当前配置', async () => {
     const t = await setup();
     try {
       t.change('授权依据', 'unfinished human draft');
@@ -131,13 +131,30 @@ describe('调度设置浏览器闭环（独立真形状夹具，presence-only 49
       await t.poll();
       assert.equal(t.field('授权依据').props.value, 'unfinished human draft');
       assert.equal(t.field('授权项目').props.value, 'plugins');
-      await t.click('保存调度授权');
+      assert.equal(t.button('保存调度授权').props.disabled, true);
+      // 失效按钮闭包或回车也不能旁路提交已知过期的草稿。
+      t.button('保存调度授权').props.onClick(); await settle(); t.renderer.flush();
       assert.equal(t.accepted, 0);
-      assert.match(t.text(), /配置冲突/);
+      assert.match(t.text(), /授权配置已在别处更新/);
+      assert.equal(t.calls.filter(row => row.method === 'POST').length, 0);
       assert.equal(t.field('授权依据').props.value, 'unfinished human draft');
       await t.click('采用当前配置');
       assert.equal(t.field('授权项目').props.value, 'external');
       assert.equal(t.field('授权依据').props.value, '');
+    } finally { t.close(); }
+  });
+
+  it('未被轮询观察到的竞争更新仍由宿主指纹校验拒绝，独立回读保留草稿', async () => {
+    const t = await setup();
+    try {
+      t.change('授权依据', 'unfinished human draft');
+      t.external({ mode: 'explicit-user', projects: ['external'], authorizationRef: '' });
+      await t.click('保存调度授权');
+      assert.equal(t.accepted, 0);
+      assert.match(t.text(), /配置冲突/);
+      assert.equal(t.field('授权依据').props.value, 'unfinished human draft');
+      assert.equal(t.button('保存调度授权').props.disabled, true);
+      assert.ok(t.button('采用当前配置'));
     } finally { t.close(); }
   });
 
