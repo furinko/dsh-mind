@@ -15,6 +15,7 @@ import { appendLines, readTextOrNull, serializeByKey, withLock } from './kernel/
 import { parseTaskLedger, readTaskLedger } from './task-ledger.js';
 import { Denied, Fault, InvalidBody } from './kernel/errors.js';
 import { normalizeKnowledgeAdoption, validateKnowledgeEvidenceSource } from './knowledge-reuse-contract.js';
+import { normalizeKnowledgeContext } from './knowledge-applicability.js';
 import { 复核对象引用 } from './review-scope.js';
 import { artifactReferences, captureArtifactManifest, verifyArtifactManifest } from './artifact-manifest.js';
 import { ToolFileAuthority } from './tool-file-scope.js';
@@ -1521,6 +1522,13 @@ export class TaskGraph {
    * }>}
    */
   async settlePlan(id, spec = {}) {
+    // 在异步读候选之前固定显式说明；来源数据不会因排队期间改入参而迁移。
+    const 处置输入 = spec.记忆处置 === undefined ? undefined : structuredClone(spec.记忆处置);
+    if (处置输入 && typeof 处置输入 === 'object' && !Array.isArray(处置输入)) {
+      for (const value of Object.values(处置输入)) {
+        if (value && typeof value === 'object' && Object.hasOwn(value, '知识说明')) value.知识说明 = normalizeKnowledgeContext(value.知识说明);
+      }
+    }
     if (!this.memory) {
       throw new Fault('SETTLE_NO_MEMORY', '结账要归档作答，但装配时没把记忆服务接进任务图（org.js 的接线问题，不是调用问题）。');
     }
@@ -1552,7 +1560,7 @@ export class TaskGraph {
       ...经历候选.map((c) => ({ 键: c.id, 类: '经历', 标题: c.标题 })),
       ...交卷候选.map((c) => ({ 键: c.键, 类: '交卷候选', 标题: String(c.内容).slice(0, 40) })),
     ];
-    const 处置 = spec.记忆处置;
+    const 处置 = 处置输入;
     if (!处置 || typeof 处置 !== 'object' || Array.isArray(处置)) {
       throw new Denied('任务图 · 结账必须带「记忆处置」声明（v2 条目16）', `节点 ${id} 结账被拒：先逐条判本任务的记忆候选（晋升 / 留账本 / 丢弃），再结账。候选清单在本拒绝的 detail.候选清单里；确无候选就传 记忆处置={} 明示「无产出需处置」。`, {
         howToChange: '重发 task_settle 并带 记忆处置（候选键 → 晋升/留账本/丢弃）。',
@@ -1576,13 +1584,20 @@ export class TaskGraph {
       }
       // 幂等键与 `memory.promoteFromAdopted` 的定义**同一口径**（来源项目|来源任务|候选键）：
       // 审批步骤的写标签、执行侧的幂等认回都靠它，两处漂了会被入口级真链测试当场抓住。
-      晋升计划.push({ 候选: c, 内容: String(内容).trim(), 岗位, 标题: 判[c.键].标题 ?? (c.类 === '经历' ? 源?.标题 : undefined), 幂等键: `${spec.项目}|${id}|${c.键}` });
+      晋升计划.push({ 候选: c, 内容: String(内容).trim(), 岗位, 标题: 判[c.键].标题 ?? (c.类 === '经历' ? 源?.标题 : undefined), 幂等键: `${spec.项目}|${id}|${c.键}`, ...(Object.hasOwn(判[c.键], '知识说明') ? { 知识说明: 判[c.键].知识说明 } : {}) });
     }
     const 丢弃 = 经历候选.filter((c) => 判[c.id]?.处置 === '丢弃').map((c) => c.id);
-    return { 节点: node, 处置, 候选清单, 判, 晋升计划, 丢弃 };
+    // 新说明只随知识本体保存；任务事件保留晋升id，不自动复制可被purge的说明正文。
+    const 记录处置 = Object.fromEntries(Object.entries(处置).map(([key, value]) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return [key, value];
+      const { 知识说明: _知识正文, ...receipt } = value;
+      return [key, receipt];
+    }));
+    return { 节点: node, 处置: 记录处置, 候选清单, 判, 晋升计划, 丢弃 };
   }
 
   async settle(id, spec) {
+    spec = { ...spec, ...(spec.记忆处置 === undefined ? {} : { 记忆处置: structuredClone(spec.记忆处置) }) };
     const node = await this.#require(id, spec.项目);
     this.#requireTransition(node, 'settle');
     // 补修K：旧账「复核即采纳」但没有 Lead 承接的节点，不得借结账洗成 Lead 收口——
@@ -1613,6 +1628,7 @@ export class TaskGraph {
         岗位: 晋升.岗位,
         内容: 晋升.内容,
         标题: 晋升.标题,
+        ...(Object.hasOwn(晋升, '知识说明') ? { 知识说明: 晋升.知识说明 } : {}),
         来源: `结账晋升：任务 ${id} 的${晋升.候选.类}「${晋升.候选.标题}」`,
         来源引用: [id, ...(晋升.候选.类 === '经历' ? [晋升.候选.键] : [])],
         晋升: { 来源任务: id, 候选键: 晋升.候选.键 },
@@ -1680,7 +1696,7 @@ export class TaskGraph {
         ? { 处置: 原值 }
         : (原值 && typeof 原值 === 'object' && !Array.isArray(原值) ? 原值 : null);
       if (!规范 || !['晋升', '留账本', '丢弃'].includes(规范.处置)) {
-        throw new InvalidBody(`记忆处置必须覆盖每条候选，值只认 晋升 / 留账本 / 丢弃（或 {处置:'晋升',岗位?,标题?,内容?}）。缺失或非法：${c.键}（${c.类}「${c.标题}」）。`, {
+        throw new InvalidBody(`记忆处置必须覆盖每条候选，值只认 晋升 / 留账本 / 丢弃（或 {处置:'晋升',岗位?,标题?,内容?,知识说明?}）。缺失或非法：${c.键}（${c.类}「${c.标题}」）。`, {
           missing: [c.键],
           detail: { 候选清单 },
         });
@@ -1693,10 +1709,10 @@ export class TaskGraph {
         结果[c.键] = { 处置: 规范.处置 };
         continue;
       }
-      const 允许 = ['处置', '岗位', '标题', '内容'];
+      const 允许 = ['处置', '岗位', '标题', '内容', '知识说明'];
       const 未知键 = Object.keys(规范).filter((键) => !允许.includes(键));
       if (未知键.length > 0) {
-        throw new InvalidBody(`候选 ${c.键} 的晋升参数里有未知键：${未知键.join('、')}（只认 岗位 / 标题 / 内容）。`, { detail: { 候选: c.键, 未知键 } });
+        throw new InvalidBody(`候选 ${c.键} 的晋升参数里有未知键：${未知键.join('、')}（只认 岗位 / 标题 / 内容 / 知识说明）。`, { detail: { 候选: c.键, 未知键 } });
       }
       for (const 键 of ['岗位', '标题', '内容']) {
         if (规范[键] !== undefined && (typeof 规范[键] !== 'string' || !规范[键].trim())) {
@@ -1708,6 +1724,7 @@ export class TaskGraph {
         ...(规范.岗位 !== undefined ? { 岗位: 规范.岗位.trim() } : {}),
         ...(规范.标题 !== undefined ? { 标题: 规范.标题.trim() } : {}),
         ...(规范.内容 !== undefined ? { 内容: 规范.内容.trim() } : {}),
+        ...(Object.hasOwn(规范, '知识说明') ? { 知识说明: normalizeKnowledgeContext(规范.知识说明) } : {}),
       };
     }
     return 结果;

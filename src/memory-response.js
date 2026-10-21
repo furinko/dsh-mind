@@ -10,6 +10,7 @@ export const MEMORY_RESPONSE_LIMITS = Object.freeze({ defaultBudget: 12000, maxB
  * @returns {{ 返回模式: string, 内容预算: number, limit: number, 条数上限: number, 偏移: number, 正文偏移: number }}
  */
 export function memoryResponseOptions(query = {}) {
+  if (query.含待复验 !== undefined && typeof query.含待复验 !== 'boolean') throw new InvalidBody('含待复验只能为boolean；true只放宽复验筛选，不扩大失效或权限读域。');
   const integer = (key, fallback, min, max) => {
     const value = query[key] === undefined ? fallback : query[key];
     if (!Number.isSafeInteger(value) || value < min || value > max) throw new InvalidBody(`${key} 必须是 ${min}–${max} 的整数。`);
@@ -69,11 +70,21 @@ export function memoryResponsePage({ entries, hits = [], options, total, detail 
     if (measure() <= options.内容预算) continue;
     pop();
     if (条目.length) { 内容截断 = true; break; }
-    // 巨大的历史/来源/标签也要计入预算，不能只截正文后原样带回其余字段。
-    entry = { id: original.id, [field]: '', 元数据截断: true };
-    if (original.状态) entry.状态 = sliceText(String(original.状态), 32);
-    if (detail && options.返回模式 === '全文') Object.assign(entry, { 正文偏移: start, 正文总字符: body.length, 下一正文偏移: start });
-    hit = hit ? { id: hit.id, 分数: hit.分数, 摘要: '' } : null;
+    // 保留元数据还须容纳至少一个完整码点和最终分页标记，避免正文0字符原地续页。
+    // 只有元数据与最小正文放不下时才缩减，正常大说明仍可配合正文分页读回。
+    const firstText = text ? sliceText(text, text.codePointAt(0) > 0xffff ? 2 : 1) : '';
+    entry = { ...entry, [field]: firstText, 正文截断: start + firstText.length < body.length };
+    if (detail && options.返回模式 === '全文') entry.下一正文偏移 = start + firstText.length;
+    push();
+    const metadataFits = measure() <= options.内容预算;
+    pop();
+    if (!metadataFits) {
+      // 巨大的历史/来源/标签也要计入预算，不能只截正文后原样带回其余字段。
+      entry = { id: original.id, [field]: '', 元数据截断: true, ...reviewWarnings(original) };
+      if (original.状态) entry.状态 = sliceText(String(original.状态), 32);
+      if (detail && options.返回模式 === '全文') Object.assign(entry, { 正文偏移: start, 正文总字符: body.length, 下一正文偏移: start });
+      hit = hit ? { id: hit.id, 分数: hit.分数, 摘要: '' } : null;
+    }
     push();
     let low = 0;
     let high = text.length;
@@ -95,6 +106,9 @@ export function memoryResponsePage({ entries, hits = [], options, total, detail 
     while (measure() > options.内容预算 && entry[field].length) {
       entry[field] = sliceText(entry[field], entry[field].length - 1);
       刷新正文边界();
+    }
+    if (detail && options.返回模式 === '全文' && start < body.length && entry[field].length === 0) {
+      throw new Fault('MEMORY_RESPONSE_NO_PROGRESS', '当前内容预算无法容纳正文续页；请增加内容预算，不能以相同正文偏移无限续读。');
     }
     刷新正文边界();
     if (measure() > options.内容预算) pop();
@@ -163,7 +177,7 @@ function fitSerializedResponse(result, serialize) {
     result.信封截断 = true;
     result.内容截断 = true;
     result.条目 = (result.条目 ?? []).map((entry) => ({
-      ...Object.fromEntries(['id', '类', '状态', '内容', '摘要', '正文偏移', '正文总字符', '下一正文偏移', '正文截断'].filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]])),
+      ...Object.fromEntries(['id', '类', '状态', '内容', '摘要', '正文偏移', '正文总字符', '下一正文偏移', '正文截断', '复验状态', '复验警示'].filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]])),
       元数据截断: true,
     }));
     result.命中 = (result.命中 ?? []).map((hit) => ({ id: hit.id, 分数: hit.分数, 摘要: hit.摘要 ?? '' }));
@@ -197,8 +211,9 @@ function fitSerializedResponse(result, serialize) {
 
 /** 摘要不携带完整历史；所有动态元数据仍由总预算兜底。 */
 function compactEntry(entry) {
-  return Object.fromEntries(['id', '类', '状态', '项目', '岗位', '归属', '记于', '来源', '来源引用', '派生自', '归档'].filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]]));
+  return Object.fromEntries(['id', '类', '状态', '项目', '岗位', '归属', '记于', '来源', '来源引用', '派生自', '归档', '知识说明', '复验状态', '复验警示'].filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]]));
 }
+function reviewWarnings(entry) { return Object.fromEntries(['复验状态', '复验警示'].filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]])); }
 
 /** 字符分页不可把补充平面字符切成两个坏代理项。 */
 function sliceText(text, size) {

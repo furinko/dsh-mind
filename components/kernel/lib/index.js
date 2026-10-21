@@ -363,6 +363,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
       'usage_query只读当前接线的assistant-stream观察窗口；已报告token字段汇总可能不完整，目标token总量和费用仍未知，不修改准入预算。',
       'operation_query只读成员创建意图与已落盘阶段回执，可按操作UUID或精确任务id查询；拟用实例不证明宿主已创建，audited不证明宿主已停止；不提供重放、恢复或清零操作。',
       'knowledge_reuse_query仅治理身份只读知识采用声明；声明及历史采纳不证明知识有效或带来收益，不影响任务推进，不自动修改知识状态或排行。',
+      '知识说明是作者声明的适用条件、已知反例及复验安排，不是验证认证；作者期限到期默认不建议，可用memory_query含待复验=true显式读取，原失效及读域限制仍适用；未设期限不代表永远有效。',
       `动作清单：${ACTIONS.join(', ')}。`,
     ].join(' '),
     parameters: {
@@ -409,7 +410,8 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         知识候选: { type: 'string', description: '交卷附的知识候选（task_submit，v2 条目15）：值得蒸馏成知识的点，多个用逗号分隔或 JSON 数组。成员不得直接写知识——候选随卷入账，结账时 Lead 逐条判' },
         采用知识: { type: 'array', maxItems: 16, items: { type: 'object', properties: { id: { type: 'string', minLength: 1, maxLength: 256 }, 用途: { type: 'string', minLength: 1, maxLength: 512 }, 适用判断: { type: 'string', minLength: 1, maxLength: 512 }, 使用结果: { type: 'string', enum: ['有帮助', '不适用', '发现问题', '未知'] }, 说明: { type: 'string', maxLength: 1024 } }, required: ['id', '用途', '适用判断', '使用结果'], additionalProperties: false }, description: 'task_submit可选采用声明，最多16项；省略=未知，[]=明确未声明采用，null拒。仅调用者声明，不证明知识有效、采纳或收益；不填服务器版本、来源及哈希。命令传JSON数组' },
         知识id: { type: 'string', minLength: 1, maxLength: 256, description: 'knowledge_reuse_query的精确知识id过滤；只查声明，不授权读域或修改知识状态' },
-        记忆处置: { type: 'string', description: 'task_settle 必填（v2 条目16）：{候选键:"晋升"|"留账本"|"丢弃"} 的 JSON 对象；「晋升」也可写成 {处置:"晋升",岗位?,标题?,内容?}（可选蒸馏覆盖，缺省按来源绑定岗位/现有正文推导）。无候选传 {} 明示。晋升会真实产出知识条目（id 见节点.记忆晋升），任一条失败则不结账（不留假结账）' },
+        知识说明: { type: 'object', minProperties: 1, properties: { 适用条件: { type: 'array', minItems: 1, maxItems: 16, items: { type: 'string', minLength: 1, maxLength: 512 } }, 已知反例: { type: 'array', minItems: 1, maxItems: 16, items: { type: 'string', minLength: 1, maxLength: 512 } }, 复验条件: { type: 'array', minItems: 1, maxItems: 16, items: { type: 'string', minLength: 1, maxLength: 512 } }, 复验期限: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$' } }, additionalProperties: false, description: '仅知识类memory_write或overturn新替代知识可附；至少一项作者声明，不接受null、未知字段、验证状态或哈希；期限须规范UTC秒或毫秒格式，不代表机器认证或授权' },
+        记忆处置: { type: 'string', description: 'task_settle 必填（v2 条目16）：{候选键:"晋升"|"留账本"|"丢弃"} 的 JSON 对象；「晋升」也可写成 {处置:"晋升",岗位?,标题?,内容?,知识说明?}（可选蒸馏覆盖；知识说明沿用作者声明结构，缺省不补期限或验证结论）。无候选传 {} 明示。晋升会真实产出知识条目（id 见节点.记忆晋升），任一条失败则不结账（不留假结账）' },
         命名空间: { type: 'string', enum: ['通用'], description: 'memory_write 的存储命名空间：「通用」= 项目无关知识的公共命名空间，不是另一个项目（执行项目仍是当前会话项目，成员跨项目闸不变）。目前只收「知识」；Lead 写入须带依据，披露检查照跑' },
         结论: { type: 'string', description: '交卷结论（task_submit）；会审按人留，谁交卷记谁那份' },
         结论层: { type: 'string', description: '结论的结构化标签（task_submit，会审时必填）：一句话给结论定性归类，如「方案A」「可修」「不采纳」。§10 零分歧判据比的是它而不是结论全文——措辞漂不了的判据才成立；不写则退化为全文逐字比对（两份独立答案几乎不会逐字同，报警永不触发）' },
@@ -439,6 +441,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         数据版本: { type: 'string', description: 'memory_query或knowledge_reuse_query续页必须带上一页返回的64位SHA256数据版本；可见数据或查询口径变化时从0重新读取，不默默拼接不同版本' },
         显式: { type: 'boolean', description: '检索时是否显式包含归档作答' },
         含失效: { type: 'boolean', description: '检索时是否包含已失效/被推翻的记忆（默认 false：只召回当前有效视图）' },
+        含待复验: { type: 'boolean', description: '仅memory_query：true显式纳入作者复验期限已到的知识；不纳入失效条目，须另含失效=true；仍受项目、岗位及复核读域限制，不改状态或权限' },
         全量: { type: 'boolean', description: 'workbench 是否越过「成员只读自己那片」的切片' },
         op: { type: 'string', enum: ['invalidate', 'demote', 'overturn', 'purge', 'promote'], description: '记忆处置；不许改写只能追加' },
         敏感: { type: 'boolean', description: 'op=purge 时显式声明「这是敏感数据」；声明会进审计，不声明只有主权者能物理删除' },
@@ -1275,7 +1278,7 @@ async function 注入Lead已钉规程(assembly, agent, org, logger) {
 }
 
 /** 布尔型参数白名单（与上方 schema 的 type:'boolean' 一一对应）。 */
-const BOOLEAN_ARGS = new Set(['显式', '含失效', '全量', '敏感', '披露豁免', '暂不投递', '延后', '未投递']);
+const BOOLEAN_ARGS = new Set(['显式', '含失效', '含待复验', '全量', '敏感', '披露豁免', '暂不投递', '延后', '未投递']);
 
 function normalizeArgs(args) {
   const out = { ...args };
@@ -1295,6 +1298,10 @@ function normalizeArgs(args) {
   if (typeof out.采用知识 === 'string') {
     try { out.采用知识 = JSON.parse(out.采用知识); }
     catch { throw new InvalidBody('采用知识必须是合法JSON数组；坏串不能当作未声明或空声明。'); }
+  }
+  if (typeof out.知识说明 === 'string') {
+    try { out.知识说明 = JSON.parse(out.知识说明); }
+    catch { throw new InvalidBody('知识说明必须是合法JSON对象；坏串不能当作省略声明。'); }
   }
   for (const key of ['负责人', '判据', '依赖', '复核对象', '分歧清单', '反例面', '产出物引用', '适用岗位', '收件', '标签', '来源引用', '知识候选', '参与者']) {
     const value = out[key];

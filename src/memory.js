@@ -18,6 +18,7 @@ import { objectId } from './kernel/ids.js';
 import { digest, canonical } from './kernel/text.js';
 import { buildIndex, formatMiss, search } from './retrieval.js';
 import { memoryResponseOptions, memoryResponsePage, finalizeMemoryResponse } from './memory-response.js';
+import { normalizeKnowledgeContext, knowledgeReviewStatus, knowledgeReviewProjection, KNOWLEDGE_CONTEXT_LIST_FIELDS } from './knowledge-applicability.js';
 import { DIR, MEMORY_KINDS } from './paths.js';
 import { 记忆条目在读域, 取复核读域 } from './review-scope.js';
 // 「已被合法采纳」的唯一判据住在任务图（补修K 字段合同），晋升面直接复用、不另抄状态判断。
@@ -206,6 +207,9 @@ export class MemoryService {
    */
   async remember(input) {
     const kind = input.类;
+    const 知识说明 = normalizeKnowledgeContext(input.知识说明);
+    if (知识说明 !== undefined && kind !== '知识') throw new InvalidBody('知识说明仅属于知识类，不能附在经历、偏好或作答上。');
+    input = { ...input, ...(知识说明 === undefined ? {} : { 知识说明 }) };
     // 内部通道封口（2026-10-13 审查 P1-11）：`派生自`（推翻替换链）与 `同锁追加`（账本伴随行）
     // 是 overturn 的内部参数——修前 remember 签名照收、零校验，任何调用方传 `派生自` 即可
     // 伪造「谁推翻谁」的血缘事实，传 `同锁追加` 函数可向账本追加任意构造行。
@@ -271,7 +275,7 @@ export class MemoryService {
     if (通用) {
       // 通用直写 = 生下来就在跨项目面：披露闸与跨项目晋升同一把尺（同一私有方法）。
       // 写入被拒时条目尚无 id，审计对象用占位名（拒的是企图，条目没出生）。
-      await this.#披露闸({ id: '知识/通用（写入前）', 项目: '通用', 标题: input.标题 ?? text.slice(0, 40), 内容: text, 标签: input.标签 ?? [] }, { subject: input.subject, 披露豁免: input.披露豁免 }, '通用直写');
+      await this.#披露闸({ id: '知识/通用（写入前）', 项目: '通用', 标题: input.标题 ?? text.slice(0, 40), 内容: text, 标签: input.标签 ?? [], ...(知识说明 === undefined ? {} : { 知识说明 }) }, { subject: input.subject, 披露豁免: input.披露豁免 }, '通用直写');
     }
 
     // id 的种子**不许含正文**。id 会进每一条审计记录的 `对象.id`，而审计只增、
@@ -304,6 +308,7 @@ export class MemoryService {
         // v2 条目16（补修E）：受限晋升的幂等键随条目留痕，重试时据此认回同一条产物。
         ...(typeof input.幂等键 === 'string' && input.幂等键 ? { 幂等键: input.幂等键 } : {}),
         标签: input.标签 ?? [],
+        ...(知识说明 === undefined ? {} : { 知识说明 }),
         状态: '有效',
         记于: this.clock.iso(),
         轮: input.轮 ?? null,
@@ -311,7 +316,7 @@ export class MemoryService {
       同锁追加: input.同锁追加, // 内部通道（overturn 双行同锁）；外部调用方不传
       // v2 条目16（补修E）：权限晋升的幂等闸——同一幂等键只产一条知识；业务参数
       // （岗位/内容/标题）变了则拒，不许拿旧产物冒充本次内容。
-      ...(typeof input.幂等键 === 'string' && input.幂等键 ? { 幂等键: input.幂等键, 幂等比对: { 岗位: input.岗位 ?? null, 内容: text, 标题: input.标题 ?? text.slice(0, 40) } } : {}),
+      ...(typeof input.幂等键 === 'string' && input.幂等键 ? { 幂等键: input.幂等键, 幂等比对: { 岗位: input.岗位 ?? null, 内容: text, 标题: input.标题 ?? text.slice(0, 40), 知识说明 } } : {}),
       // R10（审查 2026-10-16 · 提交点 fence）：带引用的写在最终落线点复验引用——锁外
       // 那次校验与本次提交之间完成的 purge（状态行已入账、源行已抹）在这里必被 fold
       // 视图看见：悬空/待删除引用 ⇒ 本条不落线。审查实证的并发窗口就此关闭。
@@ -431,6 +436,7 @@ export class MemoryService {
     const entry = await this.#folded(id);
     if (!entry) throw new InvalidBody(`没有这条记忆：${id}`);
     if (entry.类 !== '知识') throw new InvalidBody('只有知识可以打岗位标签；经历/偏好/作答不跨项目。');
+    if (Object.hasOwn(entry, '知识说明') && normalizeKnowledgeContext(entry.知识说明) === undefined) throw new InvalidBody('已存知识说明不可判，不能当作未设说明扩散。');
     // P2（全面审查 2026-10-17）：岗位标签是跨项目知识的「对谁可复用」边界，不能为空。
     // 修前动作层/schema 都允许省略岗位 ⇒ 副本无标签，其他项目默认召回直接命中。
     const 岗位 = typeof spec.岗位 === 'string' ? spec.岗位.trim() : '';
@@ -540,6 +546,8 @@ export class MemoryService {
    * @returns {Promise<{ id: string, 项目: string, 岗位: string, 来源任务: string, 幂等键: string, 幂等命中: boolean }>}
    */
   async promoteFromAdopted(spec = {}) {
+    const 知识说明 = normalizeKnowledgeContext(spec.知识说明);
+    spec = { ...spec, ...(知识说明 === undefined ? {} : { 知识说明 }) };
     const subject = spec.subject;
     const 项目 = String(spec.项目 ?? '').trim();
     const 岗位 = typeof spec.岗位 === 'string' ? spec.岗位.trim() : '';
@@ -638,6 +646,7 @@ export class MemoryService {
       岗位,
       依据: spec.依据,
       标签: spec.标签,
+      ...(知识说明 === undefined ? {} : { 知识说明 }),
       来源引用,
       // 策略引擎的任务上下文：成员路径必须带（任务内全权）；Lead 路径带结算节点也无害。
       任务: spec.任务 ?? null,
@@ -669,6 +678,7 @@ export class MemoryService {
     const unknown = () => new Map(requested.map(id => [id, { 状态: '来源未核验' }]));
     if (!requested.length) return unknown();
     try {
+      const now = new Date(this.clock.now());
       if (typeof 项目 !== 'string' || !项目.trim() || !subject?.id || !['成员', 'Lead', '主权者'].includes(subject.kind)) return unknown();
       if (!this.policy?.refreshIfStale || !this.policy?.decideCurrentSync) return unknown();
       await this.policy.refreshIfStale();
@@ -703,8 +713,9 @@ export class MemoryService {
       }
       const result = unknown();
       for (const entry of fold(rows)) {
-        if (!result.has(entry.id) || entry.类 !== '知识' || !memoryEntryVisible(entry, { 项目, 读者: actor }) || !记忆条目在读域(entry, 域) || 是否已被否(entry)) continue;
+        if (!result.has(entry.id) || entry.类 !== '知识' || !memoryEntryVisible(entry, { 项目, 读者: actor }) || !记忆条目在读域(entry, 域) || 是否已被否(entry) || ['待复验', '说明不可判'].includes(knowledgeReviewStatus(entry, now))) continue;
         const metadata = Object.fromEntries(['id', '类', '标题', '来源', '来源引用', '派生自', '归属', '项目', '岗位', '标签', '状态', '历史', '记于'].map(key => [key, entry[key] ?? null]));
+        if (Object.hasOwn(entry, '知识说明')) metadata.知识说明 = structuredClone(entry.知识说明);
         result.set(entry.id, { 状态: '可核来源版本', 内容哈希: digest(entry.内容), 元数据哈希: digest(canonical(metadata)), 捕获于: this.clock.iso() });
       }
       // 读取期间变化立即降为未知；之后的变化由查询重新裁剪，不宣称跨账本原子性。
@@ -732,6 +743,7 @@ export class MemoryService {
    * @returns {Promise<{ 命中: object[], 口径: object, 条目: object[], 说明?: string }>}
    */
   async query(query = {}) {
+    const now = new Date(this.clock.now());
     const 响应配置 = memoryResponseOptions(query);
     await this.policy.check({
       subject: query.subject,
@@ -773,7 +785,7 @@ export class MemoryService {
       // 还必须自报读者身份且在可读名单内——此前第二个 if 依赖 `query.读者` 存在才检查，
       // 「显式:true 但不传读者」会让整道检查静默跳过（fail-open）。
       if (!memoryEntryVisible(entry, query)) continue;
-      visible.push(entry);
+      visible.push(knowledgeReviewProjection(entry, now));
     }
 
     // v2（条目4/6 补修 · 复核读域）：复核员岗的检索面按「已绑定复核任务 → 显式复核对象」
@@ -794,9 +806,12 @@ export class MemoryService {
     // 当前建议不夹带失效正文；历史仍留原账，明确含失效时才进入同一权限过滤后的读面。
     // 判据实现只有一处：`是否已被否`（模块级，晋升闸与它共用同一条粘性判据）。
     const 撤回 = visible.filter(是否已被否);
-    const 可召回 = query.含失效 === true ? visible : visible.filter((entry) => !是否已被否(entry));
+    const 状态可召回 = query.含失效 === true ? visible : visible.filter((entry) => !是否已被否(entry));
+    const 需复验 = (entry) => ['待复验', '说明不可判'].includes(entry.复验状态);
+    const 可召回 = query.含待复验 === true ? 状态可召回 : 状态可召回.filter((entry) => !需复验(entry));
     // 页码不对正在变化的账本承诺无漏重；变化即要求重启，不能拼接两个不同事实快照。
-    const 数据版本 = digest(JSON.stringify({ 类: wanted, 项目: query.项目 ?? null, 岗位: query.岗位 ?? null, 文本: query.文本 ?? '', id: query.id ?? null, 条目: 可召回 }));
+    const 复验指纹 = visible.map((entry) => [entry.id, entry.复验状态 ?? null]);
+    const 数据版本 = digest(JSON.stringify({ 类: wanted, 项目: query.项目 ?? null, 岗位: query.岗位 ?? null, 文本: query.文本 ?? '', id: query.id ?? null, 含待复验: query.含待复验 === true, 复验指纹, 条目: 可召回 }));
     if (query.数据版本 && query.数据版本 !== 数据版本) {
       throw new InvalidBody('记忆数据或查询口径已变化，不能继续旧分页；请清除 数据版本，并从偏移0/正文偏移0重新读取。', { detail: { 原因: 'MEMORY_QUERY_SNAPSHOT_CHANGED' } });
     }
@@ -819,6 +834,10 @@ export class MemoryService {
       失效条目数: 撤回.filter((e) => !被隔离(e)).length,
       隔离条目数: 撤回.filter(被隔离).length,
       排除失效: query.含失效 === true ? 0 : 撤回.length,
+      待复验条目数: visible.filter((entry) => entry.复验状态 === '待复验').length,
+      说明不可判数: visible.filter((entry) => entry.复验状态 === '说明不可判').length,
+      排除待复验: query.含待复验 === true ? 0 : 状态可召回.filter((entry) => entry.复验状态 === '待复验').length,
+      排除说明不可判: query.含待复验 === true ? 0 : 状态可召回.filter((entry) => entry.复验状态 === '说明不可判').length,
       // v2 条目4/6：复核读域裁掉多少条（只报数，条目与敏感内容不进读数）。
       ...(query.读域?.限定 === true ? { 复核读域排除: 读域排除 } : {}),
     };
@@ -826,7 +845,8 @@ export class MemoryService {
     const 视图说明 = 撤回.length > 0 && query.含失效 !== true
       ? `另有 ${撤回.length} 条已失效/被推翻/待删除/已隔离的条目按「当前有效视图」未进召回${口径数.隔离条目数 > 0 ? `（其中 ${口径数.隔离条目数} 条因源对象物理删除被血缘隔离）` : ''}；要看它们请带 含失效: true。`
       : '';
-    const 说明们 = [读域说明, 视图说明, query.显式 === true ? '已显式包含可读归档作答。' : ''].filter(Boolean);
+    const 复验说明 = wanted.includes('知识') ? '复验期限仅为作者声明；到期不代表已失效，未设期限不等于永远有效。待复验或说明不可判知识默认不推荐；含待复验=true仅放宽本筛选，仍须满足失效、项目和复核读域。' : '';
+    const 说明们 = [读域说明, 视图说明, 复验说明, query.显式 === true ? '已显式包含可读归档作答。' : ''].filter(Boolean);
     const 装配 = (entries, hits, total, 口径, detail = false, fromEnd = false) => {
       const page = memoryResponsePage({ entries, hits, total, options: 响应配置, detail, fromEnd });
       if (page.条目截断) 说明们.push(`条目 共 ${total} 条，本页回传 ${page.条目.length} 条；按 下一偏移 继续读取。`);
@@ -856,7 +876,7 @@ export class MemoryService {
     // 索引缓存键必须带**读域指纹**：复核员与普通成员即便 读者.kind 相同，可见集也不同；
     // 漏掉这一维会让先到的读者把索引借给后到的读者（遮罩被缓存旁路）。
     const 读域指纹 = query.读域?.限定 === true ? `复核:${[...query.读域.集合].sort().join(',')}` : '无';
-    const 索引键 = `${await this.#签名们(账本文件)}|${JSON.stringify([wanted, query.项目 ?? null, query.岗位 ?? null, query.含失效 === true, query.显式 === true, query.读者?.kind ?? null, 读域指纹])}`;
+    const 索引键 = `${await this.#签名们(账本文件)}|${JSON.stringify([wanted, query.项目 ?? null, query.岗位 ?? null, query.含失效 === true, query.含待复验 === true, query.显式 === true, query.读者?.kind ?? null, 读域指纹, 复验指纹, 可召回.map((entry) => entry.id)])}`;
     let index = this.#indexCache.get(索引键);
     if (!index) {
       // 用户标签进检索索引（2026-10-14 审查 P2-19）：修前 标签 只塞 [类, 岗位]——
@@ -943,8 +963,11 @@ export class MemoryService {
    * @param {{ subject: object, 新条目: string, 理由: string, 任务?: object }} spec
    */
   async overturn(id, spec) {
+    const 知识说明 = normalizeKnowledgeContext(spec.知识说明);
+    spec = { ...spec, ...(知识说明 === undefined ? {} : { 知识说明 }) };
     const entry = await this.#folded(id);
     if (!entry) throw new InvalidBody(`没有这条记忆：${id}`);
+    if (知识说明 !== undefined && entry.类 !== '知识') throw new InvalidBody('知识说明仅属于知识类，不能给非知识替代条目追加。');
     // 推翻 = 「新条目 + 旧条目状态行」**双行同锁落账**（2026-10-12 评审 P3）：
     // 修前两步分开落，第二步（状态行）失败会留下「替代品在、原条目没标推翻」的
     // 撕裂窗口——旧知识继续被召回，替代它的人却已经入账。
@@ -963,6 +986,7 @@ export class MemoryService {
       项目: entry.项目,
       岗位: entry.岗位 ?? undefined,
       来源引用: entry.来源引用 ?? [],
+      ...(知识说明 === undefined ? {} : { 知识说明 }),
       派生自: id,
       // 推翻是「追加新条目 + 旧条目入账」双动作：新条目那次 remember 也过策略引擎，
       // 任务上下文必须跟着透传，否则成员任务内推翻会死在内部那次写入上（半动作）。
@@ -1309,7 +1333,8 @@ export class MemoryService {
     // 输入面长度上限（2026-10-13 审查 P1-14）：正则执行时间随输入长度放大，
     // 把被检面截到 20k 字符——超长输入用前 20k 过机械检查（正则复杂度边界）。
     // R11（2026-10-16）：截断事实随返回值上交，由晋升闸 fail-closed——不再默默放行尾部。
-    const 原面 = [entry?.标题, entry?.内容, ...(Array.isArray(entry?.标签) ? entry.标签 : [])].filter((s) => typeof s === 'string').join('\n');
+    const 说明面 = KNOWLEDGE_CONTEXT_LIST_FIELDS.flatMap((key) => Array.isArray(entry?.知识说明?.[key]) ? entry.知识说明[key] : []);
+    const 原面 = [entry?.标题, entry?.内容, ...(Array.isArray(entry?.标签) ? entry.标签 : []), ...说明面].filter((s) => typeof s === 'string').join('\n');
     const 已截断 = 原面.length > 20_000;
     const 面数 = 已截断 ? `${原面.slice(0, 20_000)}\n[披露检查：输入已截断，原长 ${原面.length}]` : 原面;
     const 清单 = this.policy.state.defaults?.披露敏感模式 ?? DEFAULT_DISCLOSURE_PATTERNS;
@@ -1515,7 +1540,7 @@ export class MemoryService {
       if (typeof spec.幂等键 === 'string' && spec.幂等键) {
         const 既有 = rows.find((row) => row?.幂等键 === spec.幂等键 && typeof row?.id === 'string' && !isStateRow(row));
         if (既有) {
-          const 不符 = Object.entries(spec.幂等比对 ?? {}).filter(([键, 值]) => String(既有[键] ?? '') !== String(值 ?? ''));
+          const 不符 = Object.entries(spec.幂等比对 ?? {}).filter(([键, 值]) => 键 === '知识说明' ? canonical(Object.hasOwn(既有, 键) ? normalizeKnowledgeContext(既有[键]) : undefined) !== canonical(值) : String(既有[键] ?? '') !== String(值 ?? ''));
           if (不符.length > 0) {
             throw new Denied(
               'v2 条目16 · 晋升幂等键已存在但业务参数不同',
