@@ -364,6 +364,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
       'operation_query只读成员创建意图与已落盘阶段回执，可按操作UUID或精确任务id查询；拟用实例不证明宿主已创建，audited不证明宿主已停止；不提供重放、恢复或清零操作。',
       'knowledge_reuse_query仅治理身份只读知识采用声明；声明及历史采纳不证明知识有效或带来收益，不影响任务推进，不自动修改知识状态或排行。',
       '知识说明是作者声明的适用条件、已知反例及复验安排，不是验证认证；作者期限到期默认不建议，可用memory_query含待复验=true显式读取，原失效及读域限制仍适用；未设期限不代表永远有效。',
+      'memory_lifecycle可由治理身份附反馈引用核对真实负反馈；仅invalidate/demote/overturn，批准绑定服务端核验凭据，不将处理等同于复验完成或认证知识。',
       `动作清单：${ACTIONS.join(', ')}。`,
     ].join(' '),
     parameters: {
@@ -411,6 +412,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         采用知识: { type: 'array', maxItems: 16, items: { type: 'object', properties: { id: { type: 'string', minLength: 1, maxLength: 256 }, 用途: { type: 'string', minLength: 1, maxLength: 512 }, 适用判断: { type: 'string', minLength: 1, maxLength: 512 }, 使用结果: { type: 'string', enum: ['有帮助', '不适用', '发现问题', '未知'] }, 说明: { type: 'string', maxLength: 1024 } }, required: ['id', '用途', '适用判断', '使用结果'], additionalProperties: false }, description: 'task_submit可选采用声明，最多16项；省略=未知，[]=明确未声明采用，null拒。仅调用者声明，不证明知识有效、采纳或收益；不填服务器版本、来源及哈希。命令传JSON数组' },
         知识id: { type: 'string', minLength: 1, maxLength: 256, description: 'knowledge_reuse_query的精确知识id过滤；只查声明，不授权读域或修改知识状态' },
         知识说明: { type: 'object', minProperties: 1, properties: { 适用条件: { type: 'array', minItems: 1, maxItems: 16, items: { type: 'string', minLength: 1, maxLength: 512 } }, 已知反例: { type: 'array', minItems: 1, maxItems: 16, items: { type: 'string', minLength: 1, maxLength: 512 } }, 复验条件: { type: 'array', minItems: 1, maxItems: 16, items: { type: 'string', minLength: 1, maxLength: 512 } }, 复验期限: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$' } }, additionalProperties: false, description: '仅知识类memory_write或overturn新替代知识可附；至少一项作者声明，不接受null、未知字段、验证状态或哈希；期限须规范UTC秒或毫秒格式，不代表机器认证或授权' },
+        反馈引用: { type: 'object', properties: { 任务: { type: 'string', minLength: 1, maxLength: 256 }, 提交序: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER } }, required: ['任务', '提交序'], additionalProperties: false, description: '仅治理身份memory_lifecycle的invalidate/demote/overturn可附，引用真实同项目交卷中的本知识负反馈；不接受hash、proof、身份或处理状态自报。核验与完整审批仍由服务端完成，不证明复验完成' },
         记忆处置: { type: 'string', description: 'task_settle 必填（v2 条目16）：{候选键:"晋升"|"留账本"|"丢弃"} 的 JSON 对象；「晋升」也可写成 {处置:"晋升",岗位?,标题?,内容?,知识说明?}（可选蒸馏覆盖；知识说明沿用作者声明结构，缺省不补期限或验证结论）。无候选传 {} 明示。晋升会真实产出知识条目（id 见节点.记忆晋升），任一条失败则不结账（不留假结账）' },
         命名空间: { type: 'string', enum: ['通用'], description: 'memory_write 的存储命名空间：「通用」= 项目无关知识的公共命名空间，不是另一个项目（执行项目仍是当前会话项目，成员跨项目闸不变）。目前只收「知识」；Lead 写入须带依据，披露检查照跑' },
         结论: { type: 'string', description: '交卷结论（task_submit）；会审按人留，谁交卷记谁那份' },
@@ -1302,6 +1304,10 @@ function normalizeArgs(args) {
   if (typeof out.知识说明 === 'string') {
     try { out.知识说明 = JSON.parse(out.知识说明); }
     catch { throw new InvalidBody('知识说明必须是合法JSON对象；坏串不能当作省略声明。'); }
+  }
+  if (typeof out.反馈引用 === 'string') {
+    try { out.反馈引用 = JSON.parse(out.反馈引用); }
+    catch { throw new InvalidBody('反馈引用必须是合法JSON对象；坏串不能当作省略引用。'); }
   }
   for (const key of ['负责人', '判据', '依赖', '复核对象', '分歧清单', '反例面', '产出物引用', '适用岗位', '收件', '标签', '来源引用', '知识候选', '参与者']) {
     const value = out[key];

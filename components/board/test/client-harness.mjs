@@ -4036,6 +4036,20 @@ export async function runHarness() {
     passed.push(check(!(await renderView(reuseView)).text.includes('知识采用反馈'), '没有治理读域时不渲染知识反馈汇总'));
   }
 
+  {
+    const dispositionView = sampleView();
+    dispositionView.知识复用 = { 健康: '可用', 汇总: { 交卷记录: 1, 未说明: 0, 显式空: 0, 有声明: 1, 声明条目: 4, 有帮助声明: 1, 不适用声明: 1, 问题声明: 2, 来源可核: 1, 关联采纳交卷: 0 }, 处置汇总: { 负反馈条目: 3, 已见关联处置: 1, 未见关联处置: 1, 处置不可核对: 1 } };
+    const rendered = await renderView(dispositionView);
+    passed.push(check(rendered.text.includes('负反馈条目 3；已见关联处置 1；未见关联处置 1；处置不可核对 1'), '知识处置分列可核关联、未见与不可核对，保持负反馈分母'));
+    passed.push(check(rendered.text.includes('已见关联不证明问题已解决，未见不证明尚未处理'), '处置观察不冒充语义成功或未处理结论'));
+    dispositionView.知识复用.健康 = '不可用';
+    passed.push(check(!(await renderView(dispositionView)).text.includes('负反馈条目 3'), '坏反馈源不显示旧处置计数'));
+    dispositionView.知识复用.健康 = '可用';
+    dispositionView.知识复用.处置汇总 = { 负反馈条目: null, 已见关联处置: null, 未见关联处置: null, 处置不可核对: null };
+    const unknown = await renderView(dispositionView);
+    passed.push(check(unknown.text.includes('负反馈条目 未知；已见关联处置 未知') && !unknown.text.includes('负反馈条目 0'), '未知处置计数不补成零'));
+  }
+
   return { passed, liveElements: c1.elements.length, liveTexts: c1.texts.length };
 }
 

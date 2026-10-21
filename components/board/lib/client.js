@@ -3751,12 +3751,15 @@ window.__ModuleLoader__.load({
     function 知识复用概览(reuse) {
       if (!reuse) return null;
       var counts = obj(reuse.汇总) || {};
+      var dispositions = obj(reuse.处置汇总);
       var known = function (value) { return typeof value === 'number' ? String(value) : '未知'; };
       return h('section', { 'data-dshmind': 'knowledge-reuse' }, [
         h('h3', { key: 'h' }, '知识采用反馈'),
         reuse.健康 !== '可用' ? h('p', { key: 'error' }, '知识采用记录不可读，当前反馈未知。')
           : h('p', { key: 'counts' }, '交卷记录 ' + known(counts.交卷记录) + '；未说明 ' + known(counts.未说明) + '；显式空 ' + known(counts.显式空) + '；有声明 ' + known(counts.有声明)),
         reuse.健康 === '可用' ? h('p', { key: 'feedback' }, '采用声明条目 ' + known(counts.声明条目) + '；有帮助声明 ' + known(counts.有帮助声明) + '；不适用声明 ' + known(counts.不适用声明) + '；问题声明 ' + known(counts.问题声明) + '；当前来源可核 ' + known(counts.来源可核) + '；关联采纳交卷 ' + known(counts.关联采纳交卷)) : null,
+        reuse.健康 === '可用' && dispositions ? h('p', { key: 'dispositions' }, '负反馈条目 ' + known(dispositions.负反馈条目) + '；已见关联处置 ' + known(dispositions.已见关联处置) + '；未见关联处置 ' + known(dispositions.未见关联处置) + '；处置不可核对 ' + known(dispositions.处置不可核对)) : null,
+        dispositions ? h('p', { key: 'disposition-scope' }, '只核对明确引用本次负反馈的失效、降权或替代记录；已见关联不证明问题已解决，未见不证明尚未处理。') : null,
         h('p', { key: 'scope' }, '使用结果由交卷者声明；检索不等于采用，任务采纳不证明知识正确或带来收益。未说明保持未知，不回填零采用。'),
         h('p', { key: 'read', className: 'dshmind-mono' }, 'knowledge_reuse_query 可按任务或知识id分页核对；问题声明作为纠错线索，不自动改写知识状态或排行。'),
       ]);
