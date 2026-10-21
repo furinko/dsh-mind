@@ -16,6 +16,7 @@
  *  兜底   · 无匹配 ⇒ 拒绝
  */
 import { stat } from 'node:fs/promises';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { readFileSync } from 'node:fs';
 import { readTextOrNull, stripBom } from './kernel/fsx.js';
 import { digest } from './kernel/text.js';
@@ -34,6 +35,7 @@ import { readVerifiedCardSnapshot } from './card-credential.js';
 // （底层 动作+目标 kind/id）逐条消费，宏动作名不参与——本文件只读、不写。
 import { 本次放行匹配, 本次放行可匹配 } from './intervention.js';
 import { isTaskTerminal } from './task-state.js';
+import { requireLiveActor } from './runtime-actor.js';
 // 保留既有公开导出；解析实现只在tags.js，避免合并与求值各维护一份口径。
 export { extractPolicyBlock } from './tags.js';
 
@@ -136,6 +138,8 @@ const ALWAYS_INVARIANTS = '宪章 不可违背原则（§3 永不 + §12 约束�
  * 引擎实例。
  */
 export class PolicyEngine {
+  // 仅宿主真实根会话首次出生的有限读写上下文；不进入JSON、审批票或持久授权。
+  #leadBirthContext = new AsyncLocalStorage();
   /** @type {Promise<boolean>|null} in-flight reload 的共享 Promise（并发合并为一次全量加载）。 */
   #inFlightReload = null;
 
@@ -740,7 +744,7 @@ export class PolicyEngine {
    * 为什么动作层需要它：宏动作（member_spawn / 多候选 settle）有多个受管步骤、且 host
    * 创建子等副作用在中间。批准必须发生在**任何副作用之前**，所以动作层要在执行前把
    * 整份步骤计划摊出来、逐条问「会被拦吗」；有一步会拦 ⇒ 整单挂起等主权者批一份完整计划。
-   * 判据与 `#preGrantBoundary` 同一份（预审只看写死的高风险清单，审批全拦，主权者不拦）。
+   * 判据与 `#preGrantBoundary` 同一份；真实根会话首次机械出生只免该笔confirm，业务照常审批。
    *
    * @param {{ subject: object, action: string, target: object, context?: object }} spec
    * @returns {boolean}
@@ -749,10 +753,38 @@ export class PolicyEngine {
     if (subject?.kind === '主权者') return false;
     if (String(action ?? '') === 'read') return false;
     if (target?.authority && target.authority !== '自治') return false;
+    if (this.#leadBirthMatches({ subject, action, target, context })) return false;
     const level = this.intervention();
     if (level === '审批') return true;
     if (level === '预审') return this.#预审高风险(String(action), target, context);
     return false;
+  }
+
+  /** 内部宿主适配：只为一位真实live根Agent登记现行Lead卡，不能批准任何业务写。 */
+  async withLeadBirth({ 实例, 宿主, 卡版本 }, execute) {
+    if (typeof execute !== 'function' || typeof 卡版本 !== 'string' || !/^[a-f0-9]{64}$/.test(卡版本)) throw new Denied('Lead出生 · 宿主凭据不可判', '出生上下文必须绑定真实宿主根会话与精确Lead卡摘要。');
+    const project = 宿主?.project;
+    this.#assertLeadBirthHost(实例, 宿主, project);
+    const lease = { active: true, 实例, 宿主, project, 卡版本 };
+    try { return await this.#leadBirthContext.run(lease, execute); }
+    finally { lease.active = false; }
+  }
+
+  #assertLeadBirthHost(instance, host, project) {
+    const agent = requireLiveActor({ host, subject: { id: instance, kind: 'Lead', roleId: 'Lead' }, project });
+    const header = agent.session?.header;
+    if (!header || typeof header !== 'object' || header.origin === 'subagent' || (header.delegationDepth !== undefined && header.delegationDepth !== 0)) throw new Denied('Lead出生 · 只认真实宿主根会话', '子会话、缺少header或委派深度不明的实例不能走Lead出生。');
+  }
+
+  #leadBirthMatches({ subject, action, target, context = {} }) {
+    const lease = this.#leadBirthContext.getStore();
+    if (!lease?.active || !this.healthy || subject?.id !== MECHANISM_SUBJECT.id || subject?.kind !== '系统'
+      || action !== 'create' || target?.id !== lease.实例 || target.kind !== '身份' || target.authority !== '自治'
+      || target.zone !== '私有' || target.domain !== '个体' || target.project !== null || target.岗位 !== 'Lead'
+      || context.身份操作 !== '实例' || context.机制动作 !== '实例出生' || context.卡版本 !== lease.卡版本
+      || this.state.identity?.members?.[lease.实例]) return false;
+    try { this.#assertLeadBirthHost(lease.实例, lease.宿主, lease.project); return true; }
+    catch { return false; }
   }
 
   /**
@@ -1148,8 +1180,8 @@ export class PolicyEngine {
    *
    * 三条边界如实写清：
    *  ① **只读写面**：只读投影（bus.summary 等）用系统主体，读不构成扩权，不收；
-   *  ② **不豁免失联冻结与介入度审批**：本条只判「是不是机制动作」，之后 presence 闸与
-   *     `#preGrantBoundary` 照常求值——机制维护不是「主权者不在也能改治理」的许可证；
+   *  ② **不豁免失联冻结**：本条只判「是不是机制动作」，之后presence和介入度照判；
+   *     唯一有限confirm例外由withLeadBirth核验真实根Agent首次出生，其他系统写仍审批；
    *  ③ **主体来源必须可信**：模型面只有 `agentSubject(exec)`（宿主会话事实）一条路，
    *     `args.role` / `args.实例` 自报在 runAction 入口即拒（见 lib/actions.js）。
    *     所以「清单封闭」+「入口唯一」合起来才成立；少一条就有穿闸口子（有回归钉着）。
@@ -1448,7 +1480,7 @@ export class PolicyEngine {
     // （策略拒绝 · 需确认 · detail.介入挂起），工作台「待你决定」从那里投影。
     if (write && authority === '自治' && subject.kind !== '主权者') {
       const level = this.intervention();
-      const 会挂起 = level === '审批' || (level === '预审' && this.#预审高风险(action, target, context));
+      const 会挂起 = this.会挂起({ subject, action, target: { ...target, authority }, context });
       if (会挂起) {
         // v2 条目14/17（2026-10-18 补修F）：主权者「逐请求」放行后，原申请者按**冻结请求**
         // 重放。这里只解除介入度这一道 confirm 门，而且必须对上**步骤计划里的某一步**

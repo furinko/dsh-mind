@@ -1086,7 +1086,7 @@ export class RoleRegistry {
    * 已有身份不重生、不换岗、不复岗。唯有旧运行绑定可由宿主真实根会话核验后续接；
    * 身份状态、钉卡与生命周期不变，运行绑定单独经策略并记审计。
    *
-   * @param {{实例: string, 代次?: {代: string, pid?: number}, 宿主会话?: object}} spec
+   * @param {{实例: string, 代次?: {代: string, pid?: number}, 宿主会话?: object, 宿主?: object}} spec
    * @returns {Promise<{已登记: boolean, 就绪: boolean, 新建?: boolean, 岗位?: string|null, 卡版本?: string|null, 状态?: string|null, 原因?: string}>}
    *
    * **合同（2026-10-18 与 Lead/A 成员对齐，勿改形状）**：
@@ -1179,44 +1179,57 @@ export class RoleRegistry {
       });
     }
     const 钉 = this.#钉卡版本(card);
-    await this.#写卡快照(card, 钉);
-    await this.policy.check({
+    const permission = {
       subject: { ...MECHANISM_SUBJECT },
       action: 'create',
       target: { id: 实例, kind: '身份', authority: '自治', zone: '私有', domain: '个体', project: null, 岗位: 'Lead' },
-      context: { 身份操作: '实例', 机制动作: '实例出生' },
-    });
-    const 于 = this.clock.iso();
-    await this.#mutateIdentity((current) => {
-      if (current.members[实例]) return current; // 锁内复检：并发出生只留第一条
-      return {
-        ...current,
-        members: {
-          ...current.members,
-          [实例]: {
-            id: 实例,
-            岗位: 'Lead',
-            代: 1,
-            status: '在岗',
-            登记于: 于,
-            卡版本: 钉,
-            生命周期: { 创建于: 于, 封存于: null },
-            // 与 assign 同口径：出生代次 + 出生时的 pid 一起钉在实例上（不依赖 8 代截断）。
-            ...(spec.代次 ? { 代次: { 代: spec.代次.代, pid: spec.代次.pid ?? null } } : {}),
+      context: { 身份操作: '实例', 机制动作: '实例出生', 卡版本: 钉.摘要 },
+    };
+    const create = async () => {
+      await this.policy.check(permission);
+      let 新建 = false;
+      const updated = await this.#mutateIdentity(async (current) => {
+        // 与初读不同：这是实际提交点。撤回或竞争登记不许被旧预检覆盖。
+        if (current.denylist.some((d) => d.id === 实例 || d.id === 'Lead')) throw new Denied('Lead出生 · 锁内撤权', '实例或Lead岗位已撤回，不能用早先根会话读数登记。');
+        if (current.members[实例]) return current;
+        const fresh = await this.get({ id: 'Lead' });
+        if (!fresh || fresh.id !== 'Lead' || this.#钉卡版本(fresh).摘要 !== 钉.摘要) throw new Denied('Lead出生 · 锁内卡版本变化', 'Lead卡在出生准备后已变化，必须重新读取，不能钉旧卡后冒称就绪。');
+        await this.policy.check(permission);
+        await this.#写卡快照(fresh, 钉);
+        新建 = true;
+        const 于 = this.clock.iso();
+        return {
+          ...current,
+          members: {
+            ...current.members,
+            [实例]: {
+              id: 实例,
+              岗位: 'Lead',
+              代: 1,
+              status: '在岗',
+              登记于: 于,
+              卡版本: 钉,
+              生命周期: { 创建于: 于, 封存于: null },
+              ...(spec.代次 ? { 代次: { 代: spec.代次.代, pid: spec.代次.pid ?? null } } : {}),
+            },
           },
-        },
-      };
-    });
-    const 后 = (await this.#identity()).members[实例];
-    await this.audit.append({
-      动作: '主体创建',
-      主体: { ...MECHANISM_SUBJECT },
-      对象: { id: 实例, kind: '身份' },
-      依据: 'v2 条目9/10：Lead 实例随主会话出生，出生时钉当时的卡版本（机制动作，主体=系统）',
-      结果: `Lead 实例出生（第 ${后?.代 ?? 1} 代）`,
-      详情: { 岗位: 'Lead', 卡版本: 钉.摘要, 卡声明版本: 钉.声明版本, 机制动作: '实例出生' },
-    });
-    return { 已登记: true, 就绪: true, 新建: true, 岗位: 'Lead', 卡版本: 钉.摘要, 状态: '在岗' };
+        };
+      });
+      // 竞争者已登记：按真实当前身份重读，不能把封存/错岗/坏快照认成出生成功。
+      if (!新建) return this.ensureLeadInstance(spec);
+      const 后 = updated.members[实例];
+      await this.audit.append({
+        动作: '主体创建',
+        主体: { ...MECHANISM_SUBJECT },
+        对象: { id: 实例, kind: '身份' },
+        依据: 'v2 条目9/10：Lead 实例随主会话出生，出生时钉当时的卡版本（机制动作，主体=系统）',
+        结果: `Lead 实例出生（第 ${后?.代 ?? 1} 代）`,
+        详情: { 岗位: 'Lead', 卡版本: 钉.摘要, 卡声明版本: 钉.声明版本, 机制动作: '实例出生' },
+      });
+      return { 已登记: true, 就绪: true, 新建: true, 岗位: 'Lead', 卡版本: 钉.摘要, 状态: '在岗' };
+    };
+    // 没有exact live宿主事实时保留旧内部合同：审批档仍会挂起，不能按自报JSON补发Lead。
+    return spec.宿主 ? this.policy.withLeadBirth({ 实例, 宿主: spec.宿主, 卡版本: 钉.摘要 }, create) : create();
   }
 
   /** 运行绑定独立于身份生命周期。锁内复核，封存/撤权/换岗竞态一律不恢复。 */

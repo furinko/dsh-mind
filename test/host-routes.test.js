@@ -291,7 +291,8 @@ describe('Batch 7：自注册同源路由（换掉永不返回的命令通道）
       // `生成于` 是时间戳（两次调用必然不同）⇒ 比之外逐字段相同。
       const { 生成于: _a, ...路由数据 } = 路由.json.数据;
       const { 生成于: _b, ...命令数据 } = 命令.数据;
-      assert.deepEqual(Object.keys(路由数据), Object.keys(命令数据), '看板投影的顶层块必须一致');
+      // 并行读取的可选块可按完成顺序装配；JSON对象键序不是传输合同，字段和值仍须全等。
+      assert.deepEqual(Object.keys(路由数据).sort(), Object.keys(命令数据).sort(), '看板投影的顶层块集合必须一致');
       assert.deepEqual(路由数据, 命令数据, '除 生成于 外逐字段相同（同一份投影）');
     } finally {
       await t.清理();

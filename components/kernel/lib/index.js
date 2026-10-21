@@ -25,7 +25,7 @@ import { createProjectResolver } from '../../../src/project-identity.js';
 import { serializeMemoryEnvelope } from '../../../src/memory-response.js';
 import { describeFailure, Denied, Fault, InvalidBody } from '../../../src/kernel/errors.js';
 import { atomicWrite, stripBom } from '../../../src/kernel/fsx.js';
-import { ACTIONS, READ_ONLY_ACTIONS, 是写动作, runAction, 会审参与动作闸 } from '../../../lib/actions.js';
+import { ACTIONS, READ_ONLY_ACTIONS, COMMAND_ONLY_ACTIONS, 是写动作, runAction, 会审参与动作闸 } from '../../../lib/actions.js';
 // 复核读域单源（v2 条目6）：guard 是同步的 ⇒ 直接同步读任务账本 + fold，不另造一套范围判据。
 import { fold } from '../../../src/tasks.js';
 import { 复核读域 } from '../../../src/review-scope.js';
@@ -186,7 +186,9 @@ export async function apply(ctx, config = {}) {
         const 已接调度 = delegation.assemble(out, { project: 当前项目键({ agent: context?.agent }), isTeam: 是Team成员(ctx, context?.agent) });
         // v2 条目10（W7 实证）：Root 实例在**首个真实组织上下文装配前**出生/钉版，并把
         // 它钉住的那版 Lead 规程注入；子会话/伪 Lead 形状不在此列（agentSubject 判）。
-        return 注入Lead已钉规程(已接调度, context?.agent, org, logger);
+        return 注入Lead已钉规程(已接调度, context?.agent, org, logger, {
+          agent: context?.agent, agents: 取服务(ctx, 'agents'), project: 当前项目键({ agent: context?.agent }),
+        });
       }, { prepend: true }));
       调度接线回执.promptRegistered = true;
     } catch (error) {
@@ -515,26 +517,17 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         // 子会话 `agentSubject` 算出成员、`runAction` 收到的却是 Lead（两处读数都在回报里）。
         // v2 条目9/10：Lead 实例随主会话出生——**落在这里**（真实 exec 的会话事实），
         // 不在路由面/任意 Lead 形状上自动生造（那是「设置页」这类伪实例的来源）。
-        const 登记 = await 钉Lead实例(org, 主体, logger, exec?.agent?.session);
+        const 本次宿主 = 宿主服务?.(exec);
+        const 登记 = await 钉Lead实例(org, 主体, logger, exec?.agent?.session, 本次宿主);
         // v2 条目10（W5 审计反例收口）：内核入口不再「warn 后继续」——模型面的 Lead 自治写
         // 必须钉版真就绪；诊断读（status / workbench / audit_tail …）照旧放行并带读数。
         // 分类与 runAction / isConcurrencySafe 共用 READ_ONLY_ACTIONS 这一张表。
         const 本次入参 = normalizeArgs(args);
-        if (主体.kind === 'Lead' && 是写动作(本次入参.action) && 登记?.就绪 !== true) {
-          throw new Denied(
-            'v2 条目10 · Lead 自治写前钉版未就绪（内核入口）',
-            `Lead 实例 ${主体.id} 的出生/钉版读数未就绪：${登记?.原因 ?? '内核没拿到就绪读数（unknown ⇒ 按未就绪处理）'}。模型面的自治写不做「先写后补钉」——写动作 fail-closed；status / workbench / audit 等诊断读仍可用。`,
-            {
-              requireAuthority: '主权者/Lead',
-              howToChange: '先由主权者/Lead 修好 Lead 岗位卡与身份档案（在岗 + 钉版快照可读），或重新登记 Lead 实例；诊断用 status / workbench / audit_tail。',
-              detail: { 实例: 主体.id, 动作: 本次入参.action, 写动作: true, 就绪读数: 登记 ?? null },
-            },
-          );
-        }
+        断言Lead业务就绪(主体, 本次入参.action, 登记);
         const 响应 = {
           成功: true,
           ...(登记 && 登记.就绪 === false ? { 实例登记: 登记 } : {}),
-          ...(await runAction({ org, 项目: 本次项目, subject: 主体, 主体, args: 本次入参, ...(宿主服务 ? { 宿主: 宿主服务(exec) } : {}) })),
+          ...(await runAction({ org, 项目: 本次项目, subject: 主体, 主体, args: 本次入参, ...(本次宿主 ? { 宿主: 本次宿主 } : {}) })),
         };
         return 本次入参.action === 'memory_query' ? serializeMemoryEnvelope(响应) : JSON.stringify(响应, null, 1);
       }); } catch (error) {
@@ -561,6 +554,8 @@ function mindCommand(spec) {
       const line = String(rawInput ?? '').trim();
       try {
         const 本次项目 = spec.项目键(agent);
+        const 主体 = agentSubject({ agent });
+        const 本次宿主 = spec.宿主服务?.({ agent });
         if (line === '' || line === 'dashboard' || line === 'workbench') {
           // 看板走的也是「按身份切片」的同一条路：Lead 看全量，成员只读自己那片。
           // 投影本体与同源路由**共用**（`看板包`）：同一份 JSON，客户端只换传输层。
@@ -570,16 +565,16 @@ function mindCommand(spec) {
         const [head, ...rest] = line.split(/\s+/);
         const action = ALIASES[head] ?? head;
         const args = 解析参数(rest.join(' '));
-        const 主体 = agentSubject({ agent });
-        // v2 条目9/10：同一条出生路径（命令面也是真实 agent 的会话事实）。
-        const 登记 = await 钉Lead实例(spec.org, 主体, spec.logger, agent?.session);
+        const 登记 = await 钉Lead实例(spec.org, 主体, spec.logger, agent?.session, 本次宿主);
+        // 业务未就绪在冻结审批请求前拒绝；真实人侧恢复/设置仍走其原认证通道。
+        if (!COMMAND_ONLY_ACTIONS.includes(action)) 断言Lead业务就绪(主体, action, 登记);
         // `面: 'command'` 是**人侧**的标记：命令面专属动作（如改设置的 `presence`）
         // 只在这一面可达，`mind` 工具的 enum 里没有它们（模型没有这只手）。
         // `主体` 一起显式传下去：账上要记**敲这条命令的那个人**，不许归并成一个泛化的 lead。
         // P1-12（全面审查 2026-10-17）：宿主服务束读 `exec.agent`；命令面手里只有 agent 本身，
         // 修前把 agent 当 exec 传 ⇒ 宿主.agent 恒 null，/mind member_* 全抛 NO_AGENT。
         // 两个面统一成 exec 形状：命令面显式包成 { agent }（无工具调用的 signal）。
-        const result = await runAction({ org: spec.org, 项目: 本次项目, subject: 主体, 主体, args: { ...args, action }, 面: 'command', ...(spec.宿主服务 ? { 宿主: spec.宿主服务({ agent }) } : {}) });
+        const result = await runAction({ org: spec.org, 项目: 本次项目, subject: 主体, 主体, args: { ...args, action }, 面: 'command', ...(本次宿主 ? { 宿主: 本次宿主 } : {}) });
         const 响应 = { 成功: true, ...(登记 && 登记.就绪 === false ? { 实例登记: 登记 } : {}), ...result };
         return { kind: 'success', text: action === 'memory_query' ? serializeMemoryEnvelope(响应) : JSON.stringify(响应, null, 1) };
       } catch (error) {
@@ -1205,10 +1200,10 @@ function 组织说明(org) {
  * @param {object} logger
  * @returns {Promise<{已登记: boolean, 就绪: boolean, 卡版本?: string|null, 原因?: string}|null>} 非 Lead ⇒ null
  */
-async function 钉Lead实例(org, 主体, logger, 宿主会话) {
+async function 钉Lead实例(org, 主体, logger, 宿主会话, 宿主) {
   if (主体?.kind !== 'Lead') return null;
   try {
-    const 读数 = await org.registry.ensureLeadInstance({ 实例: 主体.id, 代次: org.boot?.代次, 宿主会话 });
+    const 读数 = await org.registry.ensureLeadInstance({ 实例: 主体.id, 代次: org.boot?.代次, 宿主会话, ...(宿主?.agents ? { 宿主 } : {}) });
     // 就绪 = 有登记事实 + 明确就绪 + 有卡版本摘要。缺关键位（unknown）按**未就绪**处理：
     // 写前闸不许「少一个字段就默认 ready」。
     const 就绪 = 读数?.已登记 === true && 读数?.就绪 === true && Boolean(读数?.卡版本);
@@ -1219,6 +1214,16 @@ async function 钉Lead实例(org, 主体, logger, 宿主会话) {
     logger?.warn?.(`[dsh-mind] Lead 实例钉版失败（模型面自治写将 fail-closed）：${原因}`);
     return { 已登记: false, 就绪: false, 卡版本: null, 原因 };
   }
+}
+
+function 断言Lead业务就绪(主体, action, 登记) {
+  if (主体.kind !== 'Lead' || !是写动作(action) || 登记?.就绪 === true) return;
+  throw new Denied('v2 条目10 · Lead 自治写前钉版未就绪（内核入口）',
+    `Lead 实例 ${主体.id} 的出生/钉版读数未就绪：${登记?.原因 ?? '内核没拿到就绪读数（unknown ⇒ 按未就绪处理）'}。业务写 fail-closed，在准备审批前拒绝；status / workbench / audit 等诊断读与真实人侧恢复仍可用。`, {
+      requireAuthority: '主权者/Lead',
+      howToChange: '先核对真实宿主根会话及Lead岗位卡、在岗记录与钉版快照；不能先冻结业务写再借批准补发身份。',
+      detail: { 实例: 主体.id, 动作: action, 写动作: true, 就绪读数: 登记 ?? null },
+    });
 }
 
 /**
@@ -1237,7 +1242,7 @@ async function 钉Lead实例(org, 主体, logger, 宿主会话) {
  * @param {object} org
  * @param {any} logger
  */
-async function 注入Lead已钉规程(assembly, agent, org, logger) {
+async function 注入Lead已钉规程(assembly, agent, org, logger, 宿主) {
   try {
     if (!assembly || typeof assembly !== 'object' || !Array.isArray(assembly.sections)) return assembly;
     // 只认**真实 Agent**（有 session.id 的宿主会话事实）：没有会话 id 的任意 Lead 形状
@@ -1246,7 +1251,7 @@ async function 注入Lead已钉规程(assembly, agent, org, logger) {
     if (typeof 会话id !== 'string' || !会话id.trim()) return assembly;
     const 主体 = agentSubject({ agent });
     if (主体?.kind !== 'Lead' || !主体.id) return assembly;
-    const 登记 = await 钉Lead实例(org, 主体, logger, agent.session);
+    const 登记 = await 钉Lead实例(org, 主体, logger, agent.session, 宿主);
     let 段文本;
     if (登记?.就绪 !== true) {
       段文本 = [
