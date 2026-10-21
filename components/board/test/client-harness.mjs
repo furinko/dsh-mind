@@ -1039,7 +1039,7 @@ export async function runHarness() {
   passed.push(check(c1.text.includes('1 位负责人未见活动'), '派活闭环：执行中节点亮「负责人未见活动」徽章'));
   passed.push(check(c1.text.includes('artifact-1') && c1.text.includes('artifact-2'), '产物引用显示为 chip'));
   passed.push(check(c1.text.includes('活数据'), '页头显示活数据状态'));
-  passed.push(check(c1.text.includes('预审'), '介入度档位可见'));
+  passed.push(check(c1.text.includes('50%'), '介入度档位显示百分比'));
   const marks = DEGRADED_MARKS.filter((m) => c1.text.includes(m));
   passed.push(check(marks.length === 0, '全量数据下不出现任何降级占位文本', marks.join(',')));
 
@@ -2596,7 +2596,7 @@ export async function runHarness() {
     // 介入度那格：**只显示当前生效的那一档**（一个值），而且不带边框/背景/光标。
     const 各格 = 状态条各格(面板.tree);
     const 介入格 = 各格.find((g) => g.键 === '介入度档位');
-    passed.push(check(!!介入格 && 介入格.文本.indexOf('预审') >= 0 && 介入格.文本.indexOf('放权') < 0
+    passed.push(check(!!介入格 && 介入格.文本.indexOf('50%') >= 0 && !/(^|\s)(0%|100%)/.test(介入格.文本)
       && 介入格.文本.indexOf('变更预审') < 0 && 介入格.文本.indexOf('审批') < 0,
       '① 介入度只显示当前生效那一档（其余三档不出现）', 介入格 ? 介入格.文本 : '(缺)'));
     passed.push(check(!!介入格 && collect(介入格.元素).elements.every((el) => !el.props.onClick

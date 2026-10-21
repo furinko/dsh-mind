@@ -410,6 +410,11 @@ window.__ModuleLoader__.load({
     // ── 视图模型：把宿主投影收敛成渲染用得上的形状（§2.10 + 容错别名）──────
     var EMPTY = { phase: 'init', view: null, at: '', error: '', sessionId: '', source: '', stale: false, 项目选择: null, 自动选择: null };
 
+    // 百分比是三档介入度的显示名称；配置值与审批规则沿用原有枚举。
+    function 介入度标签(value) {
+      return value === '放权' ? '0%' : value === '预审' ? '50%' : value === '审批' ? '100%' : line(value, '未知');
+    }
+
     function normalizeView(raw) {
       // 宿主命令返回 `{成功, action, 项目, 数据: <投影>}`；工具路径共用同一个包装。
       // 这里把包装与投影合并成一层，两种形状都能读，视图不必知道自己被谁调过。
@@ -4156,7 +4161,7 @@ window.__ModuleLoader__.load({
               // 保持只读投影的纪律：一个值 + 一句注记，不带边框、不带背景、不带光标、不可聚焦。
               readout('介入度档位', null, bar
                 ? h('span', { className: 'dshmind-valueLine' }, [
-                    h('span', { key: 'v' }, bar.介入度),
+                    h('span', { key: 'v' }, 介入度标签(bar.介入度)),
                     h('span', { key: 'h', className: 'dshmind-valueNote' }, '三档之一（只读）'),
                   ])
                 : null),
@@ -4977,7 +4982,7 @@ window.__ModuleLoader__.load({
         }
         var 介入度 = String(form.介入度 || '');
         if (['放权', '预审', '审批'].indexOf(介入度) < 0) {
-          set提示({ 保存中: false, 提示: '没写进去：介入度 只接受 放权 / 预审 / 审批。', 提示调: 'warn' });
+          set提示({ 保存中: false, 提示: '没写进去：介入度请选择 0% / 50% / 100%。', 提示调: 'warn' });
           return;
         }
         if (form.复核免审 !== '是' && form.复核免审 !== '否') {
@@ -5151,9 +5156,9 @@ window.__ModuleLoader__.load({
             },
           }, [
             ...(未接入 ? [h('option', { key: 'x', value: '' }, '未读到（未接入）')] : []),
-            h('option', { key: 'f', value: '放权' }, '放权'),
-            h('option', { key: 'p', value: '预审' }, '预审'),
-            h('option', { key: 'a', value: '审批' }, '审批'),
+            h('option', { key: 'f', value: '放权' }, 介入度标签('放权')),
+            h('option', { key: 'p', value: '预审' }, 介入度标签('预审')),
+            h('option', { key: 'a', value: '审批' }, 介入度标签('审批')),
           ]),
         ]),
         设置行('exempt', '复核免审', '允许 Lead 为任务登记复核豁免；关闭时仍须复核。', [

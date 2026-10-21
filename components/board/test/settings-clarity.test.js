@@ -21,6 +21,7 @@ test('设置分组清楚：首屏隐藏诊断、项目指纹及冗长回执；�
 test('字段标签与解释绑定控件，选中模式只展示相关说明',async()=>{
   const t=await settingsScene();try{
     for(const f of t.elements().filter(x=>['input','select'].includes(x.type))){assert.ok(t.elements().some(x=>x.type==='label'&&x.props.htmlFor===f.props.id));assert.ok(t.elements().some(x=>x.props.id===f.props['aria-describedby']));}
+    assert.deepEqual(collect(t.field('介入度')).elements.filter(x=>x.type==='option').map(textOf),['0%','50%','100%']);
     assert.match(textOf(t.elements().find(x=>x.props.id==='dshmind-setting-intervention-hint')),/改岗位.*发布能力/);
     t.change('介入度','审批');assert.match(textOf(t.elements().find(x=>x.props.id==='dshmind-setting-intervention-hint')),/每次自治写入/);
     assert.ok(!t.text().includes('放权=自治写直落留痕；预审='));
