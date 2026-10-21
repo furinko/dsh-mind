@@ -195,7 +195,7 @@ describe('持久目标独立攻击：宿主创建之前', () => {
   it('已暂停目标的 member_spawn 在准备及审批请求之前拒绝，零宿主创建', async () => scene(async ({ goal, task, link, pause, org, executionHost }) => {
     const g = await goal(), node = await task(); await link(g, node); await pause(g);
     let calls = 0;
-    executionHost.subagents.startContinuable = async () => ({ childId: `unexpected-${++calls}`, messageId: 'unexpected-inbox' });
+    executionHost.subagents.startContinuable = async (spec) => { calls++; return { childId: spec.childId ?? `unexpected-${calls}`, messageId: 'unexpected-inbox' }; };
     const before = (await org.audit.read({})).filter(row => row.动作 === '介入请求').length;
     await assert.rejects(() => runAction({ org, 项目: P, 主体: LEAD, 面: 'tool', 宿主: executionHost,
       args: { action: 'member_spawn', 方式: 'subagent', 岗位: '插件工程', 节点: node.id, 任务书: '暂停后不能新建执行' } }), denied);

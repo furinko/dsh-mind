@@ -243,6 +243,26 @@ export class Layout {
     return this.private(DIR.基础设施, DIR.任务图, assertPathSegment(project, '项目'), '.goal-budgets.lock');
   }
 
+  /** 模型尝试的只读用量观察；不属于额度或任务状态账本。 */
+  modelUsageLog(project) {
+    return this.private(DIR.基础设施, DIR.任务图, assertPathSegment(project, '项目'), 'model-usage.jsonl');
+  }
+
+  /** 观测独占锁，不取得任务或目标锁。 */
+  modelUsageLock(project) {
+    return this.private(DIR.基础设施, DIR.任务图, assertPathSegment(project, '项目'), '.model-usage.lock');
+  }
+
+  /** 成员创建意图与阶段观察；不替代任务、身份或宿主执行真源。 */
+  spawnOperationLog(project) {
+    return this.private(DIR.基础设施, DIR.任务图, assertPathSegment(project, '项目'), 'spawn-operations.jsonl');
+  }
+
+  /** 创建意图唯一性独占锁，不与目标/任务锁互相嵌套。 */
+  spawnOperationLock(project) {
+    return this.private(DIR.基础设施, DIR.任务图, assertPathSegment(project, '项目'), '.spawn-operations.lock');
+  }
+
   /** 会审存档（v2 条目18）：`任务图/<项目>/councils.jsonl`——与任务图同目录的独立事件流。 */
   councilLog(project) {
     return this.private(DIR.基础设施, DIR.任务图, assertPathSegment(project, '项目'), 'councils.jsonl');

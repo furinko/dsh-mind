@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { readTextOrNull, stripBom } from './kernel/fsx.js';
 import { Fault } from './kernel/errors.js';
+import { validateStoredKnowledgeAdoption } from './knowledge-reuse-contract.js';
 
 const EVENT_KINDS = new Set([
   'created', 'dispatched', 'reassigned', 'bound', 'started', 'submitted', 'reviewed',
@@ -31,6 +32,12 @@ export function parseTaskLedger(text, file = 'tasks.jsonl') {
     if (!row || typeof row !== 'object' || Array.isArray(row) ||
         typeof row.id !== 'string' || !row.id.trim() || !EVENT_KINDS.has(row.kind)) {
       fail(index + 1, '不是可识别的任务事件');
+    }
+    if (Object.hasOwn(row, '采用知识')) {
+      try {
+        if (row.kind !== 'submitted' || !Number.isSafeInteger(row.代) || row.代 < 1) fail(index + 1, '采用声明不属于明确本代交卷');
+        validateStoredKnowledgeAdoption(row.采用知识);
+      } catch { fail(index + 1, '采用知识声明结构非法'); }
     }
     rows.push(row);
   }

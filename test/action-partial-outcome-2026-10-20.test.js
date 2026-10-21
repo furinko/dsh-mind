@@ -15,11 +15,17 @@ async function scene(run) {
     const org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
     const calls = { spawn: 0, send: 0, release: 0 };
     const inbox = [];
+    const created = [];
     const host = {
       agent: { session: { id: 'outcome-lead' } },
       delegation: { authorize: () => ({ fingerprint: 'outcome-test-authority' }) },
       subagents: {
-        startContinuable: async () => ({ childId: `outcome-child-${++calls.spawn}`, messageId: 'initial-received' }),
+        startContinuable: async (spec) => {
+          calls.spawn++;
+          const childId = spec.childId ?? `outcome-child-${calls.spawn}`;
+          created.push({ id: childId, spec });
+          return { childId, messageId: 'initial-received' };
+        },
         sendMessage: async (_parent, id, content) => {
           calls.send += 1;
           const receipt = { messageId: `accepted-work-${calls.send}` };
@@ -41,7 +47,7 @@ async function scene(run) {
       await org.intervention.人侧决议({ 请求id: requestId, 决定: '批准', 通道: '设置页', 认证: '宿主 Connection 已认证' });
       return requestId;
     };
-    await run({ f, org, host, calls, inbox, act, create, approvalLevel, approve });
+    await run({ f, org, host, calls, inbox, created, act, create, approvalLevel, approve });
   } finally { await f.cleanup(); }
 }
 
@@ -71,7 +77,7 @@ async function assertDispatched(org, node, id) {
 }
 
 describe('动作真实链路的部分提交回执', () => {
-  it('派发事件已落线、仅审计失败：外层保留dispatched及真实事件序号，不说仍待派发', async () => scene(async ({ f, org, calls, act, create }) => {
+  it('派发事件已落线、仅审计失败：外层保留dispatched及真实事件序号，不说仍待派发', async () => scene(async ({ f, org, calls, created, act, create }) => {
     const node = await create();
     const append = org.audit.append.bind(org.audit);
     org.audit.append = async (row) => {
@@ -85,13 +91,13 @@ describe('动作真实链路的部分提交回执', () => {
     assert.ok(event && Number.isInteger(event.seq));
     assert.ok(output.已确认阶段.some((stage) => stage.事件 === 'dispatched' && stage.事件序号 === event.seq && stage.任务 === node.id));
     assert.doesNotMatch(output.怎么改, /节点仍在待派发/);
-    await assertDispatched(org, node, 'outcome-child-1');
+    await assertDispatched(org, node, created[0].id);
     assert.equal(calls.spawn, 1);
     assert.equal(calls.send, 0);
   }));
 
   for (const failure of ['lost-receipt', 'throw-after-accept']) {
-    it(`开工书已入inbox但${failure}：保留登记/绑定/派发，结果未知不建议重发`, async () => scene(async ({ org, host, calls, inbox, act, create }) => {
+    it(`开工书已入inbox但${failure}：保留登记/绑定/派发，结果未知不建议重发`, async () => scene(async ({ org, host, calls, inbox, created, act, create }) => {
       const node = await create();
       const send = host.subagents.sendMessage;
       host.subagents.sendMessage = async (...args) => {
@@ -105,14 +111,14 @@ describe('动作真实链路的部分提交回执', () => {
       for (const phase of ['登记及钉卡就绪', '任务绑定完成', '任务派发完成']) assert.ok(output.已确认阶段.some((stage) => stage.阶段 === phase), phase);
       assert.ok(!output.已确认阶段.some((stage) => stage.阶段 === '开工书inbox已接收'), '丢了接收回执，不能把夹具知道的事实冒称服务已确认');
       assert.match(output.怎么改, /不要重发/);
-      await assertDispatched(org, node, 'outcome-child-1');
+      await assertDispatched(org, node, created[0].id);
       assert.equal(inbox.length, 1, '反例前提：宿主已实际接受一次');
       assert.equal(calls.send, 1);
       assert.equal(calls.spawn, 1);
     }));
   }
 
-  it('开工已接受、成员创建审计失败：报告已提交及消息id，零重建或重发', async () => scene(async ({ org, calls, inbox, act, create }) => {
+  it('开工已接受、成员创建审计失败：报告已提交及消息id，零重建或重发', async () => scene(async ({ org, calls, inbox, created, act, create }) => {
     const node = await create();
     const append = org.audit.append.bind(org.audit);
     org.audit.append = async (row) => {
@@ -124,7 +130,7 @@ describe('动作真实链路的部分提交回执', () => {
     const output = partial(error, '已提交');
     assert.ok(output.已确认阶段.some((stage) => stage.阶段 === '开工书inbox已接收' && stage.消息id === inbox[0].messageId && stage.已接收 === true));
     assert.match(output.怎么改, /不要重建成员或重复发送开工书/);
-    await assertDispatched(org, node, 'outcome-child-1');
+    await assertDispatched(org, node, created[0].id);
     assert.equal(calls.spawn, 1);
     assert.equal(calls.send, 1);
   }));
@@ -148,7 +154,7 @@ describe('动作真实链路的部分提交回执', () => {
     assert.equal(calls.spawn, 0);
   }));
 
-  it('批准member_spawn成功但记完成失败：保留已知实例、任务和开工消息id', async () => scene(async ({ org, calls, inbox, act, create, approvalLevel, approve }) => {
+  it('批准member_spawn成功但记完成失败：保留已知实例、任务和开工消息id', async () => scene(async ({ org, calls, inbox, created, act, create, approvalLevel, approve }) => {
     const node = await create();
     await approvalLevel();
     const args = spawnArgs(node);
@@ -157,10 +163,10 @@ describe('动作真实链路的部分提交回执', () => {
     const error = await failed(() => act({ ...args, 审批引用: id }));
     assert.equal(error.code, 'APPROVAL_COMPLETION_AUDIT_FAILED');
     const output = partial(error, '已提交');
-    assert.ok(output.已确认阶段.some((stage) => stage.实例 === 'outcome-child-1'), '外层记账失败不能抹去已拿到的成员id');
+    assert.ok(output.已确认阶段.some((stage) => stage.实例 === created[0].id), '外层记账失败不能抹去已拿到的成员id');
     assert.ok(output.已确认阶段.some((stage) => stage.任务 === node.id), '已派发任务id必须保留');
     assert.ok(output.已确认阶段.some((stage) => stage.消息id === inbox[0].messageId && stage.已接收 === true), '开工书接收回执不能退化成仅有审批请求id');
-    await assertDispatched(org, node, 'outcome-child-1');
+    await assertDispatched(org, node, created[0].id);
     assert.equal(calls.spawn, 1);
     assert.equal(calls.send, 1);
   }));

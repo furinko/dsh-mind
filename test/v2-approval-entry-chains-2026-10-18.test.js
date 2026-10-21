@@ -31,13 +31,15 @@ async function 切档(f, org, 档位) {
 /** member_spawn 的宿主束：只记调用次数，不碰真实运行时。 */
 function 假宿主() {
   const 调用 = { 创建: 0, 发消息: 0, 停用: 0 };
+  const 已创建 = [];
   return {
     调用,
+    已创建,
     宿主: {
       agent: { session: { id: 'lead-session' } },
       delegation: { authorize: () => ({ fingerprint: 'test-auth' }), status: () => ({}) },
       subagents: {
-        startContinuable: async () => { 调用.创建 += 1; return { childId: 'member-spawned', messageId: 'initial-accepted' }; },
+        startContinuable: async (spec) => { 调用.创建 += 1; const childId = spec.childId ?? 'member-spawned'; 已创建.push({ id: childId, spec }); return { childId, messageId: 'initial-accepted' }; },
         sendMessage: async () => { 调用.发消息 += 1; return 'work-inbox-accepted'; },
         drainContinuableChildren: async () => { 调用.停用 += 1; },
       },
@@ -89,21 +91,23 @@ describe('② member_spawn 入口链', () => {
     try {
       const 节点 = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '派活链', 负责人: '插件工程', 判据: ['x'] });
       await 切档(f, org, '审批');
-      const { 宿主, 调用 } = 假宿主();
+      const { 宿主, 调用, 已创建 } = 假宿主();
+      const 原实例 = Object.keys((await org.registry.identity()).members);
       let 请求id = null;
       await assert.rejects(
         () => 跑(org, 宿主, { action: 'member_spawn', 方式: 'subagent', 任务书: '开工', 节点: 节点.id, 岗位: '插件工程' }),
         (e) => e instanceof NeedsApproval && (请求id = 取请求id(e), true),
       );
       assert.equal(调用.创建, 0, '挂起时不得先创建子（副作用前拦截）');
-      assert.equal((await org.registry.identity()).members['member-spawned'], undefined, '挂起时未登记实例');
+      assert.deepEqual(Object.keys((await org.registry.identity()).members), 原实例, '挂起时未登记任何实例');
       assert.equal((await org.tasks.get(节点.id, { 项目: P })).状态, '待派发', '挂起时节点未派发');
 
       await org.intervention.人侧决议({ 请求id, 决定: '批准', 通道: '设置页', 认证: '宿主 Connection 已认证' });
       const 回 = await 跑(org, 宿主, { action: 'member_spawn', 方式: 'subagent', 任务书: '开工', 节点: 节点.id, 岗位: '插件工程', 审批引用: 请求id });
-      assert.equal(回.实例, 'member-spawned');
+      assert.equal(回.实例, 已创建[0].spec.childId);
+      assert.equal(回.实例, 已创建[0].id);
       assert.equal(调用.创建, 1, '批准后只创建一次子');
-      assert.equal((await org.registry.identity()).members['member-spawned'].status, '在岗', '实例已登记在岗');
+      assert.equal((await org.registry.identity()).members[已创建[0].id].status, '在岗', '实例已登记在岗');
       assert.equal((await org.tasks.get(节点.id, { 项目: P })).状态, '已派发', '节点已绑定并派发');
       assert.equal(调用.发消息, 1, '开工书只发一次');
 

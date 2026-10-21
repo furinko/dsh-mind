@@ -473,6 +473,9 @@ window.__ModuleLoader__.load({
         审计尾: arr(firstOf(v, ['审计尾', '审计', 'audit'])),
         监控: obj(v.监控),
         目标: obj(v.目标),
+        模型用量: obj(v.模型用量),
+        创建操作: obj(v.创建操作),
+        知识复用: obj(v.知识复用),
         // 记忆读数：宿主没给就是 null（不装懂）；给了只取四个标量，数字真伪由投影侧负责。
         记忆: 记忆读数Of(firstOf(v, ['记忆', '记忆读数', 'memory'])),
         // 能力 × 岗位接线（2026-10-13 重做·图谱）。**宿主没给就是 null**（不装懂）：
@@ -2059,7 +2062,7 @@ window.__ModuleLoader__.load({
       var 现在 = 当前页();
       var 页体 = {
         // ① 总览＝注意力顺序：状态头 → **注意力区（要我做什么）** → 数字 → 「待你决定」明细 → 最近动态
-        overview: [头, 状态区(ctx), 目标概览({ goals: ctx.view && ctx.view.目标 }), 可视化块(ctx), 段[0] || null, 动态时间线(ctx)],
+        overview: [头, 状态区(ctx), 目标概览({ goals: ctx.view && ctx.view.目标 }), 知识复用概览(ctx.view && ctx.view.知识复用), 创建操作概览(ctx.view && ctx.view.创建操作), 模型用量概览(ctx.view && ctx.view.模型用量), 可视化块(ctx), 段[0] || null, 动态时间线(ctx)],
         graph: 图谱页(ctx),
         tasks: [段[2] || null],
         reviews: [段[1] || null],
@@ -3745,6 +3748,52 @@ window.__ModuleLoader__.load({
 
     /** 官方根席位只从实际可见引用取会话：主视图mainView、嵌入侧聊sidebarChat；不把后台持有者当正在看的会话。 */
     /** A small authenticated feedback surface. POST is confirmed by a fresh independent GET. */
+    function 知识复用概览(reuse) {
+      if (!reuse) return null;
+      var counts = obj(reuse.汇总) || {};
+      var known = function (value) { return typeof value === 'number' ? String(value) : '未知'; };
+      return h('section', { 'data-dshmind': 'knowledge-reuse' }, [
+        h('h3', { key: 'h' }, '知识采用反馈'),
+        reuse.健康 !== '可用' ? h('p', { key: 'error' }, '知识采用记录不可读，当前反馈未知。')
+          : h('p', { key: 'counts' }, '交卷记录 ' + known(counts.交卷记录) + '；未说明 ' + known(counts.未说明) + '；显式空 ' + known(counts.显式空) + '；有声明 ' + known(counts.有声明)),
+        reuse.健康 === '可用' ? h('p', { key: 'feedback' }, '采用声明条目 ' + known(counts.声明条目) + '；有帮助声明 ' + known(counts.有帮助声明) + '；不适用声明 ' + known(counts.不适用声明) + '；问题声明 ' + known(counts.问题声明) + '；当前来源可核 ' + known(counts.来源可核) + '；关联采纳交卷 ' + known(counts.关联采纳交卷)) : null,
+        h('p', { key: 'scope' }, '使用结果由交卷者声明；检索不等于采用，任务采纳不证明知识正确或带来收益。未说明保持未知，不回填零采用。'),
+        h('p', { key: 'read', className: 'dshmind-mono' }, 'knowledge_reuse_query 可按任务或知识id分页核对；问题声明作为纠错线索，不自动改写知识状态或排行。'),
+      ]);
+    }
+
+    function 创建操作概览(operations) {
+      if (!operations) return null;
+      var counts = obj(operations.汇总) || {};
+      return h('section', { 'data-dshmind': 'spawn-operations' }, [
+        h('h3', { key: 'h' }, '成员创建恢复记录'),
+        operations.健康 !== '可用' ? h('p', { key: 'error' }, '创建操作记录不可读，当前创建结果未知；不要重复创建。')
+          : h('p', { key: 'counts' }, '已记录操作 ' + String(counts.操作) + '；未收尾 ' + String(counts.未收尾) + '；已见宿主回执 ' + String(counts.已见宿主回执) + '；创建宏已审计 ' + String(counts.已审计)),
+        h('p', { key: 'scope' }, '拟用实例不等于已创建；未收尾不表示正在运行，创建宏已审计不代表成员执行或任务完成。'),
+        h('p', { key: 'read', className: 'dshmind-mono' }, 'operation_query 可按任务或操作id核对阶段与问题；缺记录不证明未创建，不自动重放或清零。'),
+      ]);
+    }
+
+    function 模型用量概览(usage) {
+      if (!usage) return null;
+      var counts = obj(usage.汇总) || {};
+      var tokens = obj(counts.已报告token) || {};
+      var coverage = obj(counts.字段覆盖) || {};
+      var collection = obj(usage.采集) || {};
+      var known = function (value) { return typeof value === 'number' ? String(value) : '未知'; };
+      var covered = function (key) { var field = obj(coverage[key]) || {}; return known(field.已知) + ' 已知 / ' + known(field.缺失) + ' 缺失'; };
+      return h('section', { 'data-dshmind': 'model-usage' }, [
+        h('h3', { key: 'h' }, '模型用量观察'),
+        h('p', { key: 'scope' }, '只含已接入观察窗口，不代表项目或目标全部用量。费用未知；用量观察不改变准入额度。'),
+        usage.健康 !== '可用' ? h('p', { key: 'error' }, '模型用量记录不可读，当前读数未知。') : h('p', { key: 'counts' }, '已观察尝试 ' + known(counts.尝试) + '；有用量 ' + known(counts.有用量) + '；无用量 ' + known(counts.无用量) + '；未结束 ' + known(counts.未结束) + '；未归因 ' + known(counts.未归因)),
+        usage.健康 === '可用' ? h('p', { key: 'tokens' }, '已报告 token：未缓存输入 ' + known(tokens.inputTokens) + '；输出 ' + known(tokens.outputTokens) + '；缓存读 ' + known(tokens.cacheReadTokens) + '；缓存写 ' + known(tokens.cacheWriteTokens) + '；提供方总数 ' + known(tokens.totalTokens)) : null,
+        usage.健康 === '可用' ? h('p', { key: 'coverage' }, '字段覆盖（尝试数）：输入 ' + covered('inputTokens') + '；输出 ' + covered('outputTokens') + '；缓存读 ' + covered('cacheReadTokens') + '；缓存写 ' + covered('cacheWriteTokens') + '；总数 ' + covered('totalTokens')) : null,
+        collection.enabled === false ? h('p', { key: 'off' }, '模型用量观察已关闭，保留的历史读数不代表当前消耗。') : null,
+        collection.attached === false || collection.failedWrites > 0 || collection.invalidFrames > 0 || collection.orphanFrames > 0 || collection.droppedWrites > 0 ? h('p', { key: 'gap' }, '采集存在未接线、丢帧或写入缺口，缺失用量不补零。') : null,
+        h('p', { key: 'detail', className: 'dshmind-mono' }, 'usage_query 可分页核对；指定 id 仅看观察开始时已归因的目标。'),
+      ]);
+    }
+
     function 目标概览(props) {
       var goals = props.goals;
       if (!goals) return null;

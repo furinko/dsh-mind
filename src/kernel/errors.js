@@ -140,12 +140,13 @@ export function describeFailure(error) {
   return { 结果: '错误', 理由: 脱路径(error instanceof Error ? error.message : String(error)) };
 }
 
+export const OUTCOME_RECEIPT_KEYS = Object.freeze(['阶段', '项目', '动作', '对象id', '任务', '前序任务', '实例', '拟用实例', '返回实例', '会审', '线程', '条目id', '请求id', '事件id', '事件序号', '事件', '消息id', '操作id', '执行键', '预算目标', '已请求', '已接收', '已停止', '已封存', '当前驻留已释放']);
+
 /** Submission facts are evidence, not permission to retry. Missing facts stay unknown. */
 function normalizeOutcome(value) {
   const states = ['未提交', '部分提交', '已提交', '未知'];
-  const keys = ['阶段', '项目', '动作', '对象id', '任务', '前序任务', '实例', '会审', '线程', '条目id', '请求id', '事件id', '事件序号', '事件', '消息id', '操作id', '执行键', '预算目标', '已请求', '已接收', '已停止', '已封存', '当前驻留已释放'];
   const receipts = (Array.isArray(value.已确认阶段) ? value.已确认阶段 : []).slice(0, 32).map(row => Object.freeze(Object.fromEntries(
-    keys.filter(key => row && Object.hasOwn(row, key) && ['string', 'number', 'boolean'].includes(typeof row[key]))
+    OUTCOME_RECEIPT_KEYS.filter(key => row && Object.hasOwn(row, key) && ['string', 'number', 'boolean'].includes(typeof row[key]))
       .map(key => [key, typeof row[key] === 'string' ? row[key].slice(0, 512) : row[key]]),
   )));
   return Object.freeze({

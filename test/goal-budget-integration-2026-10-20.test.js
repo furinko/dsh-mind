@@ -25,7 +25,7 @@ async function scene(run, audit = true) {
     let creates = 0; let body = 0; let serial = 0;
     const runtime = { agent: parent, signal: new AbortController().signal, project: P,
       delegation: { authorize: () => ({ fingerprint: 'budget-test-delegation' }) },
-      subagents: { startContinuable: async () => ({ childId: `budget-child-${++creates}`, messageId: `initial-${creates}` }), sendMessage: async () => `opened-${creates}`, drainContinuableChildren: async () => {} } };
+      subagents: { startContinuable: async (spec) => { creates++; return { childId: spec.childId ?? `budget-child-${creates}`, messageId: `initial-${creates}` }; }, sendMessage: async () => `opened-${creates}`, drainContinuableChildren: async () => {} } };
     const task = async (bind = false) => {
       const node = await org.tasks.create({ subject: LEAD, 项目: P, 描述: `受管工作${++serial}`, 负责人: '插件工程', 判据: ['内容可验证'] });
       const current = await org.goals.get(goal.id, { subject: LEAD, 项目: P });

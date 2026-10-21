@@ -15,11 +15,11 @@ import { readTaskLedger } from './task-ledger.js';
 import { stat } from 'node:fs/promises';
 import { InvalidBody, Denied, Fault } from './kernel/errors.js';
 import { objectId } from './kernel/ids.js';
-import { digest } from './kernel/text.js';
+import { digest, canonical } from './kernel/text.js';
 import { buildIndex, formatMiss, search } from './retrieval.js';
 import { memoryResponseOptions, memoryResponsePage, finalizeMemoryResponse } from './memory-response.js';
 import { DIR, MEMORY_KINDS } from './paths.js';
-import { 记忆条目在读域 } from './review-scope.js';
+import { 记忆条目在读域, 取复核读域 } from './review-scope.js';
 // 「已被合法采纳」的唯一判据住在任务图（补修K 字段合同），晋升面直接复用、不另抄状态判断。
 // 任务图的 fold 是纯函数、tasks.js 不反向依赖记忆服务 ⇒ 无环；import 真加载（不是形状桩）。
 import { fold as foldTaskEvents, 已被合法采纳 } from './tasks.js';
@@ -27,6 +27,17 @@ import { fold as foldTaskEvents, 已被合法采纳 } from './tasks.js';
 /** 归档后可读的角色（§7 表）。 */
 // v2（2026-10-18）：复核者退出主体类，复核员岗实例按 roleId 放行（两处消费点各自判）。
 const ANSWER_READERS = ['主权者', 'Lead'];
+
+/** 检索和来源观察共用基本可见性；岗位只是可选过滤，不额外授予或声称岗位隔离。 */
+function memoryEntryVisible(entry, query) {
+  if (entry.状态 === '物理删除') return false;
+  if (entry.类 === '作答' && entry.归档 === true) {
+    if (query.显式 !== true) return false;
+    if (!query.读者 || !(ANSWER_READERS.includes(query.读者.kind) || query.读者.roleId === '复核员')) return false;
+  }
+  if (query.项目 && entry.类 === '知识' && entry.项目 && entry.项目 !== query.项目 && entry.归属 !== DIR.跨项目) return false;
+  return !(query.岗位 && entry.岗位 && entry.岗位 !== query.岗位);
+}
 
 /**
  * remember 内部通道记号（2026-10-13 审查 P1-11）：`派生自` / `同锁追加` 只许 overturn
@@ -104,13 +115,15 @@ export class MemoryService {
   #lineageCache = new Map();
 
   /**
-   * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock }} spec
+   * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock, registry?: object, tasks?: object }} spec
    */
   constructor(spec) {
     this.layout = spec.layout;
     this.policy = spec.policy;
     this.audit = spec.audit;
     this.clock = spec.clock;
+    this.registry = spec.registry ?? null;
+    this.tasks = spec.tasks ?? null;
   }
 
   /**
@@ -646,6 +659,62 @@ export class MemoryService {
   }
 
   /**
+   * 内部来源观察：完整原文先过当前读域再取哈希，不经过摘要/分页，也不追加审计。
+   * 只证明捕获时读到一个有效版本；与交卷、purge没有跨账本原子事务。
+   * 来源不确定统一未核验，不返回原因、正文或路径，不阻塞合法交卷。
+   */
+  async readKnowledgeEvidence({ subject, 项目, ids } = {}) {
+    if (!Array.isArray(ids) || ids.length > 16 || ids.some(id => typeof id !== 'string' || !id.trim() || id.length > 256)) throw new InvalidBody('知识来源观察每次只接受至多16个精确id。');
+    const requested = [...new Set(ids)];
+    const unknown = () => new Map(requested.map(id => [id, { 状态: '来源未核验' }]));
+    if (!requested.length) return unknown();
+    try {
+      if (typeof 项目 !== 'string' || !项目.trim() || !subject?.id || !['成员', 'Lead', '主权者'].includes(subject.kind)) return unknown();
+      if (!this.policy?.refreshIfStale || !this.policy?.decideCurrentSync) return unknown();
+      await this.policy.refreshIfStale();
+      let actor = { ...subject };
+      if (actor.kind !== '主权者') {
+        if (!this.registry?.identity || !this.registry?.cardOf) return unknown();
+        const member = (await this.registry.identity()).members?.[actor.id];
+        if (member?.status !== '在岗' || (await this.registry.cardOf(actor.id))?.就绪 !== true) return unknown();
+        if ((actor.kind === 'Lead' && member.岗位 !== 'Lead') || (actor.kind === '成员' && member.岗位 === 'Lead') || (actor.roleId !== undefined && actor.roleId !== member.岗位)) return unknown();
+        actor = { ...actor, roleId: member.岗位 };
+      }
+      const permission = { subject: actor, action: 'read', target: { id: `记忆/检索/${项目}`, kind: '记忆', authority: '自治', zone: '私有', domain: '集体', project: 项目 }, context: { 类: '知识' } };
+      if (this.policy.decideCurrentSync(permission)?.verdict !== 'allow') return unknown();
+      const 域 = await 取复核读域({ tasks: this.tasks, 项目, subject: actor });
+      const sources = [];
+      const rows = [];
+      for (const scope of await this.#scopesFor('知识', 项目)) {
+        const file = this.layout.memoryLog(scope, '知识');
+        const text = await readTextOrNull(file);
+        sources.push({ file, text });
+        if (text === null || text === '') continue;
+        if (!text.endsWith('\n')) return unknown();
+        for (const line of text.split('\n')) {
+          if (!line.trim()) continue;
+          const row = JSON.parse(line.replace(/^\uFEFF/, ''));
+          if (!row || typeof row !== 'object' || Array.isArray(row) || typeof row.id !== 'string' || !row.id.trim()) return unknown();
+          if (isStateRow(row)) {
+            if (!['invalid', '降权', '推翻', '归档', '物理删除', '隔离', '待删除'].includes(row.追加) || typeof row.追于 !== 'string') return unknown();
+          } else if (row.类 !== '知识' || typeof row.内容 !== 'string' || Object.hasOwn(row, '指向') || Object.hasOwn(row, '追加')) return unknown();
+          rows.push(row);
+        }
+      }
+      const result = unknown();
+      for (const entry of fold(rows)) {
+        if (!result.has(entry.id) || entry.类 !== '知识' || !memoryEntryVisible(entry, { 项目, 读者: actor }) || !记忆条目在读域(entry, 域) || 是否已被否(entry)) continue;
+        const metadata = Object.fromEntries(['id', '类', '标题', '来源', '来源引用', '派生自', '归属', '项目', '岗位', '标签', '状态', '历史', '记于'].map(key => [key, entry[key] ?? null]));
+        result.set(entry.id, { 状态: '可核来源版本', 内容哈希: digest(entry.内容), 元数据哈希: digest(canonical(metadata)), 捕获于: this.clock.iso() });
+      }
+      // 读取期间变化立即降为未知；之后的变化由查询重新裁剪，不宣称跨账本原子性。
+      for (const source of sources) if (await readTextOrNull(source.file) !== source.text) return unknown();
+      if (this.policy.decideCurrentSync(permission)?.verdict !== 'allow') return unknown();
+      return result;
+    } catch { return unknown(); }
+  }
+
+  /**
    * 检索。默认把归档后的作答排除在检索面之外；`显式: true` 才把它拉回来（§7）。
    * 默认按「当前有效视图」召回与浏览，失效正文须明确 `含失效: true` 才返回。
    * 有查询词只返回命中条目；id 详情复用同一过滤面，不另开跨项目或归档读口。
@@ -703,12 +772,7 @@ export class MemoryService {
       // 归档作答的可读性矩阵（§7 · 2026-10-13 审查 P1-9 修复）：默认不召回；显式要看时
       // 还必须自报读者身份且在可读名单内——此前第二个 if 依赖 `query.读者` 存在才检查，
       // 「显式:true 但不传读者」会让整道检查静默跳过（fail-open）。
-      if (entry.类 === '作答' && entry.归档 === true) {
-        if (query.显式 !== true) continue;
-        if (!query.读者 || !(ANSWER_READERS.includes(query.读者.kind) || query.读者.roleId === '复核员')) continue;
-      }
-      if (query.项目 && entry.类 === '知识' && entry.项目 && entry.项目 !== query.项目 && entry.归属 !== DIR.跨项目) continue;
-      if (query.岗位 && entry.岗位 && entry.岗位 !== query.岗位) continue;
+      if (!memoryEntryVisible(entry, query)) continue;
       visible.push(entry);
     }
 

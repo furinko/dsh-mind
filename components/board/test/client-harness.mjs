@@ -3985,6 +3985,57 @@ export async function runHarness() {
     passed.push(check(unavailable.text.includes('目标记录暂不可读，当前状态未知') && !unavailable.text.includes('尚未登记持续目标'), '坏目标读面呈现未知，不冒充空目标'));
   }
 
+  {
+    const usageView = sampleView();
+    usageView.模型用量 = { 健康: '可用', 完整: false, token: null, 费用: null,
+      汇总: { 尝试: 3, 有用量: 2, 无用量: 1, 未结束: 1, 未归因: 1,
+        已报告token: { inputTokens: 0, outputTokens: 12, cacheReadTokens: 5, cacheWriteTokens: null, totalTokens: null },
+        字段覆盖: { inputTokens: { 已知: 2, 缺失: 1 }, outputTokens: { 已知: 2, 缺失: 1 }, cacheReadTokens: { 已知: 1, 缺失: 2 }, cacheWriteTokens: { 已知: 0, 缺失: 3 }, totalTokens: { 已知: 0, 缺失: 3 } } },
+      采集: { enabled: true, attached: true, failedWrites: 0, invalidFrames: 0, orphanFrames: 0, droppedWrites: 0 } };
+    const partial = await renderView(usageView);
+    passed.push(check(partial.text.includes('已观察尝试 3；有用量 2；无用量 1；未结束 1；未归因 1'), '模型观察显示缺用量、未结束与未归因分母'));
+    passed.push(check(partial.text.includes('未缓存输入 0；输出 12；缓存读 5；缓存写 未知；提供方总数 未知'), '模型token精确区分已知零与缺失，不推算总数'));
+    passed.push(check(partial.text.includes('字段覆盖（尝试数）：输入 2 已知 / 1 缺失') && partial.text.includes('总数 0 已知 / 3 缺失'), '模型字段分别展示来源分母，不把部分已知和冒充全部观察'));
+    passed.push(check(partial.text.includes('不代表项目或目标全部用量') && partial.text.includes('费用未知') && partial.text.includes('不改变准入额度'), '部分用量不冒充目标总量或费用硬额度'));
+    usageView.模型用量.采集.enabled = false;
+    passed.push(check((await renderView(usageView)).text.includes('观察已关闭，保留的历史读数不代表当前消耗'), '关闭观察仍明确历史读数的覆盖缺口'));
+    usageView.模型用量.采集.droppedWrites = 1;
+    passed.push(check((await renderView(usageView)).text.includes('采集存在未接线、丢帧或写入缺口'), '模型采集队列缺口不会静默补零'));
+    usageView.模型用量.健康 = '不可用';
+    const broken = await renderView(usageView);
+    passed.push(check(broken.text.includes('模型用量记录不可读，当前读数未知') && !broken.text.includes('未缓存输入 0'), '坏用量账不显示旧数字为有效读数'));
+    usageView.模型用量 = null;
+    passed.push(check(!(await renderView(usageView)).text.includes('模型用量观察'), '没有模型用量读域时不渲染治理统计'));
+  }
+
+  {
+    const operationView = sampleView();
+    operationView.创建操作 = { 健康: '可用', 完整: false, 汇总: { 操作: 3, 未收尾: 2, 已见宿主回执: 2, 已审计: 1 } };
+    const rendered = await renderView(operationView);
+    passed.push(check(rendered.text.includes('已记录操作 3；未收尾 2；已见宿主回执 2；创建宏已审计 1'), '创建恢复读数消费阶段观察而不从任务数猜创建'));
+    passed.push(check(rendered.text.includes('拟用实例不等于已创建') && rendered.text.includes('未收尾不表示正在运行'), '创建恢复分开候选身份、已见回执和未知执行'));
+    passed.push(check(rendered.text.includes('不代表成员执行或任务完成') && rendered.text.includes('operation_query'), '创建宏完成不冒成员执行成功，并提供同源查询'));
+    operationView.创建操作.健康 = '不可用';
+    const broken = await renderView(operationView);
+    passed.push(check(broken.text.includes('创建操作记录不可读，当前创建结果未知') && !broken.text.includes('已记录操作 3'), '坏创建账不显示旧数值或当作空操作'));
+    operationView.创建操作 = null;
+    passed.push(check(!(await renderView(operationView)).text.includes('成员创建恢复记录'), '没有治理读域时不显示创建操作统计'));
+  }
+
+  {
+    const reuseView = sampleView();
+    reuseView.知识复用 = { 健康: '可用', 完整: false, 汇总: { 交卷记录: 4, 未说明: 2, 显式空: 1, 有声明: 1, 声明条目: 2, 有帮助声明: 1, 不适用声明: 0, 问题声明: 1, 来源可核: 1, 关联采纳交卷: 1 } };
+    const rendered = await renderView(reuseView);
+    passed.push(check(rendered.text.includes('交卷记录 4；未说明 2；显式空 1；有声明 1'), '知识反馈区分未知、明确空与有声明分母'));
+    passed.push(check(rendered.text.includes('有帮助声明 1；不适用声明 0；问题声明 1') && rendered.text.includes('当前来源可核 1'), '知识反馈消费声明与当前来源可核数，不假造效果率'));
+    passed.push(check(rendered.text.includes('任务采纳不证明知识正确或带来收益') && rendered.text.includes('不自动改写知识状态或排行'), '知识采用与采纳不升级为语义或因果保证'));
+    reuseView.知识复用.健康 = '不可用';
+    const broken = await renderView(reuseView);
+    passed.push(check(broken.text.includes('知识采用记录不可读，当前反馈未知') && !broken.text.includes('交卷记录 4'), '坏反馈账保持未知，不显示旧计数为现值'));
+    reuseView.知识复用 = null;
+    passed.push(check(!(await renderView(reuseView)).text.includes('知识采用反馈'), '没有治理读域时不渲染知识反馈汇总'));
+  }
+
   return { passed, liveElements: c1.elements.length, liveTexts: c1.texts.length };
 }
 

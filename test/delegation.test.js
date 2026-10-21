@@ -45,7 +45,7 @@ function 假宿主({ delegation = new DelegationPolicy(授权配置), agent = { 
     startContinuable: async (spec) => {
       if (!(spec?.signal instanceof AbortSignal)) throw new Error('contract: spec.signal required');
       assert.equal(Object.hasOwn(spec.request, 'signal'), false, 'continuable signal belongs to outer spec');
-      calls.spawn.push(spec); return { childId: `sub-${calls.spawn.length}`, messageId: 'm0' };
+      calls.spawn.push(spec); return { childId: spec.childId ?? `sub-${calls.spawn.length}`, messageId: 'm0' };
     },
     sendMessage: async (_sender, id, content) => { calls.subSend.push({ id, content }); return `sm-${calls.subSend.length}`; },
     interrupt: (id) => { calls.interrupts.push(id); },
@@ -203,9 +203,10 @@ describe('member_* 动作 · 统一治理入口', () => {
       const { 宿主, calls } = 假宿主();
       const 节点 = await 建待发节点(org);
       const r = await 执行(org, 宿主, { action: 'member_spawn', 方式: 'subagent', 岗位: '插件工程', 节点: 节点.id, 任务书: '做乙事' });
-      assert.equal(r.实例, 'sub-1');
+      assert.equal(r.实例, calls.spawn[0].childId);
+      assert.match(r.实例, /^[a-f0-9-]{36}$/i, '正式成员使用服务端预留的UUID');
       assert.equal(calls.spawn[0].request.parent, 宿主.agent, '必须传原始 exec.agent，不能传组织主体');
-      assert.equal(calls.subSend[0].id, 'sub-1');
+      assert.equal(calls.subSend[0].id, calls.spawn[0].childId);
     } finally { await f.cleanup(); }
   });
 
@@ -267,14 +268,14 @@ describe('member_* 动作 · 统一治理入口', () => {
   it('member_spawn 部分失败②：派发失败 ⇒ 实例已登记如实报，不回滚也不报就绪', async () => {
     const { f, org } = await 现场Org();
     try {
-      const { 宿主 } = 假宿主();
+      const { 宿主, calls } = 假宿主();
       org.tasks.dispatch = async () => { throw new Error('注入：派发失败'); };
       const 节点 = await 建待发节点(org);
       await assert.rejects(
         () => 执行(org, 宿主, { action: 'member_spawn', 方式: 'subagent', 岗位: '插件工程', 节点: 节点.id, 任务书: 'x' }),
-        (e) => e.code === 'MEMBER_SPAWN_DISPATCH_FAILED' && e.detail.已登记 === true && e.detail.实例 === 'sub-1',
+        (e) => e.code === 'MEMBER_SPAWN_DISPATCH_FAILED' && e.detail.已登记 === true && e.detail.实例 === calls.spawn[0].childId,
       );
-      assert.equal((await org.registry.identity()).members['sub-1'].status, '在岗', '登记是既成事实，报阶段而非静默回滚');
+      assert.equal((await org.registry.identity()).members[calls.spawn[0].childId].status, '在岗', '登记是既成事实，报阶段而非静默回滚');
     } finally { await f.cleanup(); }
   });
 

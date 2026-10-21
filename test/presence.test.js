@@ -60,6 +60,10 @@ const 冻结动作表 = [
   'goal_link_task',
   // 受管准入尝试预算只读；人侧配置与内部reserve/settle不属于模型动作。
   'budget_query',
+  // SDK观察用量只有只读查询；不开放模型上报、结算或费用预算入口。
+  'usage_query',
+  'operation_query',
+  'knowledge_reuse_query',
   'task_create',
   // task_reassign（task-机制缺口-10th0 · 裁决③ · 2026-10-13）：改派负责人。
   // 过这一关时回答「是不是改设置的动作」：不是——它改的是任务图节点的负责人名单，

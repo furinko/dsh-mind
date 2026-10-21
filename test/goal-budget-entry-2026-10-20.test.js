@@ -15,6 +15,16 @@ import * as kernel from '../components/kernel/lib/index.js';
 
 const P = 'goal-budget-entry';
 const invalid = (e) => e instanceof InvalidBody || e instanceof Denied;
+const existingOperationFor = (taskId, operationId) => error => {
+  assert.ok(error instanceof Fault);
+  assert.equal(error.code, 'MEMBER_SPAWN_OPERATION_EXISTS');
+  assert.match(operationId, /^[0-9a-f-]{36}$/);
+  const receipt = describeFailure(error);
+  assert.equal(receipt.可重试, false);
+  assert.ok(receipt.已确认阶段.some(stage => stage.任务 === taskId && stage.操作id === operationId), '重复派活须提供同一原任务、同一持久操作凭据');
+  assert.match(receipt.怎么改, /operation_query/);
+  return true;
+};
 const goalArgs = (key) => ({ action: 'goal_create', 请求键: key, 期望结果: '在受管准入预算内完成可复验交付', 约束: [], 禁止工具: [], 完成依据: ['交付通过核对'], 来源: '本轮用户意图转述', 下一步: '安排正式执行' });
 const budgetArgs = (id, rev, limit) => ({ action: 'budget_decide', id, 预算修订: rev, 上限: limit });
 
@@ -24,7 +34,7 @@ async function scene(run) {
     const org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
     const calls = { spawn: 0, send: 0, release: 0 };
     const host = { agent: { session: { id: 'lead' } }, delegation: { authorize: () => ({ fingerprint: 'budget-entry-authorized' }) }, subagents: {
-      startContinuable: async () => ({ childId: `budget-child-${++calls.spawn}`, messageId: 'started' }),
+      startContinuable: async (spec) => { calls.spawn++; return { childId: spec.childId ?? `budget-child-${calls.spawn}`, messageId: 'started' }; },
       sendMessage: async () => ({ messageId: `work-${++calls.send}` }),
       drainContinuableChildren: async () => { calls.release += 1; },
     } };
@@ -142,8 +152,10 @@ describe('目标预算动作入口', () => {
     assert.equal(result.未决占用, 1, 'host抛错不证明创建结果，可以保留准入占用但不能编造结算');
     const key = result.尝试页.条目[0].执行键;
     assert.ok(describeFailure(error).已确认阶段?.some(stage => stage.预算目标 === goal.id && stage.执行键 === key), 'host结果未知仍保留已确认的占用事实');
-    await assert.rejects(() => spawn(node), invalid);
+    const operationId = describeFailure(error).已确认阶段.find(stage => stage.任务 === node.id && stage.操作id)?.操作id;
+    await assert.rejects(() => spawn(node), existingOperationFor(node.id, operationId));
     assert.equal(calls.spawn, 1, '失败后没有无条件免费重试');
+    assert.deepEqual(await query(), result, '已有意图阻止重复派活，不增加准入或补造结算');
   }));
 
   it('reserve已落线但审计失败：host零调用、占用保持未决，公开回执保留服务执行键', async () => scene(async ({ org, goal, calls, configure, task, spawn, query }) => {
@@ -200,8 +212,9 @@ describe('目标预算动作入口', () => {
     assert.equal(budget.未决占用, 0);
     assert.equal(budget.尝试页.条目[0].执行键, result.预算.执行键);
     assert.equal((await log()).trim().split('\n').map(JSON.parse).filter(row => row.kind === 'budget_settled').length, 1);
-    await assert.rejects(() => spawn(node), invalid);
+    await assert.rejects(() => spawn(node), existingOperationFor(node.id, result.操作.操作id));
     assert.equal(calls.spawn, 1, '预算记账故障不得重建已创建成员');
+    assert.deepEqual(await query(), budget, '重复调用不新增预算事实');
   }));
 
   it('query只开放真实当前Lead/主权者，成员、复核员、停岗Lead与自报身份均拒', async () => scene(async ({ org, goal, configure, query, act, log }) => {

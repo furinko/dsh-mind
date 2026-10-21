@@ -42,6 +42,7 @@ import { ReviewExperimentService } from '../../../src/review-experiments.js';
 import { EXPERIMENT_RECIPES } from '../../../src/review-experiment-files.js';
 import { createKernelObservations } from './observability-hooks.js';
 import { createGoalBudgetHooks } from './goal-budget-hooks.js';
+import { createModelUsageHooks } from './model-usage-hooks.js';
 
 export const name = 'dsh-mind-kernel';
 export const inject = ['tools'];
@@ -57,7 +58,7 @@ let 上次告警键 = null;
 
 /**
  * @param {any} ctx cordis 上下文
- * @param {{ project?: string, home?: string, factoryRoot?: string, privateRoot?: string, projectBindings?: object[], memberFileAccess?: {read?: string[], write?: string[]}, audit工具调用?: boolean, reviewExperiments?: object }} [config]
+ * @param {{ project?: string, home?: string, factoryRoot?: string, privateRoot?: string, projectBindings?: object[], memberFileAccess?: {read?: string[], write?: string[]}, audit工具调用?: boolean, 观测模型用量?: boolean, reviewExperiments?: object }} [config]
  */
 export async function apply(ctx, config = {}) {
   const logger = ctx?.logger ?? console;
@@ -103,6 +104,10 @@ export async function apply(ctx, config = {}) {
   org.budgetHooks = budgetHooks;
   const disposeBudgetHooks = budgetHooks.attach(ctx);
   ctx.effect?.(() => disposeBudgetHooks);
+  const modelUsageHooks = createModelUsageHooks({ org, projectOf: 当前项目键, logger, enabled: config.观测模型用量 !== false });
+  org.modelUsageHooks = modelUsageHooks;
+  const disposeModelUsage = modelUsageHooks.attach(ctx);
+  ctx.effect?.(() => disposeModelUsage);
   刷新工具总范围(org, logger);
   // 主权者随时可能改工具总范围：定时重读，让改动生效而不必重启。
   // R04（审查 2026-10-16 · 生效闭环）：同一节拍也刷**策略引擎**——修前只刷工具范围，
@@ -355,6 +360,9 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
       '数字组织的唯一入口：查看组织状态、任务图、记忆、能力库、消息总线、审计、探针，并执行组织动作。',
       '所有写动作都过策略引擎；被拒绝时结果里带「哪条规则 + 改它要什么授权」。',
       '读取请用 status / workbench / memory_query / capability_list / audit_tail；写入用 task_* / memory_write / bus_send 等。',
+      'usage_query只读当前接线的assistant-stream观察窗口；已报告token字段汇总可能不完整，目标token总量和费用仍未知，不修改准入预算。',
+      'operation_query只读成员创建意图与已落盘阶段回执，可按操作UUID或精确任务id查询；拟用实例不证明宿主已创建，audited不证明宿主已停止；不提供重放、恢复或清零操作。',
+      'knowledge_reuse_query仅治理身份只读知识采用声明；声明及历史采纳不证明知识有效或带来收益，不影响任务推进，不自动修改知识状态或排行。',
       `动作清单：${ACTIONS.join(', ')}。`,
     ].join(' '),
     parameters: {
@@ -365,7 +373,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         role: { type: 'string', description: '兼容字段，不授予身份或岗位权限；实际主体由宿主会话与身份档案确定，自报 Lead 会被拒绝' },
         实例: { type: 'string', description: 'registry_assign / task_bind 的实例 id（必填；省略会被拒，不再按岗位推断）' },
         工具文件范围: { type: 'object', properties: { 读: { type: 'array', items: { type: 'string' } }, 写: { type: 'array', items: { type: 'string' } } }, additionalProperties: false, description: 'task_dispatch / member_spawn：派发时冻结的通用文件读写绝对根。须在部署者 memberFileAccess 可授上限内；不从 cwd 授权，不允许 shell/未知执行类。' },
-        id: { type: 'string', description: '对象 id（持久目标 / 任务节点 / 记忆条目 / 挂起项 / 能力名——capability_read 按 id 读，不读 名）；budget_query及人侧budget_decide必填目标id' },
+        id: { type: 'string', description: '对象 id（持久目标 / 任务节点 / 记忆条目 / 挂起项 / 能力名——capability_read 按 id 读，不读 名）；budget_query及人侧budget_decide必填目标id。usage_query可选同项目精确目标id，省略观察当前项目全部已记录尝试。operation_query可选操作UUID，省略按当前项目查询' },
         期望结果: { type: 'string', maxLength: 4000, description: 'goal_create 的用户期望结果；Lead goal_revise不能改目标本意，人侧改动走goal_decide' },
         约束: { type: 'array', maxItems: 32, items: { type: 'string', maxLength: 1000 }, description: '持久目标的约束；Lead仅可追加，移除或替换需人侧goal_decide。命令使用JSON数组' },
         禁止工具: { type: 'array', maxItems: 6, items: { type: 'string', enum: ['read', 'read_image', 'glob', 'grep', 'write', 'edit'] }, description: '持久目标关联任务的额外原生工具禁止项；只能收紧，不能授予或扩张任何权限' },
@@ -380,7 +388,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         说明: { type: 'string', maxLength: 2000, description: 'goal_complete必填：基于逐条证据的完成判断说明' },
         证据: { type: 'array', maxItems: 32, items: { type: 'string' }, description: 'goal_complete的精确task id；须关联本目标且真源已合法采纳，产物清单仍有效' },
         完成核对: { type: 'array', maxItems: 32, items: { type: 'object', properties: { 依据: { type: 'string', maxLength: 1000 }, 任务: { type: 'array', minItems: 1, maxItems: 32, items: { type: 'string' } } }, required: ['依据', '任务'], additionalProperties: false }, description: 'goal_complete逐条核对当前完成依据；每项精确出现一次，关联任务须包含于证据并覆盖全部证据。语义核对仍由执行者负责' },
-        条数: { type: 'integer', minimum: 1, maximum: 50, description: 'goal_query列表摘要或budget_query准入尝试每页条数，默认20最大50；按偏移续页' },
+        条数: { type: 'integer', minimum: 1, maximum: 50, description: 'goal_query目标摘要、budget_query准入尝试、usage_query观察尝试、operation_query创建操作或knowledge_reuse_query采用声明每页条数，默认20最大50；按偏移续页。usage_query与operation_query汇总仍包含所选范围全部已记录事实' },
         // 描述/原因 的分工按动作实际消费面写（设计评审 F2b 普查 · 2026-10-15）：task_pending
         // 的 handler 读的是 原因（服务层 markPending 的 待决原因），不读 描述——修前 描述
         // 的说明写着「task_create / task_pending」两用，照它传参会静默落空。
@@ -399,6 +407,8 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         分歧清单: { type: 'string' },
         反例面: { type: 'string' },
         知识候选: { type: 'string', description: '交卷附的知识候选（task_submit，v2 条目15）：值得蒸馏成知识的点，多个用逗号分隔或 JSON 数组。成员不得直接写知识——候选随卷入账，结账时 Lead 逐条判' },
+        采用知识: { type: 'array', maxItems: 16, items: { type: 'object', properties: { id: { type: 'string', minLength: 1, maxLength: 256 }, 用途: { type: 'string', minLength: 1, maxLength: 512 }, 适用判断: { type: 'string', minLength: 1, maxLength: 512 }, 使用结果: { type: 'string', enum: ['有帮助', '不适用', '发现问题', '未知'] }, 说明: { type: 'string', maxLength: 1024 } }, required: ['id', '用途', '适用判断', '使用结果'], additionalProperties: false }, description: 'task_submit可选采用声明，最多16项；省略=未知，[]=明确未声明采用，null拒。仅调用者声明，不证明知识有效、采纳或收益；不填服务器版本、来源及哈希。命令传JSON数组' },
+        知识id: { type: 'string', minLength: 1, maxLength: 256, description: 'knowledge_reuse_query的精确知识id过滤；只查声明，不授权读域或修改知识状态' },
         记忆处置: { type: 'string', description: 'task_settle 必填（v2 条目16）：{候选键:"晋升"|"留账本"|"丢弃"} 的 JSON 对象；「晋升」也可写成 {处置:"晋升",岗位?,标题?,内容?}（可选蒸馏覆盖，缺省按来源绑定岗位/现有正文推导）。无候选传 {} 明示。晋升会真实产出知识条目（id 见节点.记忆晋升），任一条失败则不结账（不留假结账）' },
         命名空间: { type: 'string', enum: ['通用'], description: 'memory_write 的存储命名空间：「通用」= 项目无关知识的公共命名空间，不是另一个项目（执行项目仍是当前会话项目，成员跨项目闸不变）。目前只收「知识」；Lead 写入须带依据，披露检查照跑' },
         结论: { type: 'string', description: '交卷结论（task_submit）；会审按人留，谁交卷记谁那份' },
@@ -417,16 +427,16 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         内容: { type: 'string', description: '正文内容（bus_send 的消息正文 / memory_write 的条目内容）' },
         来源: { type: 'string', description: '怎么知道的；记忆写入必填（谁记的默认取主体）。goal_create/goal_revise及人侧目标修订必填，记录意图转述或修订来源；来源声明不等于用户已核验或授权' },
         来源引用: { type: 'string', description: '证据/来源对象 id，多个用逗号分隔（契约A 血缘）；know-/exp-/pref-/answ- 查账本、task- 查任务图、artifact- 本批不校验，悬空拒写。记忆整理岗写知识（受限晋升）必须恰好带 1 个 task-* 且该任务已被合法采纳（同项目）' },
-        任务: { type: 'string', description: 'goal_link_task关联的精确任务id；只建立追溯关系，不授权限。memory_write / memory_lifecycle / capability_publish 的成员调用必填：声明本次写入归属的任务上下文；策略引擎仍按节点负责人名单比对。记忆整理岗写知识时=绑着你的执行中任务' },
+        任务: { type: 'string', description: 'goal_link_task关联、operation_query或knowledge_reuse_query筛选的精确任务id；关联只建立追溯关系，不授权限。memory_write / memory_lifecycle / capability_publish 的成员调用必填：声明本次写入归属的任务上下文；策略引擎仍按节点负责人名单比对。记忆整理岗写知识时=绑着你的执行中任务' },
         授权引用: { type: 'string', description: '主权者授权依据 id（audit_correct 必填：决议 / 任务节点 id；原样进链接受复核。v2 起复核员任命/复核豁免不再用授权引用——复核员是普通岗位卡，豁免走部署设置「复核免审」开关）' },
         岗位: { type: 'string', description: '岗位名（registry_assign / memory_* / capability_* / member_spawn）；记忆写入时 = 知识双标签的岗位标签（受限晋升必填：这条知识对哪个岗位可召回，不是整理它的人）；member_spawn 时须已有岗位卡' },
         标签: { type: 'string' },
         文本: { type: 'string', description: '检索查询词' },
         返回模式: { type: 'string', enum: ['摘要', '全文'], description: 'memory_query 默认摘要；按 id 查看全文仍受内容预算、项目与读域限制' },
         内容预算: { type: 'number', description: 'memory_query 的命中与条目两数组 JSON 字符预算（UTF-16代码单元）；默认12000，512至32000整数，元数据同样计入' },
-        偏移: { type: 'number', description: 'memory_query 列表分页偏移；按返回的 下一偏移 继续，有文本时只在实际命中中分页' },
+        偏移: { type: 'number', description: 'memory_query列表分页偏移按下一偏移继续；goal_query/budget_query/usage_query/operation_query/knowledge_reuse_query为非负整数页偏移。知识复用按采用页.下一偏移续页并带同一数据版本，内容预算可能使实际条数少于请求条数' },
         正文偏移: { type: 'number', description: 'memory_query 按 id 且返回模式=全文时续读正文；使用返回的 下一正文偏移，与列表偏移分开' },
-        数据版本: { type: 'string', description: 'memory_query 续页必须带上一页返回的64位SHA256数据版本；可见数据或查询口径变化时从0重新读取，不默默拼接不同版本' },
+        数据版本: { type: 'string', description: 'memory_query或knowledge_reuse_query续页必须带上一页返回的64位SHA256数据版本；可见数据或查询口径变化时从0重新读取，不默默拼接不同版本' },
         显式: { type: 'boolean', description: '检索时是否显式包含归档作答' },
         含失效: { type: 'boolean', description: '检索时是否包含已失效/被推翻的记忆（默认 false：只召回当前有效视图）' },
         全量: { type: 'boolean', description: 'workbench 是否越过「成员只读自己那片」的切片' },
@@ -1280,6 +1290,11 @@ function normalizeArgs(args) {
   // 命令键值对没有 JSON 数字类型；只转换显式数字参数（分页、目标/预算修订与上限），不改自由文本。
   for (const key of ['limit', '条数上限', '内容预算', '偏移', '正文偏移', '条数', '修订', '预算修订', '上限']) {
     if (typeof out[key] === 'string' && /^(0|[1-9]\d*)$/.test(out[key])) out[key] = Number(out[key]);
+  }
+  // 采用知识是结构声明，命令只接受JSON数组；不把坏串或null改成空声明。
+  if (typeof out.采用知识 === 'string') {
+    try { out.采用知识 = JSON.parse(out.采用知识); }
+    catch { throw new InvalidBody('采用知识必须是合法JSON数组；坏串不能当作未声明或空声明。'); }
   }
   for (const key of ['负责人', '判据', '依赖', '复核对象', '分歧清单', '反例面', '产出物引用', '适用岗位', '收件', '标签', '来源引用', '知识候选', '参与者']) {
     const value = out[key];

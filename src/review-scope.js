@@ -21,6 +21,12 @@ export function 是复核员岗(主体) {
   return 主体?.kind === '成员' && 主体?.roleId === '复核员';
 }
 
+/** 从本项目任务真源取复核读域；工具检索与交卷来源观察共用，调用参数不能授予读域。 */
+export async function 取复核读域({ tasks, 项目, subject }) {
+  if (!是复核员岗(subject)) return null;
+  return 复核读域({ 节点: await tasks.list({ 项目 }), 主体: subject, 项目 });
+}
+
 /**
  * 节点载体上的显式复核对象引用（归一去重；没有就是空数组）。
  * 这是「验哪一单」的唯一结构化载体——自由文本、任务书、依赖都不算。

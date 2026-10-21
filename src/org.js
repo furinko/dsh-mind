@@ -32,6 +32,9 @@ import { projectWorkbench, sliceForViewer } from './workbench.js';
 import { ObservabilityService } from './observability.js';
 import { projectGoalSnapshot } from './goal-view.js';
 import { GoalBudgetService } from './goal-budget.js';
+import { ModelUsageService } from './model-usage.js';
+import { SpawnOperationService } from './spawn-operations.js';
+import { KnowledgeReuseService } from './knowledge-reuse.js';
 
 /** 默认项目键。名字即目录名（§14.4-5）。 */
 export const DEFAULT_PROJECT = 'default';
@@ -69,10 +72,14 @@ export class Org {
     const registry = new RoleRegistry({ layout, policy, audit, clock });
     // memory 先建、再交给 tasks（W3 批3）：结账（tasks.settle）要归档该项目的作答，
     // 而归档逻辑只有一处（MemoryService.archiveAnswers）——不在任务图里再写一份。
-    const memory = new MemoryService({ layout, policy, audit, clock });
+    const memory = new MemoryService({ layout, policy, audit, clock, registry });
     const tasks = new TaskGraph({ layout, policy, audit, clock, memory, registry });
+    memory.tasks = tasks;
     const goals = tasks.goals;
     const budgets = new GoalBudgetService({ layout, policy, audit, clock, registry, goals });
+    const modelUsage = new ModelUsageService({ layout, policy, clock, registry, goals });
+    const spawnOperations = new SpawnOperationService({ layout, policy, clock, registry });
+    const knowledgeReuse = new KnowledgeReuseService({ layout, policy, registry, memory });
     const bus = new MessageBus({ layout, policy, audit, clock, tasks });
     const capability = new CapabilityLibrary({ layout, policy, audit, clock, store });
     const upgrade = new UpgradeManager({ layout, policy, audit, clock });
@@ -117,6 +124,9 @@ export class Org {
       tasks,
       goals,
       budgets,
+      modelUsage,
+      spawnOperations,
+      knowledgeReuse,
       bus,
       memory,
       capability,
@@ -279,8 +289,12 @@ export class Org {
     const visible = 读者 ? sliceForViewer(view, 读者) : view;
     // 成员目前没有目标全文读域；不从任务可见性推导整个目标/其他任务的可读性。
     const 可读目标 = !读者 || 读者.kind === '主权者' || (读者.kind === 'Lead' && identity.members?.[读者.id]?.岗位 === 'Lead' && identity.members?.[读者.id]?.status === '在岗');
-    if (!可读目标) visible.目标 = null;
+    if (!可读目标) { visible.目标 = null; visible.模型用量 = null; visible.创建操作 = null; visible.知识复用 = null; }
     else {
+      visible.知识复用 = !读者 ? await this.knowledgeReuse.summary(项目) : await this.knowledgeReuse.summaryFor({ subject: 读者, 项目 });
+      visible.创建操作 = !读者 ? this.spawnOperations.summary(项目) : await this.spawnOperations.summaryFor({ subject: 读者, 项目 });
+      const 用量读面 = !读者 ? this.modelUsage.summary(项目) : await this.modelUsage.summaryFor({ subject: 读者, 项目 });
+      visible.模型用量 = 用量读面 ? { ...用量读面, 采集: this.modelUsageHooks?.health() ?? { enabled: null, attached: false, 完整: false } } : null;
       try { visible.目标 = projectGoalSnapshot(this.goals, this.goals.rawSnapshot(项目), snapshot.节点, 10, this.budgets); }
       catch (error) { visible.目标 = { 健康: '不可用', 故障码: error.code ?? 'GOAL_READ_FAILED', 总数: null, 目标: [] }; }
     }

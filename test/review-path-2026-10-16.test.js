@@ -65,7 +65,7 @@ function 假宿主() {
     startContinuable: async (spec) => {
       if (!(spec?.signal instanceof AbortSignal)) throw new Error('contract: spec.signal required');
       assert.equal(Object.hasOwn(spec.request, 'signal'), false, 'continuable signal belongs to outer spec');
-      calls.spawn.push(spec); return { childId: `sub-${calls.spawn.length}`, messageId: 'm0' };
+      calls.spawn.push(spec); return { childId: spec.childId ?? `sub-${calls.spawn.length}`, messageId: 'm0' };
     },
     sendMessage: async (_sender, id, content) => { calls.subSend.push({ id, content }); return `sm-${calls.subSend.length}`; },
     interrupt: (id) => { calls.interrupts.push(id); },

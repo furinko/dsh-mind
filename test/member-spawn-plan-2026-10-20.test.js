@@ -16,11 +16,12 @@ async function scene(run) {
   try {
     const org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
     const calls = { spawn: 0, message: 0, release: 0 };
+    const created = [];
     const host = {
       agent: { session: { id: 'lead-session' } },
       delegation: { authorize: () => ({ fingerprint: 'shared-plan-authorized' }) },
       subagents: {
-        startContinuable: async () => ({ childId: `plan-child-${++calls.spawn}`, messageId: 'initial-inbox' }),
+        startContinuable: async (spec) => { calls.spawn++; const childId = spec.childId ?? `plan-child-${calls.spawn}`; created.push({ id: childId, spec }); return { childId, messageId: 'initial-inbox' }; },
         sendMessage: async () => ({ messageId: `work-inbox-${++calls.message}` }),
         drainContinuableChildren: async () => { calls.release += 1; },
       },
@@ -33,7 +34,7 @@ async function scene(run) {
     const create = (负责人 = '插件工程') => org.tasks.create({ subject: LEAD, 项目: P, 描述: `计划-${负责人}`, 负责人, 判据: ['产生可验收产物'] });
     const act = (args) => runAction({ org, 项目: P, subject: LEAD, 主体: LEAD, 面: 'tool', 宿主: host, args });
     const level = async (介入度) => { await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度 })); await org.policy.reload(); };
-    await run({ f, org, host, calls, create, act, level });
+    await run({ f, org, host, calls, created, create, act, level });
   } finally { await f.cleanup(); }
 }
 
@@ -74,6 +75,7 @@ describe('member_spawn 共享计划', () => {
   }));
 
   it('现有岗位不匹配反例：放权/审批两档均零创建、零登记、零审批请求', async () => scene(async ({ org, calls, create, act, level }) => {
+    const before = Object.keys((await org.registry.identity()).members);
     for (const 介入度 of ['放权', '审批']) {
       await level('放权');
       const node = await create('文档整理');
@@ -83,7 +85,7 @@ describe('member_spawn 共享计划', () => {
     }
     assert.equal(calls.spawn, 0);
     assert.equal(calls.message, 0);
-    assert.equal(Object.keys((await org.registry.identity()).members).filter((id) => id.startsWith('plan-')).length, 0);
+    assert.deepEqual(Object.keys((await org.registry.identity()).members), before, '非法岗位不留下任何新实例，不依赖固定ID前缀');
     assert.equal((await org.audit.read({})).filter((row) => row.动作 === '介入请求').length, 0, '不可执行的业务不应让用户白批一单');
   }));
 
@@ -154,17 +156,17 @@ describe('member_spawn 共享计划', () => {
     assert.equal(calls.spawn, 1);
   }));
 
-  it('计划不会代替真实写前策略复判；登记被拒时仍不伪报就绪', async () => scene(async ({ org, calls, create, act }) => {
+  it('计划不会代替真实写前策略复判；登记被拒时仍不伪报就绪', async () => scene(async ({ org, calls, created, create, act }) => {
     const node = await create();
     const check = org.policy.check.bind(org.policy);
     org.policy.check = async (spec) => {
-      if (spec.action === 'create' && spec.target?.kind === '身份' && String(spec.target.id).startsWith('plan-child')) throw new Denied('动态拒绝', '实际登记时权限已撤回');
+      if (spec.action === 'create' && spec.target?.kind === '身份' && spec.target.id === created[0]?.id) throw new Denied('动态拒绝', '实际登记时权限已撤回');
       return check(spec);
     };
     await assert.rejects(() => act(request(node)), (e) => e instanceof Fault && e.code === 'MEMBER_SPAWN_ASSIGN_FAILED');
     assert.equal(calls.spawn, 1);
     assert.equal(calls.release, 1);
     assert.equal(calls.message, 0);
-    assert.equal((await org.registry.identity()).members['plan-child-1'], undefined);
+    assert.equal((await org.registry.identity()).members[created[0].id], undefined);
   }));
 });

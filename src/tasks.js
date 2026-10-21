@@ -14,6 +14,7 @@
 import { appendLines, readTextOrNull, serializeByKey, withLock } from './kernel/fsx.js';
 import { parseTaskLedger, readTaskLedger } from './task-ledger.js';
 import { Denied, Fault, InvalidBody } from './kernel/errors.js';
+import { normalizeKnowledgeAdoption, validateKnowledgeEvidenceSource } from './knowledge-reuse-contract.js';
 import { 复核对象引用 } from './review-scope.js';
 import { artifactReferences, captureArtifactManifest, verifyArtifactManifest } from './artifact-manifest.js';
 import { ToolFileAuthority } from './tool-file-scope.js';
@@ -167,7 +168,7 @@ export function 是只读旧会审(node) {
 export class TaskGraph {
   /**
    * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock, memory?: import('./memory.js').MemoryService, registry?: import('./registry.js').RoleRegistry }} spec
-   *   `memory` 只被 `settle`（结账归档作答）用；`registry` 只被派发闸（`#assertOwnersSeated`）用。
+   *   `memory` 负责结账归档及可选交卷来源观察；`registry` 提供派发、绑定与复核的真实身份。
    *   两者都由装配点（org.js）负责接上；**直接构造不接它们 = 夹具口径**（对应机制自动退位，
    *   不是旁路——装配面 org.js 恒注入，见 test/dispatch-liveness.test.js 的夹具口径用例）。
    */
@@ -528,6 +529,8 @@ export class TaskGraph {
    * @param {{ subject: object, 项目: string, 产出物引用?: string[], 结论?: string }} spec
    */
   async submit(id, spec) {
+    // 第一个异步边界前固定本人声明；省略和显式空数组不能互相回填。
+    const adoption = normalizeKnowledgeAdoption(spec.采用知识);
     const node = await this.#require(id, spec.项目);
     this.#requireTransition(node, 'submit');
     await this.#checkWrite(id, node, spec, 'submit');
@@ -568,7 +571,18 @@ export class TaskGraph {
         layout: this.layout, policy: this.policy, fileAuthority: this.#toolFileAuthority,
         subject: spec.subject, task: { ...nodeInLock, 项目: spec.项目 },
       });
-      return { ...event, 交付物清单 };
+      let 采用知识;
+      if (adoption !== undefined) {
+        let sources;
+        try { sources = await this.memory?.readKnowledgeEvidence?.({ subject: spec.subject, 项目: spec.项目, ids: adoption.map(item => item.id) }); }
+        catch { sources = null; }
+        采用知识 = { 版本: 1, 声明状态: adoption.length ? '已声明' : '显式空', 条目: adoption.map(item => {
+          let 来源 = { 状态: '来源未核验' };
+          try { if (sources instanceof Map) 来源 = validateKnowledgeEvidenceSource(sources.get(item.id)); } catch { /* 不让坏观察回执妨碍交卷。 */ }
+          return { ...item, 来源 };
+        }) };
+      }
+      return { ...event, 代: nodeInLock.代, 交付物清单, ...(采用知识 === undefined ? {} : { 采用知识 }) };
     }, this.#transitionGuard(id, 'submit'));
     return 节点;
   }
@@ -1922,6 +1936,7 @@ export function fold(rows) {
           反例面: row.反例面 ?? [],
           // v2 条目15/16：知识候选随交卷折回——结账时的记忆处置按它列「交卷候选」。
           知识候选: row.知识候选 ?? [],
+          ...(Number.isSafeInteger(row.代) ? { 提交序: 序, 代: row.代 } : {}),
           产出物引用: row.产出物引用 ?? [],
           于: row.at,
         }];
