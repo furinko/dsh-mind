@@ -122,6 +122,24 @@ export async function apply(ctx, config = {}) {
     return () => clearInterval(timer);
   }, 'dsh-mind: 工具总范围与策略引擎热更新');
 
+  // 同一份调度判据在范围闸激活前就必须存在：effect 可以晚到或缺席，不能在两道闸之间
+  // 留下裸创建窗口。接线状态只取本次内存注册事实，磁盘回执仅供诊断。
+  const delegation = 建调度策略(config.delegation, logger);
+  const 调度接线回执 = { promptRegistered: false, creationGuardRegistered: false };
+  const 创建判定 = (exec) => observations.guard(exec, 'kernel.delegation', () => {
+    if (!isCreationTool(exec?.name)) return undefined;
+    try { return delegation.creationGuard(exec, { subject: agentSubject(exec), project: 当前项目键(exec) }); }
+    catch (error) { return `[dsh-mind] 调度项目身份不可判定，按 fail-closed 拒绝：${错误消息(error)}`; }
+  });
+  const 关闭调度接线 = () => {
+    // 必须先恢复首闸兜底并关闭判据，再移除专用创建闸；撤销器本身也可能触发工具调用。
+    调度接线回执.creationGuardRegistered = false;
+    调度接线回执.promptRegistered = false;
+    delegation.close();
+  };
+  // 单独承接整个组件的生命周期，包含创建 effect 尚未执行就卸载的情况。
+  ctx.effect?.(() => 关闭调度接线, 'dsh-mind: 调度创建闸生命周期');
+
   // R06（审查 2026-10-16）：安全必需依赖（宿主工具闸）注册失败 ⇒ 拒绝激活——修前仅 warn
   // 后继续：guards=0、mind 工具照常在、探针还绿（审查实证，最需要红灯的时候它绿着）。
   // 两件事：① 注册**回执**写给探针（org.toolGuardReceipts，闸在位探针从此查真实宿主链）；
@@ -142,10 +160,14 @@ export async function apply(ctx, config = {}) {
   try {
     // 单调闸：只读部署偏好，不读路径，不接受任何人的「通融」。
     // v2 条目6/7 补修：同一个 guard 里先判**复核员角色边界**（见 闸判定），不新注册平行 guard。
-    启动范围闸.activate((exec) => observations.guard(exec, 'kernel.tool-scope', (observationBlock) => {
-      try { return 闸判定(exec, 项目, { org, ctx, 项目键: 当前项目键, observationBlock, budgetHooks }); }
-      catch (error) { return `[dsh-mind] 工具闸无法确认项目/任务权限，按 fail-closed 拒绝：${错误消息(error)}`; }
-    }));
+    启动范围闸.activate((exec) => {
+      const 原范围判定 = observations.guard(exec, 'kernel.tool-scope', (observationBlock) => {
+        try { return 闸判定(exec, 项目, { org, ctx, 项目键: 当前项目键, observationBlock, budgetHooks }); }
+        catch (error) { return `[dsh-mind] 工具闸无法确认项目/任务权限，按 fail-closed 拒绝：${错误消息(error)}`; }
+      });
+      if (原范围判定 !== undefined) return 原范围判定;
+      return 调度接线回执.creationGuardRegistered ? undefined : 创建判定(exec);
+    });
     闸回执.范围闸 = { registered: true, error: null };
     await atomicWrite(org.layout.guardReceiptFile(), `${JSON.stringify(闸回执, null, 2)}\n`);
   } catch (error) {
@@ -162,8 +184,6 @@ export async function apply(ctx, config = {}) {
   // Lead 自主调度授权（2026-10-15 主权者指令「由 lead 根据需求判断使用团队或子智能体或都不使用」）：
   // 配置在 profile 层 dsh-mind-kernel.delegation（主权者的机器，不归模型/记忆改）；坏配置按未授权
   // 处理（fail-closed：宁可退回官方默认「用户显式点名」，不静默放权）。
-  const delegation = 建调度策略(config.delegation, logger);
-  const 调度接线回执 = { promptRegistered: false, creationGuardRegistered: false };
   /**
    * R06 回执的 effect 侧落盘（2026-10-17 冷启动验收修复）：首写 + 2 秒后一次幂等确认写。
    * 修前即发即忘且失败静默——冷启动实证回执永停「未尝试」而闸本体行为面在位（假阴性
@@ -175,8 +195,13 @@ export async function apply(ctx, config = {}) {
     .catch((error) => logger.error?.(`[dsh-mind] 工具闸回执落盘失败（第${attempt}次，将幂等重写）：${错误消息(error)}`));
   /** R06：安全必需闸注册失败且不可降级运行时置位——装配在注册 mind 工具前据此中止。 */
   let 拒绝激活 = null;
+  let 调度接线已尝试 = false;
   ctx.effect?.(() => {
+    // 已卸载的迟到回调以及同一回调的重复执行均不能重新注册或恢复授权。
+    if (delegation.closed || 调度接线已尝试) return () => {};
+    调度接线已尝试 = true;
     const 撤销器 = [];
+    let 确认写 = null;
     try {
       // 提示词唯一改动点：官方 team:policy 的首段原位换成部署授权，其余协作纪律保持官方原文。
       // prepend=true 让本监听最后落值；官方 complete-prompt preset 会在 waterfall 后强制还原，
@@ -199,16 +224,12 @@ export async function apply(ctx, config = {}) {
       // R06：注册失败不再仅 warn——回执记红（闸在位探针见红）；若调度授权在本项目生效，
       // 裸创建闸缺席 = 授权面无闸 ⇒ 拒绝激活（降级只读自述）；未授权项目的创建闸本就
       // 不承重，记红继续（异常本身仍值得看见）。
-      撤销器.push(ctx.tools.guard((exec) => observations.guard(exec, 'kernel.delegation', () => {
-        if (!isCreationTool(exec?.name)) return undefined;
-        try { return delegation.creationGuard(exec, { subject: agentSubject(exec), project: 当前项目键(exec) }); }
-        catch (error) { return `[dsh-mind] 调度项目身份不可判定，按 fail-closed 拒绝：${错误消息(error)}`; }
-      })));
+      撤销器.push(ctx.tools.guard(创建判定));
       闸回执.调度创建闸 = { registered: true, error: null };
       调度接线回执.creationGuardRegistered = true;
       // effect 回调是同步的（宿主的 disposer 契约）：首写即发即忘，确认写兜覆写竞态与瞬态失败。
       落闸回执(1);
-      const 确认写 = setTimeout(() => { if (!delegation.closed) 落闸回执(2); }, 2_000);
+      确认写 = setTimeout(() => { if (!delegation.closed) 落闸回执(2); }, 2_000);
       if (typeof 确认写.unref === 'function') 确认写.unref();
     } catch (error) {
       闸回执.调度创建闸 = { registered: false, error: 错误消息(error) };
@@ -219,10 +240,11 @@ export async function apply(ctx, config = {}) {
       }
     }
     return () => {
+      关闭调度接线();
+      clearTimeout(确认写);
       for (const 撤 of 撤销器) {
         try { 撤?.(); } catch { /* 已在卸载路上 */ }
       }
-      delegation.close();
     };
   }, 'dsh-mind: Lead 调度授权');
   if (拒绝激活) {
