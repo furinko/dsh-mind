@@ -923,9 +923,9 @@ export async function runHarness() {
     '只 require react 系模块（未 require 宿主内部包）', a.strict.asked.join(',')));
 
   const injected = a.calls.inject.slice().sort();
-  passed.push(check(injected.length === 4
-    && injected[0] === 'main' && injected[1] === 'settings.section' && injected[2] === 'shell.overlay' && injected[3] === 'sidebar.panellist',
-    'inject 的槽位恰好是 main + sidebar.panellist + settings.section + shell.overlay', a.calls.inject.join(',')));
+  // 真实桌面验收：全局overlay会覆盖Git等非会话面；普通与空白会话共用输入区的附加席位。
+  passed.push(check(injected.join('|') === ['conversation.input.dock', 'main', 'settings.section', 'sidebar.panellist'].join('|'),
+    'inject 仅含看板、设置及会话输入区审批，不注册全局悬浮层', a.calls.inject.join(',')));
   // ⚠️ 这一条**改过**，理由必须留在注释里（不是把历史的红偷偷删掉）：
   //
   // 旧断言是「不再注册 settings.section」，理由是「看板已搬出设置页」。那条决定说的是

@@ -3896,29 +3896,8 @@ window.__ModuleLoader__.load({
       ]);
     }
 
-    function 审批覆盖层(props) {
-      var useSessions = props && props.useSessions;
-      var state = typeof useSessions === 'function' ? useSessions(function (value) { return value; }) : null;
-      var ids = [];
-      var problem = '';
-      if (!state || state.phase !== 'ready' || !Array.isArray(state.ids) || !obj(state.byId)) {
-        problem = '介入审批不可用：所属会话目录尚未就绪，不能猜测归属。';
-      } else {
-        state.ids.forEach(function (id) {
-          var row = state.byId[id];
-          var refs = row && obj(row.retainedBy);
-          if (typeof id === 'string' && id && row && row.id === id && refs
-            && (Number(refs.mainView) > 0 || Number(refs.sidebarChat) > 0) && ids.indexOf(id) < 0) ids.push(id);
-        });
-        if (!ids.length) problem = '介入审批不可用：缺少所属会话，未选择会话或没有可见会话引用；不会借用其他会话。';
-      }
-      return h('aside', { 'data-dshmind': 'approval-overlay', style: { position: 'fixed', zIndex: 1000,
-        top: 'var(--dsh-frame-overlay-top, 20px)', right: '20px', width: 'min(760px, calc(100vw - 40px))',
-        maxHeight: 'calc(100vh - 80px)', overflow: 'auto', pointerEvents: 'none' } },
-        problem ? h('div', { role: 'status', 'data-dshmind': 'approval-unavailable', style: { padding: '8px', background: 'var(--dsw-alias-bg-base, #fff)', color: 'var(--dsw-alias-label-primary, #222)', pointerEvents: 'auto' } }, problem)
-          : ids.map(function (id) { return h(会话审批, { key: id, sessionId: id }); }));
-    }
-
+    // 0.2.1 的 conversation.input.dock 是 session-scope additive list：普通/空白会话共用，
+    // 只在真实 session+input 区域挂载。不扫描 retainedBy，不接管 composer 或输入框。
     /** 所属会话的人侧入口；只消费 intervention 的持久请求，不新建第二套审批状态机。 */
     function 会话审批(props) {
       var sessionId = line(props && props.sessionId, '');
@@ -3926,6 +3905,7 @@ window.__ModuleLoader__.load({
       var setSnap = snapState[1];
       var life = useState(function () { return { active: false, seq: 0, busy: false, refresh: null, sessionId: '' }; })[0];
       var dismiss = useState('');
+      var manual = useState(null);
       var snap = snapState[0].sessionId === sessionId ? snapState[0] : { phase: 'reading', 清单: [], error: '', 提示: '', 忙: '' };
       var route = ROUTE_INTERVENTION + '?sessionId=' + encodeURIComponent(sessionId);
       useEffect(function () {
@@ -3975,6 +3955,7 @@ window.__ModuleLoader__.load({
           setSnap(function (old) { return Object.assign({}, old, { 提示: '完整冻结计划或审阅指纹不可用，不能盲批。' }); }); return;
         }
         life.busy = true;
+        manual[1](sessionId);
         var epoch = life.seq;
         setSnap(function (old) { return Object.assign({}, old, { 忙: item.请求id, 提示: '' }); });
         runCommand(activeCtx, sessionId, { method: 'POST', path: route, body: { 请求id: item.请求id, 决定: decision, 审阅指纹: item.审阅指纹 } }).then(function (out) {
@@ -3996,15 +3977,15 @@ window.__ModuleLoader__.load({
 
       var rows = arr(snap.清单);
       var openRows = rows.filter(function (item) { return ['已完成', '已拒绝', '已撤销', '已失效'].indexOf(item.状态) < 0; });
-      var signature = sessionId + '|' + (snap.error || openRows.map(function (item) { return item.请求id + ':' + item.审阅指纹; }).join('|'));
-      var visible = dismiss[0] !== signature && (openRows.length > 0 || snap.phase === 'error' || !!snap.提示);
+      var signature = sessionId + '|' + openRows.map(function (item) { return item.请求id + ':' + item.审阅指纹; }).join('|');
+      var visible = manual[0] === sessionId || (snap.phase === 'live' && openRows.length > 0 && dismiss[0] !== signature);
       var labelId = 'dshmind-approval-' + sessionId;
-      return h('div', { 'data-dshmind': 'conversation-approval', 'data-session-id': sessionId, style: { pointerEvents: 'auto' } }, [
-        h('p', { key: 'scope', style: { margin: '4px 0', fontSize: '12px' } }, '所属会话：' + sessionId),
-        h('button', { key: 'open', type: 'button', className: 'dshmind-set__btn', onClick: function () { dismiss[1](''); if (life.refresh) life.refresh(); } },
+      return h('div', { 'data-dshmind': 'conversation-approval', 'data-session-id': sessionId, style: { width: '100%', minWidth: 0, maxWidth: '100%', pointerEvents: 'auto' } }, [
+        h('button', { key: 'open', type: 'button', className: 'dshmind-set__btn', 'aria-expanded': visible, title: '所属会话：' + (sessionId || '缺失（不猜归属）'), onClick: function () { manual[1](sessionId); dismiss[1](''); if (life.refresh) life.refresh(); } },
           '介入审批 · ' + (snap.phase === 'error' ? '读取失败' : snap.phase === 'reading' ? '读取中' : String(openRows.length))),
         visible ? h('section', { key: 'dialog', role: 'dialog', 'aria-labelledby': labelId, 'data-dshmind': 'approval-dialog',
-          style: { position: 'relative', zIndex: 1, width: '100%', maxHeight: 'min(560px, calc(100vh - 160px))', overflow: 'auto', padding: '20px', borderRadius: '12px', border: '1px solid var(--dsw-alias-border-l2, #888)', background: 'var(--dsw-alias-bg-base, #fff)', color: 'var(--dsw-alias-label-primary, #222)', boxShadow: '0 12px 40px #0004', textAlign: 'left', whiteSpace: 'normal' } }, [
+          // 正常会话区文档流，宽度服从输入区；长冻结参数换行，限高后仅卡片内滚动。
+          style: { position: 'relative', width: '100%', minWidth: 0, maxWidth: '100%', boxSizing: 'border-box', maxHeight: 'min(560px, calc(100vh - 160px))', overflow: 'auto', overflowWrap: 'anywhere', marginTop: '8px', padding: '12px', borderRadius: '8px', border: '1px solid var(--dsw-alias-border-l2, #888)', background: 'var(--dsw-alias-bg-base, #fff)', color: 'var(--dsw-alias-label-primary, #222)', textAlign: 'left', whiteSpace: 'normal' } }, [
           h('h2', { key: 'h', id: labelId }, '会话待批准'),
           h('p', { key: 'session' }, '所属会话：' + (sessionId || '缺失（不猜归属）')),
           h('p', { key: 'boundary' }, '先审阅全部冻结参数与每一步计划。批准仅解除介入门，不替申请者执行；硬拒、版本、复核与原申请者校验仍生效。'),
@@ -4025,7 +4006,7 @@ window.__ModuleLoader__.load({
             ]);
           }),
           h('button', { key: 'refresh', type: 'button', className: 'dshmind-set__btn', onClick: function () { if (life.refresh) life.refresh(); } }, '重新读取'),
-          h('button', { key: 'close', type: 'button', className: 'dshmind-set__btn', onClick: function () { dismiss[1](signature); } }, '稍后处理'),
+          h('button', { key: 'close', type: 'button', className: 'dshmind-set__btn', onClick: function () { manual[1](null); dismiss[1](signature); } }, '稍后处理'),
         ]) : null,
       ]);
     }
@@ -5254,7 +5235,7 @@ window.__ModuleLoader__.load({
      *  2. `sidebar.panellist`（list，声明方 `@deepseek-ai/dsh-client-ui-sidebar`）—— 侧边栏里的面板入口；
      *  3. `settings.section`（list，声明方 `@deepseek-ai/dsh-client-ui-settings-*`）—— 官方设置页里的
      *     「心智设置」分区。
-     *  4. `shell.overlay` —— 脱离会话header/composer的生命周期，按官方可见引用呈现所属会话审批。
+     *  4. `conversation.input.dock` —— 实际会话输入区的审批卡片，普通/空白会话共用。
      *
      * ⚠️ **看板面板 ≠ 设置页**，这是两件被分开的东西，别再合并回去：
      * 面板是常驻运维视图，§9 工作台只读 ⇒ 面板里**一个写控件都没有**；
@@ -5307,8 +5288,8 @@ window.__ModuleLoader__.load({
           label: function () { return '心智 · 数字组织'; },
         }, MindGlyph);
       });
-      登记('shell.overlay', function () {
-        return slots.register({ name: 'shell.overlay', id: 'dsh-mind-intervention', order: 60 }, 审批覆盖层);
+      登记('conversation.input.dock', function () {
+        return slots.register({ name: 'conversation.input.dock', id: 'dsh-mind-intervention', order: 60 }, 会话审批);
       });
       登记('settings.section', function () {
         return slots.register({

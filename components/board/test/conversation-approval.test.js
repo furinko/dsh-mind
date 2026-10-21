@@ -20,17 +20,21 @@ function env(handler, options = {}) {
     return jsonResponse({ 成功: true });
   }, ...options });
   const strict = makeStrictRequire(); const plugin = loaded.definition.factory(strict.require); const {slots, calls: registrations} = makeSlots();
-  const native = { name: 'conversation.session.header.actions', id: 'native-action' }; slots.register(native, () => null);
+  const native = { name: 'conversation.input.dock', id: 'native-action' }; slots.register(native, () => null);
   const dispose = plugin.apply(makeCtx({ slots, sessions: makeSessions([{id: 'wrong-global-last', main: true}]) }));
   const entry = registrations.register.find(x => x.options.id === 'dsh-mind-intervention'); assert.ok(entry, '必须注册真实会话入口');
   return { loaded, calls, entry, registrations, dispose, async drain() {
     for (let i = 0; i < 20; i += 1) { await Promise.all([...pending]); await settle(30); if (!pending.size) return; }
     throw Error('真实传输未收敛，不能清理夹具或宣称完成');
-  }, mount(sessionId = A) {
-    const props = { sessionId };
-    const renderer = createApprovalRenderer(entry.Component, { useSessions: select => select({phase:'ready',ids:props.sessionId?[props.sessionId]:[],byId:props.sessionId?{[props.sessionId]:{id:props.sessionId,retainedBy:{mainView:1}}}:{}}) });
+  }, mount(sessionId = A, blank = false) {
+    const props = { sessionId, session: { blank }, input: {} };
+    const renderer = createApprovalRenderer(entry.Component, props);
     renderer.flush(); return {renderer,props};
-  }, mountRoot(snapshot) {const renderer=createApprovalRenderer(entry.Component,{useSessions:select=>select(snapshot)});renderer.flush();return renderer;} };
+  }, mountPane(props) {
+    // 已安装 ConversationContent 只在实际会话和 input 就绪时挂载 additive dock。
+    const HostMain = p => p.panel === 'conversation' && p.ready !== false ? {type:entry.Component,key:p.sessionId,props:{sessionId:p.sessionId,session:{},input:{}}} : null;
+    const renderer=createApprovalRenderer(HostMain,props);renderer.flush();return renderer;
+  } };
 }
 async function flush(r) { await settle(30); r.flush(); await settle(20); r.flush(); }
 function elements(r) { return collect(r.tree, {skipStyle:true}).elements; }
@@ -40,33 +44,39 @@ function click(r, text) { const b = button(r,text); assert.ok(b, 'button missing
 function response(sessionId, rows) { return jsonResponse({ 成功:true, 会话:sessionId, 待决:rows }); }
 function tick(e) { for (const t of e.loaded.timers.intervals) t.fn(); }
 
-test('hideChrome与blank有真实mainView引用时不依赖header也主动显示完整冻结计划', async()=>{
-  const e=env(()=>response(A,[row('hidden-header-valid')]));
-  const r=e.mountRoot({phase:'ready',ids:[A],byId:{[A]:{id:A,blank:true,hideChrome:true,retainedBy:{mainView:1}}}});await flush(r);
-  assert.equal(e.entry.options.name,'shell.overlay');assert.ok(dialog(r));assert.match(textOf(r.tree),/hidden-header-valid/);r.unmount();e.dispose();
-});
-
-test('embedded仅sidebarChat真实引用无主header时仍按嵌入会话id主动呈现', async()=>{
-  const e=env(()=>response(B,[row('embedded-valid',B)]));const r=e.mountRoot({phase:'ready',ids:[B],byId:{[B]:{id:B,retainedBy:{sidebarChat:1}}}});await flush(r);
-  assert.ok(dialog(r));assert.match(textOf(r.tree),/embedded-valid/);assert.ok(e.calls.every(req=>new URL(req.url,'http://local').searchParams.get('sessionId')===B));r.unmount();e.dispose();
-});
-
-test('主会话与嵌入会话各自呈现不串正文，后台controller和gateway会话不可被扫描或借用', async()=>{
-  const e=env(req=>{const id=new URL(req.url,'http://local').searchParams.get('sessionId');return response(id,[row(id===A?'PRIVATE-A':'PRIVATE-B',id)]);});
-  const r=e.mountRoot({phase:'ready',ids:[A,B,'background','gateway'],byId:{[A]:{id:A,retainedBy:{mainView:1}},[B]:{id:B,retainedBy:{sidebarChat:1}},background:{id:'background',retainedBy:{controllerOperation:1}},gateway:{id:'gateway',retainedBy:{gateway:1}}}});await flush(r);
-  assert.deepEqual([...new Set(e.calls.map(req=>new URL(req.url,'http://local').searchParams.get('sessionId')))].sort(),[A,B].sort());
-  const sections=elements(r).filter(el=>el.props['data-dshmind']==='conversation-approval');assert.equal(sections.length,2);
-  const a=sections.find(el=>el.props['data-session-id']===A);const b=sections.find(el=>el.props['data-session-id']===B);assert.match(textOf(a),/PRIVATE-A/);assert.ok(!textOf(a).includes('PRIVATE-B'));assert.match(textOf(b),/PRIVATE-B/);assert.ok(!textOf(b).includes('PRIVATE-A'));r.unmount();e.dispose();
-});
-
-test('blank无session或目录未就绪明确不可用，不能拿后台末条会话冒充归属', async()=>{
-  for(const snapshot of [{phase:'ready',ids:[],byId:{}},{phase:'pending',ids:[A],byId:{[A]:{id:A,retainedBy:{mainView:1}}}},{phase:'ready',ids:[B],byId:{[B]:{id:B,retainedBy:{gateway:1}}}}]){
-    const e=env(()=>{throw Error('未知归属不得取数');});const r=e.mountRoot(snapshot);await flush(r);assert.match(textOf(r.tree),/介入审批不可用/);assert.equal(e.calls.length,0);assert.ok(!button(r,'批准'));r.unmount();e.dispose();
+test('普通与blank会话共用真实input.dock入口，header隐藏不退回全局overlay', async()=>{
+  for(const blank of [false,true]){
+    const e=env(()=>response(A,[row('hidden-header-valid')]));assert.equal(e.entry.options.name,'conversation.input.dock');
+    const r=e.mount(A,blank).renderer;await flush(r);assert.ok(dialog(r));assert.match(textOf(r.tree),/hidden-header-valid/);
+    assert.ok(!e.registrations.register.some(x=>x.options.name==='shell.overlay'));r.unmount();e.dispose();
   }
 });
 
-test('根标准useSessions缺席也有明确不可用状态，不退回ctx全局会话猜测', async()=>{
-  const e=env(()=>{throw Error('根契约缺失不得取数');});const r=createApprovalRenderer(e.entry.Component,{});r.flush();await flush(r);assert.match(textOf(r.tree),/所属会话目录尚未就绪/);assert.equal(e.calls.length,0);r.unmount();e.dispose();
+test('会话或输入未就绪不挂dock，不靠retained引用为后台会话取数', async()=>{
+  const e=env(()=>{throw Error('未就绪输入区不可取数');});
+  const r=e.mountPane({panel:'conversation',sessionId:B,ready:false,retainedBy:{mainView:1}});await flush(r);
+  assert.equal(e.calls.length,0);assert.ok(!dialog(r));r.unmount();e.dispose();
+});
+
+test('Git主面板仍保留mainView/sidebarChat会话时不挂审批，返回实际会话区域才取数', async()=>{
+  const e=env(req=>{const id=new URL(req.url,'http://local').searchParams.get('sessionId');return response(id,[row(id===A?'PRIVATE-A':'PRIVATE-B',id)]);});
+  const props={panel:'git',sessionId:A,retainedBy:{[A]:{mainView:1},[B]:{sidebarChat:1}}};
+  const r=e.mountPane(props);await flush(r);assert.equal(e.calls.length,0);assert.ok(!dialog(r));
+  props.panel='conversation';r.render();r.flush();await flush(r);assert.ok(dialog(r));assert.match(textOf(r.tree),/PRIVATE-A/);assert.ok(!textOf(r.tree).includes('PRIVATE-B'));
+  props.panel='git';r.render();r.flush();const count=e.calls.length;tick(e);await flush(r);assert.equal(e.calls.length,count);assert.ok(!dialog(r));
+  r.unmount();e.dispose();
+});
+
+test('无session的实际席位只显示轻量失败，不能拿后台末条会话冒充归属', async()=>{
+  const e=env(()=>{throw Error('未知归属不得取数');});const r=e.mount('').renderer;await flush(r);
+  assert.ok(button(r,'介入审批 · 读取失败'));assert.equal(e.calls.length,0);assert.ok(!dialog(r));
+  click(r,'介入审批 · 读取失败');assert.match(textOf(r.tree),/缺少所属会话/);assert.ok(!button(r,'批准'));r.unmount();e.dispose();
+});
+
+test('真实sessionId席位不要求全局useSessions，不读取ctx全局错误末条会话', async()=>{
+  const e=env(()=>response(A,[row()]));const r=e.mount().renderer;await flush(r);
+  assert.ok(dialog(r));assert.ok(e.calls.every(req=>new URL(req.url,'http://local').searchParams.get('sessionId')===A));
+  assert.ok(!e.calls.some(req=>req.url.includes('wrong-global-last')));r.unmount();e.dispose();
 });
 
 test('POST确认必须等已有旧GET结束再发全新GET，single-flight不能拿批准前快照假确认',async()=>{
@@ -88,17 +98,24 @@ test('持续4秒成功响应配3秒轮询最终呈现且不饥饿，延迟小于
 
 test('4秒失败响应不被3秒轮询淘汰，明确错误并可在下一次请求恢复', async () => {
   const pending=[];const e=env(()=>new Promise(resolve=>pending.push(resolve)));const r=e.mount().renderer;await flush(r);
-  tick(e);await flush(r);pending[0](jsonResponse({成功:false,理由:'慢响应可读失败'},503));await flush(r);assert.match(textOf(r.tree),/慢响应可读失败/);assert.ok(!button(r,'批准'));
+  tick(e);await flush(r);pending[0](jsonResponse({成功:false,理由:'慢响应可读失败'},503));await flush(r);
+  assert.ok(!dialog(r));click(r,'介入审批 · 读取失败');assert.match(textOf(r.tree),/慢响应可读失败/);assert.ok(!button(r,'批准'));
   tick(e);await flush(r);pending.at(-1)(response(A,[row('recovered')]));await flush(r);assert.match(textOf(r.tree),/recovered/);assert.ok(dialog(r));r.unmount();e.dispose();
 });
 
-test('根overlay入口只追加自己的id，不依赖header或全局末条会话或composer takeover且不覆盖原action', async () => {
+test('只追加真实input.dock入口，不注册全局overlay或接管composer且不覆盖原action', async () => {
   const e = env(req => response(new URL(req.url,'http://local').searchParams.get('sessionId'), [row()])); const {renderer:r} = e.mount(); await flush(r);
-  assert.equal(e.entry.options.name,'shell.overlay');
-  assert.equal(e.registrations.register.filter(x=>x.options.name==='conversation.session.header.actions'&&x.options.id==='dsh-mind-intervention').length,0,'旧header入口真实移除，不并存');
+  assert.equal(e.entry.options.name,'conversation.input.dock');
+  assert.equal(e.registrations.register.filter(x=>x.options.name==='conversation.input.dock'&&x.options.id==='dsh-mind-intervention').length,1);
+  assert.ok(!e.registrations.inject.includes('shell.overlay'));
   assert.equal(e.registrations.register.filter(x=>x.options.id==='native-action').length,1);
   assert.ok(!e.registrations.inject.includes('conversation.composer') && !e.registrations.inject.includes('conversation.input.overlay'));
   assert.ok(e.calls.every(x=>new URL(x.url,'http://local').searchParams.get('sessionId')===A));
+  assert.equal(dialog(r).props.style.position,'relative');
+  assert.equal(dialog(r).props.style.width,'100%');assert.equal(dialog(r).props.style.minWidth,0);
+  assert.equal(dialog(r).props.style.maxWidth,'100%');assert.equal(dialog(r).props.style.overflow,'auto');
+  assert.equal(dialog(r).props.style.overflowWrap,'anywhere');
+  assert.ok(!elements(r).some(node=>['fixed','absolute'].includes(node.props.style?.position)));
   assert.ok(dialog(r)); r.unmount(); e.dispose();
 });
 
@@ -139,11 +156,24 @@ test('两个会话消费者各自隔离；卸载重连从同一服务恢复待�
 test('缺会话/401/403/坏响应与超时明确可见，不静默空列表，也不缓存完整正文', async () => {
   for (const status of [401,403]) {
     const e=env(()=>jsonResponse({成功:false,理由:'认证失败 HTTP '+status},status));const {renderer:r}=e.mount();await flush(r);
+    assert.ok(button(r,'介入审批 · 读取失败'));assert.ok(!dialog(r));click(r,'介入审批 · 读取失败');await flush(r);
     assert.match(textOf(r.tree),new RegExp(String(status)));assert.ok(!button(r,'批准'));assert.ok([...e.loaded.store.values()].every(value => !String(value).includes('NEVER-TRUNCATE') && !String(value).includes('preview-r1')), '看板缓存不得包含私有审批正文或审阅指纹');r.unmount();e.dispose();
   }
-  const e=env(()=>{throw Error('缺session不得取数');});const {renderer:r}=e.mount('');await flush(r);assert.match(textOf(r.tree),/缺少所属会话/);assert.equal(e.calls.length,0);r.unmount();e.dispose();
-  const bad=env(()=>response(A,[row('wrong-session',B)]));const br=bad.mount().renderer;await flush(br);assert.match(textOf(br.tree),/范围不符/);assert.ok(!textOf(br.tree).includes('wrong-session'));br.unmount();bad.dispose();
-  const hang=env(()=>new Promise(()=>{}));const hr=hang.mount().renderer;hang.loaded.timers.fireTimeouts();await flush(hr);assert.match(textOf(hr.tree),/读取会话审批失败|无回应/);hr.unmount();hang.dispose();
+  const e=env(()=>{throw Error('缺session不得取数');});const {renderer:r}=e.mount('');await flush(r);assert.ok(!dialog(r));click(r,'介入审批 · 读取失败');assert.match(textOf(r.tree),/缺少所属会话/);assert.equal(e.calls.length,0);r.unmount();e.dispose();
+  for(const body of [{成功:true,会话:A,待决:[row('wrong-session',B)]},{成功:true,会话:B,待决:[row('wrong-session',A)]},{成功:true,项目:'plugins',待决:[row('old-backend',A)]}]){
+    const bad=env(()=>jsonResponse(body));const br=bad.mount().renderer;await flush(br);assert.ok(!dialog(br));click(br,'介入审批 · 读取失败');assert.match(textOf(br.tree),/范围不符/);assert.ok(!textOf(br.tree).includes('wrong-session'));assert.ok(!textOf(br.tree).includes('old-backend'));assert.ok(!button(br,'批准'));br.unmount();bad.dispose();
+  }
+  const hang=env(()=>new Promise(()=>{}));const hr=hang.mount().renderer;hang.loaded.timers.fireTimeouts();await flush(hr);assert.ok(!dialog(hr));click(hr,'介入审批 · 读取失败');assert.match(textOf(hr.tree),/读取会话审批失败|无回应/);hr.unmount();hang.dispose();
+});
+
+test('读取错误及错误变化不主动展开，手动查看后收起保持轻量，只有有效新待决才主动开',async()=>{
+  let mode=0;
+  const e=env(()=>mode===0?jsonResponse({成功:true,项目:'old',待决:[row('PRIVATE-OLD')]}):mode===1?jsonResponse({成功:false,理由:'新的读取故障'},503):response(A,[row('fresh-valid')]));
+  const r=e.mount().renderer;await flush(r);assert.ok(!dialog(r));assert.ok(!textOf(r.tree).includes('PRIVATE-OLD'));
+  tick(e);await flush(r);assert.ok(!dialog(r));
+  click(r,'介入审批 · 读取失败');assert.match(textOf(r.tree),/范围不符/);click(r,'稍后处理');
+  mode=1;tick(e);await flush(r);assert.ok(!dialog(r));assert.ok(button(r,'介入审批 · 读取失败'));
+  mode=2;tick(e);await flush(r);assert.ok(dialog(r));assert.match(textOf(r.tree),/fresh-valid/);r.unmount();e.dispose();
 });
 
 test('空待决是确定零而非读取中；缺完整记录禁用决议不能盲批', async () => {
