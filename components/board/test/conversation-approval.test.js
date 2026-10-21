@@ -69,8 +69,8 @@ test('Git主面板仍保留mainView/sidebarChat会话时不挂审批，返回实
 
 test('无session的实际席位只显示轻量失败，不能拿后台末条会话冒充归属', async()=>{
   const e=env(()=>{throw Error('未知归属不得取数');});const r=e.mount('').renderer;await flush(r);
-  assert.ok(button(r,'介入审批 · 读取失败'));assert.equal(e.calls.length,0);assert.ok(!dialog(r));
-  click(r,'介入审批 · 读取失败');assert.match(textOf(r.tree),/缺少所属会话/);assert.ok(!button(r,'批准'));r.unmount();e.dispose();
+  assert.ok(button(r,'审批暂不可用'));assert.equal(e.calls.length,0);assert.ok(!dialog(r));
+  click(r,'审批暂不可用');assert.match(textOf(r.tree),/缺少所属会话/);assert.ok(!button(r,'批准'));r.unmount();e.dispose();
 });
 
 test('真实sessionId席位不要求全局useSessions，不读取ctx全局错误末条会话', async()=>{
@@ -99,7 +99,7 @@ test('持续4秒成功响应配3秒轮询最终呈现且不饥饿，延迟小于
 test('4秒失败响应不被3秒轮询淘汰，明确错误并可在下一次请求恢复', async () => {
   const pending=[];const e=env(()=>new Promise(resolve=>pending.push(resolve)));const r=e.mount().renderer;await flush(r);
   tick(e);await flush(r);pending[0](jsonResponse({成功:false,理由:'慢响应可读失败'},503));await flush(r);
-  assert.ok(!dialog(r));click(r,'介入审批 · 读取失败');assert.match(textOf(r.tree),/慢响应可读失败/);assert.ok(!button(r,'批准'));
+  assert.ok(!dialog(r));click(r,'审批暂不可用');assert.match(textOf(r.tree),/慢响应可读失败/);assert.ok(!button(r,'批准'));
   tick(e);await flush(r);pending.at(-1)(response(A,[row('recovered')]));await flush(r);assert.match(textOf(r.tree),/recovered/);assert.ok(dialog(r));r.unmount();e.dispose();
 });
 
@@ -134,7 +134,7 @@ test('不打开设置页也主动读取并弹完整冻结计划；只有真实�
 test('稍后处理不被每次轮询强制重弹，同会话入口可重开，新请求再主动弹出', async () => {
   let rows=[row()]; const e=env(()=>response(A,rows));const {renderer:r}=e.mount();await flush(r);
   click(r,'稍后处理'); assert.ok(!dialog(r));tick(e);await flush(r);assert.ok(!dialog(r));
-  click(r,'介入审批 · 1');await flush(r);assert.ok(dialog(r));
+  click(r,'待你确认 · 1');await flush(r);assert.ok(dialog(r));
   click(r,'稍后处理');rows=[row(),row('new-request')];tick(e);await flush(r);assert.ok(dialog(r));assert.match(textOf(r.tree),/new-request/);
   const count=e.calls.length;r.unmount();const cleared=e.loaded.timers.cleared.length;assert.ok(cleared>=1);tick(e);await settle(20);assert.equal(e.calls.length,count);e.dispose();
 });
@@ -156,14 +156,14 @@ test('两个会话消费者各自隔离；卸载重连从同一服务恢复待�
 test('缺会话/401/403/坏响应与超时明确可见，不静默空列表，也不缓存完整正文', async () => {
   for (const status of [401,403]) {
     const e=env(()=>jsonResponse({成功:false,理由:'认证失败 HTTP '+status},status));const {renderer:r}=e.mount();await flush(r);
-    assert.ok(button(r,'介入审批 · 读取失败'));assert.ok(!dialog(r));click(r,'介入审批 · 读取失败');await flush(r);
+    assert.ok(button(r,'审批暂不可用'));assert.ok(!dialog(r));click(r,'审批暂不可用');await flush(r);
     assert.match(textOf(r.tree),new RegExp(String(status)));assert.ok(!button(r,'批准'));assert.ok([...e.loaded.store.values()].every(value => !String(value).includes('NEVER-TRUNCATE') && !String(value).includes('preview-r1')), '看板缓存不得包含私有审批正文或审阅指纹');r.unmount();e.dispose();
   }
-  const e=env(()=>{throw Error('缺session不得取数');});const {renderer:r}=e.mount('');await flush(r);assert.ok(!dialog(r));click(r,'介入审批 · 读取失败');assert.match(textOf(r.tree),/缺少所属会话/);assert.equal(e.calls.length,0);r.unmount();e.dispose();
+  const e=env(()=>{throw Error('缺session不得取数');});const {renderer:r}=e.mount('');await flush(r);assert.ok(!dialog(r));click(r,'审批暂不可用');assert.match(textOf(r.tree),/缺少所属会话/);assert.equal(e.calls.length,0);r.unmount();e.dispose();
   for(const body of [{成功:true,会话:A,待决:[row('wrong-session',B)]},{成功:true,会话:B,待决:[row('wrong-session',A)]},{成功:true,项目:'plugins',待决:[row('old-backend',A)]}]){
-    const bad=env(()=>jsonResponse(body));const br=bad.mount().renderer;await flush(br);assert.ok(!dialog(br));click(br,'介入审批 · 读取失败');assert.match(textOf(br.tree),/范围不符/);assert.ok(!textOf(br.tree).includes('wrong-session'));assert.ok(!textOf(br.tree).includes('old-backend'));assert.ok(!button(br,'批准'));br.unmount();bad.dispose();
+    const bad=env(()=>jsonResponse(body));const br=bad.mount().renderer;await flush(br);assert.ok(!dialog(br));click(br,'审批暂不可用');assert.match(textOf(br.tree),/范围不符/);assert.ok(!textOf(br.tree).includes('wrong-session'));assert.ok(!textOf(br.tree).includes('old-backend'));assert.ok(!button(br,'批准'));br.unmount();bad.dispose();
   }
-  const hang=env(()=>new Promise(()=>{}));const hr=hang.mount().renderer;hang.loaded.timers.fireTimeouts();await flush(hr);assert.ok(!dialog(hr));click(hr,'介入审批 · 读取失败');assert.match(textOf(hr.tree),/读取会话审批失败|无回应/);hr.unmount();hang.dispose();
+  const hang=env(()=>new Promise(()=>{}));const hr=hang.mount().renderer;hang.loaded.timers.fireTimeouts();await flush(hr);assert.ok(!dialog(hr));click(hr,'审批暂不可用');assert.match(textOf(hr.tree),/读取会话审批失败|无回应/);hr.unmount();hang.dispose();
 });
 
 test('读取错误及错误变化不主动展开，手动查看后收起保持轻量，只有有效新待决才主动开',async()=>{
@@ -171,15 +171,56 @@ test('读取错误及错误变化不主动展开，手动查看后收起保持�
   const e=env(()=>mode===0?jsonResponse({成功:true,项目:'old',待决:[row('PRIVATE-OLD')]}):mode===1?jsonResponse({成功:false,理由:'新的读取故障'},503):response(A,[row('fresh-valid')]));
   const r=e.mount().renderer;await flush(r);assert.ok(!dialog(r));assert.ok(!textOf(r.tree).includes('PRIVATE-OLD'));
   tick(e);await flush(r);assert.ok(!dialog(r));
-  click(r,'介入审批 · 读取失败');assert.match(textOf(r.tree),/范围不符/);click(r,'稍后处理');
-  mode=1;tick(e);await flush(r);assert.ok(!dialog(r));assert.ok(button(r,'介入审批 · 读取失败'));
+  click(r,'审批暂不可用');assert.match(textOf(r.tree),/范围不符/);click(r,'稍后处理');
+  mode=1;tick(e);await flush(r);assert.ok(!dialog(r));assert.ok(button(r,'审批暂不可用'));
   mode=2;tick(e);await flush(r);assert.ok(dialog(r));assert.match(textOf(r.tree),/fresh-valid/);r.unmount();e.dispose();
 });
 
 test('空待决是确定零而非读取中；缺完整记录禁用决议不能盲批', async () => {
-  const empty=env(()=>response(A,[]));const er=empty.mount().renderer;await flush(er);assert.ok(button(er,'介入审批 · 0'));assert.ok(!dialog(er));er.unmount();empty.dispose();
+  const empty=env(()=>response(A,[]));const er=empty.mount().renderer;await flush(er);assert.equal(er.tree,null);er.unmount();empty.dispose();
   const e=env(()=>response(A,[row('missing',A,{完整请求:undefined,步骤:[],审阅指纹:undefined,记录问题:'完整记录缺失'})]));const r=e.mount().renderer;await flush(r);
   assert.match(textOf(r.tree),/完整记录缺失/);assert.equal(button(r,'批准').props.disabled,true);assert.equal(e.calls.filter(x=>x.method==='POST').length,0);r.unmount();e.dispose();
+});
+
+test('首读和空闲不占输入区，后台读取保留，有有效新请求再显示', async()=>{
+  let release;let rows=[];
+  const e=env(()=>release?response(A,rows):new Promise(resolve=>{release=resolve;}));
+  const r=e.mount().renderer;
+  try {
+    await flush(r);assert.equal(r.tree,null,'未取得结果时不显示常驻读取入口');
+    release(response(A,[]));await flush(r);assert.equal(r.tree,null);
+    const reads=e.calls.length;tick(e);await flush(r);assert.ok(e.calls.length>reads);assert.equal(r.tree,null);
+    rows=[row('new-action')];tick(e);await flush(r);assert.ok(dialog(r));assert.ok(button(r,'待你确认 · 1'));
+    assert.match(textOf(r.tree),/new-action/);assert.equal(e.calls.filter(req=>req.method==='POST').length,0);
+  } finally {r.unmount();e.dispose();}
+});
+
+test('手动展开过也不能保留空面板，收口历史隐藏且下一次待决仍主动出现', async()=>{
+  let rows=[row()];const e=env(()=>response(A,rows));const r=e.mount().renderer;
+  try {
+    await flush(r);click(r,'稍后处理');click(r,'待你确认 · 1');assert.ok(dialog(r));
+    rows=[row('closed-request',A,{状态:'已完成',可选项:[]})];tick(e);await flush(r);
+    assert.equal(r.tree,null,'只有已收口历史时，即使手动展开标记仍在，也不渲染空面板');
+    rows=[row('next-action')];tick(e);await flush(r);assert.ok(dialog(r));assert.match(textOf(r.tree),/next-action/);
+    assert.ok(!textOf(r.tree).includes('closed-request'));
+  } finally {r.unmount();e.dispose();}
+});
+
+test('故障手动展开后恢复为空自动消失，拒绝回执仅轻量确认且可关闭', async()=>{
+  let mode='error';const e=env(req=>{
+    if(req.method==='POST'){mode='closed';return jsonResponse({成功:true,请求id:'r1',决定:'拒绝'});}
+    if(mode==='error')return jsonResponse({成功:false,理由:'暂时不可读'},503);
+    return response(A,mode==='empty'?[]:[row('r1',A,{状态:mode==='closed'?'已拒绝':'待放行',可选项:mode==='closed'?[]:['批准','拒绝']})]);
+  });const r=e.mount().renderer;
+  try {
+    await flush(r);assert.ok(!dialog(r));click(r,'审批暂不可用');assert.ok(dialog(r));
+    mode='empty';tick(e);await flush(r);assert.equal(r.tree,null);
+    mode='pending';tick(e);await flush(r);click(r,'拒绝');await flush(r);
+    assert.ok(!dialog(r));assert.match(textOf(r.tree),/已回读确认「已拒绝」/);
+    assert.ok(elements(r).some(el=>el.props['data-dshmind']==='approval-receipt'));
+    assert.ok(!textOf(r.tree).includes('NEVER-TRUNCATE'));click(r,'关闭');assert.equal(r.tree,null);
+    tick(e);await flush(r);assert.equal(r.tree,null);
+  } finally {r.unmount();e.dispose();}
 });
 
 test('批准只发冻结请求id与审阅版本，双击不重发；POST后独立GET确认才给成功', async () => {

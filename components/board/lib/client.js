@@ -3978,20 +3978,35 @@ window.__ModuleLoader__.load({
       var rows = arr(snap.清单);
       var openRows = rows.filter(function (item) { return ['已完成', '已拒绝', '已撤销', '已失效'].indexOf(item.状态) < 0; });
       var signature = sessionId + '|' + openRows.map(function (item) { return item.请求id + ':' + item.审阅指纹; }).join('|');
+      var idle = snap.phase === 'live' && openRows.length === 0 && !snap.忙;
+      var quietButton = { border: 0, background: 'transparent', padding: '4px 2px', font: 'inherit', fontSize: '12px', color: 'var(--dsw-alias-label-secondary, #77839a)', cursor: 'pointer' };
+      // 空闲与首读不占输入区；组件仍挂载轮询，有真实待决时自然出现。
+      // 手动展开的旧状态不能让已经清空的审批区继续常驻。
+      if (snap.phase !== 'error' && !openRows.length && !snap.忙 && !snap.提示) return null;
+      if (idle && snap.提示) return h('div', { 'data-dshmind': 'approval-receipt', role: 'status',
+        style: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px', fontSize: '12px', color: 'var(--dsw-alias-label-secondary, #77839a)' } }, [
+        h('span', { key: 'message' }, snap.提示),
+        h('button', { key: 'close', type: 'button', style: quietButton, onClick: function () {
+          manual[1](null); setSnap(function (old) { return Object.assign({}, old, { 提示: '' }); });
+        } }, '关闭'),
+      ]);
       var visible = manual[0] === sessionId || (snap.phase === 'live' && openRows.length > 0 && dismiss[0] !== signature);
       var labelId = 'dshmind-approval-' + sessionId;
       return h('div', { 'data-dshmind': 'conversation-approval', 'data-session-id': sessionId, style: { width: '100%', minWidth: 0, maxWidth: '100%', pointerEvents: 'auto' } }, [
-        h('button', { key: 'open', type: 'button', className: 'dshmind-set__btn', 'aria-expanded': visible, title: '所属会话：' + (sessionId || '缺失（不猜归属）'), onClick: function () { manual[1](sessionId); dismiss[1](''); if (life.refresh) life.refresh(); } },
-          '介入审批 · ' + (snap.phase === 'error' ? '读取失败' : snap.phase === 'reading' ? '读取中' : String(openRows.length))),
+        h('button', { key: 'open', type: 'button', style: quietButton, 'aria-expanded': visible, title: snap.phase === 'error' ? '点击查看原因并重新读取' : '查看当前会话待批准的操作', onClick: function () { manual[1](sessionId); dismiss[1](''); if (life.refresh) life.refresh(); } },
+          snap.phase === 'error' ? '审批暂不可用' : '待你确认 · ' + String(openRows.length)),
         visible ? h('section', { key: 'dialog', role: 'dialog', 'aria-labelledby': labelId, 'data-dshmind': 'approval-dialog',
           // 正常会话区文档流，宽度服从输入区；长冻结参数换行，限高后仅卡片内滚动。
           style: { position: 'relative', width: '100%', minWidth: 0, maxWidth: '100%', boxSizing: 'border-box', maxHeight: 'min(560px, calc(100vh - 160px))', overflow: 'auto', overflowWrap: 'anywhere', marginTop: '8px', padding: '12px', borderRadius: '8px', border: '1px solid var(--dsw-alias-border-l2, #888)', background: 'var(--dsw-alias-bg-base, #fff)', color: 'var(--dsw-alias-label-primary, #222)', textAlign: 'left', whiteSpace: 'normal' } }, [
-          h('h2', { key: 'h', id: labelId }, '会话待批准'),
-          h('p', { key: 'session' }, '所属会话：' + (sessionId || '缺失（不猜归属）')),
-          h('p', { key: 'boundary' }, '先审阅全部冻结参数与每一步计划。批准仅解除介入门，不替申请者执行；硬拒、版本、复核与原申请者校验仍生效。'),
+          h('h2', { key: 'h', id: labelId, style: { margin: 0, fontSize: '14px', fontWeight: 600, lineHeight: '22px' } }, '确认这次操作'),
+          h('p', { key: 'boundary', style: { margin: '6px 0', fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-secondary, #77839a)' } }, '请核对操作内容。批准后由申请者继续执行，其他权限检查仍然生效。'),
+          h('details', { key: 'session', style: { fontSize: '11px', color: 'var(--dsw-alias-label-secondary, #77839a)', overflowWrap: 'anywhere' } }, [
+            h('summary', { key: 'label' }, '会话信息'),
+            h('p', { key: 'id' }, '所属会话：' + (sessionId || '缺失（不猜归属）')),
+          ]),
           snap.error ? h('p', { key: 'error', role: 'alert' }, snap.error) : null,
           snap.提示 ? h('p', { key: 'tip', role: 'status' }, snap.提示) : null,
-          rows.map(function (item) {
+          openRows.map(function (item) {
             var complete = !item.记录问题 && obj(item.完整请求) && Array.isArray(item.步骤) && item.步骤.length && item.审阅指纹;
             return h('article', { key: item.请求id, 'data-request-id': item.请求id }, [
               h('h3', { key: 'head' }, '项目 ' + line(item.项目, '未声明') + ' · ' + item.状态),
