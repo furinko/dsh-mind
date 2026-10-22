@@ -116,6 +116,7 @@ const 冻结动作表 = [
   'memory_write',
   'memory_query',
   'turn_buffer_query',
+  'project_brief_query',
   'memory_lineage',
   'memory_lifecycle',
   'capability_list',

@@ -9,7 +9,7 @@ const root = session => typeof session?.id === 'string' && session.id.trim() && 
   && session.header.origin !== 'subagent' && !(session.header.delegationDepth >= 1)
   && natural(session.seq) && typeof session.isOwnSeq === 'function';
 
-export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = () => null, logger = console, enabled = true }) {
+export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = () => null, onPersist, logger = console, enabled = true }) {
   const queues = new Map();
   let stopped = false; let attached = false; let pending = 0;
   let failedWrites = 0; let dropped = 0; let recoveryUnavailable = 0;
@@ -114,7 +114,13 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
     }
     const previous = queues.get(session) ?? Promise.resolve();
     pending++;
-    const work = previous.then(() => run(session, hint, expected));
+    const work = previous.then(async () => {
+      await run(session, hint, expected);
+      if (scope(session)?.project === expected.project && onPersist) {
+        try { await onPersist(session, { summarize: !hint || hint.type === 'turn/end' }); }
+        catch (error) { logger.warn?.(`[dsh-mind] 项目接续来源登记失败：${error?.code ?? error?.name ?? 'unknown'}；轮缓冲仍保留，后续重试。`); }
+      }
+    });
     const caught = work.catch(report).finally(() => { pending--; if (queues.get(session) === caught) queues.delete(session); });
     queues.set(session, caught);
     return work;

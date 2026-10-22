@@ -51,7 +51,7 @@ export function projectTurnEvent(event) {
 }
 
 /** 不复用通用 atomicWrite：私人正文以0600写入，文件sync后原子替换。 */
-async function save(file, state) {
+export async function savePrivateBufferState(file, state) {
   await ensureDir(file);
   const tmp = `${file}.tmp-${randomUUID()}`;
   let handle;
@@ -70,6 +70,7 @@ async function save(file, state) {
     await rm(tmp, { force: true });
   }
 }
+const save = savePrivateBufferState;
 
 export class TurnBufferService {
   constructor({ layout, org, clock }) { Object.assign(this, { layout, org, clock }); }
@@ -101,7 +102,7 @@ export class TurnBufferService {
           if (!integer(m.seq) || m.seq <= last || m.seq >= state.nextSeq || !integer(m.anchor) || m.anchor < m.seq
               || m.anchor >= state.nextSeq || !['user', 'assistant'].includes(m.role) || !identifier(m.id)
               || typeof m.text !== 'string' || m.text.length > TURN_BUFFER_LIMITS.text || typeof m.clipped !== 'boolean'
-              || typeof m.interrupted !== 'boolean') throw fail();
+              || typeof m.interrupted !== 'boolean' || (m.at !== undefined && !Number.isFinite(m.at))) throw fail();
           last = m.seq; count++;
         }
       }
@@ -174,7 +175,7 @@ export class TurnBufferService {
             state.rounds.push(round);
           }
           round.messages.push({ seq: row.seq, anchor: row.seq, role: row.role, id: row.id,
-            text: row.text, clipped: row.clipped, interrupted: row.interrupted });
+            text: row.text, clipped: row.clipped, interrupted: row.interrupted, at: row.time ?? this.clock.ms() });
           round.at = Math.max(round.at, row.time ?? this.clock.ms());
         }
       }

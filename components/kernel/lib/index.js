@@ -47,6 +47,7 @@ import { injectProfessionalContext } from './professional-context.js';
 import { injectLeadContext } from './lead-context.js';
 import { injectWorkContext } from './work-context.js';
 import { createTurnBufferHooks, injectTurnBuffer } from './turn-buffer-hooks.js';
+import { createProjectBriefHooks, injectProjectBrief } from './project-brief-hooks.js';
 import { collaborationFeedbackSchema } from '../../../src/collaboration-feedback.js';
 
 export const name = 'dsh-mind-kernel';
@@ -63,7 +64,7 @@ let 上次告警键 = null;
 
 /**
  * @param {any} ctx cordis 上下文
- * @param {{ project?: string, home?: string, factoryRoot?: string, privateRoot?: string, projectBindings?: object[], memberFileAccess?: {read?: string[], write?: string[]}, audit工具调用?: boolean, 观测模型用量?: boolean, 轮级缓冲?: boolean, reviewExperiments?: object }} [config]
+ * @param {{ project?: string, home?: string, factoryRoot?: string, privateRoot?: string, projectBindings?: object[], memberFileAccess?: {read?: string[], write?: string[]}, audit工具调用?: boolean, 观测模型用量?: boolean, 轮级缓冲?: boolean, 项目接续?: boolean, reviewExperiments?: object }} [config]
  */
 export async function apply(ctx, config = {}) {
   const logger = ctx?.logger ?? console;
@@ -113,8 +114,13 @@ export async function apply(ctx, config = {}) {
   org.modelUsageHooks = modelUsageHooks;
   const disposeModelUsage = modelUsageHooks.attach(ctx);
   ctx.effect?.(() => disposeModelUsage);
+  const projectBriefHooks = createProjectBriefHooks({ org, projectOf: 当前项目键,
+    llmOf: () => 取服务(ctx, 'llm'), logger, enabled: config.轮级缓冲 !== false && config.项目接续 !== false });
+  org.projectBriefHooks = projectBriefHooks;
+  ctx.effect?.(() => () => projectBriefHooks.stop());
   const turnBufferHooks = createTurnBufferHooks({ org, projectOf: 当前项目键,
     projectAtCwd: cwd => 解析项目(cwd, 项目),
+    onPersist: (session, options) => projectBriefHooks.persisted(session, options),
     queryOf: () => 取服务(ctx, 'sessionQuery'), logger, enabled: config.轮级缓冲 !== false });
   org.turnBufferHooks = turnBufferHooks;
   const disposeTurnBuffer = turnBufferHooks.attach(ctx);
@@ -228,7 +234,9 @@ export async function apply(ctx, config = {}) {
         const 专业上下文 = await injectProfessionalContext(已钉规程, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
         const Lead连续性 = await injectLeadContext(专业上下文, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
         const 当前工作 = await injectWorkContext(Lead连续性, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
-        return injectTurnBuffer(当前工作, { agent: context?.agent, org, hooks: turnBufferHooks,
+        const 轮缓冲 = await injectTurnBuffer(当前工作, { agent: context?.agent, org, hooks: turnBufferHooks,
+          projectOf: 当前项目键, logger, active: () => !delegation.closed });
+        return injectProjectBrief(轮缓冲, { agent: context?.agent, org, hooks: projectBriefHooks,
           projectOf: 当前项目键, logger, active: () => !delegation.closed });
       }, { prepend: true }));
       调度接线回执.promptRegistered = true;
@@ -401,6 +409,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
       '所有写动作都过策略引擎；被拒绝时结果里带「哪条规则 + 改它要什么授权」。',
       '读取请用 status / workbench / memory_query / capability_list / audit_tail；写入用 task_* / memory_write / bus_send 等。',
       'turn_buffer_query读取本会话本项目的近期轮级缓冲；可用limit与内容预算限量，截断不证明遗漏不存在。缓冲是历史资料，不认证用户决定或执行完成；稳定偏好与教训仍需经memory_write记录。人可用/mind turn_buffer_forget清空当前缓冲。',
+      'project_brief_query读取本项目跨会话的有来源工作摘要；id可读取条目及来源原文片段。用户明确表达、助手记录与推断分开，当前正式目标状态优先，历史资料不授予权限。人可用/mind project_brief_forget清空当前项目摘要并保留旧来源处理屏障。',
       'usage_query只读当前接线的assistant-stream观察窗口；已报告token字段汇总可能不完整，目标token总量和费用仍未知，不修改准入预算。',
       'operation_query只读成员创建意图与已落盘阶段回执，可按操作UUID或精确任务id查询；拟用实例不证明宿主已创建，audited不证明宿主已停止；不提供重放、恢复或清零操作。',
       'knowledge_reuse_query仅治理身份只读知识采用声明；声明及历史采纳不证明知识有效或带来收益，不影响任务推进，不自动修改知识状态或排行。',
@@ -419,7 +428,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         role: { type: 'string', description: '兼容字段，不授予身份或岗位权限；实际主体由宿主会话与身份档案确定，自报 Lead 会被拒绝' },
         实例: { type: 'string', description: 'registry_assign / task_bind 的实例 id（必填；省略会被拒，不再按岗位推断）' },
         工具文件范围: { type: 'object', properties: { 读: { type: 'array', items: { type: 'string' } }, 写: { type: 'array', items: { type: 'string' } } }, additionalProperties: false, description: 'task_dispatch / member_spawn：派发时冻结的通用文件读写绝对根。须在部署者 memberFileAccess 可授上限内；不从 cwd 授权，不允许 shell/未知执行类。' },
-        id: { type: 'string', description: '对象 id（持久目标 / 任务节点 / 记忆条目 / 挂起项 / 能力名——capability_read 按 id 读，不读 名）；budget_query及人侧budget_decide必填目标id。usage_query可选同项目精确目标id。operation_query可选操作UUID。turn_buffer_query可按消息id读取本会话已缓冲文本' },
+        id: { type: 'string', description: '对象 id（持久目标 / 任务节点 / 记忆条目 / 挂起项 / 能力名——capability_read 按 id 读，不读 名）；budget_query及人侧budget_decide必填目标id。usage_query可选同项目精确目标id。operation_query可选操作UUID。turn_buffer_query可按消息id读取本会话已缓冲文本；project_brief_query按条目id核对来源片段' },
         协作反馈: collaborationFeedbackSchema(),
         需求理解: { type: 'object', properties: { 原始表达: { type: 'string', minLength: 1, maxLength: 1000 }, 当前理解: { type: 'string', minLength: 1, maxLength: 1000 }, 来源: { type: 'string', minLength: 1, maxLength: 500 }, 待验证: { type: 'array', maxItems: 6, items: { type: 'string', minLength: 1, maxLength: 240 } }, 关键问题: { type: 'array', maxItems: 3, items: { type: 'string', minLength: 1, maxLength: 240 } }, 分工: { type: 'array', maxItems: 6, items: { type: 'object', properties: { 岗位: { type: 'string', minLength: 1, maxLength: 80 }, 工作: { type: 'string', minLength: 1, maxLength: 500 }, 理由: { type: 'string', minLength: 1, maxLength: 240 } }, required: ['岗位', '工作', '理由'], additionalProperties: false } } }, required: ['原始表达', '当前理解', '来源'], additionalProperties: false, description: '仅goal_create或goal_progress可选；Lead可修正解释，不认证用户表达，不改目标本意、约束或判据，也不创建执行实例。修改目标约束后旧解释退出默认上下文，需按新目标重新记录；命令可传JSON对象。' },
         期望结果: { type: 'string', maxLength: 4000, description: 'goal_create 的用户期望结果；Lead goal_revise不能改目标本意，人侧改动走goal_decide' },

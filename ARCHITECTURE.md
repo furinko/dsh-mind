@@ -71,6 +71,7 @@ LLM 负责难以穷举的语义判断；机器检查可观测的身份、版本�
 | 目标与受管准入额度 | `src/goals.js`、`src/goal-ledger.js`、`src/goal-budget.js`、`src/budget-ledger.js` | 目标当前修订及任务引用、独立额度配置与逐次预占/结果事实；额度不授予执行权 |
 | 记忆与能力 | `src/memory.js`、`src/memory-response.js`、`src/retrieval.js`、`src/capability.js` | 记忆账本、来源引用、状态追加和能力版本；响应模块只处理预算与呈现 |
 | 轮级缓冲与续聊 | `src/turn-buffer.js`、`components/kernel/lib/turn-buffer-hooks.js` | 已接纳用户/助手文本按会话和历史项目归属持久化，检查点补读、有界回放及人侧清空；[短期缓冲](docs/design/轮级缓冲与续聊恢复-2026-10-22.md)不自动晋升长期记忆 |
+| 项目工作接续 | `src/project-brief.js`、`components/kernel/lib/project-brief-hooks.js` | 轮末异步提炼有来源的项目摘要，新Lead会话有界装配；更正、撤回及正式目标状态重新核对，[工作接续资料](docs/design/项目工作接续与自动提炼-2026-10-23.md)不授予权限或晋升长期记忆 |
 | 专业默认上下文 | `src/professional-context.js`、`components/kernel/lib/professional-context.js` | 当前真实岗位、卡、任务绑定、项目与复核读域；有界知识摘要每次替换装配，不缓存许可或改写记忆 |
 | Lead连续性 | `src/lead-continuity.js`、`src/lead-context.js`、`components/kernel/lib/lead-context.js` | 私有偏好账本中的人格、用户偏好与教训；按声明范围自动装配，支持替代、停用及已引用来源撤回 |
 | Lead会话目标与教训选择 | `src/lead-focus.js`、`src/goals.js`、`components/kernel/lib/accepted-expression.js`、工作与连续性装配 | 工作概览优先本会话目标；教训优先本轮已接纳且仍可见的用户来源文本，再用目标线索；只读选材不另存聊天或认证当前意图，公开记忆查询口径不变 |
