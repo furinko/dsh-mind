@@ -38,6 +38,7 @@ function memoryEntryVisible(entry, query) {
     if (!query.读者 || !(ANSWER_READERS.includes(query.读者.kind) || query.读者.roleId === '复核员')) return false;
   }
   if (query.项目 && entry.类 === '知识' && entry.项目 && entry.项目 !== query.项目 && entry.归属 !== DIR.跨项目) return false;
+  if (query.精确岗位 === true && entry.岗位 !== query.岗位) return false;
   return !(query.岗位 && entry.岗位 && entry.岗位 !== query.岗位);
 }
 
@@ -790,6 +791,9 @@ export class MemoryService {
    * @returns {Promise<{ 命中: object[], 口径: object, 条目: object[], 说明?: string }>}
    */
   async query(query = {}) {
+    if (query.精确岗位 !== undefined && (typeof query.精确岗位 !== 'boolean' || (query.精确岗位 && (typeof query.岗位 !== 'string' || !query.岗位.trim())))) {
+      throw new InvalidBody('精确岗位必须为布尔值；精确匹配需要非空岗位。');
+    }
     const now = new Date(this.clock.now());
     const 响应配置 = memoryResponseOptions(query);
     await this.policy.check({
@@ -858,7 +862,7 @@ export class MemoryService {
     const 可召回 = query.含待复验 === true ? 状态可召回 : 状态可召回.filter((entry) => !需复验(entry));
     // 页码不对正在变化的账本承诺无漏重；变化即要求重启，不能拼接两个不同事实快照。
     const 复验指纹 = visible.map((entry) => [entry.id, entry.复验状态 ?? null]);
-    const 数据版本 = digest(JSON.stringify({ 类: wanted, 项目: query.项目 ?? null, 岗位: query.岗位 ?? null, 文本: query.文本 ?? '', id: query.id ?? null, 含待复验: query.含待复验 === true, 复验指纹, 条目: 可召回 }));
+    const 数据版本 = digest(JSON.stringify({ 类: wanted, 项目: query.项目 ?? null, 岗位: query.岗位 ?? null, ...(query.精确岗位 === true ? { 精确岗位: true } : {}), 文本: query.文本 ?? '', id: query.id ?? null, 含待复验: query.含待复验 === true, 复验指纹, 条目: 可召回 }));
     if (query.数据版本 && query.数据版本 !== 数据版本) {
       throw new InvalidBody('记忆数据或查询口径已变化，不能继续旧分页；请清除 数据版本，并从偏移0/正文偏移0重新读取。', { detail: { 原因: 'MEMORY_QUERY_SNAPSHOT_CHANGED' } });
     }
@@ -923,7 +927,7 @@ export class MemoryService {
     // 索引缓存键必须带**读域指纹**：复核员与普通成员即便 读者.kind 相同，可见集也不同；
     // 漏掉这一维会让先到的读者把索引借给后到的读者（遮罩被缓存旁路）。
     const 读域指纹 = query.读域?.限定 === true ? `复核:${[...query.读域.集合].sort().join(',')}` : '无';
-    const 索引键 = `${await this.#签名们(账本文件)}|${JSON.stringify([wanted, query.项目 ?? null, query.岗位 ?? null, query.含失效 === true, query.含待复验 === true, query.显式 === true, query.读者?.kind ?? null, 读域指纹, 复验指纹, 可召回.map((entry) => entry.id)])}`;
+    const 索引键 = `${await this.#签名们(账本文件)}|${JSON.stringify([wanted, query.项目 ?? null, query.岗位 ?? null, query.精确岗位 === true, query.含失效 === true, query.含待复验 === true, query.显式 === true, query.读者?.kind ?? null, 读域指纹, 复验指纹, 可召回.map((entry) => entry.id)])}`;
     let index = this.#indexCache.get(索引键);
     if (!index) {
       // 用户标签进检索索引（2026-10-14 审查 P2-19）：修前 标签 只塞 [类, 岗位]——

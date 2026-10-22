@@ -43,6 +43,7 @@ import { EXPERIMENT_RECIPES } from '../../../src/review-experiment-files.js';
 import { createKernelObservations } from './observability-hooks.js';
 import { createGoalBudgetHooks } from './goal-budget-hooks.js';
 import { createModelUsageHooks } from './model-usage-hooks.js';
+import { injectProfessionalContext } from './professional-context.js';
 
 export const name = 'dsh-mind-kernel';
 export const inject = ['tools'];
@@ -211,9 +212,10 @@ export async function apply(ctx, config = {}) {
         const 已接调度 = delegation.assemble(out, { project: 当前项目键({ agent: context?.agent }), isTeam: 是Team成员(ctx, context?.agent) });
         // v2 条目10（W7 实证）：Root 实例在**首个真实组织上下文装配前**出生/钉版，并把
         // 它钉住的那版 Lead 规程注入；子会话/伪 Lead 形状不在此列（agentSubject 判）。
-        return 注入Lead已钉规程(已接调度, context?.agent, org, logger, {
+        const 已钉规程 = await 注入Lead已钉规程(已接调度, context?.agent, org, logger, {
           agent: context?.agent, agents: 取服务(ctx, 'agents'), project: 当前项目键({ agent: context?.agent }),
         });
+        return injectProfessionalContext(已钉规程, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
       }, { prepend: true }));
       调度接线回执.promptRegistered = true;
     } catch (error) {
