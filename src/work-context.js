@@ -4,6 +4,7 @@ import { Denied, InvalidBody } from './kernel/errors.js';
 import { currentProfessionalScope } from './professional-context.js';
 import { constraintsForTaskInSnapshot } from './goal-ledger.js';
 import { 已被合法采纳 } from './tasks.js';
+import { selectLeadGoals } from './lead-focus.js';
 
 export const WORK_CONTEXT_BUDGET = 9000;
 const short = (value, limit) => { const text = String(value ?? ''); return { 文本: text.slice(0, limit), 省略: text.length > limit }; };
@@ -13,8 +14,7 @@ const taskBrief = node => ({ id: node.id, 状态: node.状态, 代: node.代 ?? 
 
 async function leadSources(org, actor, project) {
   const snapshot = await org.goals.contextSnapshot({ subject: actor, 项目: project });
-  const goals = snapshot.目标.filter(goal => !['取消', '已完成'].includes(goal.状态)).reverse()
-    .sort((a, b) => String(b.更新于).localeCompare(String(a.更新于)));
+  const { goals, focus } = selectLeadGoals(snapshot);
   const selected = goals.slice(0, 3);
   const nodes = await org.tasks.list({ 项目: project });
   const linked = new Map(selected.map(goal => [goal.id, []]));
@@ -27,7 +27,7 @@ async function leadSources(org, actor, project) {
   }
   const roles = (await org.registry.list()).filter(role => !['Lead', '主权者', '出厂作者'].includes(role.id))
     .map(role => role.id).filter(id => typeof id === 'string' && id.length <= 80);
-  return { goals, selected, linked, roles, stamp: digest(canonical({ goals, linked: [...linked], roles })) };
+  return { goals, focus, selected, linked, roles, stamp: digest(canonical({ goals, focus: focus?.id ?? null, 本会话推进: snapshot.本会话推进 ?? [], linked: [...linked], roles })) };
 }
 
 export async function recallWorkContext({ org, subject, project }) {
@@ -37,7 +37,8 @@ export async function recallWorkContext({ org, subject, project }) {
   const add = item => { frame.资料.push(item); if (JSON.stringify(frame).length > WORK_CONTEXT_BUDGET - 500) { frame.资料.pop(); frame.截断 = true; } };
   if (subject.kind === 'Lead') {
     const sources = await leadSources(org, before.actor, project);
-    frame.选择口径 = '本项目最近更新的最多3个未收尾目标；不代表已识别当前对话焦点';
+    frame.选择口径 = '本会话实际创建或推进的未收尾目标优先，最多3个；无本会话线索时取本项目近期目标，不代表当前聊天焦点';
+    frame.本会话目标 = sources.focus ? { id: sources.focus.id, 修订: sources.focus.修订, 状态: sources.focus.状态 } : null;
     frame.未收尾目标数 = sources.goals.length;
     frame.可咨询岗位 = sources.roles.slice(0, 12);
     frame.岗位省略 = sources.roles.length > 12;

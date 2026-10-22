@@ -37,7 +37,13 @@ export class GoalService {
     this.#project(spec?.项目);
     await this.#actor(spec.subject);
     await this.#policy('read', 'goals', spec, 'goal_query');
-    return goalSnapshotOf(await readGoalLedger(goalLogPath(this.layout, spec.项目)), spec.项目);
+    const rows = await readGoalLedger(goalLogPath(this.layout, spec.项目));
+    const snapshot = goalSnapshotOf(rows, spec.项目);
+    const progress = new Map();
+    for (const row of rows) {
+      if (row.by.id === spec.subject.id && ['goal_created', 'goal_progressed'].includes(row.kind)) progress.set(row.id, row.seq);
+    }
+    return { ...snapshot, 本会话推进: [...progress].map(([目标, 事件序号]) => ({ 目标, 事件序号 })) };
   }
   constraintsForTask(node, nodes, project) { return constraintsForTaskInSnapshot(node, nodes, this.rawSnapshot(project)); }
 

@@ -22,6 +22,7 @@ import { normalizeKnowledgeContext, knowledgeReviewStatus, knowledgeReviewProjec
 import { normalizeFeedbackReference, resolveKnowledgeFeedback, validateFeedbackDispositionObservation } from './knowledge-feedback.js';
 import { normalizeContinuity, applicableContinuity, continuityBlockedSources, LEAD_MEMORY_KINDS } from './lead-continuity.js';
 import { normalizeCollaborationFeedback, checkCollaborationReferences } from './collaboration-feedback.js';
+import { lessonSearchText } from './lead-focus.js';
 import { DIR, MEMORY_KINDS } from './paths.js';
 import { 记忆条目在读域, 取复核读域 } from './review-scope.js';
 // 「已被合法采纳」的唯一判据住在任务图（补修K 字段合同），晋升面直接复用、不另抄状态判断。
@@ -951,14 +952,14 @@ export class MemoryService {
     // 索引缓存键必须带**读域指纹**：复核员与普通成员即便 读者.kind 相同，可见集也不同；
     // 漏掉这一维会让先到的读者把索引借给后到的读者（遮罩被缓存旁路）。
     const 读域指纹 = query.读域?.限定 === true ? `复核:${[...query.读域.集合].sort().join(',')}` : '无';
-    const 索引键 = `${await this.#签名们(账本文件)}|${JSON.stringify([wanted, query.项目 ?? null, query.岗位 ?? null, query.精确岗位 === true, query.含失效 === true, query.含待复验 === true, query.显式 === true, query.读者?.kind ?? null, 读域指纹, 复验指纹, 可召回.map((entry) => entry.id)])}`;
+    const 索引键 = `${await this.#签名们(账本文件)}|${JSON.stringify([wanted, query.项目 ?? null, query.岗位 ?? null, query.精确岗位 === true, query.连续性类别 ?? null, query.含失效 === true, query.含待复验 === true, query.显式 === true, query.读者?.kind ?? null, 读域指纹, 复验指纹, 可召回.map((entry) => entry.id)])}`;
     let index = this.#indexCache.get(索引键);
     if (!index) {
       // 用户标签进检索索引（2026-10-14 审查 P2-19）：修前 标签 只塞 [类, 岗位]——
       // 写入时收的 标签（用户打的检索词）不进索引，按标签搜永远搜不到（静默落空）。
       index = buildIndex(可召回.map((entry) => ({
         id: entry.id,
-        正文: entry.内容,
+        正文: query.连续性类别 === '协作教训' ? lessonSearchText(entry) : entry.内容,
         标签: [entry.类, entry.岗位 ?? '', ...(Array.isArray(entry.标签) ? entry.标签 : [])],
         来源: entry.归属,
       })));
