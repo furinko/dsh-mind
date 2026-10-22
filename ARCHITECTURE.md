@@ -72,6 +72,7 @@ LLM 负责难以穷举的语义判断；机器检查可观测的身份、版本�
 | 记忆与能力 | `src/memory.js`、`src/memory-response.js`、`src/retrieval.js`、`src/capability.js` | 记忆账本、来源引用、状态追加和能力版本；响应模块只处理预算与呈现 |
 | 专业默认上下文 | `src/professional-context.js`、`components/kernel/lib/professional-context.js` | 当前真实岗位、卡、任务绑定、项目与复核读域；有界知识摘要每次替换装配，不缓存许可或改写记忆 |
 | Lead连续性 | `src/lead-continuity.js`、`src/lead-context.js`、`components/kernel/lib/lead-context.js` | 私有偏好账本中的人格、用户偏好与教训；按声明范围自动装配，支持替代、停用及已引用来源撤回 |
+| 协作反馈与后续案例 | `src/collaboration-feedback.js`、记忆与Lead连续性装配 | 教训复盘及后续结果声明共用私有账本；核对真实目标历史引用，保留失败和未知，有界计数不认证成长 |
 | 需求理解与当前工作 | `src/demand-understanding.js`、`src/work-context.js`、`components/kernel/lib/work-context.js` | 需求解释随目标事件追加；Lead看未收尾目标及交付进展，成员只看当前绑定任务简报，沿用原整体证据核对 |
 | 复核与会审 | `src/review.js`、`src/council.js` | 任务复核事件与独立会审事件，分别承担验收和咨询 |
 | 审计与安全自检 | `src/audit.js`、`src/probes.js` | 审计链、实际 guard 回执、规则件与撤回记录 |

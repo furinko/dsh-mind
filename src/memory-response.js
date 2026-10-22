@@ -1,5 +1,6 @@
 /** 记忆读面的分页与内容预算；不读取账本，也不参与权限判定。 */
 import { InvalidBody, Fault } from './kernel/errors.js';
+import { collaborationFeedbackSummary } from './collaboration-feedback.js';
 
 /** 默认值与硬上限共用，动作 schema 可直接引用。单位为 JSON 的 UTF-16 字符数。 */
 export const MEMORY_RESPONSE_LIMITS = Object.freeze({ defaultBudget: 12000, maxBudget: 32000, minBudget: 512, maxRows: 100, maxQuery: 2048, maxResponse: 40000 });
@@ -211,7 +212,8 @@ function fitSerializedResponse(result, serialize) {
 
 /** 摘要不携带完整历史；所有动态元数据仍由总预算兜底。 */
 function compactEntry(entry) {
-  return Object.fromEntries(['id', '类', '状态', '项目', '岗位', '归属', '记于', '来源', '来源引用', '派生自', '归档', '连续性', '知识说明', '复验状态', '复验警示'].filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]]));
+  return { ...Object.fromEntries(['id', '类', '状态', '项目', '岗位', '归属', '记于', '来源', '来源引用', '派生自', '归档', '连续性', '知识说明', '复验状态', '复验警示'].filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]])),
+    ...(Object.hasOwn(entry, '协作反馈') ? { 协作反馈摘要: collaborationFeedbackSummary(entry.协作反馈) } : {}) };
 }
 function reviewWarnings(entry) { return Object.fromEntries(['复验状态', '复验警示'].filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]])); }
 

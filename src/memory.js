@@ -21,6 +21,7 @@ import { memoryResponseOptions, memoryResponsePage, finalizeMemoryResponse } fro
 import { normalizeKnowledgeContext, knowledgeReviewStatus, knowledgeReviewProjection, KNOWLEDGE_CONTEXT_LIST_FIELDS } from './knowledge-applicability.js';
 import { normalizeFeedbackReference, resolveKnowledgeFeedback, validateFeedbackDispositionObservation } from './knowledge-feedback.js';
 import { normalizeContinuity, applicableContinuity, continuityBlockedSources, LEAD_MEMORY_KINDS } from './lead-continuity.js';
+import { normalizeCollaborationFeedback, checkCollaborationReferences } from './collaboration-feedback.js';
 import { DIR, MEMORY_KINDS } from './paths.js';
 import { 记忆条目在读域, 取复核读域 } from './review-scope.js';
 // 「已被合法采纳」的唯一判据住在任务图（补修K 字段合同），晋升面直接复用、不另抄状态判断。
@@ -216,6 +217,8 @@ export class MemoryService {
   async remember(input) {
     const kind = input.类;
     const 连续性 = normalizeContinuity(input.连续性);
+    const 协作反馈 = normalizeCollaborationFeedback(input.协作反馈);
+    if (协作反馈 !== undefined && (kind !== '偏好' || 连续性?.类别 !== '协作教训')) throw new InvalidBody('协作反馈只能附在带协作教训连续性声明的偏好条目上。');
     if (连续性 !== undefined) {
       if (kind !== '偏好') throw new InvalidBody('连续性只附在部署私有的偏好类记忆上。');
       if (!['Lead', '主权者'].includes(input.subject?.kind)) throw new Denied('Lead连续性 · 写入身份', '仅Lead或主权者可记录Lead人格、用户偏好与协作教训。');
@@ -286,6 +289,7 @@ export class MemoryService {
         howToChange: '普通成员：把内容写成本任务的「经历」并在交卷附知识候选，由 Lead 在结账的记忆处置里逐条判。记忆整理岗：走受限晋升（来源=同项目已采纳任务），见 promoteFromAdopted。',
       });
     }
+    if (协作反馈 !== undefined) await checkCollaborationReferences(this.tasks?.goals, input.subject, 协作反馈);
     if (通用) {
       // 通用直写 = 生下来就在跨项目面：披露闸与跨项目晋升同一把尺（同一私有方法）。
       // 写入被拒时条目尚无 id，审计对象用占位名（拒的是企图，条目没出生）。
@@ -323,6 +327,7 @@ export class MemoryService {
         ...(typeof input.幂等键 === 'string' && input.幂等键 ? { 幂等键: input.幂等键 } : {}),
         标签: input.标签 ?? [],
         ...(连续性 === undefined ? {} : { 连续性 }),
+        ...(协作反馈 === undefined ? {} : { 协作反馈 }),
         ...(知识说明 === undefined ? {} : { 知识说明 }),
         状态: '有效',
         记于: this.clock.iso(),
@@ -1094,6 +1099,7 @@ export class MemoryService {
    */
   async overturn(id, spec) {
     const replacementContinuity = normalizeContinuity(spec.连续性);
+    const replacementFeedback = normalizeCollaborationFeedback(spec.协作反馈);
     const 知识说明 = normalizeKnowledgeContext(spec.知识说明);
     spec = { ...spec, ...(知识说明 === undefined ? {} : { 知识说明 }) };
     const feedback = await this.#feedbackExecution(id, spec, 'overturn');
@@ -1101,6 +1107,7 @@ export class MemoryService {
     const entry = await this.#folded(id);
     if (!entry) throw new InvalidBody(`没有这条记忆：${id}`);
     if (replacementContinuity !== undefined && entry.类 !== '偏好') throw new InvalidBody('连续性只能随偏好替代条目提供。');
+    if (replacementFeedback !== undefined && (entry.类 !== '偏好' || (replacementContinuity ?? entry.连续性)?.类别 !== '协作教训')) throw new InvalidBody('协作反馈只能随协作教训偏好替代条目提供。');
     if (entry.连续性 && !['Lead', '主权者'].includes(spec.subject?.kind)) throw new Denied('Lead连续性 · 处置身份', '仅Lead或主权者可更正连续性资料。');
     if (知识说明 !== undefined && entry.类 !== '知识') throw new InvalidBody('知识说明仅属于知识类，不能给非知识替代条目追加。');
     // 推翻 = 「新条目 + 旧条目状态行」**双行同锁落账**（2026-10-12 评审 P3）：
@@ -1123,6 +1130,7 @@ export class MemoryService {
       岗位: entry.岗位 ?? undefined,
       来源引用: entry.来源引用 ?? [],
       ...(replacementContinuity === undefined && entry.连续性 === undefined ? {} : { 连续性: replacementContinuity ?? entry.连续性 }),
+      ...(replacementFeedback === undefined ? {} : { 协作反馈: replacementFeedback }),
       ...(知识说明 === undefined ? {} : { 知识说明 }),
       派生自: id,
       // 推翻是「追加新条目 + 旧条目入账」双动作：新条目那次 remember 也过策略引擎，

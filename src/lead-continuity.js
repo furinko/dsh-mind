@@ -1,5 +1,6 @@
 /** Lead 连续性只是有来源的记忆资料，不是身份、权限或已认证的用户意图。 */
 import { InvalidBody } from './kernel/errors.js';
+import { normalizeCollaborationFeedback } from './collaboration-feedback.js';
 
 export const LEAD_MEMORY_KINDS = Object.freeze(['用户偏好', '人格', '协作教训']);
 export function normalizeContinuity(value) {
@@ -17,6 +18,7 @@ export function normalizeContinuity(value) {
 export function applicableContinuity(entry, project, category) {
   try {
     const meta = normalizeContinuity(entry.连续性);
+    if (Object.hasOwn(entry, '协作反馈') && (meta?.类别 !== '协作教训' || normalizeCollaborationFeedback(entry.协作反馈) === undefined)) return false;
     return entry.类 === '偏好' && meta !== undefined && meta.类别 === category
       && (meta.范围 === '部署' || entry.项目 === project);
   } catch { return false; }

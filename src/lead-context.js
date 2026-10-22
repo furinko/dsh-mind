@@ -20,6 +20,7 @@ export async function recallLeadContext({ org, subject, project }) {
     for (const entry of result.条目 ?? []) {
       if (typeof entry.id !== 'string' || entry.id.length > 256 || !entry.连续性) { frame.截断 = true; continue; }
       const item = { id: entry.id, 连续性: entry.连续性, 项目: entry.项目 ?? null, 摘要: String(entry.摘要 ?? '').slice(0, 160) };
+      if (entry.协作反馈摘要) item.协作反馈摘要 = entry.协作反馈摘要;
       frame.记录.push(item);
       if (JSON.stringify(frame).length > LEAD_CONTEXT_BUDGET - 512) { frame.记录.pop(); frame.截断 = true; }
     }
