@@ -38,6 +38,7 @@ import { KnowledgeReuseService } from './knowledge-reuse.js';
 import { TurnBufferService } from './turn-buffer.js';
 import { ProjectBriefService } from './project-brief.js';
 import { ContinuityCaptureService } from './continuity-capture.js';
+import { PersonaCoreService } from './persona-core.js';
 
 /** 默认项目键。名字即目录名（§14.4-5）。 */
 export const DEFAULT_PROJECT = 'default';
@@ -146,6 +147,7 @@ export class Org {
     org.turnBuffer = new TurnBufferService({ layout, org, clock });
     org.projectBrief = new ProjectBriefService({ layout, org, clock });
     org.continuityCapture = new ContinuityCaptureService({ layout, org, clock });
+    org.personaCore = new PersonaCoreService({ layout, policy, clock });
     await org.bootstrap({ 代次: spec.代次 });
     return org;
   }

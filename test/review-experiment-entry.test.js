@@ -15,7 +15,7 @@ function act(s,kind,action,args={}){
 }
 async function withKernel(s,fn,{configured=true}={}){
   const disposers=[],config={home:s.f.home,factoryRoot:s.f.factoryRoot,privateRoot:s.f.privateRoot,project:REVIEW_PROJECT,projectBindings:[{path:path.join(s.root,REVIEW_PROJECT),project:REVIEW_PROJECT}],audit工具调用:false,...(configured?{reviewExperiments:s.config}:{})};
-  const host=fakeHost({提供服务:['tools','commands','systemPrompt','agents','workingDirectory','subagents','sandbox','subprocess'],服务:{agents:s.parentHost.agents,workingDirectory:{get:()=>path.join(s.root,REVIEW_PROJECT)},subagents:s.parentHost.subagents,sandbox:s.services.sandbox,subprocess:s.services.subprocess}});
+  const host=fakeHost({提供服务:['tools','commands','systemPrompt','agents','workingDirectory','subagents','sandboxPolicy','sandbox','subprocess'],服务:{agents:s.parentHost.agents,workingDirectory:{get:()=>path.join(s.root,REVIEW_PROJECT)},subagents:s.parentHost.subagents,sandbox:s.services.sandbox,subprocess:s.services.subprocess}});
   host.ctx.effect=fn=>{const disposer=fn();disposers.push(disposer);return disposer;};
   try{await applyKernel(host.ctx,config);const tool=host.工具.get('mind');const invoke=async(args,child=false)=>JSON.parse(await tool.execute({project:REVIEW_PROJECT,...args},{name:'mind',agent:child?s.childAgent:s.parentAgent}));await fn({host,tool,invoke,disposers});}
   finally{for(const dispose of disposers.reverse())await dispose?.();forgetSharedOrg(config);}
@@ -32,7 +32,7 @@ test('真实注册工具schema/宿主束接线：配置后可独立运行，复�
   const exec={name:'mind',arguments:{action:'review_experiment_run',许可id:g.许可id,配方:'preflight'},agent:s.childAgent};for(const guard of host.闸)assert.equal(await guard(exec),undefined);
   const r=await invoke(exec.arguments,true);assert.equal(r.成功,true,JSON.stringify(r));assert.equal(r.状态,'completed');assert.equal(s.calls.spawn.length,1);
   const rejection=host.闸.map(guard=>guard({name:'pwsh',arguments:{command:'not executed'},agent:s.childAgent})).find(Boolean);assert.match(rejection,/复核员只读|闭名单/);
-})));
+}),{enforcement:'full'}));
 test('真实工具缺省未配置时关闭，不因schema可见就产生执行权',()=>reviewScene(s=>withKernel(s,async({invoke})=>{const r=await invoke({action:'review_experiment_allow',...s.grantArgs});assert.equal(r.成功,false);assert.match(r.理由,/未由部署配置启用/);assert.equal(s.calls.spawn.length,0);},{configured:false})));
 test('无宿主实验服务时不可退回单步盲审批或裸执行',()=>reviewScene(async s=>{const spec=s.parent('review_experiment_allow',s.grantArgs);await assert.rejects(runAction({org:s.org,项目:REVIEW_PROJECT,主体:spec.subject,面:'tool',宿主:spec.host,args:spec.args}),e=>e.code==='EXPERIMENT_NOT_WIRED');assert.equal(s.calls.spawn.length,0);assert.equal(fs.existsSync(s.org.layout.reviewExperimentLog(REVIEW_PROJECT)),false);}));
 test('审批许可：完整内容先预览，原申请者重放一次后不可复用',()=>reviewScene(async s=>{

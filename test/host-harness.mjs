@@ -14,7 +14,7 @@
  * @returns {{ ctx: any, 工具: Map<string, any>, 命令: Map<string, any>, 段落: any[], 闸: Function[], 钩子: Map<string, Function[]>, 日志: string[], 触发(event: string, ...args: any[]): void, 清理(): void }}
  */
 export function fakeHost(options = {}) {
-  const 服务 = new Set(options.提供服务 ?? ['tools', 'commands', 'systemPrompt']);
+  const 服务 = new Set(options.提供服务 ?? ['tools', 'commands', 'systemPrompt', 'sandboxPolicy', 'sandbox']);
   const 工具 = new Map();
   const 命令 = new Map();
   const 段落 = [];
@@ -58,6 +58,9 @@ export function fakeHost(options = {}) {
   };
 
   const 服务面 = {
+    // 原生命令需要策略与完整隔离的服务契约；假宿主不启动真实进程。
+    sandboxPolicy: { resolve: request => ({ mode: 'danger-full-access', workspaceRoot: request?.session?.header?.cwd ?? process.cwd() }) },
+    sandbox: { async confine(argv, policy) { return { argv: ['test-runner', '--', ...argv], policy, enforcement: 'full' }; } },
     tools: {
       register(definition) {
         if (!definition?.name) throw new Error('tool needs a name');

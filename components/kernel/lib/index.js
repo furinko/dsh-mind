@@ -49,6 +49,8 @@ import { injectWorkContext } from './work-context.js';
 import { createTurnBufferHooks, injectTurnBuffer } from './turn-buffer-hooks.js';
 import { createProjectBriefHooks, injectProjectBrief } from './project-brief-hooks.js';
 import { createContinuityCaptureHooks, injectPendingContinuity } from './continuity-capture-hooks.js';
+import { injectPersonaCore } from './persona-core.js';
+import { createPersonaProtection } from './persona-protection.js';
 import { collaborationFeedbackSchema } from '../../../src/collaboration-feedback.js';
 
 export const name = 'dsh-mind-kernel';
@@ -95,6 +97,15 @@ export async function apply(ctx, config = {}) {
   }
 
   const 项目 = config.project ?? DEFAULT_PROJECT;
+  const personaProtection = createPersonaProtection({ org,
+    sandboxPolicy: 取服务(ctx, 'sandboxPolicy'), sandbox: 取服务(ctx, 'sandbox'),
+    terminals: 取服务(ctx, 'terminals'),
+    getServices: () => ({ sandboxPolicy: 取服务(ctx, 'sandboxPolicy'), sandbox: 取服务(ctx, 'sandbox'), terminals: 取服务(ctx, 'terminals') }),
+    cwdOf: exec => 会话工作目录(exec, { ctx }),
+  });
+  org.personaProtection = personaProtection;
+  ctx.inject?.(['sandboxPolicy', 'sandbox'], scoped => personaProtection.connect({ sandboxPolicy: scoped.sandboxPolicy, sandbox: scoped.sandbox, terminals: 取服务(ctx, 'terminals') }));
+  ctx.effect?.(() => () => personaProtection.stop());
   let 解析项目;
   try { 解析项目 = createProjectResolver({ bindings: config.projectBindings, layout: org.layout }); }
   catch (error) {
@@ -120,7 +131,7 @@ export async function apply(ctx, config = {}) {
   org.projectBriefHooks = projectBriefHooks;
   ctx.effect?.(() => () => projectBriefHooks.stop());
   const continuityCaptureHooks = createContinuityCaptureHooks({ org, projectOf: 当前项目键,
-    llmOf: () => 取服务(ctx, 'llm'), logger, enabled: config.轮级缓冲 !== false && config.自动协作记忆 !== false });
+    llmOf: () => 取服务(ctx, 'llm'), logger, enabled: config.轮级缓冲 !== false && config.自动协作记忆 === true });
   org.continuityCaptureHooks = continuityCaptureHooks;
   ctx.effect?.(() => () => continuityCaptureHooks.stop());
   const turnBufferHooks = createTurnBufferHooks({ org, projectOf: 当前项目键,
@@ -186,6 +197,8 @@ export async function apply(ctx, config = {}) {
     // 单调闸：只读部署偏好，不读路径，不接受任何人的「通融」。
     // v2 条目6/7 补修：同一个 guard 里先判**复核员角色边界**（见 闸判定），不新注册平行 guard。
     启动范围闸.activate((exec) => {
+      const 核心人设保护 = personaProtection.guard(exec);
+      if (核心人设保护 !== undefined) return 核心人设保护;
       const 原范围判定 = observations.guard(exec, 'kernel.tool-scope', (observationBlock) => {
         try { return 闸判定(exec, 项目, { org, ctx, 项目键: 当前项目键, observationBlock, budgetHooks }); }
         catch (error) { return `[dsh-mind] 工具闸无法确认项目/任务权限，按 fail-closed 拒绝：${错误消息(error)}`; }
@@ -246,7 +259,9 @@ export async function apply(ctx, config = {}) {
         const 待整理协作表达 = await injectPendingContinuity(轮缓冲, { agent: context?.agent, org, hooks: continuityCaptureHooks,
           projectOf: 当前项目键, logger, active: () => !delegation.closed });
         const Lead连续性 = await injectLeadContext(待整理协作表达, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
-        return injectProjectBrief(Lead连续性, { agent: context?.agent, org, hooks: projectBriefHooks,
+        const 项目接续 = await injectProjectBrief(Lead连续性, { agent: context?.agent, org, hooks: projectBriefHooks,
+          projectOf: 当前项目键, logger, active: () => !delegation.closed });
+        return injectPersonaCore(项目接续, { agent: context?.agent, org,
           projectOf: 当前项目键, logger, active: () => !delegation.closed });
       }, { prepend: true }));
       调度接线回执.promptRegistered = true;

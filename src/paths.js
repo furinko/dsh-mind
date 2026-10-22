@@ -329,6 +329,10 @@ export class Layout {
     return this.private(DIR.基础设施, DIR.记忆服务, '连续性提炼', `${assertPathSegment(project, '项目')}.json`);
   }
 
+  personaCoreFile() {
+    return this.private('主权人设', '核心人设.md');
+  }
+
   /** 审计日志：按月分片，不按项目分（§14.3）。month 是路径段，必须过校验（2026-10-13 审查 P2-19）。 */
   auditLog(month) {
     return this.private(DIR.基础设施, DIR.审计日志, `audit-${assertPathSegment(String(month), '审计月份')}.jsonl`);

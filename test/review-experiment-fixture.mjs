@@ -32,7 +32,7 @@ export async function reviewScene(fn,options={}){
     const parentHost={project:REVIEW_PROJECT,agent:parentAgent,agents,subagents:{listChildren:async()=>[{id:REVIEW_HOLDER,mode:'continuable'}]}};
     const childHost={project:REVIEW_PROJECT,agent:childAgent,agents};
     const calls={confine:[],spawn:[],terminate:0,wait:0,scopes:ownedScopes};let mode=options.mode??'ok';let spawnedResolve;const spawned=new Promise(resolve=>{spawnedResolve=resolve;});
-    const sandbox={async confine(argv,policy,signal){calls.confine.push({argv,policy});if(mode==='sandbox-fail')throw Object.assign(Error('private host details'),{code:'SANDBOX_UNAVAILABLE'});return {argv:['official-runner','--',...argv],enforcement:'partial',denialSignatures:['permission-denied-marker'],runnerFailureRules:[{fatalSignatures:['runner-fatal-marker']}]};}};
+    const sandbox={async confine(argv,policy,signal){calls.confine.push({argv,policy});if(mode==='sandbox-fail')throw Object.assign(Error('private host details'),{code:'SANDBOX_UNAVAILABLE'});return {argv:['official-runner','--',...argv],enforcement:options.enforcement??'partial',denialSignatures:['permission-denied-marker'],runnerFailureRules:[{fatalSignatures:['runner-fatal-marker']}]};}};
     const subprocess={spawn(spec){
       calls.spawn.push(spec);calls.scopes.push(path.dirname(spec.cwd));spawnedResolve();
       if(mode==='spawn-throw')throw Error('private spawn detail');
