@@ -4,10 +4,12 @@ import { dirname, join } from 'node:path';
 import { readTextOrNull, stripBom } from './kernel/fsx.js';
 import { Fault } from './kernel/errors.js';
 import { canonical } from './kernel/text.js';
+import { normalizeDemandUnderstanding } from './demand-understanding.js';
 
 export const GOAL_STATES = Object.freeze(['进行中', '等待', '暂停', '取消', '已完成']);
 export const GOAL_NATIVE_TOOLS = Object.freeze(['read', 'read_image', 'glob', 'grep', 'write', 'edit']);
 const ENVELOPE = ['seq', 'at', 'by', 'kind', 'id', '修订'];
+const OPTIONAL = { goal_created: ['需求理解'], goal_progressed: ['需求理解'] };
 const FIELDS = {
   goal_created: ['期望结果', '约束', '禁止工具', '完成依据', '来源声明', '下一步', '状态', '请求键', '创建规范摘要'],
   goal_revised: ['期望结果', '约束', '禁止工具', '完成依据', '来源声明'],
@@ -32,7 +34,11 @@ export function foldGoalLedger(rows, file = 'goals.jsonl') {
     const fields = row && Object.hasOwn(FIELDS, row.kind) ? FIELDS[row.kind] : null;
     if (!row || typeof row !== 'object' || Array.isArray(row) || !fields || !text(row.id) || row.seq !== index + 1 || !text(row.at) || Number.isNaN(Date.parse(row.at)) ||
         !row.by || !text(row.by.id) || Object.keys(row.by).some((key) => !['id', 'kind'].includes(key)) || !['Lead', '主权者'].includes(row.by.kind) || !Number.isSafeInteger(row.修订) || row.修订 < 1 ||
-        Object.keys(row).some((key) => ![...ENVELOPE, ...fields].includes(key)) || fields.some((key) => !Object.hasOwn(row, key))) fail(index, '不是完整且可识别的目标事件');
+        Object.keys(row).some((key) => ![...ENVELOPE, ...fields, ...(OPTIONAL[row.kind] ?? [])].includes(key)) || fields.some((key) => !Object.hasOwn(row, key))) fail(index, '不是完整且可识别的目标事件');
+    if (Object.hasOwn(row, '需求理解')) {
+      try { if (normalizeDemandUnderstanding(row.需求理解) === undefined) fail(index, '需求理解不可判'); }
+      catch { fail(index, '需求理解不可判'); }
+    }
     const prior = goals.get(row.id);
     if (row.kind === 'goal_created' ? prior || row.修订 !== 1 : !prior || row.修订 !== prior.修订 + 1 || closed(prior)) fail(index, '目标不存在、重复创建、修订不连续或终态后仍写入');
     if (['goal_created', 'goal_revised'].includes(row.kind)) {
@@ -51,6 +57,8 @@ export function foldGoalLedger(rows, file = 'goals.jsonl') {
     }
     if (row.kind === 'goal_task_linked' && (!text(row.任务) || (owners.has(row.任务) && owners.get(row.任务) !== row.id))) fail(index, '任务关联无效或跨目标重复');
     const goal = prior ?? { id: row.id, 修订: 0, 任务关联: [], 来源历史: [], 状态历史: [] };
+    if (row.kind === 'goal_revised') { delete goal.需求理解; delete goal.理解修订; }
+    if (Object.hasOwn(row, '需求理解')) { goal.需求理解 = structuredClone(row.需求理解); goal.理解修订 = row.修订; }
     if (row.kind === 'goal_created' || row.kind === 'goal_revised') {
       Object.assign(goal, { 期望结果: row.期望结果, 约束: [...row.约束], 禁止工具: [...row.禁止工具], 完成依据: [...row.完成依据], 来源声明: structuredClone(row.来源声明) });
       goal.来源历史.push({ ...structuredClone(row.来源声明), 由: row.by.id, 于: row.at, 修订: row.修订 });

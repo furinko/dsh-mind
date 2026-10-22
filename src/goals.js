@@ -4,13 +4,14 @@ import { canonical, digest } from './kernel/text.js';
 import { Denied, Fault, InvalidBody } from './kernel/errors.js';
 import { artifactReferences, verifyArtifactManifest } from './artifact-manifest.js';
 import { 已被合法采纳 } from './tasks.js';
+import { normalizeDemandUnderstanding } from './demand-understanding.js';
 import { GOAL_NATIVE_TOOLS, goalLogPath, goalLockPath, readGoalLedger, readGoalLedgerSync, foldGoalLedger, goalSnapshotOf, constraintsForTaskInSnapshot } from './goal-ledger.js';
 
 export const GOAL_LIMITS = Object.freeze({ 期望结果: 4000, 文本: 2000, 数组项: 32, 数组文本: 1000, 请求键: 128, 默认条数: 20, 最大条数: 50 });
 const ACTION_FIELDS = {
-  goal_create: ['期望结果', '约束', '禁止工具', '完成依据', '来源', '下一步', '请求键'],
+  goal_create: ['期望结果', '约束', '禁止工具', '完成依据', '来源', '下一步', '请求键', '需求理解'],
   goal_revise: ['修订', '期望结果', '约束', '禁止工具', '完成依据', '来源'],
-  goal_progress: ['修订', '状态', '下一步', '等待原因'],
+  goal_progress: ['修订', '状态', '下一步', '等待原因', '需求理解'],
   goal_state: ['修订', '状态'],
   goal_complete: ['修订', '说明', '证据', '完成核对'],
   goal_link_task: ['修订', '任务'],
@@ -31,6 +32,13 @@ export class GoalService {
 
   /** 内核专用同步全量真源；面向模型的有界读面走 get/list。 */
   rawSnapshot(project) { this.#project(project); return goalSnapshotOf(readGoalLedgerSync(goalLogPath(this.layout, project)), project); }
+  /** 内核工作上下文专用全量快照，先按当前治理身份与原读权限检查，再由装配器限量。 */
+  async contextSnapshot(spec) {
+    this.#project(spec?.项目);
+    await this.#actor(spec.subject);
+    await this.#policy('read', 'goals', spec, 'goal_query');
+    return goalSnapshotOf(await readGoalLedger(goalLogPath(this.layout, spec.项目)), spec.项目);
+  }
   constraintsForTask(node, nodes, project) { return constraintsForTaskInSnapshot(node, nodes, this.rawSnapshot(project)); }
 
   async get(id, spec) {
@@ -124,6 +132,8 @@ export class GoalService {
 
   #normalized(action, args) {
     const common = action === 'goal_create' ? {} : { id: args.id, 修订: args.修订 };
+    const understanding = normalizeDemandUnderstanding(args.需求理解);
+    if (understanding !== undefined) Object.assign(common, { 需求理解: understanding });
     switch (action) {
       case 'goal_create': return { ...common, 期望结果: bounded(args.期望结果, '期望结果', 4000), 约束: list(args.约束 ?? [], '约束'), 禁止工具: tools(args.禁止工具 ?? []), 完成依据: list(args.完成依据, '完成依据', true), 来源: bounded(args.来源, '来源', 2000), 下一步: bounded(args.下一步, '下一步', 2000), 请求键: args.请求键 === undefined ? null : bounded(args.请求键, '请求键', 128) };
       case 'goal_revise': return { ...common, 来源: bounded(args.来源, '来源', 2000), ...(args.期望结果 !== undefined ? { 期望结果: bounded(args.期望结果, '期望结果', 4000) } : {}), ...(args.约束 !== undefined ? { 约束: list(args.约束, '约束') } : {}), ...(args.禁止工具 !== undefined ? { 禁止工具: tools(args.禁止工具) } : {}), ...(args.完成依据 !== undefined ? { 完成依据: list(args.完成依据, '完成依据', true) } : {}) };
@@ -161,6 +171,7 @@ export class GoalService {
       current = goals.get(id);
       event = { kind: 'goal_created', id, 修订: 1, 期望结果: input.期望结果, 约束: input.约束, 禁止工具: input.禁止工具, 完成依据: input.完成依据,
         来源声明: { 内容: input.来源, 用户意图: '未核验' }, 下一步: input.下一步, 状态: '进行中', 请求键: input.请求键, 创建规范摘要: 规范摘要 };
+      if (input.需求理解 !== undefined) event.需求理解 = input.需求理解;
       if (current) {
         const created = rows.find((row) => row.id === id && row.kind === 'goal_created');
         const payload = Object.fromEntries(Object.keys(event).map((key) => [key, created?.[key]]));
@@ -183,6 +194,7 @@ export class GoalService {
       } else if (action === 'goal_progress') {
         if (!['进行中', '等待'].includes(current.状态)) throw new Denied('持久目标 · 暂停不能代恢复', 'Lead 进展不能恢复用户暂停的目标。', { requireAuthority: '主权者' });
         Object.assign(event, { 状态: input.状态, 下一步: input.下一步 ?? current.下一步, 等待原因: input.等待原因 });
+        if (input.需求理解 !== undefined) event.需求理解 = input.需求理解;
       } else if (action === 'goal_link_task') {
         const nodes = await this.#taskNodes(args.项目);
         if (!nodes.has(input.任务)) throw new InvalidBody('关联任务必须在本项目真实存在。');

@@ -45,6 +45,7 @@ import { createGoalBudgetHooks } from './goal-budget-hooks.js';
 import { createModelUsageHooks } from './model-usage-hooks.js';
 import { injectProfessionalContext } from './professional-context.js';
 import { injectLeadContext } from './lead-context.js';
+import { injectWorkContext } from './work-context.js';
 
 export const name = 'dsh-mind-kernel';
 export const inject = ['tools'];
@@ -217,7 +218,8 @@ export async function apply(ctx, config = {}) {
           agent: context?.agent, agents: 取服务(ctx, 'agents'), project: 当前项目键({ agent: context?.agent }),
         });
         const 专业上下文 = await injectProfessionalContext(已钉规程, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
-        return injectLeadContext(专业上下文, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
+        const Lead连续性 = await injectLeadContext(专业上下文, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
+        return injectWorkContext(Lead连续性, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
       }, { prepend: true }));
       调度接线回执.promptRegistered = true;
     } catch (error) {
@@ -393,6 +395,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
       'knowledge_reuse_query仅治理身份只读知识采用声明；声明及历史采纳不证明知识有效或带来收益，不影响任务推进，不自动修改知识状态或排行。',
       '知识说明是作者声明的适用条件、已知反例及复验安排，不是验证认证；作者期限到期默认不建议，可用memory_query含待复验=true显式读取，原失效及读域限制仍适用；未设期限不代表永远有效。',
       'Lead可用memory_write类=偏好并附连续性记录人格、用户偏好和协作教训；仅当前Lead自动带入有界摘要。连续性依据必须区分用户明确表达、推断与自省，具体来源不可省略；当前要求优先。修正请overturn原id，停止使用请invalidate；新写一条不会自动撤回语义冲突的旧条目。',
+      '对模糊需求先形成可修正理解，在既有授权内用调查或小样例验证，不要求用户先写完整任务书。goal_create/goal_progress可选附需求理解，区分原始表达、当前解释、待验证、关键问题及分工理由。它不是授权或用户认证；任务采纳后仍需核对目标整体完成依据，不能只统计任务通过数。',
       'memory_lifecycle可由治理身份附反馈引用核对真实负反馈；仅invalidate/demote/overturn，批准绑定服务端核验凭据，不将处理等同于复验完成或认证知识。',
       `动作清单：${ACTIONS.join(', ')}。`,
     ].join(' '),
@@ -405,6 +408,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         实例: { type: 'string', description: 'registry_assign / task_bind 的实例 id（必填；省略会被拒，不再按岗位推断）' },
         工具文件范围: { type: 'object', properties: { 读: { type: 'array', items: { type: 'string' } }, 写: { type: 'array', items: { type: 'string' } } }, additionalProperties: false, description: 'task_dispatch / member_spawn：派发时冻结的通用文件读写绝对根。须在部署者 memberFileAccess 可授上限内；不从 cwd 授权，不允许 shell/未知执行类。' },
         id: { type: 'string', description: '对象 id（持久目标 / 任务节点 / 记忆条目 / 挂起项 / 能力名——capability_read 按 id 读，不读 名）；budget_query及人侧budget_decide必填目标id。usage_query可选同项目精确目标id，省略观察当前项目全部已记录尝试。operation_query可选操作UUID，省略按当前项目查询' },
+        需求理解: { type: 'object', properties: { 原始表达: { type: 'string', minLength: 1, maxLength: 1000 }, 当前理解: { type: 'string', minLength: 1, maxLength: 1000 }, 来源: { type: 'string', minLength: 1, maxLength: 500 }, 待验证: { type: 'array', maxItems: 6, items: { type: 'string', minLength: 1, maxLength: 240 } }, 关键问题: { type: 'array', maxItems: 3, items: { type: 'string', minLength: 1, maxLength: 240 } }, 分工: { type: 'array', maxItems: 6, items: { type: 'object', properties: { 岗位: { type: 'string', minLength: 1, maxLength: 80 }, 工作: { type: 'string', minLength: 1, maxLength: 500 }, 理由: { type: 'string', minLength: 1, maxLength: 240 } }, required: ['岗位', '工作', '理由'], additionalProperties: false } } }, required: ['原始表达', '当前理解', '来源'], additionalProperties: false, description: '仅goal_create或goal_progress可选；Lead可修正解释，不认证用户表达，不改目标本意、约束或判据，也不创建执行实例。修改目标约束后旧解释退出默认上下文，需按新目标重新记录；命令可传JSON对象。' },
         期望结果: { type: 'string', maxLength: 4000, description: 'goal_create 的用户期望结果；Lead goal_revise不能改目标本意，人侧改动走goal_decide' },
         约束: { type: 'array', maxItems: 32, items: { type: 'string', maxLength: 1000 }, description: '持久目标的约束；Lead仅可追加，移除或替换需人侧goal_decide。命令使用JSON数组' },
         禁止工具: { type: 'array', maxItems: 6, items: { type: 'string', enum: ['read', 'read_image', 'glob', 'grep', 'write', 'edit'] }, description: '持久目标关联任务的额外原生工具禁止项；只能收紧，不能授予或扩张任何权限' },
@@ -1333,6 +1337,10 @@ function normalizeArgs(args) {
   if (typeof out.采用知识 === 'string') {
     try { out.采用知识 = JSON.parse(out.采用知识); }
     catch { throw new InvalidBody('采用知识必须是合法JSON数组；坏串不能当作未声明或空声明。'); }
+  }
+  if (typeof out.需求理解 === 'string') {
+    try { out.需求理解 = JSON.parse(out.需求理解); }
+    catch { throw new InvalidBody('需求理解必须是合法JSON对象；坏串不能当作未提供。'); }
   }
   if (typeof out.连续性 === 'string') {
     try { out.连续性 = JSON.parse(out.连续性); }
