@@ -48,6 +48,7 @@ import { injectLeadContext } from './lead-context.js';
 import { injectWorkContext } from './work-context.js';
 import { createTurnBufferHooks, injectTurnBuffer } from './turn-buffer-hooks.js';
 import { createProjectBriefHooks, injectProjectBrief } from './project-brief-hooks.js';
+import { createContinuityCaptureHooks, injectPendingContinuity } from './continuity-capture-hooks.js';
 import { collaborationFeedbackSchema } from '../../../src/collaboration-feedback.js';
 
 export const name = 'dsh-mind-kernel';
@@ -64,7 +65,7 @@ let 上次告警键 = null;
 
 /**
  * @param {any} ctx cordis 上下文
- * @param {{ project?: string, home?: string, factoryRoot?: string, privateRoot?: string, projectBindings?: object[], memberFileAccess?: {read?: string[], write?: string[]}, audit工具调用?: boolean, 观测模型用量?: boolean, 轮级缓冲?: boolean, 项目接续?: boolean, reviewExperiments?: object }} [config]
+ * @param {{ project?: string, home?: string, factoryRoot?: string, privateRoot?: string, projectBindings?: object[], memberFileAccess?: {read?: string[], write?: string[]}, audit工具调用?: boolean, 观测模型用量?: boolean, 轮级缓冲?: boolean, 项目接续?: boolean, 自动协作记忆?: boolean, reviewExperiments?: object }} [config]
  */
 export async function apply(ctx, config = {}) {
   const logger = ctx?.logger ?? console;
@@ -118,9 +119,16 @@ export async function apply(ctx, config = {}) {
     llmOf: () => 取服务(ctx, 'llm'), logger, enabled: config.轮级缓冲 !== false && config.项目接续 !== false });
   org.projectBriefHooks = projectBriefHooks;
   ctx.effect?.(() => () => projectBriefHooks.stop());
+  const continuityCaptureHooks = createContinuityCaptureHooks({ org, projectOf: 当前项目键,
+    llmOf: () => 取服务(ctx, 'llm'), logger, enabled: config.轮级缓冲 !== false && config.自动协作记忆 !== false });
+  org.continuityCaptureHooks = continuityCaptureHooks;
+  ctx.effect?.(() => () => continuityCaptureHooks.stop());
   const turnBufferHooks = createTurnBufferHooks({ org, projectOf: 当前项目键,
     projectAtCwd: cwd => 解析项目(cwd, 项目),
-    onPersist: (session, options) => projectBriefHooks.persisted(session, options),
+    onPersist: async (session, options) => {
+      const results = await Promise.allSettled([projectBriefHooks.persisted(session, options), continuityCaptureHooks.persisted(session, options)]);
+      for (const result of results) if (result.status === 'rejected') throw result.reason;
+    },
     queryOf: () => 取服务(ctx, 'sessionQuery'), logger, enabled: config.轮级缓冲 !== false });
   org.turnBufferHooks = turnBufferHooks;
   const disposeTurnBuffer = turnBufferHooks.attach(ctx);
@@ -232,11 +240,13 @@ export async function apply(ctx, config = {}) {
           agent: context?.agent, agents: 取服务(ctx, 'agents'), project: 当前项目键({ agent: context?.agent }),
         });
         const 专业上下文 = await injectProfessionalContext(已钉规程, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
-        const Lead连续性 = await injectLeadContext(专业上下文, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
-        const 当前工作 = await injectWorkContext(Lead连续性, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
+        const 当前工作 = await injectWorkContext(专业上下文, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
         const 轮缓冲 = await injectTurnBuffer(当前工作, { agent: context?.agent, org, hooks: turnBufferHooks,
           projectOf: 当前项目键, logger, active: () => !delegation.closed });
-        return injectProjectBrief(轮缓冲, { agent: context?.agent, org, hooks: projectBriefHooks,
+        const 待整理协作表达 = await injectPendingContinuity(轮缓冲, { agent: context?.agent, org, hooks: continuityCaptureHooks,
+          projectOf: 当前项目键, logger, active: () => !delegation.closed });
+        const Lead连续性 = await injectLeadContext(待整理协作表达, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
+        return injectProjectBrief(Lead连续性, { agent: context?.agent, org, hooks: projectBriefHooks,
           projectOf: 当前项目键, logger, active: () => !delegation.closed });
       }, { prepend: true }));
       调度接线回执.promptRegistered = true;
@@ -1223,6 +1233,7 @@ function 组织说明(org) {
     '项目键：省略 project 时由完整工作目录生成稳定路径键；同名目录隔离。历史项目须由部署者通过 projectBindings 明确绑定目录归属。',
     '先推进用户目标：普通问答、需求澄清和已授权的只读调查可直接进行；需要正式交付、委派或验收证据时建立任务。目标持久化与跨会话自动接管尚未提供，不声称自动恢复。',
     '身份约定：根会话执行者 = Lead（可派活、可建卡、可汇总验收）；复核者只读数、不改、不提案；成员以真实任务绑定、有效岗位凭证和现行授权执行，绑定任务不会自动授予任意工具或文件域。',
+    '对话中自然使用用户约定的称呼和交流方式；岗位与实例名用于内部协作，不限定对外称呼，不必反复自报岗位或解释记忆机制。角色形象约定不改变真实模型、能力与权限。',
     '派活流程（仅正式任务）：定判据→判权限→Lead 直接执行或按需 member_spawn（方式=team/subagent＋岗位＋节点＋任务书；机制完成 registry_assign 登记→绑定节点→装载岗位与判据→发开工消息，不等待成员确认）→交卷→复核→采纳/打回→记忆处置→结账。',
     '推进方式由任务需要决定，不为流程额外建岗或起实例。任务判据派发后冻结；信息不足只停依赖它的动作，继续其他已授权工作；被拦时说明恢复条件，不自行绕闸。',
     '纪律：写操作一律先过策略引擎；被拒绝时结果里会带「哪条规则 + 改它要什么授权」，照着改，不要绕。',

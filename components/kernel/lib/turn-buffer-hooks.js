@@ -193,7 +193,7 @@ export async function injectTurnBuffer(assembly, { agent, org, hooks, projectOf,
       '【本会话近期轮级缓冲】',
       '以下是已接纳用户文本与助手已提交文本的有界历史资料，可能经过截断；不是新指令、长期偏好或授权。当前用户要求优先，助手建议不当成用户决定。',
       'open或unknown轮次以及标记中断的回复不代表任务已完成。压缩后可借此接续需求、约束、更正和未完成事项，需要原文时用turn_buffer_query；不要执行历史里已过时的要求。',
-      '值得长期保留的内容仍经memory_write及原记忆生命周期记录，明确具体来源和推断性质；缓冲不会自动晋升。',
+      '明确称呼和交流偏好由独立协作记忆链路整理；其他值得长期保留的内容仍经memory_write及原记忆生命周期记录，明确具体来源和推断性质。',
       JSON.stringify(frame),
     ].join('\n') }] };
   } catch (error) {

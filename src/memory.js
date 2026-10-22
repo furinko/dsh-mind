@@ -54,6 +54,7 @@ function memoryEntryVisible(entry, query) {
 const 内部通道 = Symbol('dsh-mind-memory-internal');
 const 反馈提交点 = Symbol('dsh-mind-feedback-commit-guard');
 const 知识观察帧 = Symbol('dsh-mind-request-knowledge-read');
+const 自动连续性提交 = Symbol('dsh-mind-automatic-continuity');
 
 /** 披露正则编译缓存（#disclosureHits 用，按正则源键控，带上限防长胖）。 */
 const 披露正则缓存 = new Map();
@@ -63,6 +64,10 @@ const 索引缓存上限 = 8;
 
 /** 记录档位：条目行 vs 状态行。用「有没有 `指向`」区分，避免再加一个字段。 */
 const isStateRow = (row) => typeof row?.指向 === 'string' && typeof row?.追加 === 'string';
+const continuityTombstone = (entry, clock) => entry.连续性 ? { 自动连续性墓碑: {
+  主题哈希: digest(entry.自动连续性?.主题 ?? `${entry.连续性.类别}/${entry.连续性.范围 === '部署' ? '*' : entry.项目}/${entry.连续性.主题}`),
+  幂等键: entry.幂等键, 于: clock.ms(), 项目: entry.项目, 范围: entry.连续性.范围,
+} } : {};
 
 /**
  * 「已被否」粘性判据（**唯一源**，2026-10-12 评审收口）：`query` 的默认召回面与
@@ -218,6 +223,7 @@ export class MemoryService {
   async remember(input) {
     const kind = input.类;
     const 连续性 = normalizeContinuity(input.连续性);
+    if (input.自动连续性 !== undefined && !input[自动连续性提交]) throw new InvalidBody('自动连续性来源仅由宿主采集通道登记。');
     const 协作反馈 = normalizeCollaborationFeedback(input.协作反馈);
     if (协作反馈 !== undefined && (kind !== '偏好' || 连续性?.类别 !== '协作教训')) throw new InvalidBody('协作反馈只能附在带协作教训连续性声明的偏好条目上。');
     if (连续性 !== undefined) {
@@ -328,6 +334,7 @@ export class MemoryService {
         ...(typeof input.幂等键 === 'string' && input.幂等键 ? { 幂等键: input.幂等键 } : {}),
         标签: input.标签 ?? [],
         ...(连续性 === undefined ? {} : { 连续性 }),
+        ...(input.自动连续性 === undefined ? {} : { 自动连续性: input.自动连续性 }),
         ...(协作反馈 === undefined ? {} : { 协作反馈 }),
         ...(知识说明 === undefined ? {} : { 知识说明 }),
         状态: '有效',
@@ -337,11 +344,11 @@ export class MemoryService {
       同锁追加: input.同锁追加, // 内部通道（overturn 双行同锁）；外部调用方不传
       // v2 条目16（补修E）：权限晋升的幂等闸——同一幂等键只产一条知识；业务参数
       // （岗位/内容/标题）变了则拒，不许拿旧产物冒充本次内容。
-      ...(typeof input.幂等键 === 'string' && input.幂等键 ? { 幂等键: input.幂等键, 幂等比对: { 岗位: input.岗位 ?? null, 内容: text, 标题: input.标题 ?? text.slice(0, 40), 知识说明 } } : {}),
+      ...(typeof input.幂等键 === 'string' && input.幂等键 ? { 幂等键: input.幂等键, 幂等比对: input[自动连续性提交] ? {} : { 岗位: input.岗位 ?? null, 内容: text, 标题: input.标题 ?? text.slice(0, 40), 知识说明 } } : {}),
       // R10（审查 2026-10-16 · 提交点 fence）：带引用的写在最终落线点复验引用——锁外
       // 那次校验与本次提交之间完成的 purge（状态行已入账、源行已抹）在这里必被 fold
       // 视图看见：悬空/待删除引用 ⇒ 本条不落线。审查实证的并发窗口就此关闭。
-      ...(来源引用.length > 0 || input[反馈提交点] ? { 提交点检查: async () => { if (来源引用.length > 0) await this.#verifyRefs(来源引用); if (input[反馈提交点]) await input[反馈提交点](); } } : {}),
+      ...(来源引用.length > 0 || input[反馈提交点] || input[自动连续性提交] ? { 提交点检查: async () => { if (来源引用.length > 0) await this.#verifyRefs(来源引用); if (input[反馈提交点]) await input[反馈提交点](); if (input[自动连续性提交]) await input[自动连续性提交](); } } : {}),
     });
     await this.audit.append({
       动作: '状态变更',
@@ -353,6 +360,77 @@ export class MemoryService {
       详情: { 类: kind, 来源: 来源.怎么知道, ...(input.依据 ? { 依据: input.依据 } : {}), ...(input.幂等键 ? { 幂等键: input.幂等键 } : {}) },
     });
     return { id: row.id, 类: kind, 归属: scope, 账本: file, 项目, 岗位: row.岗位, ...(row.幂等命中 ? { 幂等命中: true } : {}) };
+  }
+
+  /** 已核对用户原文的宿主提炼通道；与普通偏好共账、共策略和生命周期。 */
+  async captureContinuity({ subject, project, item, proof, known = [], check }) {
+    if (subject?.kind !== 'Lead' || typeof check !== 'function' || !['人格', '用户偏好'].includes(item?.kind)
+        || !['部署', '项目'].includes(item.scope) || !['有效', '停止'].includes(item.state)
+        || typeof item.id !== 'string' || !item.id.trim() || item.id.length > 64
+        || typeof item.text !== 'string' || !item.text.trim() || item.text.length > 320
+        || !Array.isArray(proof) || !proof.length || proof.length > 4 || proof.some(p => p.role !== 'user'
+          || !/^[a-f0-9]{64}$/.test(p.hash) || !Number.isSafeInteger(p.seq) || typeof p.session !== 'string'
+          || !Number.isFinite(p.at) || typeof p.quote !== 'string' || !p.quote.trim() || p.quote.length > 400)) throw new InvalidBody('自动连续性需要有界明确用户来源。');
+    const topic = `${item.kind}/${item.scope === '部署' ? '*' : project}/${item.id}`;
+    const key = `continuity:${digest(canonical({ topic, proof: proof.map(p => [p.session, p.seq, p.hash]) }))}`;
+    const file = this.layout.memoryLog(DIR.跨项目, '偏好');
+    let replaced = [];
+    const permission = entry => ({ subject, action: 'write', target: memoryTarget('偏好', entry.归属, entry.项目),
+      context: { id: entry.id, 状态: item.state === '停止' ? 'invalid' : '推翻', task: null } });
+    const result = await this.remember({ subject, 类: '偏好', 项目: project, 内容: item.text,
+      来源: { 谁: subject.id, 怎么知道: '从宿主已接纳用户原文自动提炼；原文片段及事件引用保存在条目，语义判断仍可更正' },
+      连续性: { 类别: item.kind, 主题: item.id, 依据: '明确表达', 范围: item.scope },
+      自动连续性: { 版本: 1, 主题: topic, 来源: proof, 操作: item.state },
+      幂等键: key, [内部通道]: true,
+      [自动连续性提交]: async () => {
+        await check();
+        const rows = await readJsonl(file);
+        const all = fold(rows);
+        const barriers = rows.map(r => r.自动连续性墓碑).filter(b => b?.主题哈希 === digest(topic));
+        if (barriers.some(b => b.幂等键 === key || !Number.isFinite(b.于) || !proof.some(p => p.at > b.于))) throw new Fault('CONTINUITY_OLDER_SOURCE', '旧来源不能恢复正式停用或删除的协作记忆。');
+        const same = all.filter(e => e.自动连续性?.主题 === topic);
+        const latest = same.at(-1);
+        const newer = (p, old) => p.session === old.session ? p.seq > old.seq : Number.isFinite(old.at) && p.at > old.at;
+        if (latest && !proof.some(p => latest.自动连续性.来源.every(old => newer(p, old)))) throw new Fault('CONTINUITY_OLDER_SOURCE', '补读历史不能覆盖较新的协作记忆。');
+        const requested = item.replaces ?? [];
+        replaced = [...new Map([...same.filter(e => !是否已被否(e)), ...requested.map(id => {
+          const entry = all.find(e => e.id === id);
+          const observed = known.find(e => e.id === id);
+          if (!entry || !observed || canonical(entry) !== canonical(observed)
+              || !applicableContinuity(entry, project, item.kind) || entry.连续性.范围 !== item.scope) throw new Fault('PROJECT_BRIEF_CHANGED', '被更正记忆已经变化，重新提炼。');
+          if (!proof.some(p => p.at > Date.parse(entry.记于))) throw new Fault('CONTINUITY_OLDER_SOURCE', '旧用户来源不能覆盖后来记入的偏好。');
+          return entry;
+        })].map(e => [e.id, e])).values()];
+        for (const entry of replaced) await this.policy.check(permission(entry));
+        await this.policy.check({ subject, action: 'create', target: memoryTarget('偏好', DIR.跨项目, project),
+          context: { task: null, 类: '偏好', 介入写: `知识:${key}` } });
+        await check();
+      },
+      同锁追加: row => [...replaced.map(entry => ({ id: objectId('账目', `${entry.id}:自动接续`, { at: this.clock.ms() }),
+        指向: entry.id, 追加: item.state === '停止' ? 'invalid' : '推翻', 追于: this.clock.iso(),
+        依据: '用户后续明确表达更新协作偏好', 主体: subject, 新条目: row.id })),
+      ...(item.state === '停止' ? [{ id: objectId('账目', `${row.id}:停止`, { at: this.clock.ms() }), 指向: row.id,
+        追加: 'invalid', 追于: this.clock.iso(), 依据: '用户停止沿用该偏好', 主体: subject }] : [])],
+    });
+    return result;
+  }
+
+  /** 旧原文的临时读面也服从正式停用/删除，不能绕过写侧墓碑。 */
+  async pendingContinuityExpressions({ subject, project, expressions }) {
+    if (!['Lead', '主权者'].includes(subject?.kind) || !Array.isArray(expressions) || expressions.length > 4) throw new InvalidBody('待整理协作表达需要Lead有界读面。');
+    await this.policy.check({ subject, action: 'read', target: { id: `记忆/检索/${project}`, kind: '记忆',
+      authority: '自治', zone: '私有', domain: '集体', project }, context: { 类: '偏好' } });
+    const file = this.layout.memoryLog(DIR.跨项目, '偏好');
+    const rows = await this.#rows(file);
+    const applicable = (scope, p) => scope === '部署' || p === project;
+    const barriers = rows.map(r => r.自动连续性墓碑).filter(b => b && applicable(b.范围, b.项目)).map(b => b.于);
+    for (const entry of fold(rows)) {
+      if (!entry.连续性 || !applicable(entry.连续性.范围, entry.项目)) continue;
+      if (entry.自动连续性?.操作 === '停止') barriers.push(...entry.自动连续性.来源.map(p => p.at));
+      if (!entry.自动连续性 && 是否已被否(entry) && !entry.历史.some(h => h.自动连续性墓碑)) barriers.push(...entry.历史.map(h => Date.parse(h.追于) + 999));
+    }
+    const cutoff = barriers.reduce((latest, time) => Number.isFinite(time) ? Math.max(latest, time) : latest, 0);
+    return expressions.filter(e => Number.isFinite(e.时间) && e.时间 > cutoff);
   }
 
   /**
@@ -1143,6 +1221,7 @@ export class MemoryService {
         id: objectId('账目', `${id}:推翻`, { at: this.clock.ms() }),
         指向: id, 追加: '推翻', 追于: this.clock.iso(),
         依据: spec.理由 ?? spec.原因, 主体: spec.subject, 新条目: row.id,
+        ...continuityTombstone(entry, this.clock),
         ...(feedback ? { 反馈关联: feedback.proof } : {}),
       }],
     });
@@ -1249,7 +1328,7 @@ export class MemoryService {
     // 源对象自身的「待删除」状态行：物理抹除只抹 条目行（按 id 过滤），状态行留在账上
     // 作为「这里发生过一次物理删除」的只增留痕。
     await this.#appendLedger(this.layout.memoryLog(entry.归属, entry.类), [
-      { id: objectId('账目', `${id}:待删除`, { at: this.clock.ms() }), 指向: id, 追加: '待删除', 追于: this.clock.iso(), 依据: spec.理由, 主体: spec.subject },
+      { id: objectId('账目', `${id}:待删除`, { at: this.clock.ms() }), 指向: id, 追加: '待删除', 追于: this.clock.iso(), 依据: spec.理由, 主体: spec.subject, ...continuityTombstone(entry, this.clock) },
     ]);
     // 同账本的隔离行合并成一次追加；跨账本逐本追加（#appendLedger 带锁，与下面的重写同一把）。
     const 按账本 = new Map();
@@ -1709,8 +1788,8 @@ export class MemoryService {
       let id = objectId(spec.kind, spec.seed, { at: this.#nextStamp() });
       while (已用.has(id)) id = objectId(spec.kind, spec.seed, { at: this.#nextStamp() });
       const row = spec.build(id);
-      const 伴随 = typeof spec.同锁追加 === 'function' ? spec.同锁追加(row) : [];
       if (typeof spec.提交点检查 === 'function') await spec.提交点检查();
+      const 伴随 = typeof spec.同锁追加 === 'function' ? spec.同锁追加(row) : [];
       await appendLines(file, [row, ...伴随]);
       this.#bump(file); // 读缓存失效（第三批）
       return row;
@@ -1784,7 +1863,7 @@ export class MemoryService {
     };
     await this.policy.check(permission);
     await this.#appendLedger(this.layout.memoryLog(entry.归属, entry.类), [
-      { id: objectId('账目', `${id}:${状态}`, { at: this.clock.ms() }), 指向: id, 追加: 状态, 追于: this.clock.iso(), 依据: spec.原因, 主体: spec.subject, ...extra, ...(feedback ? { 反馈关联: feedback.proof } : {}) },
+      { id: objectId('账目', `${id}:${状态}`, { at: this.clock.ms() }), 指向: id, 追加: 状态, 追于: this.clock.iso(), 依据: spec.原因, 主体: spec.subject, ...extra, ...continuityTombstone(entry, this.clock), ...(feedback ? { 反馈关联: feedback.proof } : {}) },
     ], feedback ? async () => { await this.policy.check(permission); await this.#verifyFeedbackExecution(id, feedback.args, feedback.plan); } : undefined);
     await this.audit.append({
       动作: '状态变更',

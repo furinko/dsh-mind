@@ -325,6 +325,10 @@ export class Layout {
     return this.private(DIR.基础设施, DIR.记忆服务, '项目接续', `${assertPathSegment(project, '项目')}.json`);
   }
 
+  continuityCaptureFile(project) {
+    return this.private(DIR.基础设施, DIR.记忆服务, '连续性提炼', `${assertPathSegment(project, '项目')}.json`);
+  }
+
   /** 审计日志：按月分片，不按项目分（§14.3）。month 是路径段，必须过校验（2026-10-13 审查 P2-19）。 */
   auditLog(month) {
     return this.private(DIR.基础设施, DIR.审计日志, `audit-${assertPathSegment(String(month), '审计月份')}.jsonl`);

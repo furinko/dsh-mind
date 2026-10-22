@@ -20,7 +20,7 @@ const root = session => typeof session?.id === 'string' && session.id.trim()
   && session.header.origin !== 'subagent' && !(session.header.delegationDepth >= 1)
   && Number.isSafeInteger(session.seq) && typeof session.isOwnSeq === 'function';
 
-export async function extractProjectBrief(llm, route, input, { signal, timeoutMs = 20000 } = {}) {
+export async function extractProjectBrief(llm, route, input, { signal, timeoutMs = 20000, system = PROJECT_BRIEF_SYSTEM } = {}) {
   if (typeof llm?.prepareCall !== 'function' || !route?.provider || !route.model) throw new Fault('PROJECT_BRIEF_MODEL_UNAVAILABLE', '当前宿主模型路由不可用，保留未整理来源。');
   const controller = new AbortController();
   const abort = () => controller.abort(signal.reason);
@@ -32,7 +32,7 @@ export async function extractProjectBrief(llm, route, input, { signal, timeoutMs
       (controls, model) => ({ ...controls, ...(model.reasoning?.efforts?.[0]?.id ? { reasoningEffort: model.reasoning.efforts[0].id } : {}) }));
     controller.signal.throwIfAborted();
     let finish = null; let size = 0; const blocks = new Map();
-    const options = { ...call.config, system: PROJECT_BRIEF_SYSTEM,
+    const options = { ...call.config, system,
       messages: [{ role: 'user', id: randomUUID(), source: { kind: 'dsh-mind-project-brief', form: 'recall' },
         content: [{ type: 'text', text: JSON.stringify(input) }] }], signal: controller.signal };
     // 没有会话工具/权限/宿主system prompt；也不伪标为session-title或compaction计费。
@@ -54,7 +54,8 @@ export async function extractProjectBrief(llm, route, input, { signal, timeoutMs
   } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
 }
 
-export function createProjectBriefHooks({ org, projectOf, llmOf = () => null, logger = console, enabled = true }) {
+export function createProjectBriefHooks({ org, projectOf, llmOf = () => null, logger = console, enabled = true,
+  service = org.projectBrief, system = PROJECT_BRIEF_SYSTEM, label = '项目接续', healthExtra = { 自动晋升长期记忆: false } }) {
   let stopped = false; let calls = 0; let failed = 0; let unavailable = 0;
   const jobs = new Map(); const controller = new AbortController();
   const specOf = session => {
@@ -68,13 +69,13 @@ export function createProjectBriefHooks({ org, projectOf, llmOf = () => null, lo
   };
   const warn = error => {
     failed++;
-    if (failed === 1) try { logger.warn?.(`[dsh-mind] 项目接续整理暂不可用：${error?.code ?? error?.name ?? 'unknown'}；保留来源与未推进水位，下次重试。`); } catch { /* 不影响对话。 */ }
+    if (failed === 1) try { logger.warn?.(`[dsh-mind] ${label}整理暂不可用：${error?.code ?? error?.name ?? 'unknown'}；保留来源与未推进水位，下次重试。`); } catch { /* 不影响对话。 */ }
   };
   const api = {
     async persisted(session, { summarize = false } = {}) {
       const spec = specOf(session);
       if (!spec) return;
-      await org.projectBrief.touch(spec);
+      await service.touch(spec);
       if (summarize) api.schedule(session);
     },
     schedule(session) {
@@ -91,9 +92,9 @@ export function createProjectBriefHooks({ org, projectOf, llmOf = () => null, lo
         for (let batch = 0; batch < 2 && current(session, spec); batch++) {
           let result;
           try {
-            result = await org.projectBrief.update(spec, { active: () => current(session, spec), extract: async input => {
+            result = await service.update(spec, { active: () => current(session, spec), extract: async input => {
               calls++;
-              return extractProjectBrief(llm, { provider: config.provider, model: config.model }, input, { signal: controller.signal });
+              return extractProjectBrief(llm, { provider: config.provider, model: config.model }, input, { signal: controller.signal, system });
             } });
           } catch (error) {
             if (['PROJECT_BRIEF_CHANGED', 'PROJECT_BRIEF_SOURCE_CHANGED', 'PROJECT_BRIEF_GOALS_CHANGED'].includes(error?.code)) continue;
@@ -112,7 +113,7 @@ export function createProjectBriefHooks({ org, projectOf, llmOf = () => null, lo
     async flush() { while (jobs.size) await Promise.all([...jobs.values()].map(entry => entry.promise)); },
     stop() { stopped = true; controller.abort(new Error('组件已卸载')); },
     health() { return { enabled, stopped, pending: jobs.size, calls, failed, unavailable,
-      自动晋升长期记忆: false, 计量: '辅助调用尚未纳入agent/assistant-stream用量账本' }; },
+      ...healthExtra, 计量: '辅助调用尚未纳入agent/assistant-stream用量账本' }; },
   };
   return api;
 }

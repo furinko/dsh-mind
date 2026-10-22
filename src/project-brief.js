@@ -108,6 +108,32 @@ export class ProjectBriefService {
     return items.filter(item => item.sources.every(ref => buffers.get(ref.session)?.rounds.some(round =>
       round.messages.some(m => m.seq === ref.seq && m.id === ref.id && signature(ref.session, m) === ref.hash))));
   }
+  async supplementInput() { return {}; }
+  inputItems(items, add) { return items.map(item => ({ ...item, sources: item.sources.map(add) })); }
+  async commitItems() {}
+  responseItems(response, { items, refs, selected, exposed, goalMap, buffers }) {
+    if (!response || Object.keys(response).some(k => k !== 'items') || !Array.isArray(response.items)
+        || response.items.length > PROJECT_BRIEF_LIMITS.items) throw new InvalidBody('项目提炼只能返回有界items数组。');
+    const next = response.items.map(item => {
+      if (!item || Object.keys(item).some(k => !['id', 'kind', 'claim', 'state', 'text', 'sources', 'goal'].includes(k))
+          || !Array.isArray(item.sources) || item.sources.some(key => !exposed.has(key))) throw new InvalidBody('项目提炼引用了未提供来源或未知字段。');
+      const out = { ...item, sources: item.sources.map(key => refs.get(key)) };
+      const oldItem = items.find(old => old.id === item.id);
+      if (oldItem && inactive(oldItem.state) && !inactive(item.state)
+          && !out.sources.some(ref => ref.role === 'user' && selected.some(m => m.session === ref.session && m.message.seq === ref.seq)
+            && oldItem.sources.every(old => laterThan(ref, old, buffers)))) {
+        throw new InvalidBody('暂停或终态事项重新推进必须有晚于原状态的本批新的用户来源；补读旧历史或时间未知不能恢复。');
+      }
+      if (item.goal !== undefined) {
+        const goal = goalMap.get(item.goal);
+        if (!goal) throw new InvalidBody('项目提炼引用未知目标。');
+        out.state = goal.状态;
+      }
+      return out;
+    });
+    this.validateItems(next);
+    return next;
+  }
   async locked(project, work) {
     const file = this.file(project);
     return serializeByKey(file, () => withLock(`${file}.lock`, work, { timeoutMs: 3000 }));
@@ -154,7 +180,7 @@ export class ProjectBriefService {
     if (!selected.length || !active()) return { updated: false, pending: pending.length };
     const refs = new Map();
     const add = ref => { let key = [...refs].find(([, r]) => r.hash === ref.hash)?.[0]; if (!key) { key = `s${refs.size}`; refs.set(key, ref); } return key; };
-    const old = items.map(item => ({ ...item, sources: item.sources.map(add) }));
+    const old = this.inputItems(items, add);
     const messages = selected.map(({ session, message: m }) => ({ source: add(refOf(session, m)), session, seq: m.seq,
       at: m.at ?? null, role: m.role,
       text: m.text.slice(0, 1000), clipped: m.clipped || m.text.length > 1000, interrupted: m.interrupted }));
@@ -162,6 +188,7 @@ export class ProjectBriefService {
     const goalMap = new Map(goals.目标.map(g => [g.id, g]));
     const input = { previous: old, messages, goals: goals.目标.slice(-8).map(g => ({ id: g.id, state: g.状态,
       expected: g.期望结果.slice(0, 160), next: g.下一步.slice(0, 120) })), omitted: pending.length > selected.length };
+    Object.assign(input, await this.supplementInput(spec));
     if (goals.目标.length > 8 || goals.目标.slice(-8).some(g => g.期望结果.length > 160 || g.下一步.length > 120)) {
       input.goalsOmitted = true; input.omitted = true;
     }
@@ -182,26 +209,7 @@ export class ProjectBriefService {
     if (Buffer.byteLength(JSON.stringify(input)) > PROJECT_BRIEF_LIMITS.input) throw new Fault('PROJECT_BRIEF_INPUT_LIMIT', '项目提炼输入超预算；处理水位未前进。');
     const exposed = new Set([...old.flatMap(item => item.sources), ...messages.map(m => m.source)]);
     const response = await extract(input);
-    if (!response || Object.keys(response).some(k => k !== 'items') || !Array.isArray(response.items)
-        || response.items.length > PROJECT_BRIEF_LIMITS.items) throw new InvalidBody('项目提炼只能返回有界items数组。');
-    const next = response.items.map(item => {
-      if (!item || Object.keys(item).some(k => !['id', 'kind', 'claim', 'state', 'text', 'sources', 'goal'].includes(k))
-          || !Array.isArray(item.sources) || item.sources.some(key => !exposed.has(key))) throw new InvalidBody('项目提炼引用了未提供来源或未知字段。');
-      const out = { ...item, sources: item.sources.map(key => refs.get(key)) };
-      const oldItem = items.find(old => old.id === item.id);
-      if (oldItem && inactive(oldItem.state) && !inactive(item.state)
-          && !out.sources.some(ref => ref.role === 'user' && selected.some(m => m.session === ref.session && m.message.seq === ref.seq)
-            && oldItem.sources.every(old => laterThan(ref, old, buffers)))) {
-        throw new InvalidBody('暂停或终态事项重新推进必须有晚于原状态的本批新的用户来源；补读旧历史或时间未知不能恢复。');
-      }
-      if (item.goal !== undefined) {
-        const goal = goalMap.get(item.goal);
-        if (!goal) throw new InvalidBody('项目提炼引用未知目标。');
-        out.state = goal.状态;
-      }
-      return out;
-    });
-    this.validateItems(next);
+    const next = this.responseItems(response, { spec, items, refs, selected, exposed, goalMap, buffers, input });
     if (!active()) return { updated: false };
     return this.locked(spec.project, async () => {
       const state = await this.load(spec.project);
@@ -214,6 +222,13 @@ export class ProjectBriefService {
       const afterGoals = await this.org.goals.contextSnapshot({ subject: spec.subject, 项目: spec.project });
       if (digest(canonical(goals.目标)) !== digest(canonical(afterGoals.目标))) throw new Fault('PROJECT_BRIEF_GOALS_CHANGED', '目标状态已变，丢弃旧提炼。');
       if (!active() || before !== await this.authorize(spec)) throw new Denied('项目接续 · 身份变化', '身份或项目变化，丢弃旧提炼。');
+      await this.commitItems(spec, next, { input, selected, buffers: live, check: async () => {
+        const current = await this.load(spec.project);
+        const sources = await this.sources(spec, current.sessions.map(s => s.id));
+        if (!active() || before !== await this.authorize(spec) || current.epoch !== previous.epoch
+            || current.revision !== previous.revision || current.sourceRevision !== previous.sourceRevision
+            || sourceCut(sources) !== sourceCut(buffers)) throw new Fault('PROJECT_BRIEF_CHANGED', '接续来源或身份变化，拒绝在途记忆写入。');
+      } });
       state.items = next; state.revision++; state.at = this.clock.ms();
       for (const entry of state.sessions) {
         const buffer = live.get(entry.id);
