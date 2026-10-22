@@ -35,6 +35,7 @@ import { GoalBudgetService } from './goal-budget.js';
 import { ModelUsageService } from './model-usage.js';
 import { SpawnOperationService } from './spawn-operations.js';
 import { KnowledgeReuseService } from './knowledge-reuse.js';
+import { TurnBufferService } from './turn-buffer.js';
 
 /** 默认项目键。名字即目录名（§14.4-5）。 */
 export const DEFAULT_PROJECT = 'default';
@@ -140,6 +141,7 @@ export class Org {
       logger: spec.logger ?? console,
     });
     org.observability = new ObservabilityService({ audit, clock, registry, tasks, policy, logger: spec.logger ?? console });
+    org.turnBuffer = new TurnBufferService({ layout, org, clock });
     await org.bootstrap({ 代次: spec.代次 });
     return org;
   }

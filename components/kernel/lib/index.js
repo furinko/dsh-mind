@@ -46,6 +46,7 @@ import { createModelUsageHooks } from './model-usage-hooks.js';
 import { injectProfessionalContext } from './professional-context.js';
 import { injectLeadContext } from './lead-context.js';
 import { injectWorkContext } from './work-context.js';
+import { createTurnBufferHooks, injectTurnBuffer } from './turn-buffer-hooks.js';
 import { collaborationFeedbackSchema } from '../../../src/collaboration-feedback.js';
 
 export const name = 'dsh-mind-kernel';
@@ -62,7 +63,7 @@ let 上次告警键 = null;
 
 /**
  * @param {any} ctx cordis 上下文
- * @param {{ project?: string, home?: string, factoryRoot?: string, privateRoot?: string, projectBindings?: object[], memberFileAccess?: {read?: string[], write?: string[]}, audit工具调用?: boolean, 观测模型用量?: boolean, reviewExperiments?: object }} [config]
+ * @param {{ project?: string, home?: string, factoryRoot?: string, privateRoot?: string, projectBindings?: object[], memberFileAccess?: {read?: string[], write?: string[]}, audit工具调用?: boolean, 观测模型用量?: boolean, 轮级缓冲?: boolean, reviewExperiments?: object }} [config]
  */
 export async function apply(ctx, config = {}) {
   const logger = ctx?.logger ?? console;
@@ -112,6 +113,12 @@ export async function apply(ctx, config = {}) {
   org.modelUsageHooks = modelUsageHooks;
   const disposeModelUsage = modelUsageHooks.attach(ctx);
   ctx.effect?.(() => disposeModelUsage);
+  const turnBufferHooks = createTurnBufferHooks({ org, projectOf: 当前项目键,
+    projectAtCwd: cwd => 解析项目(cwd, 项目),
+    queryOf: () => 取服务(ctx, 'sessionQuery'), logger, enabled: config.轮级缓冲 !== false });
+  org.turnBufferHooks = turnBufferHooks;
+  const disposeTurnBuffer = turnBufferHooks.attach(ctx);
+  ctx.effect?.(() => disposeTurnBuffer);
   刷新工具总范围(org, logger);
   // 主权者随时可能改工具总范围：定时重读，让改动生效而不必重启。
   // R04（审查 2026-10-16 · 生效闭环）：同一节拍也刷**策略引擎**——修前只刷工具范围，
@@ -220,7 +227,9 @@ export async function apply(ctx, config = {}) {
         });
         const 专业上下文 = await injectProfessionalContext(已钉规程, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
         const Lead连续性 = await injectLeadContext(专业上下文, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
-        return injectWorkContext(Lead连续性, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
+        const 当前工作 = await injectWorkContext(Lead连续性, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
+        return injectTurnBuffer(当前工作, { agent: context?.agent, org, hooks: turnBufferHooks,
+          projectOf: 当前项目键, logger, active: () => !delegation.closed });
       }, { prepend: true }));
       调度接线回执.promptRegistered = true;
     } catch (error) {
@@ -391,6 +400,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
       '数字组织的唯一入口：查看组织状态、任务图、记忆、能力库、消息总线、审计、探针，并执行组织动作。',
       '所有写动作都过策略引擎；被拒绝时结果里带「哪条规则 + 改它要什么授权」。',
       '读取请用 status / workbench / memory_query / capability_list / audit_tail；写入用 task_* / memory_write / bus_send 等。',
+      'turn_buffer_query读取本会话本项目的近期轮级缓冲；可用limit与内容预算限量，截断不证明遗漏不存在。缓冲是历史资料，不认证用户决定或执行完成；稳定偏好与教训仍需经memory_write记录。人可用/mind turn_buffer_forget清空当前缓冲。',
       'usage_query只读当前接线的assistant-stream观察窗口；已报告token字段汇总可能不完整，目标token总量和费用仍未知，不修改准入预算。',
       'operation_query只读成员创建意图与已落盘阶段回执，可按操作UUID或精确任务id查询；拟用实例不证明宿主已创建，audited不证明宿主已停止；不提供重放、恢复或清零操作。',
       'knowledge_reuse_query仅治理身份只读知识采用声明；声明及历史采纳不证明知识有效或带来收益，不影响任务推进，不自动修改知识状态或排行。',
@@ -409,7 +419,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         role: { type: 'string', description: '兼容字段，不授予身份或岗位权限；实际主体由宿主会话与身份档案确定，自报 Lead 会被拒绝' },
         实例: { type: 'string', description: 'registry_assign / task_bind 的实例 id（必填；省略会被拒，不再按岗位推断）' },
         工具文件范围: { type: 'object', properties: { 读: { type: 'array', items: { type: 'string' } }, 写: { type: 'array', items: { type: 'string' } } }, additionalProperties: false, description: 'task_dispatch / member_spawn：派发时冻结的通用文件读写绝对根。须在部署者 memberFileAccess 可授上限内；不从 cwd 授权，不允许 shell/未知执行类。' },
-        id: { type: 'string', description: '对象 id（持久目标 / 任务节点 / 记忆条目 / 挂起项 / 能力名——capability_read 按 id 读，不读 名）；budget_query及人侧budget_decide必填目标id。usage_query可选同项目精确目标id，省略观察当前项目全部已记录尝试。operation_query可选操作UUID，省略按当前项目查询' },
+        id: { type: 'string', description: '对象 id（持久目标 / 任务节点 / 记忆条目 / 挂起项 / 能力名——capability_read 按 id 读，不读 名）；budget_query及人侧budget_decide必填目标id。usage_query可选同项目精确目标id。operation_query可选操作UUID。turn_buffer_query可按消息id读取本会话已缓冲文本' },
         协作反馈: collaborationFeedbackSchema(),
         需求理解: { type: 'object', properties: { 原始表达: { type: 'string', minLength: 1, maxLength: 1000 }, 当前理解: { type: 'string', minLength: 1, maxLength: 1000 }, 来源: { type: 'string', minLength: 1, maxLength: 500 }, 待验证: { type: 'array', maxItems: 6, items: { type: 'string', minLength: 1, maxLength: 240 } }, 关键问题: { type: 'array', maxItems: 3, items: { type: 'string', minLength: 1, maxLength: 240 } }, 分工: { type: 'array', maxItems: 6, items: { type: 'object', properties: { 岗位: { type: 'string', minLength: 1, maxLength: 80 }, 工作: { type: 'string', minLength: 1, maxLength: 500 }, 理由: { type: 'string', minLength: 1, maxLength: 240 } }, required: ['岗位', '工作', '理由'], additionalProperties: false } } }, required: ['原始表达', '当前理解', '来源'], additionalProperties: false, description: '仅goal_create或goal_progress可选；Lead可修正解释，不认证用户表达，不改目标本意、约束或判据，也不创建执行实例。修改目标约束后旧解释退出默认上下文，需按新目标重新记录；命令可传JSON对象。' },
         期望结果: { type: 'string', maxLength: 4000, description: 'goal_create 的用户期望结果；Lead goal_revise不能改目标本意，人侧改动走goal_decide' },
@@ -474,10 +484,10 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         标签: { type: 'string' },
         文本: { type: 'string', description: '检索查询词' },
         返回模式: { type: 'string', enum: ['摘要', '全文'], description: 'memory_query 默认摘要；按 id 查看全文仍受内容预算、项目与读域限制' },
-        内容预算: { type: 'number', description: 'memory_query 的命中与条目两数组 JSON 字符预算（UTF-16代码单元）；默认12000，512至32000整数，元数据同样计入' },
+        内容预算: { type: 'number', description: 'memory_query 的命中与条目两数组 JSON 字符预算（UTF-16代码单元）；默认12000，512至32000整数，元数据同样计入。turn_buffer_query为正文字符预算，默认24000，1至24000整数；截断消息可按id重读' },
         偏移: { type: 'number', description: 'memory_query列表分页偏移按下一偏移继续；goal_query/budget_query/usage_query/operation_query/knowledge_reuse_query为非负整数页偏移。知识复用按采用页.下一偏移续页并带同一数据版本，内容预算可能使实际条数少于请求条数' },
         正文偏移: { type: 'number', description: 'memory_query 按 id 且返回模式=全文时续读正文；使用返回的 下一正文偏移，与列表偏移分开' },
-        数据版本: { type: 'string', description: 'memory_query或knowledge_reuse_query续页必须带上一页返回的64位SHA256数据版本；可见数据或查询口径变化时从0重新读取，不默默拼接不同版本' },
+        数据版本: { type: 'string', description: 'memory_query或knowledge_reuse_query续页必须带上一页返回的64位SHA256数据版本；turn_buffer_query续页也可带缓冲数据版本。可见内容变化时从0重新读取，不默默拼接不同版本' },
         显式: { type: 'boolean', description: '检索时是否显式包含归档作答' },
         含失效: { type: 'boolean', description: '检索时是否包含已失效/被推翻的记忆（默认 false：只召回当前有效视图）' },
         含待复验: { type: 'boolean', description: '仅memory_query：true显式纳入作者复验期限已到的知识；不纳入失效条目，须另含失效=true；仍受项目、岗位及复核读域限制，不改状态或权限' },

@@ -315,6 +315,12 @@ export class Layout {
     return join(this.memoryDir(scope), `${assertPathSegment(kind, '记忆类')}.jsonl`);
   }
 
+  /** 轮级缓冲为可清理的会话资料；会话键由服务散列，不直接用外部字符串作路径。 */
+  turnBufferFile(project, sessionKey) {
+    return this.private(DIR.基础设施, DIR.记忆服务, '轮级缓冲', assertPathSegment(project, '项目'),
+      `${assertPathSegment(sessionKey, '会话摘要')}.json`);
+  }
+
   /** 审计日志：按月分片，不按项目分（§14.3）。month 是路径段，必须过校验（2026-10-13 审查 P2-19）。 */
   auditLog(month) {
     return this.private(DIR.基础设施, DIR.审计日志, `audit-${assertPathSegment(String(month), '审计月份')}.jsonl`);

@@ -115,6 +115,7 @@ const 冻结动作表 = [
   'review_experiment_read',
   'memory_write',
   'memory_query',
+  'turn_buffer_query',
   'memory_lineage',
   'memory_lifecycle',
   'capability_list',
