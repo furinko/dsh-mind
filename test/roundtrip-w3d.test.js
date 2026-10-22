@@ -14,6 +14,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { appendLines, listFiles, readTextOrNull, sleep, withLock } from '../src/kernel/fsx.js';
 import { formatFrontMatter, parseDocument, parseSimpleYaml } from '../src/tags.js';
 import { makeFixture, LEAD, MEMBER, REVIEWER, SOVEREIGN, seedReviewRelation } from './helpers.mjs';
@@ -96,7 +97,7 @@ describe('W3 批4 · 写-读往返闭合', () => {
   });
 
   it('①出厂件 front matter 走一遍 format+parse：**逐字节不变**（升级层靠字节比对）', async () => {
-    const root = new URL('../mind/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+    const root = fileURLToPath(new URL('../mind/', import.meta.url));
     const files = await listFiles(root, { recursive: true, filter: (n) => n.endsWith('.md') });
     assert.ok(files.length >= 15, `出厂件要够多才有意义，实测 ${files.length}`);
     for (const rel of files) {

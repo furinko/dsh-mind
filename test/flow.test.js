@@ -6,6 +6,7 @@
  */
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { stat } from 'node:fs/promises';
 import { makeFixture, SOVEREIGN, LEAD, MEMBER, REVIEWER, seedReviewRelation } from './helpers.mjs';
 import { TaskGraph } from '../src/tasks.js';
 import { MessageBus } from '../src/bus.js';
@@ -310,8 +311,8 @@ describe('主干环路', () => {
       assert.equal(总线行?.会审讨论段, true, '未交齐 ⇒ 历史会审节点线程按盲评口径收起正文');
       assert.ok(!JSON.stringify(视图).includes(密文), '同一份面板上，会审线程遮罩时总线行不许把结论画出来');
 
-      // 泄漏路径 B：讨论开启**之前**用大写别名先建线（先落的那一侧决定文件名形态，
-      // 与真 id 是同一个文件）——判定侧用精确键就会 miss。
+      // 泄漏路径 B：讨论开启之前用大写别名先建线。大小写不敏感的文件系统上
+      // 与真 id 是同一文件；大小写敏感时是独立文件，两者都必须遮住正文。
       const 节点B = await org.tasks.create({
         subject: LEAD, 项目: P, 描述: '掩码补漏会审二', 负责人: ['member-a', 'member-b'], 判据: ['结论一致'], 模式: '独立会审',
       });
@@ -325,10 +326,18 @@ describe('主干环路', () => {
         org, 项目: P, subject: LEAD, 主体: LEAD,
         args: { action: 'bus_send', 线程: 别名, 类型: '交卷', 内容: 别名密文 },
       });
+      assert.ok((await org.bus.readRaw({ 项目: P, 线程: 别名 })).some((m) => m.内容 === 别名密文),
+        '前置：大写别名线程确实落线');
+      const [原文件, 别名文件] = await Promise.all([节点B.id, 别名].map(async (线程) => {
+        try { return await stat(org.layout.busThread(P, 线程)); }
+        catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+      }));
+      const 同一文件 = 原文件 !== null && 别名文件 !== null
+        && 原文件.dev === 别名文件.dev && 原文件.ino === 别名文件.ino;
       assert.equal(
         (await org.bus.readRaw({ 项目: P, 线程: 节点B.id })).some((m) => m.内容 === 别名密文),
-        true,
-        '别名与真 id 落到同一个文件（NTFS 大小写不敏感）——这就是大小写那条旁路的落线事实',
+        同一文件,
+        '真 id 的读取应与当前文件系统是否把大小写别名指向同一文件一致',
       );
       const 别名视图 = await org.workbench({ 项目: P });
       const 别名行 = 别名视图.消息总线.find((t) => t.线程 === 别名);

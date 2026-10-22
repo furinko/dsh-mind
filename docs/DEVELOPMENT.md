@@ -2,6 +2,8 @@
 
 ## 本地工作区
 
+本文原有目录约定描述 Windows 环境。2026-10-22 新建的 Linux 环境、命令、回退与客户端验收步骤见[本机 Linux 开发与验收](LOCAL-LINUX.md)。两台机器的运行状态分别取证。
+
 遵守父目录 `AGENTS.md`：日常开发在 `dsh-mind-dev`；桌面 profile 直接链接的 `dsh-mind` 是单独固定的运行工作区。两者共享 Git 数据库，不能把开发修改保存到运行目录，也不能用开发测试推断当前 GUI 已更新。
 
 本轮开始前的全部未提交候选已逐文件保存于 `audits/mind-restructure-baseline-20261020-173655`，其中 `manifest.json` 记录 SHA-256，`tracked.patch` 保存已跟踪差异。早前 WIP、历史引用与 Git 清理恢复材料按父目录说明保留，不自动合并。

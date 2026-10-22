@@ -52,6 +52,10 @@
     "README.md"
   ],
   "scripts": {
+    "dsh:check": "bash scripts/local-dsh.sh check",
+    "dsh:status": "bash scripts/local-dsh.sh status",
+    "dsh:deploy": "bash scripts/local-dsh.sh deploy",
+    "dsh:rollback": "bash scripts/local-dsh.sh rollback",
     "test": "node test/preflight.mjs && node --test \"test/*.test.js\" \"components/board/test/*.test.js\" && node components/board/test/client-harness.mjs",
     "preflight": "node test/preflight.mjs"
   },

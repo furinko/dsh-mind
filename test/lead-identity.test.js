@@ -52,6 +52,8 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { makeFixture, LEAD, 钉Lead } from './helpers.mjs';
 import { CouncilService, 线程名, ROUND_BOUNDARY_MARK } from '../src/council.js';
 import { TaskGraph } from '../src/tasks.js';
@@ -65,6 +67,8 @@ import { fakeHost } from './host-harness.mjs';
 import { shareOrg, forgetSharedOrg } from '../src/runtime.js';
 
 const P = 'default';
+const WORKSPACE = join(tmpdir(), 'dsh-mind-identity-ws');
+const OTHER_WORKSPACE = join(tmpdir(), 'dsh-mind-identity-other');
 const MEMBER_A = { id: 'member-a', kind: '成员', roleId: '插件工程' };
 const MEMBER_B = { id: 'member-b', kind: '成员', roleId: '插件工程' };
 
@@ -117,21 +121,22 @@ async function 读数(parts, 会审id) {
 function 桩exec(header, id = 'session-root-0001') {
   return { name: 'mind', agent: { session: { id, header: { id, ...header } } } };
 }
-const 根会话exec = 桩exec({ cwd: 'C:/ws', createdAt: 1, isSeeded: false, version: 1 });
+const 根会话exec = 桩exec({ cwd: WORKSPACE, createdAt: 1, isSeeded: false, version: 1 });
 const 成员会话exec = 桩exec(
-  { cwd: 'C:/ws', createdAt: 2, isSeeded: false, version: 1, origin: 'subagent', parentSession: 'session-root-0001', delegationDepth: 1 },
+  { cwd: WORKSPACE, createdAt: 2, isSeeded: false, version: 1, origin: 'subagent', parentSession: 'session-root-0001', delegationDepth: 1 },
   'session-child-0002',
 );
 /** 第二个成员会话：独立会审的两份答案按**主体 id** 去重，所以两份要来自两个会话。 */
 const 成员会话exec2 = 桩exec(
-  { cwd: 'C:/ws', createdAt: 3, isSeeded: false, version: 1, origin: 'subagent', parentSession: 'session-root-0001', delegationDepth: 1 },
+  { cwd: WORKSPACE, createdAt: 3, isSeeded: false, version: 1, origin: 'subagent', parentSession: 'session-root-0001', delegationDepth: 1 },
   'session-child-0003',
 );
 
 /** 起一个真装配的宿主（真出厂件 + 临时私有区），拿到 `mind` 工具。 */
 async function 起宿主(g) {
   const host = fakeHost();
-  await kernel.apply(host.ctx, { home: g.home, factoryRoot: g.factoryRoot, privateRoot: g.privateRoot });
+  await kernel.apply(host.ctx, { home: g.home, factoryRoot: g.factoryRoot, privateRoot: g.privateRoot,
+    projectBindings: [{ path: WORKSPACE, project: P }] });
   const org = await shareOrg({ home: g.home, factoryRoot: g.factoryRoot, privateRoot: g.privateRoot });
   await org.policy.reload();
   return { host, org, 工具: host.工具.get('mind') };
@@ -473,8 +478,8 @@ describe('B 实例键：唯一标识「哪一个会话」（2026-10-10 P1 补 ·
   /** 两个**同父**的子会话的会话 id（修前它们会算出同一个键 —— 这正是 B 要治的第二半）。 */
   const 真子A_id = 'session-c1a2b3c4-1111-4222-8333-444455556666';
   const 真子B_id = 'session-d5e6f7a8-9999-4aaa-8bbb-ccccddddeeee';
-  const 真子A = 桩exec({ cwd: 'C:/ws', createdAt: 2, isSeeded: false, version: 1, origin: 'subagent', parentSession: 真根A, delegationDepth: 1 }, 真子A_id);
-  const 真子B = 桩exec({ cwd: 'C:/ws', createdAt: 3, isSeeded: false, version: 1, origin: 'subagent', parentSession: 真根A, delegationDepth: 1 }, 真子B_id);
+  const 真子A = 桩exec({ cwd: WORKSPACE, createdAt: 2, isSeeded: false, version: 1, origin: 'subagent', parentSession: 真根A, delegationDepth: 1 }, 真子A_id);
+  const 真子B = 桩exec({ cwd: WORKSPACE, createdAt: 3, isSeeded: false, version: 1, origin: 'subagent', parentSession: 真根A, delegationDepth: 1 }, 真子B_id);
 
   it('B-判据：两个不同会话 ⇒ 不同键；同一会话两次调用 ⇒ 同键（根会话与子会话两面都测）', async () => {
     const g = await makeFixture();
@@ -489,8 +494,8 @@ describe('B 实例键：唯一标识「哪一个会话」（2026-10-10 P1 补 ·
         assert.equal(旧公式(真根A), 旧公式(真根B), '反例面前提：修前公式对这两个不同会话给出同一个键');
 
         // ── 根会话面：两个不同会话 ⇒ 两个不同键（读数原样印出来）。
-        const 根A1 = 放行主体(await 主体读数(工具, 桩exec({ cwd: 'C:/ws', createdAt: 1, isSeeded: false, version: 1 }, 真根A)));
-        const 根B1 = 放行主体(await 主体读数(工具, 桩exec({ cwd: 'C:/ws', createdAt: 1, isSeeded: false, version: 1 }, 真根B)));
+        const 根A1 = 放行主体(await 主体读数(工具, 桩exec({ cwd: WORKSPACE, createdAt: 1, isSeeded: false, version: 1 }, 真根A)));
+        const 根B1 = 放行主体(await 主体读数(工具, 桩exec({ cwd: WORKSPACE, createdAt: 1, isSeeded: false, version: 1 }, 真根B)));
         // eslint-disable-next-line no-console
         console.log(`[B-读数] 根会话 ${真根A} ⇒ 实例键 ${根A1.id} ; 根会话 ${真根B} ⇒ 实例键 ${根B1.id}`);
         assert.equal(根A1.id, 真根A, `根会话 A 的实例键 = 它自己的会话 id；实际 ${根A1.id}`);
@@ -498,10 +503,10 @@ describe('B 实例键：唯一标识「哪一个会话」（2026-10-10 P1 补 ·
         assert.notEqual(根A1.id, 根B1.id, `两个不同会话必须给出不同实例键（修前都是 session-session-）；实际 ${根A1.id} / ${根B1.id}`);
 
         // ── 同一会话两次调用 ⇒ 同一个键（稳定性；键由会话 id 派生，不由调用次序派生）。
-        const 根A2 = 放行主体(await 主体读数(工具, 桩exec({ cwd: 'C:/ws', createdAt: 1, isSeeded: false, version: 1 }, 真根A)));
+        const 根A2 = 放行主体(await 主体读数(工具, 桩exec({ cwd: WORKSPACE, createdAt: 1, isSeeded: false, version: 1 }, 真根A)));
         assert.equal(根A2.id, 根A1.id, '同一会话两次调用必须是同一个实例键');
         // 换一份 header（同一 id、不同 createdAt）也必须是同一个键：键只认会话身份，不认其余 header 字段。
-        const 根A3 = 放行主体(await 主体读数(工具, 桩exec({ cwd: 'C:/other', createdAt: 999, isSeeded: true, version: 3 }, 真根A)));
+        const 根A3 = 放行主体(await 主体读数(工具, 桩exec({ cwd: OTHER_WORKSPACE, createdAt: 999, isSeeded: true, version: 3 }, 真根A)));
         assert.equal(根A3.id, 根A1.id, '同一会话（换 header 其余字段）仍是同一个实例键');
 
         // ── 子会话面：两个**同父**的子会话 ⇒ 两个不同键（修前它们取父会话 ⇒ 同一个键）。
@@ -527,7 +532,7 @@ describe('B 实例键：唯一标识「哪一个会话」（2026-10-10 P1 补 ·
         // ── 取不到会话 id 的兜底（两条路各自的兜底值，别互相串）。
         const 无id子 = await 主体读数(工具, { name: 'mind', agent: { session: { header: { origin: 'subagent', version: 1, isSeeded: false } } } });
         assert.match(String(无id子.理由), /member-unknown/, '子会话取不到会话 id ⇒ 兜底 member-unknown（fail-closed）');
-        const 无id根 = 放行主体(await 主体读数(工具, { name: 'mind', agent: { session: { header: { cwd: 'C:/ws', version: 1, isSeeded: false } } } }));
+        const 无id根 = 放行主体(await 主体读数(工具, { name: 'mind', agent: { session: { header: { cwd: WORKSPACE, version: 1, isSeeded: false } } } }));
         assert.equal(无id根.id, 'lead', `根会话取不到会话 id ⇒ 兜底 lead；实际 ${无id根.id}`);
       } finally {
         host.清理();
@@ -556,7 +561,7 @@ describe('A 落地（2026-10-10 · 主人拍板：Lead 显式登记 + 会话派�
   /** 一个**会话派生**的子会话：实例键 = 它自己的会话 id（B 修后的形状）。 */
   const 子id = 'session-child-a0001';
   const 子会话 = 桩exec(
-    { cwd: 'C:/ws', createdAt: 2, isSeeded: false, version: 3, origin: 'subagent', parentSession: 'session-root-0001', delegationDepth: 1 },
+    { cwd: WORKSPACE, createdAt: 2, isSeeded: false, version: 3, origin: 'subagent', parentSession: 'session-root-0001', delegationDepth: 1 },
     子id,
   );
 
