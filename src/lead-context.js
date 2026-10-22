@@ -5,16 +5,17 @@ import { Denied, InvalidBody } from './kernel/errors.js';
 import { readLeadFocus } from './lead-focus.js';
 
 export const LEAD_CONTEXT_BUDGET = 6500;
-export async function recallLeadContext({ org, subject, project }) {
+export async function recallLeadContext({ org, subject, project, readExpression = () => null }) {
   if (subject?.kind !== 'Lead') throw new Denied('Lead连续性 · 当前身份', '只有当前Lead装配人格、用户偏好与协作教训。');
   if (typeof project !== 'string' || !project.trim() || project.length > 256) throw new InvalidBody('Lead连续性需要当前项目键。');
   const before = await currentProfessionalScope(org, subject, project);
+  const expression = readExpression();
   const focus = await readLeadFocus(org, before.actor, project);
-  const frame = { 版本: 1, 项目: project, 依据: '人格和偏好保留原优先规则；有本会话目标时按其词面检索协作教训，零命中不夹带无关近期教训；不是语义适用认证', 焦点线索: focus.description,
+  const frame = { 版本: 1, 项目: project, 依据: '人格和偏好保留原规则；教训按本轮已接纳用户来源文本、会话目标、近期浏览依次选材；词面零命中不补近期项，不认证语义适用', 焦点线索: expression?.description ?? focus.description,
     每类上限: 3, 记录: [], 数据版本: {}, 截断: false };
   const observations = [];
   for (const category of LEAD_MEMORY_KINDS) {
-    const query = category === '协作教训' ? focus.query : '';
+    const query = category === '协作教训' ? (expression?.query ?? focus.query) : '';
     const result = await org.memory.query({ subject: before.actor, 读者: before.actor, 项目: project, 类: '偏好',
       连续性类别: category, 文本: query, limit: 3, 返回模式: '摘要', 条数上限: 3, 内容预算: 3000 });
     frame.数据版本[category] = result.数据版本;
@@ -40,5 +41,6 @@ export async function recallLeadContext({ org, subject, project }) {
   const after = await currentProfessionalScope(org, subject, project);
   if (before.stamp !== after.stamp) throw new Denied('Lead连续性 · 身份已变化', '身份或凭证变化，丢弃本次连续性装配。');
   await org.policy.check({ subject: after.actor, action: 'read', target: { id: `记忆/检索/${project}`, kind: '记忆', authority: '自治', zone: '私有', domain: '集体', project }, context: { 类: '偏好' } });
+  if ((expression?.stamp ?? null) !== (readExpression()?.stamp ?? null)) throw new Denied('Lead连续性 · 用户文本线索已变化', '本轮接纳文本或轮次变化，丢弃旧教训召回。');
   return frame;
 }
