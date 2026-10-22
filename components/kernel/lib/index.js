@@ -44,6 +44,7 @@ import { createKernelObservations } from './observability-hooks.js';
 import { createGoalBudgetHooks } from './goal-budget-hooks.js';
 import { createModelUsageHooks } from './model-usage-hooks.js';
 import { injectProfessionalContext } from './professional-context.js';
+import { injectLeadContext } from './lead-context.js';
 
 export const name = 'dsh-mind-kernel';
 export const inject = ['tools'];
@@ -215,7 +216,8 @@ export async function apply(ctx, config = {}) {
         const 已钉规程 = await 注入Lead已钉规程(已接调度, context?.agent, org, logger, {
           agent: context?.agent, agents: 取服务(ctx, 'agents'), project: 当前项目键({ agent: context?.agent }),
         });
-        return injectProfessionalContext(已钉规程, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
+        const 专业上下文 = await injectProfessionalContext(已钉规程, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
+        return injectLeadContext(专业上下文, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
       }, { prepend: true }));
       调度接线回执.promptRegistered = true;
     } catch (error) {
@@ -390,6 +392,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
       'operation_query只读成员创建意图与已落盘阶段回执，可按操作UUID或精确任务id查询；拟用实例不证明宿主已创建，audited不证明宿主已停止；不提供重放、恢复或清零操作。',
       'knowledge_reuse_query仅治理身份只读知识采用声明；声明及历史采纳不证明知识有效或带来收益，不影响任务推进，不自动修改知识状态或排行。',
       '知识说明是作者声明的适用条件、已知反例及复验安排，不是验证认证；作者期限到期默认不建议，可用memory_query含待复验=true显式读取，原失效及读域限制仍适用；未设期限不代表永远有效。',
+      'Lead可用memory_write类=偏好并附连续性记录人格、用户偏好和协作教训；仅当前Lead自动带入有界摘要。连续性依据必须区分用户明确表达、推断与自省，具体来源不可省略；当前要求优先。修正请overturn原id，停止使用请invalidate；新写一条不会自动撤回语义冲突的旧条目。',
       'memory_lifecycle可由治理身份附反馈引用核对真实负反馈；仅invalidate/demote/overturn，批准绑定服务端核验凭据，不将处理等同于复验完成或认证知识。',
       `动作清单：${ACTIONS.join(', ')}。`,
     ].join(' '),
@@ -454,6 +457,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         类: { type: 'string', enum: ['知识', '经历', '偏好', '作答'] },
         对象类: { type: 'string', description: '对象库的种类（store_rollback 用：能力/规则/身份/产物…；与记忆类的「类」不是一个字段）' },
         version: { type: 'number', description: 'store_rollback 的回滚目标版本号（正整数）' },
+        连续性: { type: 'object', properties: { 类别: { type: 'string', enum: ['用户偏好', '人格', '协作教训'] }, 主题: { type: 'string', minLength: 1, maxLength: 80 }, 依据: { type: 'string', enum: ['明确表达', '推断', '自省'] }, 范围: { type: 'string', enum: ['部署', '项目'] } }, required: ['类别', '主题', '依据', '范围'], additionalProperties: false, description: '仅偏好类memory_write或overturn替代条目；Lead私有连续性资料，来源性质是作者声明，非用户认证。用户偏好不能以自省为依据。项目范围仅在该项目自动召回，部署范围跨会话/项目适用。修正原id请overturn；不凭主题自动合并冲突。' },
         内容: { type: 'string', description: '正文内容（bus_send 的消息正文 / memory_write 的条目内容）' },
         来源: { type: 'string', description: '怎么知道的；记忆写入必填（谁记的默认取主体）。goal_create/goal_revise及人侧目标修订必填，记录意图转述或修订来源；来源声明不等于用户已核验或授权' },
         来源引用: { type: 'string', description: '证据/来源对象 id，多个用逗号分隔（契约A 血缘）；know-/exp-/pref-/answ- 查账本、task- 查任务图、artifact- 本批不校验，悬空拒写。记忆整理岗写知识（受限晋升）必须恰好带 1 个 task-* 且该任务已被合法采纳（同项目）' },
@@ -1329,6 +1333,10 @@ function normalizeArgs(args) {
   if (typeof out.采用知识 === 'string') {
     try { out.采用知识 = JSON.parse(out.采用知识); }
     catch { throw new InvalidBody('采用知识必须是合法JSON数组；坏串不能当作未声明或空声明。'); }
+  }
+  if (typeof out.连续性 === 'string') {
+    try { out.连续性 = JSON.parse(out.连续性); }
+    catch { throw new InvalidBody('连续性必须是合法JSON对象；坏串不能当作未提供。'); }
   }
   if (typeof out.知识说明 === 'string') {
     try { out.知识说明 = JSON.parse(out.知识说明); }

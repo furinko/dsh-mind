@@ -20,6 +20,7 @@ import { buildIndex, formatMiss, search } from './retrieval.js';
 import { memoryResponseOptions, memoryResponsePage, finalizeMemoryResponse } from './memory-response.js';
 import { normalizeKnowledgeContext, knowledgeReviewStatus, knowledgeReviewProjection, KNOWLEDGE_CONTEXT_LIST_FIELDS } from './knowledge-applicability.js';
 import { normalizeFeedbackReference, resolveKnowledgeFeedback, validateFeedbackDispositionObservation } from './knowledge-feedback.js';
+import { normalizeContinuity, applicableContinuity, continuityBlockedSources, LEAD_MEMORY_KINDS } from './lead-continuity.js';
 import { DIR, MEMORY_KINDS } from './paths.js';
 import { 记忆条目在读域, 取复核读域 } from './review-scope.js';
 // 「已被合法采纳」的唯一判据住在任务图（补修K 字段合同），晋升面直接复用、不另抄状态判断。
@@ -32,6 +33,7 @@ const ANSWER_READERS = ['主权者', 'Lead'];
 
 /** 检索和来源观察共用基本可见性；岗位只是可选过滤，不额外授予或声称岗位隔离。 */
 function memoryEntryVisible(entry, query) {
+  if (Object.hasOwn(entry, '连续性') && !['Lead', '主权者'].includes(query.subject?.kind)) return false;
   if (entry.状态 === '物理删除') return false;
   if (entry.类 === '作答' && entry.归档 === true) {
     if (query.显式 !== true) return false;
@@ -213,6 +215,12 @@ export class MemoryService {
    */
   async remember(input) {
     const kind = input.类;
+    const 连续性 = normalizeContinuity(input.连续性);
+    if (连续性 !== undefined) {
+      if (kind !== '偏好') throw new InvalidBody('连续性只附在部署私有的偏好类记忆上。');
+      if (!['Lead', '主权者'].includes(input.subject?.kind)) throw new Denied('Lead连续性 · 写入身份', '仅Lead或主权者可记录Lead人格、用户偏好与协作教训。');
+      if (连续性.范围 === '项目' && (typeof input.项目 !== 'string' || !input.项目.trim())) throw new InvalidBody('项目范围的连续性需要真实项目键。');
+    }
     const 知识说明 = normalizeKnowledgeContext(input.知识说明);
     if (知识说明 !== undefined && kind !== '知识') throw new InvalidBody('知识说明仅属于知识类，不能附在经历、偏好或作答上。');
     input = { ...input, ...(知识说明 === undefined ? {} : { 知识说明 }) };
@@ -314,6 +322,7 @@ export class MemoryService {
         // v2 条目16（补修E）：受限晋升的幂等键随条目留痕，重试时据此认回同一条产物。
         ...(typeof input.幂等键 === 'string' && input.幂等键 ? { 幂等键: input.幂等键 } : {}),
         标签: input.标签 ?? [],
+        ...(连续性 === undefined ? {} : { 连续性 }),
         ...(知识说明 === undefined ? {} : { 知识说明 }),
         状态: '有效',
         记于: this.clock.iso(),
@@ -791,6 +800,7 @@ export class MemoryService {
    * @returns {Promise<{ 命中: object[], 口径: object, 条目: object[], 说明?: string }>}
    */
   async query(query = {}) {
+    if (query.连续性类别 !== undefined && (!LEAD_MEMORY_KINDS.includes(query.连续性类别) || !['Lead', '主权者'].includes(query.subject?.kind))) throw new InvalidBody('连续性类别仅供Lead或主权者按三类连续性读取。');
     if (query.精确岗位 !== undefined && (typeof query.精确岗位 !== 'boolean' || (query.精确岗位 && (typeof query.岗位 !== 'string' || !query.岗位.trim())))) {
       throw new InvalidBody('精确岗位必须为布尔值；精确匹配需要非空岗位。');
     }
@@ -829,7 +839,16 @@ export class MemoryService {
         rows.push(...(await this.#rows(file)));
       }
     }
-    const entries = fold(rows).filter((entry) => entry.状态 !== '物理删除');
+    let entries = fold(rows).filter((entry) => entry.状态 !== '物理删除');
+    if (query.连续性类别 !== undefined) {
+      entries = entries.filter(entry => applicableContinuity(entry, query.项目, query.连续性类别));
+      const all = entries.some(entry => (entry.来源引用 ?? []).some(ref => /^(know|exp|pref|answ)-/.test(ref)))
+        ? await this.#foldAll() : new Map(entries.map(entry => [entry.id, entry]));
+      const blocked = continuityBlockedSources(all, 是否已被否);
+      entries = entries.filter(entry => !blocked.has(entry.id));
+      // 候选推断不能挤掉已明确表达的偏好；同档仍按账本顺序取最近项。
+      entries.sort((a, b) => Number(a.连续性.依据 === '明确表达') - Number(b.连续性.依据 === '明确表达'));
+    }
     const visible = [];
     for (const entry of entries) {
       // 归档作答的可读性矩阵（§7 · 2026-10-13 审查 P1-9 修复）：默认不召回；显式要看时
@@ -862,7 +881,7 @@ export class MemoryService {
     const 可召回 = query.含待复验 === true ? 状态可召回 : 状态可召回.filter((entry) => !需复验(entry));
     // 页码不对正在变化的账本承诺无漏重；变化即要求重启，不能拼接两个不同事实快照。
     const 复验指纹 = visible.map((entry) => [entry.id, entry.复验状态 ?? null]);
-    const 数据版本 = digest(JSON.stringify({ 类: wanted, 项目: query.项目 ?? null, 岗位: query.岗位 ?? null, ...(query.精确岗位 === true ? { 精确岗位: true } : {}), 文本: query.文本 ?? '', id: query.id ?? null, 含待复验: query.含待复验 === true, 复验指纹, 条目: 可召回 }));
+    const 数据版本 = digest(JSON.stringify({ 类: wanted, 项目: query.项目 ?? null, 岗位: query.岗位 ?? null, ...(query.连续性类别 === undefined ? {} : { 连续性类别: query.连续性类别 }), ...(query.精确岗位 === true ? { 精确岗位: true } : {}), 文本: query.文本 ?? '', id: query.id ?? null, 含待复验: query.含待复验 === true, 复验指纹, 条目: 可召回 }));
     if (query.数据版本 && query.数据版本 !== 数据版本) {
       throw new InvalidBody('记忆数据或查询口径已变化，不能继续旧分页；请清除 数据版本，并从偏移0/正文偏移0重新读取。', { detail: { 原因: 'MEMORY_QUERY_SNAPSHOT_CHANGED' } });
     }
@@ -977,6 +996,7 @@ export class MemoryService {
     });
     const entry = await this.#folded(spec.id);
     if (!entry) throw new InvalidBody(`没有这条记忆：${spec.id}`);
+    if (entry.连续性 && !['Lead', '主权者'].includes(spec.subject?.kind)) throw new Denied('Lead连续性 · 私有读面', '该连续性条目仅向Lead或主权者提供。');
     const index = await this.#lineageIndex();
     const closure = lineageClosure(index, spec.id);
     // 「已不存在」标注（2026-10-13 第四批）：物理删除会抹掉源的**条目行**，但下游那行仍写着
@@ -1073,12 +1093,15 @@ export class MemoryService {
    * @param {{ subject: object, 新条目: string, 理由: string, 任务?: object }} spec
    */
   async overturn(id, spec) {
+    const replacementContinuity = normalizeContinuity(spec.连续性);
     const 知识说明 = normalizeKnowledgeContext(spec.知识说明);
     spec = { ...spec, ...(知识说明 === undefined ? {} : { 知识说明 }) };
     const feedback = await this.#feedbackExecution(id, spec, 'overturn');
     if (feedback) spec = feedback.args;
     const entry = await this.#folded(id);
     if (!entry) throw new InvalidBody(`没有这条记忆：${id}`);
+    if (replacementContinuity !== undefined && entry.类 !== '偏好') throw new InvalidBody('连续性只能随偏好替代条目提供。');
+    if (entry.连续性 && !['Lead', '主权者'].includes(spec.subject?.kind)) throw new Denied('Lead连续性 · 处置身份', '仅Lead或主权者可更正连续性资料。');
     if (知识说明 !== undefined && entry.类 !== '知识') throw new InvalidBody('知识说明仅属于知识类，不能给非知识替代条目追加。');
     // 推翻 = 「新条目 + 旧条目状态行」**双行同锁落账**（2026-10-12 评审 P3）：
     // 修前两步分开落，第二步（状态行）失败会留下「替代品在、原条目没标推翻」的
@@ -1099,6 +1122,7 @@ export class MemoryService {
       项目: entry.项目,
       岗位: entry.岗位 ?? undefined,
       来源引用: entry.来源引用 ?? [],
+      ...(replacementContinuity === undefined && entry.连续性 === undefined ? {} : { 连续性: replacementContinuity ?? entry.连续性 }),
       ...(知识说明 === undefined ? {} : { 知识说明 }),
       派生自: id,
       // 推翻是「追加新条目 + 旧条目入账」双动作：新条目那次 remember 也过策略引擎，
@@ -1165,6 +1189,7 @@ export class MemoryService {
     }
     const entry = await this.#folded(id);
     if (!entry) throw new InvalidBody(`没有这条记忆：${id}`);
+    if (entry.连续性 && !['Lead', '主权者'].includes(spec.subject?.kind)) throw new Denied('Lead连续性 · 处置身份', '仅Lead或主权者可删除连续性资料。');
     await this.policy.check({
       subject: spec.subject,
       action: 'write',
@@ -1340,6 +1365,7 @@ export class MemoryService {
   async readableBy(id, spec) {
     const entry = await this.#folded(id);
     if (!entry) return { 可读: false, 原因: '没有这条记忆' };
+    if (entry.连续性 && !['Lead', '主权者'].includes(spec.读者?.kind)) return { 可读: false, 原因: 'Lead连续性仅向Lead或主权者提供' };
     if (entry.类 !== '作答' || entry.归档 !== true) return { 可读: true, 原因: '未归档条目对所有在编主体可读' };
     if (ANSWER_READERS.includes(spec.读者?.kind) || spec.读者?.roleId === '复核员') return { 可读: true, 原因: `${spec.读者.kind}${spec.读者.roleId === '复核员' ? '/复核员' : ''} 在归档后仍可读（会审分歧清单必须对复核员可见）` };
     return { 可读: false, 原因: `${spec.读者?.kind ?? '未知主体'} 不可读归档作答；自动检索也不进默认面` };
@@ -1739,6 +1765,7 @@ export class MemoryService {
     if (feedback) spec = feedback.args;
     const entry = await this.#folded(id);
     if (!entry) throw new InvalidBody(`没有这条记忆：${id}`);
+    if (entry.连续性 && !['Lead', '主权者'].includes(spec.subject?.kind)) throw new Denied('Lead连续性 · 处置身份', '仅Lead或主权者可停用连续性资料。');
     const permission = {
       subject: spec.subject,
       action: 'write',

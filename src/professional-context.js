@@ -33,6 +33,8 @@ async function currentScope(org, subject, project) {
   return { actor, role, nodes, domain, stamp, council: Boolean(member.会审绑定) };
 }
 
+export { currentScope as currentProfessionalScope };
+
 export async function recallProfessionalContext({ org, subject, project }) {
   if (typeof project !== 'string' || !project.trim() || project.length > 256) throw new InvalidBody('专业上下文需要长度不超过256的当前项目键。');
   const before = await currentScope(org, subject, project);
