@@ -39,6 +39,7 @@ import { TurnBufferService } from './turn-buffer.js';
 import { ProjectBriefService } from './project-brief.js';
 import { ContinuityCaptureService } from './continuity-capture.js';
 import { PersonaCoreService } from './persona-core.js';
+import { InformationService } from './information.js';
 
 /** 默认项目键。名字即目录名（§14.4-5）。 */
 export const DEFAULT_PROJECT = 'default';
@@ -148,6 +149,8 @@ export class Org {
     org.projectBrief = new ProjectBriefService({ layout, org, clock });
     org.continuityCapture = new ContinuityCaptureService({ layout, org, clock });
     org.personaCore = new PersonaCoreService({ layout, policy, clock });
+    org.information = new InformationService({ org, layout, clock });
+    capability.information = org.information;
     await org.bootstrap({ 代次: spec.代次 });
     return org;
   }
@@ -279,7 +282,7 @@ export class Org {
       // 能力 × 岗位接线（2026-10-13 重做·图谱）：两个只读真源 + 实例规模。
       // 三条都走**免审计的只读取数**（`capability.list` / `registry.list` / `identity` 都不入账）——
       // 工作台是轮询的投影，取数一旦入账就会把审计链灌成流水。
-      能力: await this.capability.list(),
+      能力: await this.capability.list({ subject: 读者 ?? { id: '本机工作台', kind: '主权者' } }),
       岗位: await this.registry.list(),
       实例计数: 计实例计数(identity),
       // 岗位闲置（派活闭环 2026-10-15）：岗位 → {在岗实例, 封存实例, 最近派发于}。

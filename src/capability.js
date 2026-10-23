@@ -49,6 +49,7 @@ export class CapabilityLibrary {
         const text = await readTextOrNull(path);
         if (text === null) continue;
         const parsed = parseDocument(text);
+        if (this.information && !(await this.information.capabilityUsable(parsed.meta.id ?? rel.replace(/\.md$/, ''), query.subject))) continue;
         const 适用岗位 = parseRoles(section(parsed.body, '适用岗位'));
         if (query.岗位 && !适用岗位.includes(query.岗位)) continue;
         out.push({
@@ -90,7 +91,7 @@ export class CapabilityLibrary {
       结果: '放行',
       详情: { 服务: 'capability.resolve', 名: spec.名 },
     });
-    const all = await this.list();
+    const all = await this.list({ subject: spec.subject });
     const 条目 = all.filter((c) => c.id === spec.名 || c.名 === spec.名);
     if (条目.length === 0) {
       return { 名: spec.名, 条目: [], 默认: null, 冲突: false, 说明: `能力库里没有「${spec.名}」；同名不合并，缺失就是缺失。` };
@@ -119,6 +120,7 @@ export class CapabilityLibrary {
     // id 先过段名校验（2026-10-12 评审 P1-5）：修前 `read('../../../x')` 直接拼进路径，
     // 读出能力库目录外的任意 .md —— 读面也要守段，「找不到返回 null」只在段合法后成立。
     assertPathSegment(spec.id, '能力id');
+    if (this.information && !(await this.information.capabilityUsable(spec.id, spec.subject))) return null;
     const zones = spec.来源 ? [spec.来源] : [SOURCE_AUTONOMOUS, SOURCE_FACTORY];
     for (const 来源 of zones) {
       const path = `${this.#dir(来源)}/${spec.id}.md`;

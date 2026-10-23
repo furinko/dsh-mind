@@ -9,7 +9,8 @@ export async function settingsScene(options={}) {
   const personaData=()=>({text:state.persona.text,fingerprint:state.persona.exists?digest(state.persona.text):digest('mind:persona-core:missing'),state:!state.persona.exists?'missing':state.persona.text.trim()?'active':'empty',file:'fixture/private/主权人设/核心人设.md',limits:{characters:3000,bytes:12000}});
   const calls=[];const doc=makeDocument();
   const loaded=loadClient({document:doc.document,fetch:async(url,init)=>{
-    const call={url,method:init.method,body:init.body?JSON.parse(init.body):undefined};calls.push(call);
+     const call={url,method:init.method,body:init.body?JSON.parse(init.body):undefined};calls.push(call);
+     if(options.informationRequest && url.startsWith('/plugins/dsh-mind/information')) return options.informationRequest(url,init);
     if(state.fail&&url!=='/plugins/dsh-mind/workbench')return jsonResponse({成功:false,理由:'读取暂不可用'},503);
     if(init.method==='POST'&&state.hold===url){state.hold='';await new Promise(resolve=>{state.release=resolve;});}
     if(url==='/plugins/dsh-mind/persona-core'){
@@ -46,7 +47,9 @@ export async function settingsScene(options={}) {
     return jsonResponse(sampleView());
   }});
   const slots=makeSlots();const plugin=loaded.definition.factory(makeStrictRequire().require);const dispose=plugin.apply(makeCtx({slots:slots.slots,sessions:makeSessions([{id:'settings-fixture',main:true}])}));
-  const r=createRenderer(slots.calls.register.find(x=>x.options.name==='settings.section').Component,{close(){}});r.flush();await settle(10);r.flush();
+  let r=createRenderer(slots.calls.register.find(x=>x.options.name==='settings.section').Component,{close(){}});r.flush();await settle(10);r.flush();
+  // The minimal renderer does not expand React child components; render the actual registered child in isolation.
+  if(options.informationOnly){const child=collect(r.tree).elements.find(e=>typeof e.type==='function'&&e.type.name==='信息成长设置');if(!child)throw Error('Information settings child missing');r.unmount();r=createRenderer(child.type,child.props);r.flush();await settle(10);r.flush();}
   const elements=()=>collect(r.tree,{skipStyle:true}).elements;
   const field=label=>elements().find(x=>x.props['aria-label']===label);
   const button=label=>elements().find(x=>x.type==='button'&&textOf(x)===label);

@@ -1050,3 +1050,10 @@ await runAction({ org, 项目, subject, 主体, args: { action, ...args }, 面: 
 7. `task_settle`逐候选明确晋升/留账本/丢弃，真实产物成功后才结账；用毕实例停机并封存。旧节点保留事实，不冒旧主体、不迁移署名、不补签假完成。
 
 验收运行`npm test`覆盖preflight、根测试、board测试与client harness，另跑安装selftest，合计五道门；拒绝路径与独立副本变异必能证伪，测试池不缩小，源码与日志哈希对应。另分开记录真实运行态、尚未实测边界与当前探针历史；没有独立过票不得采纳本次恢复目标。
+
+
+## 信息收录与成长（2026-10-24）
+
+三个固定认证端点：`/plugins/dsh-mind/information`（来源设置、分页资料与收获）、`/plugins/dsh-mind/information-material`（原文版本预览）、`/plugins/dsh-mind/information-deposit`（结构化插件投递）。均要求宿主Connection认证与同源，不代理任意动作。
+
+模型面新增 information_query / information_read / information_update，使用顶层「信息」对象；身份与项目来自真实会话，模型不能配置目录、预算、关系或扩大分享范围。会话分享是人的主入口，目录和插件接驳共用版本、阅读回执与成长流程。完整字段、范围、覆盖、预算、撤回及能力发布合同见 [信息来源与成长](docs/INFORMATION-GROWTH.md)。

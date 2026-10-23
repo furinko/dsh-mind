@@ -54,6 +54,7 @@ import { createContinuityCaptureHooks, injectPendingContinuity } from './continu
 import { injectPersonaCore } from './persona-core.js';
 import { createPersonaProtection } from './persona-protection.js';
 import { collaborationFeedbackSchema } from '../../../src/collaboration-feedback.js';
+import { createInformationHooks, injectInformationContext } from './information-hooks.js';
 
 export const name = 'dsh-mind-kernel';
 export const inject = ['tools'];
@@ -134,10 +135,19 @@ export async function apply(ctx, config = {}) {
     llmOf: () => 取服务(ctx, 'llm'), logger, enabled: config.轮级缓冲 !== false && config.自动协作记忆 === true });
   org.continuityCaptureHooks = continuityCaptureHooks;
   ctx.effect?.(() => () => continuityCaptureHooks.stop());
+  const informationHooks = createInformationHooks({ org, projectOf: 当前项目键, llmOf: () => 取服务(ctx, 'llm'), logger });
+  org.informationHooks = informationHooks;
+  const disposeInformationSources = informationHooks.attach(ctx);
+  try { await org.information.recoverLearning(); }
+  catch (error) { logger.warn?.(`[dsh-mind] 信息阅读恢复未确认：${error?.code ?? 'unknown'}`); }
+  ctx.effect?.(() => {
+    const timer = setInterval(() => { void informationHooks.scan(); }, 60000); timer.unref?.();
+    return () => { clearInterval(timer); disposeInformationSources?.(); informationHooks.stop(); };
+  }, 'dsh-mind: 信息收录与阅读生命周期');
   const turnBufferHooks = createTurnBufferHooks({ org, projectOf: 当前项目键,
     projectAtCwd: cwd => 解析项目(cwd, 项目),
     onPersist: async (session, options) => {
-      const results = await Promise.allSettled([projectBriefHooks.persisted(session, options), continuityCaptureHooks.persisted(session, options)]);
+      const results = await Promise.allSettled([projectBriefHooks.persisted(session, options), continuityCaptureHooks.persisted(session, options), informationHooks.persisted(session, options)]);
       for (const result of results) if (result.status === 'rejected') throw result.reason;
     },
     queryOf: () => 取服务(ctx, 'sessionQuery'), logger, enabled: config.轮级缓冲 !== false });
@@ -261,7 +271,8 @@ export async function apply(ctx, config = {}) {
         const Lead连续性 = await injectLeadContext(待整理协作表达, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
         const 项目接续 = await injectProjectBrief(Lead连续性, { agent: context?.agent, org, hooks: projectBriefHooks,
           projectOf: 当前项目键, logger, active: () => !delegation.closed });
-        return injectPersonaCore(项目接续, { agent: context?.agent, org,
+        const 见闻与成长 = await injectInformationContext(项目接续, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
+        return injectPersonaCore(见闻与成长, { agent: context?.agent, org,
           projectOf: 当前项目键, logger, active: () => !delegation.closed });
       }, { prepend: true }));
       调度接线回执.promptRegistered = true;
@@ -449,6 +460,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations, 
     parameters: {
       type: 'object',
       properties: {
+        信息: { type: 'object', description: 'information_query: {collection:status/materials/growth/interests/candidates,id?,query?,offset?,limit?}; information_read: {id,hash?,version?,offset?,limit?}; information_update: {op,data}。op=submit时data={messageIds:[当前真实消息ID],title?,note?}；op=submit_tool时data={receiptId,title,note?}；record时data={type:growth/candidate,kind?,title,text,sources:[{readingId,quote}],expiresAt?,method?,conditions?,limitations?,roles?,replaces?:[{id,revision}]}；revise时data={id,revision,reason,state?:active/dormant/withdrawn/needs-review,text?,stage?:灵感/待试用/已验证/需修订,trial?:{task,outcome:有帮助/无改善/变差/未知,detail},expiresAt?}；finish时data={readingIds:[]}；publish时data={id,revision}。模型不能配置目录、预算或扩大来源分享范围。', additionalProperties: true },
         action: { type: 'string', enum: ACTIONS, description: '要执行的动作' },
         project: { type: 'string', description: '项目键；省略则用当前项目' },
         role: { type: 'string', description: '兼容字段，不授予身份或岗位权限；实际主体由宿主会话与身份档案确定，自报 Lead 会被拒绝' },

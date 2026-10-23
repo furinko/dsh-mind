@@ -29,7 +29,7 @@ const 部署偏好 = '集体L2-共享基础设施/defaults/部署.json';
 const 前缀 = '/plugins/dsh-mind';
 const 端点 = { presence: `${前缀}/presence`, workbench: `${前缀}/workbench`, ping: `${前缀}/ping`, delegation: `${前缀}/delegation`, personaCore: `${前缀}/persona-core`, intervention: `${前缀}/intervention` };
 /** 只允许明确端点，新增调度设置仍不能打开通用 action 代理。 */
-const 应有端点 = [端点.presence, 端点.workbench, 端点.ping, 端点.delegation, 端点.personaCore, 端点.intervention, `${前缀}/monitor`];
+const 应有端点 = [端点.presence, 端点.workbench, 端点.ping, 端点.delegation, 端点.personaCore, 端点.intervention, `${前缀}/monitor`, `${前缀}/information`, `${前缀}/information-material`, `${前缀}/information-deposit`];
 
 const 睡 = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -393,7 +393,7 @@ describe('Batch 7：自注册同源路由（换掉永不返回的命令通道）
     const 一 = await 起宿主();
     const { ws, home } = 一;
     try {
-      assert.equal(ws.路由表.length, 7, '第一次 apply 挂上七条明确端点，包括独立的认证人侧核心人设设置');
+      assert.equal(ws.路由表.length, 应有端点.length, '第一次 apply 挂上全部明确端点，包括独立认证的信息来源、预览与插件投递入口');
       // 卸载：effect 的清理器必须把路由 disposer 交回去，否则第二次 apply 撞 duplicate。
       一.host.清理();
       assert.deepEqual(ws.路由表, [], `卸载后不许留残留：${JSON.stringify(ws.路由表)}`);

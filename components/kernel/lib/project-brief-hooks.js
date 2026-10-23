@@ -20,7 +20,7 @@ const root = session => typeof session?.id === 'string' && session.id.trim()
   && session.header.origin !== 'subagent' && !(session.header.delegationDepth >= 1)
   && Number.isSafeInteger(session.seq) && typeof session.isOwnSeq === 'function';
 
-export async function extractProjectBrief(llm, route, input, { signal, timeoutMs = 20000, system = PROJECT_BRIEF_SYSTEM } = {}) {
+export async function extractProjectBrief(llm, route, input, { signal, timeoutMs = 20000, system = PROJECT_BRIEF_SYSTEM, sourceKind = 'dsh-mind-project-brief' } = {}) {
   if (typeof llm?.prepareCall !== 'function' || !route?.provider || !route.model) throw new Fault('PROJECT_BRIEF_MODEL_UNAVAILABLE', '当前宿主模型路由不可用，保留未整理来源。');
   const controller = new AbortController();
   const abort = () => controller.abort(signal.reason);
@@ -33,7 +33,7 @@ export async function extractProjectBrief(llm, route, input, { signal, timeoutMs
     controller.signal.throwIfAborted();
     let finish = null; let size = 0; const blocks = new Map();
     const options = { ...call.config, system,
-      messages: [{ role: 'user', id: randomUUID(), source: { kind: 'dsh-mind-project-brief', form: 'recall' },
+      messages: [{ role: 'user', id: randomUUID(), source: { kind: sourceKind, form: 'recall' },
         content: [{ type: 'text', text: JSON.stringify(input) }] }], signal: controller.signal };
     // 没有会话工具/权限/宿主system prompt；也不伪标为session-title或compaction计费。
     for await (const chunk of call.stream(options)) {

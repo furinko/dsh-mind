@@ -41,6 +41,9 @@ export const 端点表 = Object.freeze({
   ping: `${路由前缀}/ping`,
   delegation: `${路由前缀}/delegation`,
   personaCore: `${路由前缀}/persona-core`,
+  information: `${路由前缀}/information`,
+  informationMaterial: `${路由前缀}/information-material`,
+  informationDeposit: `${路由前缀}/information-deposit`,
   // v2 条目14/17（2026-10-18 补修F）：介入度待决清单与主权者逐请求决议。
   // 与调度授权同一档：读/写都要求宿主 Connection 认证，不退回无头本机通道。
   intervention: `${路由前缀}/intervention`,
@@ -617,6 +620,41 @@ export function personaCore路由({ ctx, settings }) {
 }
 
 // ── 注册（webServer 可能晚于插件激活）────────────────────────────────────────
+/** Fixed information endpoints share the host authentication and same-origin fences. */
+export function information路由({ ctx, org, 项目, mode = 'settings' }) {
+  return async function information端点(req, res) {
+    const method = String(req?.method ?? 'GET').toUpperCase();
+    if (!(mode === 'preview' ? method === 'GET' : mode === 'deposit' ? method === 'POST' : ['GET', 'POST'].includes(method))) return 回方法不对(res, method, mode === 'preview' ? 'GET' : mode === 'deposit' ? 'POST' : 'GET 或 POST');
+    try {
+      const connection = ctx?.get?.('connection');
+      if (typeof connection?.requestRejection !== 'function') return 回JSON(res, 503, { 成功: false, 理由: '信息收录需要宿主Connection认证，不回退无认证通道。' });
+      const rejection = connection.requestRejection(req);
+      if (rejection !== undefined) return 回JSON(res, rejection === 401 ? 401 : 403, { 成功: false, 理由: '信息收录需要已认证的同源入口。' });
+      const gate = method === 'GET' ? 读栅栏(req) : 写栅栏(req);
+      if (!gate.ok) return 回JSON(res, 403, { 成功: false, 理由: '信息收录同源请求被拒绝。' });
+      const url = new URL(req.url, 'http://localhost');
+      const spec = { subject: { id: '信息设置页', kind: '主权者' }, project: 取项目(req, 项目), session: null };
+      if (method === 'GET') {
+        const input = {};
+        for (const k of mode === 'preview' ? ['id', 'hash', 'version', 'offset', 'limit'] : ['query', 'offset', 'limit']) {
+          if (url.searchParams.has(k)) input[k] = ['offset', 'limit', 'version'].includes(k) ? Number(url.searchParams.get(k)) : url.searchParams.get(k);
+        }
+        return 回JSON(res, 200, { 成功: true, 数据: mode === 'preview' ? await org.information.preview(spec, input) : await org.information.settings(spec, input),
+          runtime: org.informationHooks?.health() ?? { pending: 0, state: '未接入自动阅读' } });
+      }
+      if (取头(req, 'content-type').split(';')[0].trim().toLowerCase() !== 'application/json') return 回JSON(res, 415, { 成功: false, 理由: '信息收录只接受application/json。' });
+      let raw;
+      try { raw = await 读请求体(req); } catch { return 回JSON(res, 413, { 成功: false, 理由: '请求体超过64KiB；大材料请通过目录连接。' }); }
+      let input;
+      try { input = JSON.parse(raw); } catch { return 回JSON(res, 400, { 成功: false, 理由: '请求体不是合法JSON。' }); }
+      const data = mode === 'deposit' ? await org.information.deposit(spec, input) : await org.information.admin(spec, input);
+      return 回JSON(res, 200, { 成功: true, 数据: data });
+    } catch (error) {
+      return 回JSON(res, error.code === 'INFORMATION_CONFLICT' ? 409 : error.code === 'INVALID_BODY' ? 400 : ['DENIED', 'NEEDS_APPROVAL'].includes(error.code) ? 403 : 503,
+        { 成功: false, ...describeFailure(error) });
+    }
+  };
+}
 
 /** 取 webServer 服务：先 `ctx.get`，再退回 `ctx.webServer`（两种宿主形状都认）。 */
 function 取webServer(ctx) {
@@ -676,6 +714,9 @@ export function 挂同源路由(spec) {
         新挂.push(ws.register({ kind: 'exact', path: 端点表.ping, handler: ping路由({ org, ctx }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.delegation, handler: delegation路由({ ctx, settings: spec.调度设置 }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.personaCore, handler: personaCore路由({ ctx, settings: spec.人设设置 }) }));
+        新挂.push(ws.register({ kind: 'exact', path: 端点表.information, handler: information路由({ ctx, org, 项目 }) }));
+        新挂.push(ws.register({ kind: 'exact', path: 端点表.informationMaterial, handler: information路由({ ctx, org, 项目, mode: 'preview' }) }));
+        新挂.push(ws.register({ kind: 'exact', path: 端点表.informationDeposit, handler: information路由({ ctx, org, 项目, mode: 'deposit' }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.intervention, handler: intervention路由({ org, 项目, ctx }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.monitor, handler: monitor路由({ org, ctx }) }));
       } catch (error) {

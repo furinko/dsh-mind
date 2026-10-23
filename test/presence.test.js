@@ -114,6 +114,10 @@ const 冻结动作表 = [
   'review_experiment_run',
   'review_experiment_read',
   'memory_write',
+  // 仅查询、阅读和整理资料；目录、预算、关系关联与分享权限只在人侧设置，不给模型自配。
+  'information_query',
+  'information_read',
+  'information_update',
   'memory_query',
   'turn_buffer_query',
   'project_brief_query',

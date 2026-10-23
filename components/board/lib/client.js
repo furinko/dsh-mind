@@ -3137,6 +3137,11 @@ window.__ModuleLoader__.load({
     var 调度store = { 快照: { phase: 'reading', data: null, error: '' }, 订阅者: [] };
     var 人设页已访问 = false;
     var 人设store = { 快照: { phase: 'reading', data: null, error: '' }, 订阅者: [] };
+    var 信息页已访问 = false;
+    var 信息参数 = { offset: 0, query: '' };
+    var 信息请求序 = 0;
+    var 信息最近读取 = 0;
+    var 信息store = { 快照: { phase: 'reading', data: null, error: '' }, 订阅者: [] };
     var 投影store = { 快照: EMPTY, 订阅者: [] };
     var 设置store = { 快照: { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' }, 订阅者: [] };
     /** 待批准清单（v2 条目14/17）：状态机投影由域服务给，前端只读、只发批准/拒绝/撤销。 */
@@ -3224,6 +3229,8 @@ window.__ModuleLoader__.load({
       调度store.快照 = { phase: 'reading', data: null, error: '' };
       人设页已访问 = false;
       人设store.快照 = { phase: 'reading', data: null, error: '' };
+      信息页已访问 = false; 信息请求序 += 1; 信息最近读取 = 0; 信息参数 = { offset: 0, query: '' };
+      信息store.快照 = { phase: 'reading', data: null, error: '' };
       投影store.快照 = EMPTY;
       设置store.快照 = { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' };
       界面store.快照 = { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null, 当前页: null, 图谱选中: null, 图谱视图: null, 审计展开: null };
@@ -4002,7 +4009,7 @@ window.__ModuleLoader__.load({
 
     /** 立刻拉一次（两个页面都刷）。给"手动刷新"按钮与 effect 增强用。 */
     function 立即刷新() {
-      return Promise.all([刷新投影(), 刷新设置(), 刷新调度(), 刷新人设()]);
+      return Promise.all([刷新投影(), 刷新设置(), 刷新调度(), 刷新人设(), 刷新信息(false)]);
     }
 
     /**
@@ -4809,6 +4816,154 @@ window.__ModuleLoader__.load({
      *
      * 主人（宿主）只传 `{close}`。
      */
+    function 刷新信息(force) {
+      if (!信息页已访问 || (!force && Date.now() - 信息最近读取 < 15000)) return Promise.resolve({ ok: false, error: '等待下次读取' });
+      信息最近读取 = Date.now(); var ticket = ++信息请求序;
+      var url = '/plugins/dsh-mind/information?limit=10&offset=' + 信息参数.offset + (信息参数.query ? '&query=' + encodeURIComponent(信息参数.query) : '');
+      return runCommand(activeCtx, '', { method: 'GET', path: url }).then(function (out) {
+        if (ticket !== 信息请求序) return { ok: false, error: '信息回读已被新请求替代' };
+        var data = out.ok && out.value.数据;
+        if (out.ok && (!data || !obj(data.config) || !Array.isArray(data.sources) || !obj(data.materials) || !obj(data.growth) || !obj(data.candidates))) out = { ok: false, error: '信息收录未返回完整读数。' };
+        发通知(信息store, { phase: out.ok ? 'live' : 'error', data: out.ok ? data : null, error: out.ok ? '' : out.error });
+        return out;
+      });
+    }
+
+    function 信息成长设置() {
+      信息页已访问 = true;
+      var snapshot = useStore(信息store); var data = snapshot.data;
+      var busyState = useState(false); var busy = busyState[0]; var setBusy = busyState[1];
+      var lock = useState(function () { return { saving: false }; })[0];
+      var noticeState = useState(''); var notice = noticeState[0]; var setNotice = noticeState[1];
+      var sourceState = useState({ name: '', path: '', purpose: '两者', project: '', audience: 'lead', roles: '', recursive: true });
+      var source = sourceState[0]; var setSource = sourceState[1];
+      var configState = useState(null); var draft = configState[0]; var setDraft = configState[1];
+      var configRevisionState = useState(null); var draftRevision = configRevisionState[0]; var setDraftRevision = configRevisionState[1];
+      var tabState = useState('materials'); var tab = tabState[0]; var setTab = tabState[1];
+      var searchState = useState(''); var search = searchState[0]; var setSearch = searchState[1];
+      var pagesState = useState([]); var pages = pagesState[0]; var setPages = pagesState[1];
+      var previewState = useState(null); var preview = previewState[0]; var setPreview = previewState[1];
+      var editState = useState(null); var edit = editState[0]; var setEdit = editState[1];
+      var relationshipState = useState(''); var relationship = relationshipState[0]; var setRelationship = relationshipState[1];
+      var confirmState = useState(null); var confirmation = confirmState[0]; var setConfirmation = confirmState[1];
+      useEffect(function () { 刷新信息(true); }, []);
+      function patchSource(k, v) { var next = Object.assign({}, source); next[k] = v; setSource(next); }
+      function patchConfig(k, v) { if (!draft) setDraftRevision(data.configRevision); var next = Object.assign({}, draft || data.config); next[k] = v; setDraft(next); }
+      function refresh() { return 刷新信息(true); }
+      function relationshipSession() { var value = resolveSessionId(activeCtx); if (!value.id || value.source === 'sessions.list · 末条') { setNotice('没有确认当前可见会话，请先打开目标会话；不会猜测关联对象。'); return null; } return value.id; }
+      function send(body, after) {
+        if (lock.saving) return; lock.saving = true; setBusy(true); setNotice('正在处理并核对…');
+        return runCommand(activeCtx, '', { method: 'POST', path: '/plugins/dsh-mind/information', body: body }).then(function (out) {
+          return refresh().then(function (back) {
+            setNotice(out.ok && back.ok ? '已处理，最新状态已重新读取。' : out.ok ? '操作已返回；状态回读失败，请重新读取核对。' : out.error + '；请核对最新状态后再操作。');
+            if (out.ok && back.ok && after) after(back.value.数据);
+          });
+        }).then(function () { lock.saving = false; setBusy(false); }, function () { lock.saving = false; setBusy(false); setNotice('操作未完整确认，请重新读取核对。'); });
+      }
+      function sourceInput(label, name, type) {
+        return 设置行('information-' + name, label, '', h('input', { className: 'dshmind-set__input', type: type || 'text', 'aria-label': label,
+          value: source[name], disabled: busy, onChange: function (event) { patchSource(name, event.target.value); } }));
+      }
+      function button(label, click, disabled) { return h('button', { type: 'button', className: 'dshmind-set__btn', disabled: busy || disabled, onClick: click }, label); }
+      function openMaterial(item, offset, hashValue, version) {
+        var url = '/plugins/dsh-mind/information-material?id=' + encodeURIComponent(item.id) + '&offset=' + (offset || 0) + (hashValue ? '&hash=' + encodeURIComponent(hashValue) : '') + (version ? '&version=' + version : '');
+        runCommand(activeCtx, '', { method: 'GET', path: url }).then(function (out) {
+          if (out.ok) setPreview(out.value.数据); else setNotice(out.error);
+        });
+      }
+      function saveSource() {
+        var value = { name: source.name, path: source.path, purpose: source.purpose, recursive: source.recursive, enabled: true,
+          extensions: ['.md', '.txt', '.json', '.jsonl', '.html', '.htm', '.vtt', '.srt'],
+          scope: { project: source.project.trim() || null, audience: source.audience, roles: source.audience === 'roles' ? source.roles.split(/[,，]/).map(function (s) { return s.trim(); }).filter(Boolean) : [], relationship: source.relationship || null } };
+        if (source.id) value.id = source.id;
+        send({ op: 'source_save', expectedRevision: source.expectedRevision === undefined ? data.configRevision : source.expectedRevision, source: value }, function () { setSource({ name: '', path: '', purpose: '两者', project: '', audience: 'lead', roles: '', recursive: true }); });
+      }
+      var config = draft || (data && data.config);
+      var page = data && data[tab];
+      var stateLabels = { active: '使用中', dormant: '暂时淡去', withdrawn: '已撤回', 'needs-review': '待重新理解', missing: '来源不可用', error: '读取失败' };
+      return h('section', { className: 'dshmind-set__section', 'data-dshmind': 'information-settings', 'aria-label': '见闻与成长' }, [
+        h('h3', { className: 'dshmind-set__subtitle' }, '见闻与成长'),
+        h('p', { className: 'dshmind-set__hint' }, '在会话中分享链接、文件或说“这个记一下”即可。这里连接资料目录，查看 Lead 的兴趣、回忆和能力候选，也可以纠正它。'),
+        snapshot.phase === 'error' ? h('p', { role: 'alert' }, snapshot.error) : null,
+        !data ? h('p', { role: 'status' }, '正在读取见闻与成长…') : null,
+        button('刷新见闻与成长', refresh),
+        data ? h('div', null, [
+          h('p', null, (data.config.paused ? '阅读已暂停' : '阅读已开启') + ' · 今日提供 ' + data.usage.readChars + ' / ' + data.config.dailyReadChars + ' 字符 · 辅助阅读 ' + data.usage.modelCalls + ' / ' + data.config.dailyModelCalls + ' 次'),
+          button(data.config.paused ? '恢复阅读' : '暂停阅读', function () { send({ op: 'configure', expectedRevision: data.configRevision, config: Object.assign({}, data.config, { paused: !data.config.paused }) }); }),
+          h('details', { className: 'dshmind-set__details' }, [
+            h('summary', null, '阅读节奏与预算'),
+            ['autoScan', 'autoLearn'].map(function (name, i) { return 设置行('information-' + name, i ? '自动整理收获' : '自动收录目录更新', '', h('input', { type: 'checkbox', 'aria-label': i ? '自动整理收获' : '自动收录目录更新', checked: config[name], disabled: busy, onChange: function (event) { patchConfig(name, event.target.checked); } })); }),
+            ['dailyReadChars', 'dailyModelCalls'].map(function (name, i) { var label = i ? '每日辅助阅读次数' : '每日阅读字符上限'; return 设置行('information-' + name, label, '', h('input', { type: 'number', min: 0, max: i ? 100 : 1000000, className: 'dshmind-set__input', 'aria-label': label, value: config[name], disabled: busy, onChange: function (event) { patchConfig(name, Number(event.target.value)); } })); }),
+            h('p', { className: 'dshmind-set__hint' }, '预算按 UTC 日计算，次数含失败尝试。自动整理使用当前 Lead 的模型，在轮末运行；没有可用模型时资料保持待阅读。这些读数不等于 token 或费用。'),
+            draft && draftRevision !== data.configRevision ? h('p', { role: 'status' }, '阅读设置已在别处更新，草稿保留；放弃草稿并核对当前设置后再修改。') : null,
+            button('保存阅读设置', function () { send({ op: 'configure', expectedRevision: draftRevision, config: config }, function () { setDraft(null); }); }, !draft || draftRevision !== data.configRevision),
+            draft ? button('放弃阅读设置修改', function () { setDraft(null); }) : null,
+          ]),
+          h('h4', { className: 'dshmind-set__groupTitle' }, '信息来源'),
+          data.sources.length ? data.sources.map(function (s) { return h('article', { key: s.id, style: { padding: '12px 0', borderBottom: '1px solid var(--dsw-alias-border-l2,#444)' } }, [
+            h('strong', null, s.name), h('p', { className: 'dshmind-set__mono' }, s.path),
+            h('p', { className: 'dshmind-set__hint' }, (s.enabled ? '已连接' : '已停用') + ' · ' + s.purpose + ' · ' + (s.scope.project || '跨项目') + ' · ' + (s.scope.audience === 'lead' ? '仅 Lead' : '共享给 ' + s.scope.roles.join('、')) + (s.scanPending ? ' · 本轮扫描未完，下批续接' : '') + (s.lastError ? ' · ' + s.lastError : '')),
+            button('编辑来源 ' + s.name, function () { setSource({ id: s.id, expectedRevision: data.configRevision, name: s.name, path: s.path, purpose: s.purpose, project: s.scope.project || '', audience: s.scope.audience, roles: s.scope.roles.join(','), relationship: s.scope.relationship, recursive: s.recursive }); }),
+            button((s.enabled ? '停用 ' : '启用 ') + s.name, function () { var v = {}; ['id', 'name', 'path', 'recursive', 'extensions', 'purpose', 'scope'].forEach(function (k) { v[k] = s[k]; }); v.enabled = !s.enabled; send({ op: 'source_save', expectedRevision: data.configRevision, source: v }); }),
+            button('断开 ' + s.name, function () { setConfirmation({ label: '断开来源 ' + s.name + ' 后，其派生资料停止自动使用。', body: { op: 'source_remove', id: s.id, expectedRevision: data.configRevision } }); }),
+          ]); }) : h('p', null, '尚未连接目录。可以连接外部插件导出目录，也可以连接你的本地知识库。'),
+          h('details', { className: 'dshmind-set__details', open: source.id ? true : undefined }, [
+            h('summary', null, source.id ? '编辑信息来源' : '连接一个目录'), sourceInput('来源名称', 'name'), sourceInput('本地目录绝对路径', 'path'),
+            设置行('information-purpose', '阅读用途', '', h('select', { 'aria-label': '阅读用途', value: source.purpose, disabled: busy, onChange: function (e) { patchSource('purpose', e.target.value); } }, ['两者', '探索', '专业'].map(function (v) { return h('option', { value: v }, v); }))),
+            sourceInput('所属项目（留空跨项目）', 'project'),
+            设置行('information-audience', '可用范围', '', h('select', { 'aria-label': '可用范围', value: source.audience, disabled: busy, onChange: function (e) { patchSource('audience', e.target.value); } }, [h('option', { value: 'lead' }, '仅 Lead'), h('option', { value: 'roles' }, 'Lead 与指定岗位') ])),
+            source.audience === 'roles' ? sourceInput('共享岗位（逗号分隔）', 'roles') : null,
+            设置行('information-recursive', '包含子目录', '', h('input', { type: 'checkbox', 'aria-label': '包含子目录', checked: source.recursive, disabled: busy, onChange: function (e) { patchSource('recursive', e.target.checked); } })),
+            h('p', { className: 'dshmind-set__hint' }, '原目录只读，默认收录文字、JSON、网页导出和字幕。隐藏文件、链接及 Mind 自身数据跳过；其他格式不会被当成已阅读。'),
+            button(source.id ? '保存信息来源' : '连接信息来源', saveSource, !source.name.trim() || !source.path.trim() || (source.audience === 'roles' && !source.roles.trim())),
+          ]),
+          button('现在收录一批', function () { send({ op: 'scan' }); }),
+          h('h4', { className: 'dshmind-set__groupTitle' }, '材料与收获'),
+          h('nav', { 'aria-label': '成长记录分类' }, ['materials', 'growth', 'candidates'].map(function (v, i) { return button(['资料', '趣味与成长', '能力候选'][i], function () { setTab(v); setPages([]); 信息参数.offset = 0; refresh(); }, v === tab); })),
+          h('div', { className: 'dshmind-set__actions' }, [h('input', { className: 'dshmind-set__input', 'aria-label': '搜索材料与收获', value: search, onChange: function (e) { setSearch(e.target.value); } }), button('搜索收录记录', function () { 信息参数.query = search; 信息参数.offset = 0; setPages([]); refresh(); })]),
+          page ? h('p', { className: 'dshmind-set__hint' }, page.countMode ? '资料共 ' + page.total + ' 条，本批检查 ' + page.examined + ' 条，命中 ' + page.matched + ' 条' : '共 ' + page.total + ' 条，当前从第 ' + (page.total ? page.offset + 1 : 0) + ' 条开始') : null,
+          page && page.entries.map(function (r) { return h('article', { key: r.id, style: { padding: '14px 0', borderBottom: '1px solid var(--dsw-alias-border-l2,#444)' } }, [
+            h('strong', null, r.title), h('p', { className: 'dshmind-set__hint' }, (stateLabels[r.state] || r.state) + ' · 第 ' + r.revision + ' 版' + (r.stage ? ' · ' + r.stage : '') + (r.processing ? ' · ' + r.processing : '') + (r.sourceStatus === 'disconnected' ? ' · 来源已断开，保留快照' : r.sourceStatus === 'disabled' ? ' · 来源已停用' : '') + (r.usable === false ? ' · 暂不自动使用' : '')),
+            r.text ? h('p', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, r.text) : null,
+            r.method ? h('details', null, [h('summary', null, '方法、条件与试用'), h('p', null, r.method), h('p', null, r.conditions), h('p', null, r.limitations), h('pre', { style: { whiteSpace: 'pre-wrap' } }, JSON.stringify(r.trials, null, 2))]) : null,
+            h('details', null, [h('summary', null, '出处'), h('pre', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, JSON.stringify(r.sources || { source: r.source, name: r.name, coverage: r.coverage }, null, 2)),
+              tab === 'materials' && r.state !== 'withdrawn' ? button('查看原文 ' + r.title, function () { openMaterial(r); }) : null,
+              tab === 'materials' ? r.versions.map(function (v) { return button('查看第 ' + v.revision + ' 版 ' + r.title, function () { openMaterial(r, 0, v.hash, v.revision); }, r.state === 'withdrawn'); }) : null,
+            ]),
+            tab !== 'materials' ? [button('查看修订与试用 ' + r.title, function () { openMaterial(r); }), button('纠正 ' + r.title, function () { setEdit({ id: r.id, revision: r.revision, text: r.text, reason: '' }); }),
+              button('让它淡去 ' + r.title, function () { send({ op: 'revise', id: r.id, revision: r.revision, state: 'dormant', reason: '用户选择暂时淡去' }); }),
+              button('停止使用 ' + r.title, function () { send({ op: 'revise', id: r.id, revision: r.revision, state: 'withdrawn', reason: '用户选择停止使用' }); }),
+              r.state === 'dormant' || r.state === 'withdrawn' ? button('恢复使用 ' + r.title, function () { send({ op: 'revise', id: r.id, revision: r.revision, state: 'active', reason: '用户明确恢复此记录' }); }) : null,
+            ] : [r.state !== 'withdrawn' ? button('撤回资料 ' + r.title, function () { send({ op: 'forget', id: r.id, revision: r.revision }); }) :
+              button('删除资料快照 ' + r.title, function () { setConfirmation({ label: '删除本地资料快照及派生收获；原始文件、宿主对话和备份分别管理。', body: { op: 'purge', id: r.id, revision: r.revision } }); }),
+              r.state !== 'withdrawn' ? button('分享资料 ' + r.title, function () { setEdit({ share: true, id: r.id, revision: r.revision, text: '', reason: '', roles: '' }); }) : null],
+          ]); }),
+          page && !page.total ? h('p', null, '这里还没有记录。没有收获时可以不写，记录数不代表成长。') : null,
+          h('div', { className: 'dshmind-set__actions' }, [button('上一批收录记录', function () { 信息参数.offset = pages[pages.length - 1]; setPages(pages.slice(0, -1)); refresh(); }, !pages.length), button('下一批收录记录', function () { setPages(pages.concat([信息参数.offset])); 信息参数.offset = page.nextOffset; refresh(); }, !page || page.nextOffset === null)]),
+          preview ? h('details', { open: true, className: 'dshmind-set__details' }, [h('summary', null, '原文预览 · ' + preview.title + ' · 第 ' + preview.revision + ' 版'),
+            h('pre', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '360px', overflowY: 'auto' } }, preview.text),
+            h('p', { className: 'dshmind-set__hint' }, preview.coverage), button('继续预览原文', function () { openMaterial(preview, preview.nextOffset, preview.hash, preview.format === 'growth-history' ? null : preview.revision); }, preview.nextOffset === null), button('关闭原文预览', function () { setPreview(null); })]) : null,
+          edit ? h('div', { className: 'dshmind-set__rows' }, [
+            h('h4', null, edit.share ? '明确分享所选资料' : '纠正这条收获'),
+            edit.share ? 设置行('information-share-roles', '允许使用的岗位', '分享会创建一份跨项目副本，请先核对原文中的私人内容。', h('input', { 'aria-label': '允许使用的岗位', className: 'dshmind-set__input', value: edit.roles, onChange: function (e) { setEdit(Object.assign({}, edit, { roles: e.target.value })); } })) :
+              h('textarea', { 'aria-label': '纠正后的收获', className: 'dshmind-set__persona', value: edit.text, onChange: function (e) { setEdit(Object.assign({}, edit, { text: e.target.value })); } }),
+            设置行('information-correction-reason', '说明原因', '', h('input', { 'aria-label': '收获修订或分享原因', className: 'dshmind-set__input', value: edit.reason, onChange: function (e) { setEdit(Object.assign({}, edit, { reason: e.target.value })); } })),
+            button(edit.share ? '确认分享所选资料' : '保存收获纠正', function () { send(edit.share ? { op: 'share', id: edit.id, revision: edit.revision, reason: edit.reason, scope: { project: null, audience: 'roles', roles: edit.roles.split(/[,，]/).map(function (s) { return s.trim(); }).filter(Boolean), relationship: null } } :
+              { op: 'revise', id: edit.id, revision: edit.revision, text: edit.text, reason: edit.reason }, function () { setEdit(null); }); }, !edit.reason.trim() || (!edit.share && !edit.text.trim()) || (edit.share && !edit.roles.trim())),
+            button('取消收获编辑', function () { setEdit(null); }),
+          ]) : null,
+          h('details', { className: 'dshmind-set__details' }, [h('summary', null, '关联同一段关系的会话'), h('p', { className: 'dshmind-set__hint' }, '默认各会话独立。你确认当前会话属于同一人或关系时，可填写稳定标识；不依据昵称自动合并。'),
+            h('input', { 'aria-label': '稳定关系标识', className: 'dshmind-set__input', value: relationship, onChange: function (e) { setRelationship(e.target.value); } }),
+            button('关联当前会话', function () { var id = relationshipSession(); if (id) send({ op: 'relationship', session: id, relationship: relationship, expectedRevision: data.configRevision }); }, !relationship.trim()),
+            button('恢复当前会话独立范围', function () { var id = relationshipSession(); if (id) send({ op: 'relationship', session: id, relationship: null, expectedRevision: data.configRevision }); }),
+          ]),
+          h('details', { className: 'dshmind-set__details' }, [h('summary', null, '最近阅读状态'), data.jobs.map(function (j) { return h('p', { key: j.id }, j.at + ' · ' + ({ running: '阅读中', completed: '已整理', failed: '未完成' }[j.state] || j.state) + (j.partial ? ' · 部分材料' : '') + (j.error ? ' · ' + j.error : '') + (j.records ? ' · 留下 ' + j.records.length + ' 条收获' : '')); })]),
+        ]) : null,
+        confirmation ? h('div', { role: 'alert', className: 'dshmind-set__notice' }, [h('p', null, confirmation.label), button('确认这次操作', function () { send(confirmation.body, function () { setConfirmation(null); }); }), button('取消这次操作', function () { setConfirmation(null); })]) : null,
+        notice ? h('p', { role: 'status', className: 'dshmind-set__hint' }, notice) : null,
+      ]);
+    }
+
     function 心智设置(props) {
       var close = props && typeof props.close === 'function' ? props.close : null;
       // ⚠️ 读数来自**模块级 store**（由 `apply` 的裸 setInterval 轮询喂），**不来自 effect**：
@@ -5337,6 +5492,7 @@ window.__ModuleLoader__.load({
           h('button', { key: 'read', type: 'button', className: 'dshmind-set__btn', disabled: refreshing[0] || 提示.保存中 || 调度提示.saving || 人设提示.saving, onClick: 手动刷新 }, refreshing[0] ? '读取中…' : '重新读取'),
         ]),
         人设块,
+        h(信息成长设置, { key: 'information' }),
         h('section', { key: 'policy', className: 'dshmind-set__section', 'data-dshmind': 'policy-settings', 'aria-labelledby': 'dshmind-policy-title', 'aria-busy': 提示.保存中 }, [
           h('h3', { key: 'title', id: 'dshmind-policy-title', className: 'dshmind-set__subtitle' }, '运行与审批'),
           未接入块, 坏值块,
