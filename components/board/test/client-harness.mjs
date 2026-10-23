@@ -1928,16 +1928,17 @@ export async function runHarness() {
       const 点规则 = 基础规则体('dshmind-set__dot');
       passed.push(check(/width\s*:/.test(点规则) && /height\s*:/.test(点规则),
         '⑬ 设置页态点有自己的基础规则且带尺寸（不再借看板的 .dshmind-dot）', 点规则.slice(0, 80)));
-      // ⑬b 分区边界：调度授权区有 section 分隔规则与 subtitle 标题层级，
+      // ⑬b 分区边界：各模块使用独立圆角边框卡片与 subtitle 标题层级，
       //     且 DOM **真的挂上**这些类（只验 CSS 在源里，DOM 不挂照样绿 —— 空转）。
       const 全元素 = collect(常驻.renderer.tree, { skipStyle: true }).elements;
       const 调度节 = 全元素.find((el) => el.props['data-dshmind'] === 'delegation-settings');
       const 副题 = 全元素.find((el) => el.type === 'h3' && String(el.props.children).indexOf('Lead 调度授权') >= 0);
-      passed.push(check(基础规则体('dshmind-set__section').indexOf('border-top') >= 0
+      passed.push(check(/border\s*:/.test(基础规则体('dshmind-set__section'))
+        && /border-radius\s*:/.test(基础规则体('dshmind-set__section'))
         && 基础规则体('dshmind-set__subtitle') !== ''
         && !!调度节 && String(调度节.props.className || '').split(/\s+/).indexOf('dshmind-set__section') >= 0
         && !!副题 && String(副题.props.className || '').split(/\s+/).indexOf('dshmind-set__subtitle') >= 0,
-        '⑬ 调度授权区有看得见的分区边界（section 分隔线 + subtitle 标题层级，CSS 与 DOM 两面都验）'));
+        '⑬ 调度授权区有看得见的卡片边界（section 圆角边框 + subtitle 标题层级，CSS 与 DOM 两面都验）'));
       // ⑬c 长文本字段行走上下排变体：输入框吃满行宽，不再被右栏定宽挤断。
       const 字段框 = 全元素.filter((el) => el.type === 'input'
         && String(el.props['aria-label'] || '').indexOf('授权') === 0);

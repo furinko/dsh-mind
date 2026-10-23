@@ -1631,10 +1631,10 @@ window.__ModuleLoader__.load({
      * 并按 `style[data-plugin='<id>']` 判重，所以热重载不会叠出第二份。
      */
     var SETTINGS_CSS = [
-      '.dshmind-set__{box-sizing:border-box;width:100%;max-width:880px;padding:4px 0 20px;color:var(--dsw-alias-label-primary,#1a2233);font:13px/1.6 var(--ds-font-family-sans,system-ui,sans-serif)}',
-      '.dshmind-set__ *{box-sizing:border-box}.dshmind-set__header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:24px}',
+      '.dshmind-set__{box-sizing:border-box;width:100%;min-width:0;max-width:880px;padding:4px 0 20px;color:var(--dsw-alias-label-primary,#1a2233);font:13px/1.6 var(--ds-font-family-sans,system-ui,sans-serif)}',
+      '.dshmind-set__ *{box-sizing:border-box}.dshmind-set__header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:24px}.dshmind-set__header>div{min-width:0;flex:1}.dshmind-set__header>button{flex:0 0 auto}',
       '.dshmind-set__title{margin:0 0 4px;font-size:18px;line-height:26px;font-weight:600}.dshmind-set__lede{margin:0;color:var(--dsw-alias-label-secondary,#61666b);font-size:13px}',
-      '.dshmind-set__section{margin:0 0 28px;padding-top:20px;border-top:1px solid var(--dsw-alias-border-l2,#d3dcea)}',
+      '.dshmind-set__section{margin:0 0 18px;padding:20px;border:1px solid var(--dsw-alias-border-l2,#d3dcea);border-radius:12px;background:var(--dsw-alias-bg-layer-1,#fff)}',
       '.dshmind-set__subtitle{font-size:15px;line-height:24px;font-weight:600;margin:0 0 6px}.dshmind-set__groupTitle{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:22px 0 0;font-size:13px;font-weight:600}',
       '.dshmind-set__rows{display:flex;flex-direction:column}.dshmind-set__row{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:15px 0;border-bottom:1px solid var(--dsw-alias-border-l2,#d3dcea)}',
       '.dshmind-set__texts{flex:1 1 auto;min-width:0}.dshmind-set__label{display:block;margin-bottom:3px;font-size:14px;font-weight:500;color:var(--dsw-alias-label-primary,#1a2233)}',
@@ -1658,7 +1658,7 @@ window.__ModuleLoader__.load({
       '.dshmind-set__details .dshmind-set__row{align-items:flex-start;padding:9px 0}.dshmind-set__details .dshmind-set__control{flex:1 1 55%;overflow-wrap:anywhere}.dshmind-set__details .dshmind-set__label{font-size:12px}',
       '.dshmind-set__status{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:400;color:var(--dsw-alias-label-secondary,#61666b)}.dshmind-set__dot{display:inline-block;width:7px;height:7px;border-radius:50%;flex:0 0 auto}',
       '.dshmind-set__foot{display:flex;align-items:center;gap:12px;justify-content:space-between;padding-top:16px;border-top:1px solid var(--dsw-alias-border-l2,#d3dcea)}.dshmind-set__foot p{margin:0}.dshmind-set__mono{font-family:var(--ds-font-family-code,ui-monospace,monospace);overflow-wrap:anywhere}',
-      '@media(max-width:560px){.dshmind-set__row{align-items:flex-start;flex-direction:column;gap:10px}.dshmind-set__row .dshmind-set__control{width:100%}.dshmind-set__select{width:100%}.dshmind-set__header{gap:12px}.dshmind-set__actions{gap:8px}.dshmind-set__editState{flex-basis:100%}.dshmind-set__details .dshmind-set__control{flex:auto}.dshmind-set__groupTitle{align-items:flex-start;flex-wrap:wrap}}',
+      '@media(max-width:560px){.dshmind-set__section{padding:16px}.dshmind-set__row{align-items:flex-start;flex-direction:column;gap:10px}.dshmind-set__row .dshmind-set__control{width:100%}.dshmind-set__select{width:100%}.dshmind-set__header{gap:12px}.dshmind-set__actions{gap:8px}.dshmind-set__editState{flex-basis:100%}.dshmind-set__details .dshmind-set__control{flex:auto}.dshmind-set__groupTitle{align-items:flex-start;flex-wrap:wrap}}',
     ].join('');
 
     /** 注入设置页样式的 `<style>` 标记（判重用），与宿主里 `installStyle` 的做法同源。 */
