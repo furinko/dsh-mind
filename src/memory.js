@@ -56,6 +56,8 @@ const 内部通道 = Symbol('dsh-mind-memory-internal');
 const 反馈提交点 = Symbol('dsh-mind-feedback-commit-guard');
 const 知识观察帧 = Symbol('dsh-mind-request-knowledge-read');
 const 自动连续性提交 = Symbol('dsh-mind-automatic-continuity');
+const 收录提交 = Symbol('dsh-mind-intake-commit');
+const 个体提交 = Symbol('dsh-mind-personal-memory');
 
 /** 披露正则编译缓存（#disclosureHits 用，按正则源键控，带上限防长胖）。 */
 const 披露正则缓存 = new Map();
@@ -68,6 +70,7 @@ const isStateRow = (row) => typeof row?.指向 === 'string' && typeof row?.追�
 const continuityTombstone = (entry, clock) => entry.连续性 ? { 自动连续性墓碑: {
   主题哈希: digest(entry.自动连续性?.主题 ?? `${entry.连续性.类别}/${entry.连续性.范围 === '部署' ? '*' : entry.项目}/${entry.连续性.主题}`),
   幂等键: entry.幂等键, 于: clock.ms(), 项目: entry.项目, 范围: entry.连续性.范围,
+  ...(entry.数据归属?.会话 && entry.数据归属.范围?.relationship !== null ? { 归属会话: digest(entry.数据归属.会话) } : {}),
 } } : {};
 
 /**
@@ -223,6 +226,8 @@ export class MemoryService {
    */
   async remember(input) {
     const kind = input.类;
+    if (input.收录 !== undefined && input[收录提交] !== true) throw new InvalidBody('收录来源凭据只能由已核对的正式收录通道登记。');
+    if (input.数据归属 !== undefined && input[个体提交] !== true && input[收录提交] !== true) throw new InvalidBody('个人记忆归属由真实主体入口确定，不接受自报归属。');
     const 连续性 = normalizeContinuity(input.连续性);
     if (input.自动连续性 !== undefined && !input[自动连续性提交]) throw new InvalidBody('自动连续性来源仅由宿主采集通道登记。');
     const 协作反馈 = normalizeCollaborationFeedback(input.协作反馈);
@@ -336,6 +341,8 @@ export class MemoryService {
         标签: input.标签 ?? [],
         ...(连续性 === undefined ? {} : { 连续性 }),
         ...(input.自动连续性 === undefined ? {} : { 自动连续性: input.自动连续性 }),
+        ...(input.收录 === undefined ? {} : { 收录: input.收录, 数据归属: { 主体: 'Lead', 范围: input.收录.scope } }),
+        ...(input.数据归属 === undefined ? {} : { 数据归属: input.数据归属 }),
         ...(协作反馈 === undefined ? {} : { 协作反馈 }),
         ...(知识说明 === undefined ? {} : { 知识说明 }),
         状态: '有效',
@@ -349,7 +356,7 @@ export class MemoryService {
       // R10（审查 2026-10-16 · 提交点 fence）：带引用的写在最终落线点复验引用——锁外
       // 那次校验与本次提交之间完成的 purge（状态行已入账、源行已抹）在这里必被 fold
       // 视图看见：悬空/待删除引用 ⇒ 本条不落线。审查实证的并发窗口就此关闭。
-      ...(来源引用.length > 0 || input[反馈提交点] || input[自动连续性提交] ? { 提交点检查: async () => { if (来源引用.length > 0) await this.#verifyRefs(来源引用); if (input[反馈提交点]) await input[反馈提交点](); if (input[自动连续性提交]) await input[自动连续性提交](); } } : {}),
+      ...(来源引用.length > 0 || input[反馈提交点] || input[自动连续性提交] || input.收录检查 || input.归属检查 ? { 提交点检查: async () => { if (来源引用.length > 0) await this.#verifyRefs(来源引用); if (input[反馈提交点]) await input[反馈提交点](); if (input[自动连续性提交]) await input[自动连续性提交](); if (input.收录检查) await input.收录检查(); if (input.归属检查) await input.归属检查(); } } : {}),
     });
     await this.audit.append({
       动作: '状态变更',
@@ -363,6 +370,61 @@ export class MemoryService {
     return { id: row.id, 类: kind, 归属: scope, 账本: file, 项目, 岗位: row.岗位, ...(row.幂等命中 ? { 幂等命中: true } : {}) };
   }
 
+  /** Intake is a producer of the four existing memory kinds, never a parallel knowledge ledger. */
+  async rememberPersonal(input) {
+    const ownership = this.information?.org.dataOwnership;
+    if (input.subject?.kind !== 'Lead' || !ownership) return this.remember(input);
+    const stamp = await ownership.stamp(input.subject.id);
+    const self = input.连续性?.类别 === '人格' && input.连续性?.依据 === '自省';
+    const scope = { project: input.连续性?.范围 === '部署' ? null : input.项目 ?? null, audience: 'lead', roles: [],
+      relationship: self ? null : await ownership.relationship(input.subject.id) };
+    return this.remember({ ...input, 数据归属: { 主体: 'Lead', 会话: input.subject.id, 范围: scope }, [个体提交]: true,
+      归属检查: async () => { if (await ownership.stamp(input.subject.id) !== stamp) throw new Denied('个人记忆关系变化', '写入期间关系归属变化，请重新核对。'); } });
+  }
+  async ownedReadable(entry, subject, project) {
+    if (!entry.数据归属 || entry.收录) return true;
+    if (subject?.kind === '主权者') return true;
+    const ownership = this.information?.org.dataOwnership; if (!ownership) return false;
+    const scope = entry.数据归属.范围;
+    const current = scope?.relationship !== null && entry.数据归属.会话 ? { ...scope, relationship: await ownership.relationship(entry.数据归属.会话) } : scope;
+    return ownership.allows(current, subject, project ?? entry.项目);
+  }
+  async tombstoneReadable(barrier, subject) {
+    if (!barrier.归属会话 || subject?.kind === '主权者') return true;
+    if (subject?.kind !== 'Lead' || !this.information) return false;
+    const bindings = (await this.information.load()).bindings;
+    return (bindings[barrier.归属会话] ?? barrier.归属会话) === (bindings[digest(subject.id)] ?? digest(subject.id));
+  }
+  async rememberIntake({ subject, record, generation, project, role, body, check }) {
+    if (!['Lead', '主权者'].includes(subject?.kind) || typeof check !== 'function') throw new Denied('正式收录写入', '需要已核对来源的Lead或人侧入口。');
+    await check();
+    const 类 = record.type === 'candidate' || record.kind === '知识' ? '知识' : record.kind === '共同回忆' ? '经历' : '偏好';
+    const 通用 = 类 === '知识' && record.scope.project === null && record.scope.relationship === null && ['auto', 'roles'].includes(record.scope.audience);
+    return this.remember({ subject, 类, 标题: record.title, 内容: body, 项目: 通用 ? '通用' : record.scope.project ?? project,
+      岗位: 类 === '知识' ? role : 'Lead', 标签: ['信息收录', ...(record.type === 'candidate' ? ['能力候选'] : [record.kind])],
+      来源: { 谁: subject.id, 怎么知道: `实际阅读回执与原文引文已核对；收录回执${record.id}；不认证语义正确或能力掌握` },
+      依据: 'Lead从已连接来源提炼，按项目与关系边界纳入现有记忆体系',
+      ...(类 === '偏好' ? { 连续性: { 类别: '人格', 主题: record.title.slice(0, 80), 依据: '自省', 范围: record.scope.project === null ? '部署' : '项目' } } : {}),
+      ...(类 === '知识' && record.type === 'candidate' ? { 知识说明: { 适用条件: [record.conditions.slice(0, 512)], 已知反例: [record.limitations.slice(0, 512)] } } : {}),
+      收录: { version: 1, receipt: record.id, generation, scope: record.scope, refs: record.sources, kind: record.kind, type: record.type },
+      收录检查: check, 幂等键: `intake:${record.id}:${generation}:${role}`, [内部通道]: true, [收录提交]: true,
+    });
+  }
+  async intakeEntry(id, { subject, project, inspect = false, mutation = false } = {}) {
+    let entry = await this.#folded(id); const seen = new Set();
+    for (let n = 0; entry?.状态 === '被推翻' && n < 16; n++) {
+      if (seen.has(entry.id)) throw new Fault('INTAKE_LINEAGE_INVALID', '正式记忆替代链循环。'); seen.add(entry.id);
+      const replacement = entry.历史.filter(h => h.追加 === '推翻').at(-1)?.新条目;
+      if (!replacement) break; entry = await this.#folded(replacement);
+    }
+    if (!entry?.收录 || entry.状态 === '物理删除') return null;
+    await this.policy.check({ subject, action: 'read', target: memoryTarget(entry.类, entry.归属, entry.项目) });
+    if (!(inspect && subject?.kind === '主权者') && !await this.information?.nativeReadable(entry, { subject, 项目: project, mutation })) return null;
+    return structuredClone(entry);
+  }
+  async intakeActive(id) { const entry = await this.#folded(id); return !!entry && !是否已被否(entry) && entry.状态 !== '已降权' && entry.状态 !== '物理删除'; }
+  async intakeReferences(receipt) { return [...(await this.#foldAll()).values()].filter(e => e.收录?.receipt === receipt && e.状态 !== '物理删除').map(e => ({ id: e.id, 类: e.类, 项目: e.项目, 归属: e.归属 })); }
+
   /** 已核对用户原文的宿主提炼通道；与普通偏好共账、共策略和生命周期。 */
   async captureContinuity({ subject, project, item, proof, known = [], check }) {
     if (subject?.kind !== 'Lead' || typeof check !== 'function' || !['人格', '用户偏好'].includes(item?.kind)
@@ -372,13 +434,14 @@ export class MemoryService {
         || !Array.isArray(proof) || !proof.length || proof.length > 4 || proof.some(p => p.role !== 'user'
           || !/^[a-f0-9]{64}$/.test(p.hash) || !Number.isSafeInteger(p.seq) || typeof p.session !== 'string'
           || !Number.isFinite(p.at) || typeof p.quote !== 'string' || !p.quote.trim() || p.quote.length > 400)) throw new InvalidBody('自动连续性需要有界明确用户来源。');
+    const relationship = this.information?.org.dataOwnership ? await this.information.org.dataOwnership.relationship(subject.id) : null;
     const topic = `${item.kind}/${item.scope === '部署' ? '*' : project}/${item.id}`;
-    const key = `continuity:${digest(canonical({ topic, proof: proof.map(p => [p.session, p.seq, p.hash]) }))}`;
+    const key = `continuity:${digest(canonical({ topic, relationship, proof: proof.map(p => [p.session, p.seq, p.hash]) }))}`;
     const file = this.layout.memoryLog(DIR.跨项目, '偏好');
     let replaced = [];
     const permission = entry => ({ subject, action: 'write', target: memoryTarget('偏好', entry.归属, entry.项目),
       context: { id: entry.id, 状态: item.state === '停止' ? 'invalid' : '推翻', task: null } });
-    const result = await this.remember({ subject, 类: '偏好', 项目: project, 内容: item.text,
+    const result = await this.rememberPersonal({ subject, 类: '偏好', 项目: project, 内容: item.text,
       来源: { 谁: subject.id, 怎么知道: '从宿主已接纳用户原文自动提炼；原文片段及事件引用保存在条目，语义判断仍可更正' },
       连续性: { 类别: item.kind, 主题: item.id, 依据: '明确表达', 范围: item.scope },
       自动连续性: { 版本: 1, 主题: topic, 来源: proof, 操作: item.state },
@@ -387,9 +450,14 @@ export class MemoryService {
         await check();
         const rows = await readJsonl(file);
         const all = fold(rows);
-        const barriers = rows.map(r => r.自动连续性墓碑).filter(b => b?.主题哈希 === digest(topic));
+        const barriers = [];
+        for (const row of rows) {
+          const b = row.自动连续性墓碑;
+          if (b?.主题哈希 === digest(topic) && await this.tombstoneReadable(b, subject)) barriers.push(b);
+        }
         if (barriers.some(b => b.幂等键 === key || !Number.isFinite(b.于) || !proof.some(p => p.at > b.于))) throw new Fault('CONTINUITY_OLDER_SOURCE', '旧来源不能恢复正式停用或删除的协作记忆。');
-        const same = all.filter(e => e.自动连续性?.主题 === topic);
+        const same = [];
+        for (const entry of all) if (entry.自动连续性?.主题 === topic && await this.ownedReadable(entry, subject, project)) same.push(entry);
         const latest = same.at(-1);
         const newer = (p, old) => p.session === old.session ? p.seq > old.seq : Number.isFinite(old.at) && p.at > old.at;
         if (latest && !proof.some(p => latest.自动连续性.来源.every(old => newer(p, old)))) throw new Fault('CONTINUITY_OLDER_SOURCE', '补读历史不能覆盖较新的协作记忆。');
@@ -424,9 +492,13 @@ export class MemoryService {
     const file = this.layout.memoryLog(DIR.跨项目, '偏好');
     const rows = await this.#rows(file);
     const applicable = (scope, p) => scope === '部署' || p === project;
-    const barriers = rows.map(r => r.自动连续性墓碑).filter(b => b && applicable(b.范围, b.项目)).map(b => b.于);
+    const barriers = [];
+    for (const row of rows) {
+      const b = row.自动连续性墓碑;
+      if (b && applicable(b.范围, b.项目) && await this.tombstoneReadable(b, subject)) barriers.push(b.于);
+    }
     for (const entry of fold(rows)) {
-      if (!entry.连续性 || !applicable(entry.连续性.范围, entry.项目)) continue;
+      if (!entry.连续性 || !applicable(entry.连续性.范围, entry.项目) || !await this.ownedReadable(entry, subject, project)) continue;
       if (entry.自动连续性?.操作 === '停止') barriers.push(...entry.自动连续性.来源.map(p => p.at));
       if (!entry.自动连续性 && 是否已被否(entry) && !entry.历史.some(h => h.自动连续性墓碑)) barriers.push(...entry.历史.map(h => Date.parse(h.追于) + 999));
     }
@@ -535,6 +607,8 @@ export class MemoryService {
   async promoteCrossProject(id, spec) {
     const entry = await this.#folded(id);
     if (!entry) throw new InvalidBody(`没有这条记忆：${id}`);
+    if (!await this.ownedReadable(entry, spec.subject, entry.项目)) throw new Denied('个人记忆归属', '不能晋升其他关系的记忆。');
+    if (entry.收录 && !await this.information?.nativeReadable(entry, { subject: spec.subject, 项目: entry.项目, mutation: true })) throw new Denied('记忆归属', '不能晋升其他关系的记忆。');
     if (entry.类 !== '知识') throw new InvalidBody('只有知识可以打岗位标签；经历/偏好/作答不跨项目。');
     if (Object.hasOwn(entry, '知识说明') && normalizeKnowledgeContext(entry.知识说明) === undefined) throw new InvalidBody('已存知识说明不可判，不能当作未设说明扩散。');
     // P2（全面审查 2026-10-17）：岗位标签是跨项目知识的「对谁可复用」边界，不能为空。
@@ -817,9 +891,17 @@ export class MemoryService {
         }
       }
       const result = unknown();
+      const owned = (snapshot ? [...snapshot.byId.values()] : fold(rows)).some(entry => requested.includes(entry.id) && (entry.收录 || entry.数据归属));
+      const intakeStamp = owned ? await this.information?.visibilityStamp() : undefined;
+      if (frame && intakeStamp !== undefined) {
+        if (frame.intakeStamp !== undefined && frame.intakeStamp !== intakeStamp) return unavailable();
+        frame.intakeStamp = intakeStamp;
+      }
       if (frame) for (const id of requested) frame.requestedEvidence.add(id);
       for (const entry of snapshot ? requested.map((id) => snapshot.byId.get(id)).filter(Boolean) : fold(rows)) {
         if (!result.has(entry.id) || entry.类 !== '知识' || !memoryEntryVisible(entry, { 项目, 读者: actor }) || !记忆条目在读域(entry, 域) || 是否已被否(entry) || ['待复验', '说明不可判'].includes(knowledgeReviewStatus(entry, now))) continue;
+        if (!await this.ownedReadable(entry, actor, 项目)) continue;
+        if (entry.收录 && !await this.information?.nativeReadable(entry, { subject: actor, 项目 })) continue;
         try { this.#feedbackRead(actor, memoryTarget('知识', entry.归属, entry.项目), { id: entry.id, 类: '知识' }); } catch { continue; }
         let version = frame?.versions.get(entry.id);
         if (!version) {
@@ -832,6 +914,7 @@ export class MemoryService {
         if (frame) frame.confirmedEvidence.add(entry.id);
       }
       // 读取期间变化立即降为未知；之后的变化由查询重新裁剪，不宣称跨账本原子性。
+      if (intakeStamp !== undefined && intakeStamp !== await this.information?.visibilityStamp()) return unavailable();
       if (!frame) for (const source of sources) if (await readTextOrNull(source.file) !== source.text) return unknown();
       if (this.policy.decideCurrentSync(permission)?.verdict !== 'allow') return unavailable();
       if (!frame) for (const entry of fold(rows)) if (result.get(entry.id)?.状态 === '可核来源版本') {
@@ -885,6 +968,12 @@ export class MemoryService {
    * @returns {Promise<{ 命中: object[], 口径: object, 条目: object[], 说明?: string }>}
    */
   async query(query = {}) {
+    const guard = {}; const result = await this.#query(query, guard);
+    if (guard.stamp !== undefined && guard.stamp !== await this.information?.visibilityStamp()) throw new Denied('记忆读取范围变化', '来源、关系或可用状态在读取期间变化，请重新读取。');
+    return guard.unavailable ? { ...result, 来源警示: '收录来源状态不可用，相关派生记忆未提供；原有其他记忆照常读取' } : result;
+  }
+  async #query(query = {}, intakeGuard = {}) {
+    if (query.个人经历 !== undefined && (query.个人经历 !== true || query.类 !== '经历' || !['Lead', '主权者'].includes(query.subject?.kind))) throw new InvalidBody('个人经历筛选仅供Lead或主权者读取经历。');
     if (query.连续性类别 !== undefined && (!LEAD_MEMORY_KINDS.includes(query.连续性类别) || !['Lead', '主权者'].includes(query.subject?.kind))) throw new InvalidBody('连续性类别仅供Lead或主权者按三类连续性读取。');
     if (query.精确岗位 !== undefined && (typeof query.精确岗位 !== 'boolean' || (query.精确岗位 && (typeof query.岗位 !== 'string' || !query.岗位.trim())))) {
       throw new InvalidBody('精确岗位必须为布尔值；精确匹配需要非空岗位。');
@@ -925,6 +1014,8 @@ export class MemoryService {
       }
     }
     let entries = fold(rows).filter((entry) => entry.状态 !== '物理删除');
+    if (entries.some(e => e.收录 || e.数据归属)) try { intakeGuard.stamp = await this.information?.visibilityStamp(); }
+    catch { intakeGuard.unavailable = true; }
     if (query.连续性类别 !== undefined) {
       entries = entries.filter(entry => applicableContinuity(entry, query.项目, query.连续性类别));
       const all = entries.some(entry => (entry.来源引用 ?? []).some(ref => /^(know|exp|pref|answ)-/.test(ref)))
@@ -936,10 +1027,14 @@ export class MemoryService {
     }
     const visible = [];
     for (const entry of entries) {
+      if (query.个人经历 && entry.数据归属?.主体 !== 'Lead') continue;
+      if (intakeGuard.unavailable && entry.数据归属) continue;
       // 归档作答的可读性矩阵（§7 · 2026-10-13 审查 P1-9 修复）：默认不召回；显式要看时
       // 还必须自报读者身份且在可读名单内——此前第二个 if 依赖 `query.读者` 存在才检查，
       // 「显式:true 但不传读者」会让整道检查静默跳过（fail-open）。
       if (!memoryEntryVisible(entry, query)) continue;
+      if (!await this.ownedReadable(entry, query.subject ?? query.读者, query.项目)) continue;
+      if (entry.收录 && (intakeGuard.unavailable || !await this.information?.nativeReadable(entry, query))) continue;
       visible.push(knowledgeReviewProjection(entry, now));
     }
 
@@ -1081,6 +1176,8 @@ export class MemoryService {
     });
     const entry = await this.#folded(spec.id);
     if (!entry) throw new InvalidBody(`没有这条记忆：${spec.id}`);
+    if (!await this.ownedReadable(entry, spec.subject, entry.项目)) throw new Denied('个人记忆归属', '不能读取其他关系的血缘。');
+    if (entry.收录 && !await this.information?.nativeReadable(entry, { subject: spec.subject, 项目: entry.项目 === '通用' ? undefined : entry.项目, 含失效: true })) throw new Denied('记忆归属', '当前主体不能读取该来源与关系的血缘。');
     if (entry.连续性 && !['Lead', '主权者'].includes(spec.subject?.kind)) throw new Denied('Lead连续性 · 私有读面', '该连续性条目仅向Lead或主权者提供。');
     const index = await this.#lineageIndex();
     const closure = lineageClosure(index, spec.id);
@@ -1186,6 +1283,8 @@ export class MemoryService {
     if (feedback) spec = feedback.args;
     const entry = await this.#folded(id);
     if (!entry) throw new InvalidBody(`没有这条记忆：${id}`);
+    if (!await this.ownedReadable(entry, spec.subject, entry.项目)) throw new Denied('个人记忆归属', '不能更正其他关系的记忆。');
+    if (entry.收录 && !await this.information?.nativeReadable(entry, { subject: spec.subject, 项目: entry.项目 === '通用' ? undefined : entry.项目, mutation: true })) throw new Denied('记忆归属', '当前主体不能更正该关系的记忆。');
     if (replacementContinuity !== undefined && entry.类 !== '偏好') throw new InvalidBody('连续性只能随偏好替代条目提供。');
     if (replacementFeedback !== undefined && (entry.类 !== '偏好' || (replacementContinuity ?? entry.连续性)?.类别 !== '协作教训')) throw new InvalidBody('协作反馈只能随协作教训偏好替代条目提供。');
     if (entry.连续性 && !['Lead', '主权者'].includes(spec.subject?.kind)) throw new Denied('Lead连续性 · 处置身份', '仅Lead或主权者可更正连续性资料。');
@@ -1212,6 +1311,8 @@ export class MemoryService {
       ...(replacementContinuity === undefined && entry.连续性 === undefined ? {} : { 连续性: replacementContinuity ?? entry.连续性 }),
       ...(replacementFeedback === undefined ? {} : { 协作反馈: replacementFeedback }),
       ...(知识说明 === undefined ? {} : { 知识说明 }),
+      ...(entry.收录 ? { 收录: entry.收录, [收录提交]: true } : {}),
+      ...(entry.数据归属 ? { 数据归属: entry.数据归属, [个体提交]: true } : {}),
       派生自: id,
       // 推翻是「追加新条目 + 旧条目入账」双动作：新条目那次 remember 也过策略引擎，
       // 任务上下文必须跟着透传，否则成员任务内推翻会死在内部那次写入上（半动作）。
@@ -1278,6 +1379,8 @@ export class MemoryService {
     }
     const entry = await this.#folded(id);
     if (!entry) throw new InvalidBody(`没有这条记忆：${id}`);
+    if (!await this.ownedReadable(entry, spec.subject, entry.项目)) throw new Denied('个人记忆归属', '不能删除其他关系的记忆。');
+    if (entry.收录 && !await this.information?.nativeReadable(entry, { subject: spec.subject, 项目: entry.项目, mutation: true })) throw new Denied('记忆归属', '不能删除其他关系的记忆。');
     if (entry.连续性 && !['Lead', '主权者'].includes(spec.subject?.kind)) throw new Denied('Lead连续性 · 处置身份', '仅Lead或主权者可删除连续性资料。');
     await this.policy.check({
       subject: spec.subject,
@@ -1454,6 +1557,8 @@ export class MemoryService {
   async readableBy(id, spec) {
     const entry = await this.#folded(id);
     if (!entry) return { 可读: false, 原因: '没有这条记忆' };
+    if (!await this.ownedReadable(entry, spec.读者, spec.项目)) return { 可读: false, 原因: '个人记忆关系范围不可读' };
+    if (entry.收录 && !await this.information?.nativeReadable(entry, { subject: spec.读者, 项目: spec.项目 })) return { 可读: false, 原因: '来源或关系范围不可读' };
     if (entry.连续性 && !['Lead', '主权者'].includes(spec.读者?.kind)) return { 可读: false, 原因: 'Lead连续性仅向Lead或主权者提供' };
     if (entry.类 !== '作答' || entry.归档 !== true) return { 可读: true, 原因: '未归档条目对所有在编主体可读' };
     if (ANSWER_READERS.includes(spec.读者?.kind) || spec.读者?.roleId === '复核员') return { 可读: true, 原因: `${spec.读者.kind}${spec.读者.roleId === '复核员' ? '/复核员' : ''} 在归档后仍可读（会审分歧清单必须对复核员可见）` };
@@ -1853,6 +1958,8 @@ export class MemoryService {
     if (feedback) spec = feedback.args;
     const entry = await this.#folded(id);
     if (!entry) throw new InvalidBody(`没有这条记忆：${id}`);
+    if (!await this.ownedReadable(entry, spec.subject, entry.项目)) throw new Denied('个人记忆归属', '不能处置其他关系的记忆。');
+    if (entry.收录 && !await this.information?.nativeReadable(entry, { subject: spec.subject, 项目: entry.项目 === '通用' ? undefined : entry.项目, mutation: true })) throw new Denied('记忆归属', '当前主体不能处置该关系的记忆。');
     if (entry.连续性 && !['Lead', '主权者'].includes(spec.subject?.kind)) throw new Denied('Lead连续性 · 处置身份', '仅Lead或主权者可停用连续性资料。');
     const permission = {
       subject: spec.subject,
@@ -1997,6 +2104,7 @@ export class MemoryService {
   }
   async #finishObservationFrame(frame) {
     if (!frame.active || frame.invalid) return false;
+    if (frame.intakeStamp !== undefined && frame.intakeStamp !== await this.information?.visibilityStamp()) return false;
     await this.#feedbackActor(frame.subject);
     this.#feedbackRead(frame.subject, { id: `记忆/检索/${frame.project}`, kind: '记忆', authority: '自治', zone: '私有', domain: '集体', project: frame.project }, { 类: '知识' });
     // 无声明、无来源的查询保持懒加载，不制造多余知识文件读取。
@@ -2016,6 +2124,8 @@ export class MemoryService {
     for (const id of new Set([...frame.confirmedEvidence, ...frame.confirmedDisposition, ...frame.confirmedReplacements])) {
       const entry = snapshot.byId.get(id);
       if (!entry || !memoryEntryVisible(entry, { 项目: frame.project, 读者: frame.subject }) || ['物理删除', '待删除'].includes(entry.状态)) return false;
+      if (!await this.ownedReadable(entry, frame.subject, frame.project)
+          || entry.收录 && !await this.information?.nativeReadable(entry, { subject: frame.subject, 项目: frame.project })) return false;
       this.#feedbackRead(frame.subject, memoryTarget('知识', entry.归属, entry.项目), { id, 类: '知识' });
       if (frame.confirmedEvidence.has(id) && (!记忆条目在读域(entry, domain) || 是否已被否(entry) || ['待复验', '说明不可判'].includes(knowledgeReviewStatus(entry, currentNow)))) return false;
     }

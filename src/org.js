@@ -150,6 +150,9 @@ export class Org {
     org.continuityCapture = new ContinuityCaptureService({ layout, org, clock });
     org.personaCore = new PersonaCoreService({ layout, policy, clock });
     org.information = new InformationService({ org, layout, clock });
+    const { DataOwnershipService } = await import('./data-ownership.js');
+    org.dataOwnership = new DataOwnershipService(org);
+    memory.information = org.information;
     capability.information = org.information;
     await org.bootstrap({ 代次: spec.代次 });
     return org;

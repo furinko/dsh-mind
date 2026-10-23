@@ -44,6 +44,10 @@ async function capture(org, messages, target = spec(), { at = Date.now(), touch 
 async function root(org, id, project = P) {
   const subject = { id, kind: 'Lead' };
   await org.registry.assign({ subject: SOVEREIGN, 岗位: 'Lead', 实例: id });
+  for (const session of [LEAD.id, id]) {
+    const state = await org.information.load();
+    await org.information.admin({ subject: SOVEREIGN, project: P }, { op: 'relationship', expectedRevision: state.configRevision, session, relationship: 'same-human-fixture' });
+  }
   return spec(subject, project);
 }
 function gate() {
@@ -432,7 +436,8 @@ it('已落memory但回执失败后purge，重试不复活且墓碑只留散列�
     const barriers = ledger.trim().split('\n').filter(Boolean).map(line => JSON.parse(line)).map(row => row.自动连续性墓碑).filter(Boolean);
     assert.ok(barriers.length > 0);
     for (const barrier of barriers) {
-      assert.deepEqual(Object.keys(barrier).sort(), ['主题哈希', '幂等键', '于', '项目', '范围'].sort());
+      assert.deepEqual(Object.keys(barrier).sort(), ['主题哈希', '幂等键', '于', '项目', '范围', '归属会话'].sort());
+      assert.match(barrier.归属会话, /^[a-f0-9]{64}$/);
       assert.match(barrier.主题哈希, /^[a-f0-9]{64}$/);
       assert.match(barrier.幂等键, /^continuity:[a-f0-9]{64}$/);
       assert.ok(Number.isFinite(barrier.于));

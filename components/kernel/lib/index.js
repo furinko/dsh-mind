@@ -135,7 +135,7 @@ export async function apply(ctx, config = {}) {
     llmOf: () => 取服务(ctx, 'llm'), logger, enabled: config.轮级缓冲 !== false && config.自动协作记忆 === true });
   org.continuityCaptureHooks = continuityCaptureHooks;
   ctx.effect?.(() => () => continuityCaptureHooks.stop());
-  const informationHooks = createInformationHooks({ org, projectOf: 当前项目键, llmOf: () => 取服务(ctx, 'llm'), logger });
+  const informationHooks = createInformationHooks({ org, projectOf: 当前项目键, llmOf: () => 取服务(ctx, 'llm'), toolsOf: () => 取服务(ctx, 'tools'), agentsOf: () => 取服务(ctx, 'agents'), logger });
   org.informationHooks = informationHooks;
   const disposeInformationSources = informationHooks.attach(ctx);
   try { await org.information.recoverLearning(); }
@@ -460,7 +460,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations, 
     parameters: {
       type: 'object',
       properties: {
-        信息: { type: 'object', description: 'information_query: {collection:status/materials/growth/interests/candidates,id?,query?,offset?,limit?}; information_read: {id,hash?,version?,offset?,limit?}; information_update: {op,data}。op=submit时data={messageIds:[当前真实消息ID],title?,note?}；op=submit_tool时data={receiptId,title,note?}；record时data={type:growth/candidate,kind?,title,text,sources:[{readingId,quote}],expiresAt?,method?,conditions?,limitations?,roles?,replaces?:[{id,revision}]}；revise时data={id,revision,reason,state?:active/dormant/withdrawn/needs-review,text?,stage?:灵感/待试用/已验证/需修订,trial?:{task,outcome:有帮助/无改善/变差/未知,detail},expiresAt?}；finish时data={readingIds:[]}；publish时data={id,revision}。模型不能配置目录、预算或扩大来源分享范围。', additionalProperties: true },
+        信息: { type: 'object', description: 'information_query: {collection:status/materials/growth/interests/candidates,id?,query?,offset?,limit?}; information_read: {id,hash?,version?,offset?,limit?}; information_update: {op,data}。submit={messageIds:[真实消息ID],title?,note?}；submit_tool={receiptId,title,note?}；record={type:growth/candidate,kind?,title,text,sources:[{readingId,quote}],expiresAt?,method?,conditions?,limitations?,roles?,replaces?:[{id,revision}]}，经原记忆服务写成pref-/exp-/know-；distribute={id:收录回执id,revision,roles,reason}，Lead自治调整正式知识的适用岗位；revise={id,revision,reason,state?,text?,stage?,trial?:{task,outcome,detail},expiresAt?}；finish={readingIds:[]}；publish={id,revision}。正式正文与生命周期可用memory_query/memory_lifecycle。模型不配置目录、预算或扩大私人来源范围。', additionalProperties: true },
         action: { type: 'string', enum: ACTIONS, description: '要执行的动作' },
         project: { type: 'string', description: '项目键；省略则用当前项目' },
         role: { type: 'string', description: '兼容字段，不授予身份或岗位权限；实际主体由宿主会话与身份档案确定，自报 Lead 会被拒绝' },

@@ -214,6 +214,11 @@ it('真实工具、命令和新Lead装配共用复盘；专业子会话不接收
     const revised = JSON.parse((await cmd.handler({ agent: a, rawInput: `memory_lifecycle ${JSON.stringify({ op: 'overturn', id: written.条目.id, 原因: '记录后续案例', 新条目: '首次改法未改善，应重审适用条件', 协作反馈: JSON.stringify(updated) })}` })).text);
     assert.equal(revised.成功, true, JSON.stringify(revised));
     const hook = host.钩子.get('system-prompt/assemble').at(-1);
+    for (const session of [LEAD.id, 'new-lead']) {
+      const state = await org.information.load();
+      await org.information.admin({ subject: { id: 'owner-fixture', kind: '主权者' }, project: P },
+        { op: 'relationship', expectedRevision: state.configRevision, session, relationship: 'same-human-fixture' });
+    }
     const input = base();
     const out = await hook(input, { agent: agent('new-lead') }, async () => input);
     const section = out.sections.find(item => item.name === LEAD_CONTEXT_SECTION);

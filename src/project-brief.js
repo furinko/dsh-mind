@@ -39,10 +39,11 @@ const laterThan = (candidate, previous, buffers) => candidate.session === previo
     && sourceTime(buffers, candidate) > sourceTime(buffers, previous);
 
 /** 保留各会话事件顺序，再按各队列头的事件时间合并；未知时间不冒充新更正。 */
-function pendingMessages(state, buffers, currentSession, closedOnly = false) {
+function pendingMessages(state, buffers, currentSession, closedOnly = false, relationForgetAt = 0) {
   const queues = state.sessions.map(s => (buffers.get(s.id)?.rounds ?? [])
     .filter(r => !closedOnly || s.id !== currentSession || r.status !== 'open')
-    .flatMap(round => round.messages.filter(m => m.seq >= s.processed && (!state.forgetAt || (m.at ?? 0) > state.forgetAt))
+     .flatMap(round => round.messages.filter(m => m.seq >= s.processed && (!Math.max(s.forgetAt ?? 0, state.forgetAt ?? 0, relationForgetAt)
+       || (m.at ?? 0) > Math.max(s.forgetAt ?? 0, state.forgetAt ?? 0, relationForgetAt)))
       .map(message => ({ session: s.id, message, at: message.at ?? null }))));
   const result = [];
   while (queues.some(q => q.length)) {
@@ -56,7 +57,18 @@ function pendingMessages(state, buffers, currentSession, closedOnly = false) {
 export class ProjectBriefService {
   constructor({ layout, org, clock }) { Object.assign(this, { layout, org, clock }); }
   file(project) { return this.layout.projectBriefFile(project); }
-  async authorize(spec) { return this.org.turnBuffer.authorize(spec.subject, spec.project, spec.session); }
+  async relationKey(session) { return digest(await this.org.dataOwnership?.relationship(session) ?? session); }
+  async relationCutoff(state, session) {
+    let at = 0;
+    for (const entry of Object.values(state.relationForget ?? {})) {
+      if (entry.session === session || await this.org.dataOwnership?.related(session, entry.session)) at = Math.max(at, entry.at);
+    }
+    return at;
+  }
+  async authorize(spec) {
+    const stamp = await this.org.turnBuffer.authorize(spec.subject, spec.project, spec.session);
+    return this.org.dataOwnership ? digest(canonical([stamp, await this.org.dataOwnership.stamp(spec.session)])) : stamp;
+  }
   async load(project) {
     try {
       const file = this.file(project);
@@ -69,33 +81,37 @@ export class ProjectBriefService {
           || !string(state.epoch, 64) || !natural(state.sourceRevision)
           || !(state.at === null || Number.isFinite(state.at)) || !Number.isFinite(state.forgetAt) || !Array.isArray(state.sessions)
           || state.sessions.length > PROJECT_BRIEF_LIMITS.sessions || !Array.isArray(state.items)
-          || state.items.length > PROJECT_BRIEF_LIMITS.items) throw bad();
+           || state.items.length > PROJECT_BRIEF_LIMITS.items * PROJECT_BRIEF_LIMITS.sessions) throw bad();
       const ids = new Set();
       for (const s of state.sessions) {
         if (!string(s.id) || ids.has(s.id) || !natural(s.seen) || !natural(s.processed) || s.processed > s.seen || !Number.isFinite(s.at)
             || (s.version !== undefined && !hash(s.version))) throw bad();
         ids.add(s.id);
       }
-      this.validateItems(state.items);
+       if (state.relationForget && (typeof state.relationForget !== 'object' || Array.isArray(state.relationForget)
+           || Object.entries(state.relationForget).some(([k, v]) => !hash(k) || !string(v?.session) || digest(v.session) !== k || !Number.isFinite(v.at)))) throw bad();
+       this.validateItems(state.items, { stored: true });
       return state;
     } catch (error) { if (error.code === 'ENOENT') return null; throw bad(); }
   }
-  validateItems(items) {
+  validateItems(items, { stored = false } = {}) {
     const ids = new Set();
     for (const item of items) {
-      if (!string(item.id, 64) || ids.has(item.id) || !KINDS.includes(item.kind) || !CLAIMS.includes(item.claim)
+      const key = stored ? `${item.ownerKey ?? 'legacy'}/${item.id}` : item.id;
+      if (!string(item.id, 64) || ids.has(key) || (item.ownerKey !== undefined && !hash(item.ownerKey)) || !KINDS.includes(item.kind) || !CLAIMS.includes(item.claim)
           || !STATES.includes(item.state) || !string(item.text, PROJECT_BRIEF_LIMITS.text)
           || !Array.isArray(item.sources) || !item.sources.length || item.sources.length > PROJECT_BRIEF_LIMITS.sources
           || item.sources.some(ref => !validRef(ref)) || (item.goal !== undefined && !string(item.goal))) throw new InvalidBody('项目接续条目或来源无效。');
       if (item.claim === '用户表达' && item.sources.some(ref => ref.role !== 'user')) throw new InvalidBody('用户表达必须只引用已接纳用户来源。');
       if (['需求', '约束', '决定'].includes(item.kind) && item.claim !== '用户表达') throw new InvalidBody('助手解释不能登记成用户需求、约束或决定。');
-      ids.add(item.id);
+      ids.add(key);
     }
   }
   async sources(spec, sessions) {
     const all = new Map();
     const actor = (await currentProfessionalScope(this.org, spec.subject, spec.project)).actor;
     for (const id of [...new Set(sessions)].slice(0, PROJECT_BRIEF_LIMITS.sessions)) {
+      if (this.org.dataOwnership && !await this.org.dataOwnership.related(spec.session, id)) { all.set(id, null); continue; }
       await this.org.policy.check({ subject: actor, action: 'read', target: {
         id: `轮级缓冲/${digest(id)}`, kind: '记忆', authority: '自治', zone: '私有', domain: '个体', project: spec.project } });
       const stored = await this.org.turnBuffer.load(spec.project, id);
@@ -105,11 +121,12 @@ export class ProjectBriefService {
     return all;
   }
   validItems(items, buffers) {
-    return items.filter(item => item.sources.every(ref => buffers.get(ref.session)?.rounds.some(round =>
+    const visible = items.filter(item => item.sources.every(ref => buffers.get(ref.session)?.rounds.some(round =>
       round.messages.some(m => m.seq === ref.seq && m.id === ref.id && signature(ref.session, m) === ref.hash))));
+    return [...new Map(visible.map(item => [item.id, item])).values()];
   }
   async supplementInput() { return {}; }
-  inputItems(items, add) { return items.map(item => ({ ...item, sources: item.sources.map(add) })); }
+  inputItems(items, add) { return items.map(({ ownerKey, ...item }) => ({ ...item, sources: item.sources.map(add) })); }
   async commitItems() {}
   responseItems(response, { items, refs, selected, exposed, goalMap, buffers }) {
     if (!response || Object.keys(response).some(k => k !== 'items') || !Array.isArray(response.items)
@@ -155,7 +172,7 @@ export class ProjectBriefService {
       if (previous && previous.seen > buffer.nextSeq) throw new Fault('PROJECT_BRIEF_HISTORY_REWOUND', '宿主历史回退，不能接续未来摘要。');
       state.sessions = state.sessions.filter(s => s.id !== spec.session);
       const version = sourceVersion(buffer);
-      state.sessions.push({ id: spec.session, seen: buffer.nextSeq, processed: previous?.processed ?? buffer.floor, version,
+      state.sessions.push({ id: spec.session, seen: buffer.nextSeq, processed: previous?.processed ?? buffer.floor, ...(previous?.forgetAt ? { forgetAt: previous.forgetAt } : {}), version,
         at: buffer.rounds.at(-1)?.at ?? this.clock.ms() });
       state.sessions = state.sessions.slice(-PROJECT_BRIEF_LIMITS.sessions);
       const retained = new Set(state.sessions.map(s => s.id));
@@ -172,10 +189,11 @@ export class ProjectBriefService {
   }
   async update(spec, { extract, active = () => true }) {
     const before = await this.authorize(spec);
+    const relationKey = await this.relationKey(spec.session);
     const previous = await this.load(spec.project);
     const buffers = await this.sources(spec, previous.sessions.map(s => s.id));
-    const items = this.validItems(previous.items, buffers);
-    const pending = pendingMessages(previous, buffers, spec.session, true);
+    const items = this.validItems(previous.items, buffers).slice(-PROJECT_BRIEF_LIMITS.items);
+    const pending = pendingMessages(previous, buffers, spec.session, true, await this.relationCutoff(previous, spec.session));
     const selected = pending.slice(0, PROJECT_BRIEF_LIMITS.messages);
     if (!selected.length || !active()) return { updated: false, pending: pending.length };
     const refs = new Map();
@@ -229,7 +247,8 @@ export class ProjectBriefService {
             || current.revision !== previous.revision || current.sourceRevision !== previous.sourceRevision
             || sourceCut(sources) !== sourceCut(buffers)) throw new Fault('PROJECT_BRIEF_CHANGED', '接续来源或身份变化，拒绝在途记忆写入。');
       } });
-      state.items = next; state.revision++; state.at = this.clock.ms();
+      const unrelated = state.items.filter(item => item.sources.some(ref => !live.get(ref.session)));
+      state.items = [...unrelated, ...next.map(item => ({ ...item, ownerKey: relationKey }))]; state.revision++; state.at = this.clock.ms();
       for (const entry of state.sessions) {
         const buffer = live.get(entry.id);
         if (!buffer) continue;
@@ -255,7 +274,7 @@ export class ProjectBriefService {
     const items = this.validItems(state.items, buffers).filter(item => id === undefined || item.id === id);
     const goals = await this.org.goals.contextSnapshot({ subject: spec.subject, 项目: spec.project });
     const goalMap = new Map(goals.目标.map(goal => [goal.id, goal]));
-    const pending = pendingMessages(state, buffers, spec.session);
+    const pending = pendingMessages(state, buffers, spec.session, false, await this.relationCutoff(state, spec.session));
     const pendingUsers = pending.filter(p => p.message.role === 'user');
     const frame = { 版本: 1, 项目: spec.project, 修订: state.revision, 来源修订: state.sourceRevision, 更新于: state.at,
       依据: '模型从已接纳用户文本及助手已提交文本提炼；引用可核对，语义与完成声明未经程序认证',
@@ -301,12 +320,17 @@ export class ProjectBriefService {
         const backup = `${this.file(spec.project)}.invalid-${randomUUID()}`;
         await copyFile(this.file(spec.project), backup, constants.COPYFILE_EXCL);
         await chmod(backup, 0o600); isolated = true;
-        state = { version: 1, project: spec.project, revision: 0, sourceRevision: 0, sessions: [], items: [] };
+        state = { version: 1, project: spec.project, forgetAt: 0, revision: 0, sourceRevision: 0, sessions: [], items: [] };
       }
       state.epoch = randomUUID();
-      state.items = []; state.revision++; state.at = this.clock.ms(); state.forgetAt = state.at;
       const buffers = await this.sources(spec, state.sessions.map(s => s.id));
+      state.items = state.items.filter(item => item.sources.some(ref => !buffers.get(ref.session)));
+      state.revision++; state.at = this.clock.ms();
+      state.relationForget ??= {};
+      state.relationForget[digest(spec.session)] = { session: spec.session, at: state.at };
       for (const entry of state.sessions) {
+        if (!buffers.get(entry.id)) continue;
+        entry.forgetAt = state.at;
         entry.seen = Math.max(entry.seen, buffers.get(entry.id)?.nextSeq ?? 0);
         entry.processed = entry.seen;
       }

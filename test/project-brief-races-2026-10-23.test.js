@@ -41,6 +41,10 @@ async function capture(org, messages, target = spec(), { touch = true, at = Date
 async function root(org, id) {
   const subject = { id, kind: 'Lead' };
   await org.registry.assign({ subject: SOVEREIGN, 岗位: 'Lead', 实例: id });
+  for (const session of [LEAD.id, id]) {
+    const state = await org.information.load();
+    await org.information.admin({ subject: SOVEREIGN, project: P }, { op: 'relationship', expectedRevision: state.configRevision, session, relationship: 'same-human-fixture' });
+  }
   return spec(subject);
 }
 const extractLatest = input => ({ items: [item(input.messages.filter(m => m.role === 'user').at(-1).source,

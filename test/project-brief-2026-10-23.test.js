@@ -39,6 +39,10 @@ const update = (org, extract, target = spec()) => org.projectBrief.update(target
 const simple = input => ({ items: [item(input.messages.find(m => m.role === 'user').source)] });
 async function newLead(org, id = 'new-lead') {
   await org.registry.assign({ subject: SOVEREIGN, 岗位: 'Lead', 实例: id });
+  for (const session of [LEAD.id, id]) {
+    const state = await org.information.load();
+    await org.information.admin({ subject: SOVEREIGN, project: P }, { op: 'relationship', expectedRevision: state.configRevision, session, relationship: 'same-human-fixture' });
+  }
   return spec({ id, kind: 'Lead' });
 }
 function session(id = LEAD.id) {

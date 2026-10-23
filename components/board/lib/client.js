@@ -1658,6 +1658,7 @@ window.__ModuleLoader__.load({
       '.dshmind-set__details .dshmind-set__row{align-items:flex-start;padding:9px 0}.dshmind-set__details .dshmind-set__control{flex:1 1 55%;overflow-wrap:anywhere}.dshmind-set__details .dshmind-set__label{font-size:12px}',
       '.dshmind-directory-overlay{position:fixed;inset:0;z-index:10000;background:#0006;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}.dshmind-directory-dialog{display:flex;flex-direction:column;width:680px;max-width:100%;max-height:88vh;overflow:hidden;box-sizing:border-box;padding:24px;border-radius:12px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#202225);box-shadow:0 16px 64px #0004;font-size:14px;line-height:1.6}.dshmind-directory-dialog>h3,.dshmind-directory-dialog>p{flex-shrink:0;margin:0 0 12px}.dshmind-directory-body{overflow:auto;min-height:0;padding:2px}.dshmind-directory-footer{padding-top:16px;flex-shrink:0}.dshmind-directory-dialog .dshmind-set__actions{flex-wrap:wrap}.dshmind-directory-dialog .dshmind-set__actions>input{min-width:0;width:auto;flex:1 1 240px}.dshmind-directory-dialog nav{max-height:72px;overflow:auto;margin-top:12px}.dshmind-directory-entries{height:160px;overflow:auto;border:1px solid var(--dsw-alias-border-l2,#ddd);border-radius:8px;margin:12px 0}',
       '.dshmind-directory-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 10px}.dshmind-directory-row>label{display:flex;align-items:center;gap:8px;min-width:0;overflow-wrap:anywhere;flex:1}.dshmind-directory-row .dshmind-set__mono{overflow-wrap:anywhere;min-width:0;flex:1}.dshmind-directory-row .dshmind-set__btn{flex-shrink:0}.dshmind-directory-selected{max-height:150px;overflow:auto}.dshmind-directory-dialog button:focus-visible,.dshmind-directory-dialog input:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#3076ee);outline-offset:2px}',
+      '.dshmind-growth-overlay{position:fixed;inset:0;z-index:9000;background:#0005;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}.dshmind-growth-dialog{display:flex;flex-direction:column;width:740px;max-width:100%;height:620px;max-height:85vh;border-radius:14px;overflow:hidden;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#202225);box-shadow:0 16px 64px #0004;font-size:14px;line-height:1.6}.dshmind-growth-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:20px 24px 12px}.dshmind-growth-header p{margin:6px 0 0}.dshmind-growth-tabs{display:flex;gap:8px;padding:0 24px 14px;border-bottom:1px solid var(--dsw-alias-border-l2,#ddd)}.dshmind-growth-tabs button[aria-pressed=true]{background:var(--dsw-alias-interactive-bg-active,#eaf2ff);font-weight:600}.dshmind-growth-body{overflow:auto;min-height:0;flex:1;padding:18px 24px 24px}.dshmind-growth-body>.dshmind-set__btn{margin-bottom:12px}.dshmind-growth-body article p{margin:7px 0}.dshmind-growth-body article{overflow-wrap:anywhere}.dshmind-growth-dialog .dshmind-set__actions{flex-wrap:wrap}.dshmind-growth-dialog .dshmind-set__mono{overflow-wrap:anywhere}.dshmind-growth-body [hidden]{display:none!important}.dshmind-growth-header .dshmind-set__btn{flex-shrink:0}@media(max-width:560px){.dshmind-growth-header{padding:16px}.dshmind-growth-tabs{padding:0 16px 12px;gap:6px;flex-wrap:wrap}.dshmind-growth-body{padding:16px}}',
       '.dshmind-set__status{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:400;color:var(--dsw-alias-label-secondary,#61666b)}.dshmind-set__dot{display:inline-block;width:7px;height:7px;border-radius:50%;flex:0 0 auto}',
       '.dshmind-set__foot{display:flex;align-items:center;gap:12px;justify-content:space-between;padding-top:16px;border-top:1px solid var(--dsw-alias-border-l2,#d3dcea)}.dshmind-set__foot p{margin:0}.dshmind-set__mono{font-family:var(--ds-font-family-code,ui-monospace,monospace);overflow-wrap:anywhere}',
       '@media(max-width:560px){.dshmind-set__section{padding:16px}.dshmind-set__row{align-items:flex-start;flex-direction:column;gap:10px}.dshmind-set__row .dshmind-set__control{width:100%}.dshmind-set__select{width:100%}.dshmind-set__header{gap:12px}.dshmind-set__actions{gap:8px}.dshmind-set__editState{flex-basis:100%}.dshmind-set__details .dshmind-set__control{flex:auto}.dshmind-set__groupTitle{align-items:flex-start;flex-wrap:wrap}}',
@@ -4835,10 +4836,12 @@ window.__ModuleLoader__.load({
     function 信息成长设置() {
       信息页已访问 = true;
       var snapshot = useStore(信息store); var data = snapshot.data;
+      var managerState = useState(false); var managerOpen = managerState[0]; var setManagerOpen = managerState[1];
+      var panelState = useState('sources'); var panel = panelState[0]; var setPanel = panelState[1];
       var busyState = useState(false); var busy = busyState[0]; var setBusy = busyState[1];
       var lock = useState(function () { return { saving: false }; })[0];
       var noticeState = useState(''); var notice = noticeState[0]; var setNotice = noticeState[1];
-      var sourceState = useState({ name: '', path: '', purpose: '两者', project: '', audience: 'lead', roles: '', recursive: true });
+      var sourceState = useState({ name: '', path: '', purpose: '两者', project: '', audience: 'auto', roles: '', recursive: true });
       var source = sourceState[0]; var setSource = sourceState[1];
       var directoryState = useState(null); var directory = directoryState[0]; var setDirectory = directoryState[1];
       var directoryControl = useState(function () { return { seq: 0, closed: true, controller: null }; })[0];
@@ -4882,7 +4885,7 @@ window.__ModuleLoader__.load({
           extensions: ['.md', '.txt', '.json', '.jsonl', '.html', '.htm', '.vtt', '.srt'],
           scope: { project: source.project.trim() || null, audience: source.audience, roles: source.audience === 'roles' ? source.roles.split(/[,，]/).map(function (s) { return s.trim(); }).filter(Boolean) : [], relationship: source.relationship || null } };
         if (source.id) value.id = source.id;
-        send({ op: 'source_save', expectedRevision: source.expectedRevision === undefined ? data.configRevision : source.expectedRevision, source: value }, function () { setSource({ name: '', path: '', purpose: '两者', project: '', audience: 'lead', roles: '', recursive: true }); });
+        send({ op: 'source_save', expectedRevision: source.expectedRevision === undefined ? data.configRevision : source.expectedRevision, source: value }, function () { setSource({ name: '', path: '', purpose: '两者', project: '', audience: 'auto', roles: '', recursive: true }); });
       }
       function closeDirectories() {
         if (lock.saving) return;
@@ -4944,7 +4947,7 @@ window.__ModuleLoader__.load({
       function connectDirectories() {
         var values = directory.selected.map(function (pathValue) { return { name: (pathValue.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || pathValue).slice(0, 120), path: pathValue,
           enabled: true, recursive: true, purpose: '两者', extensions: ['.md', '.txt', '.json', '.jsonl', '.html', '.htm', '.vtt', '.srt'],
-          scope: { project: null, audience: 'lead', roles: [], relationship: null } }; });
+          scope: { project: null, audience: 'auto', roles: [], relationship: null } }; });
         send({ op: 'sources_add', sources: values, expectedRevision: directory.expectedRevision }, function () {
           directoryControl.closed = true; directoryControl.seq++; setDirectory(null);
           if (directoryControl.trigger && typeof directoryControl.trigger.focus === 'function') directoryControl.trigger.focus();
@@ -4958,33 +4961,51 @@ window.__ModuleLoader__.load({
           if (first && (event.shiftKey && document.activeElement === first || !event.shiftKey && document.activeElement === last)) { event.preventDefault(); (event.shiftKey ? last : first).focus(); }
         }
       }
+      function closeManager() { if (busy || directory) return; setManagerOpen(false); if (lock.managerTrigger && typeof lock.managerTrigger.focus === 'function') lock.managerTrigger.focus(); }
+      function managerKey(event) {
+        if (directory) return;
+        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeManager(); }
+        if (event.key === 'Tab' && event.currentTarget && typeof event.currentTarget.querySelectorAll === 'function') {
+          var controls = Array.prototype.slice.call(event.currentTarget.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),summary,[tabindex="0"]')).filter(function (el) { return el.getClientRects().length; });
+          var first = controls[0]; var last = controls[controls.length - 1];
+          if (first && (event.shiftKey && document.activeElement === first || !event.shiftKey && document.activeElement === last)) { event.preventDefault(); (event.shiftKey ? last : first).focus(); }
+        }
+      }
       var config = draft || (data && data.config);
       var page = data && data[tab];
       var stateLabels = { active: '使用中', dormant: '暂时淡去', withdrawn: '已撤回', 'needs-review': '待重新理解', missing: '来源不可用', error: '读取失败' };
       return h('section', { className: 'dshmind-set__section', 'data-dshmind': 'information-settings', 'aria-label': '见闻与成长' }, [
         h('h3', { className: 'dshmind-set__subtitle' }, '见闻与成长'),
-        h('p', { className: 'dshmind-set__hint' }, '在会话中分享链接、文件或说“这个记一下”即可。这里连接资料目录，查看 Lead 的兴趣、回忆和能力候选，也可以纠正它。'),
+        h('p', { className: 'dshmind-set__hint' }, '在会话中分享即可。你连接来源，Lead 自主吸收并纳入 Mind 原有记忆和能力体系。'),
+        data ? h('p', { className: 'dshmind-set__hint' }, '已连接 ' + data.sources.length + ' 个目录 · ' + (data.config.paused ? '阅读已暂停' : '阅读已开启')) : null,
+        button('管理信息来源', function (event) { lock.managerTrigger = event && event.currentTarget; setManagerOpen(true); refresh(); }),
+        managerOpen ? h('div', { className: 'dshmind-growth-overlay', onClick: function (event) { event.stopPropagation(); } }, h('section', { role: 'dialog', 'aria-modal': true, 'aria-label': '信息来源与沉淀管理', className: 'dshmind-growth-dialog', onKeyDown: managerKey }, [
+        h('header', { className: 'dshmind-growth-header' }, [h('div', null, [h('h3', { className: 'dshmind-set__subtitle' }, '信息来源'), h('p', { className: 'dshmind-set__hint' }, '整理、归类与知识分配交给 Lead；正式内容沿用 Mind 记忆服务。')]), h('button', { type: 'button', autoFocus: true, className: 'dshmind-set__btn', disabled: busy || !!directory, onClick: closeManager, 'aria-label': '关闭信息来源管理' }, '关闭')]),
+        h('nav', { className: 'dshmind-growth-tabs', 'aria-label': '来源管理分类' }, [['sources', '连接目录'], ['records', '收录与沉淀'], ['settings', '阅读设置']].map(function (entry) { return h('button', { type: 'button', className: 'dshmind-set__btn', 'aria-pressed': panel === entry[0], onClick: function () { setPanel(entry[0]); } }, entry[1]); })),
+        h('div', { className: 'dshmind-growth-body' }, [
         snapshot.phase === 'error' ? h('p', { role: 'alert' }, snapshot.error) : null,
         !data ? h('p', { role: 'status' }, '正在读取见闻与成长…') : null,
         button('刷新见闻与成长', refresh),
         data ? h('div', null, [
+          h('div', { hidden: panel !== 'settings' }, [
           h('p', null, (data.config.paused ? '阅读已暂停' : '阅读已开启') + ' · 今日提供 ' + data.usage.readChars + ' / ' + data.config.dailyReadChars + ' 字符 · 辅助阅读 ' + data.usage.modelCalls + ' / ' + data.config.dailyModelCalls + ' 次'),
           button(data.config.paused ? '恢复阅读' : '暂停阅读', function () { send({ op: 'configure', expectedRevision: data.configRevision, config: Object.assign({}, data.config, { paused: !data.config.paused }) }); }),
           h('details', { className: 'dshmind-set__details' }, [
             h('summary', null, '阅读节奏与预算'),
-            ['autoScan', 'autoLearn'].map(function (name, i) { return 设置行('information-' + name, i ? '自动整理收获' : '自动收录目录更新', '', h('input', { type: 'checkbox', 'aria-label': i ? '自动整理收获' : '自动收录目录更新', checked: config[name], disabled: busy, onChange: function (event) { patchConfig(name, event.target.checked); } })); }),
-            ['dailyReadChars', 'dailyModelCalls'].map(function (name, i) { var label = i ? '每日辅助阅读次数' : '每日阅读字符上限'; return 设置行('information-' + name, label, '', h('input', { type: 'number', min: 0, max: i ? 100 : 1000000, className: 'dshmind-set__input', 'aria-label': label, value: config[name], disabled: busy, onChange: function (event) { patchConfig(name, Number(event.target.value)); } })); }),
+            [['autoScan', '自动收录目录更新'], ['autoLearn', '自动整理收获'], ['autoExplore', '通过已安装的 B 站插件自主探索']].map(function (entry) { var name = entry[0], label = entry[1]; return 设置行('information-' + name, label, name === 'autoExplore' ? '由 Lead 在少量公开候选中按兴趣选择；未安装来源插件时等待连接。与辅助阅读共用预算。' : '', h('input', { type: 'checkbox', 'aria-label': label, checked: config[name], disabled: busy, onChange: function (event) { patchConfig(name, event.target.checked); } })); }),
+            [['dailyReadChars', '每日阅读字符上限', 1000000], ['dailyModelCalls', '每日模型调用上限（含选题）', 100], ['dailySourceReads', '每日自主探索上限', 10]].map(function (entry) { var name = entry[0], label = entry[1]; return 设置行('information-' + name, label, '', h('input', { type: 'number', min: 0, max: entry[2], className: 'dshmind-set__input', 'aria-label': label, value: config[name], disabled: busy, onChange: function (event) { patchConfig(name, Number(event.target.value)); } })); }),
             h('p', { className: 'dshmind-set__hint' }, '预算按 UTC 日计算，次数含失败尝试。自动整理使用当前 Lead 的模型，在轮末运行；没有可用模型时资料保持待阅读。这些读数不等于 token 或费用。'),
             draft && draftRevision !== data.configRevision ? h('p', { role: 'status' }, '阅读设置已在别处更新，草稿保留；放弃草稿并核对当前设置后再修改。') : null,
             button('保存阅读设置', function () { send({ op: 'configure', expectedRevision: draftRevision, config: config }, function () { setDraft(null); }); }, !draft || draftRevision !== data.configRevision),
             draft ? button('放弃阅读设置修改', function () { setDraft(null); }) : null,
           ]),
-          h('h4', { className: 'dshmind-set__groupTitle' }, '信息来源'),
+          ]),
+          h('div', { hidden: panel !== 'sources' }, [
           button('选择信息来源目录', chooseDirectories, data.sources.length >= data.limits.sources),
           h('p', { className: 'dshmind-set__hint' }, '像选择工作区一样浏览文件夹，可勾选多个目录一起连接，也可随时继续添加。'),
           data.sources.length ? data.sources.map(function (s) { return h('article', { key: s.id, style: { padding: '12px 0', borderBottom: '1px solid var(--dsw-alias-border-l2,#444)' } }, [
             h('strong', null, s.name), h('p', { className: 'dshmind-set__mono' }, s.path),
-            h('p', { className: 'dshmind-set__hint' }, (s.enabled ? '已连接' : '已停用') + ' · ' + s.purpose + ' · ' + (s.scope.project || '跨项目') + ' · ' + (s.scope.audience === 'lead' ? '仅 Lead' : '共享给 ' + s.scope.roles.join('、')) + (s.scanPending ? ' · 本轮扫描未完，下批续接' : '') + (s.lastError ? ' · ' + s.lastError : '')),
+            h('p', { className: 'dshmind-set__hint' }, (s.enabled ? '已连接' : '已停用') + ' · ' + (s.scope.project || '跨项目') + ' · ' + (s.scope.audience === 'auto' ? 'Lead 自治吸收与分配' : s.scope.audience === 'lead' ? '私密来源，仅 Lead' : '保留原有岗位范围') + (s.scanPending ? ' · 下批续接' : '') + (s.lastError ? ' · ' + s.lastError : '')),
             button('编辑来源 ' + s.name, function () { setSource({ id: s.id, expectedRevision: data.configRevision, name: s.name, path: s.path, purpose: s.purpose, project: s.scope.project || '', audience: s.scope.audience, roles: s.scope.roles.join(','), relationship: s.scope.relationship, recursive: s.recursive }); }),
             button((s.enabled ? '停用 ' : '启用 ') + s.name, function () { var v = {}; ['id', 'name', 'path', 'recursive', 'extensions', 'purpose', 'scope'].forEach(function (k) { v[k] = s[k]; }); v.enabled = !s.enabled; send({ op: 'source_save', expectedRevision: data.configRevision, source: v }); }),
             button('断开 ' + s.name, function () { setConfirmation({ label: '断开来源 ' + s.name + ' 后，其派生资料停止自动使用。', body: { op: 'source_remove', id: s.id, expectedRevision: data.configRevision } }); }),
@@ -4993,19 +5014,21 @@ window.__ModuleLoader__.load({
             h('summary', null, source.id ? '编辑信息来源' : '手动填写目录'), sourceInput('来源名称', 'name'), sourceInput('本地目录绝对路径', 'path'),
             设置行('information-purpose', '阅读用途', '', h('select', { 'aria-label': '阅读用途', value: source.purpose, disabled: busy, onChange: function (e) { patchSource('purpose', e.target.value); } }, ['两者', '探索', '专业'].map(function (v) { return h('option', { value: v }, v); }))),
             sourceInput('所属项目（留空跨项目）', 'project'),
-            设置行('information-audience', '可用范围', '', h('select', { 'aria-label': '可用范围', value: source.audience, disabled: busy, onChange: function (e) { patchSource('audience', e.target.value); } }, [h('option', { value: 'lead' }, '仅 Lead'), h('option', { value: 'roles' }, 'Lead 与指定岗位') ])),
-            source.audience === 'roles' ? sourceInput('共享岗位（逗号分隔）', 'roles') : null,
+            设置行('information-private', '私密来源', '普通来源由 Lead 自主判断知识给谁使用；私密来源仅供 Lead。', h('input', { type: 'checkbox', 'aria-label': '私密来源（仅 Lead）', checked: source.audience === 'lead', disabled: busy, onChange: function (e) { patchSource('audience', e.target.checked ? 'lead' : 'auto'); } })),
             设置行('information-recursive', '包含子目录', '', h('input', { type: 'checkbox', 'aria-label': '包含子目录', checked: source.recursive, disabled: busy, onChange: function (e) { patchSource('recursive', e.target.checked); } })),
             h('p', { className: 'dshmind-set__hint' }, '原目录只读，默认收录文字、JSON、网页导出和字幕。隐藏文件、链接及 Mind 自身数据跳过；其他格式不会被当成已阅读。'),
             button(source.id ? '保存信息来源' : '连接信息来源', saveSource, !source.name.trim() || !source.path.trim() || (source.audience === 'roles' && !source.roles.trim())),
           ]),
           button('现在收录一批', function () { send({ op: 'scan' }); }),
-          h('h4', { className: 'dshmind-set__groupTitle' }, '材料与收获'),
+          ]),
+          h('div', { hidden: panel !== 'records' }, [
+          h('p', { className: 'dshmind-set__hint' }, '这里是来源和处理回执。知识、经历、人格连续性存入原记忆服务，正文与更正以正式记忆为准。'),
           h('nav', { 'aria-label': '成长记录分类' }, ['materials', 'growth', 'candidates'].map(function (v, i) { return button(['资料', '趣味与成长', '能力候选'][i], function () { setTab(v); setPages([]); 信息参数.offset = 0; refresh(); }, v === tab); })),
           h('div', { className: 'dshmind-set__actions' }, [h('input', { className: 'dshmind-set__input', 'aria-label': '搜索材料与收获', value: search, onChange: function (e) { setSearch(e.target.value); } }), button('搜索收录记录', function () { 信息参数.query = search; 信息参数.offset = 0; setPages([]); refresh(); })]),
           page ? h('p', { className: 'dshmind-set__hint' }, page.countMode ? '资料共 ' + page.total + ' 条，本批检查 ' + page.examined + ' 条，命中 ' + page.matched + ' 条' : '共 ' + page.total + ' 条，当前从第 ' + (page.total ? page.offset + 1 : 0) + ' 条开始') : null,
           page && page.entries.map(function (r) { return h('article', { key: r.id, style: { padding: '14px 0', borderBottom: '1px solid var(--dsw-alias-border-l2,#444)' } }, [
             h('strong', null, r.title), h('p', { className: 'dshmind-set__hint' }, (stateLabels[r.state] || r.state) + ' · 第 ' + r.revision + ' 版' + (r.stage ? ' · ' + r.stage : '') + (r.processing ? ' · ' + r.processing : '') + (r.sourceStatus === 'disconnected' ? ' · 来源已断开，保留快照' : r.sourceStatus === 'disabled' ? ' · 来源已停用' : '') + (r.usable === false ? ' · 暂不自动使用' : '')),
+            r.native ? h('p', { className: 'dshmind-set__mono' }, r.native.map(function (n) { return n.类 + ' · ' + n.id + (n.岗位 ? ' · ' + n.岗位 : ''); }).join('\n')) : null,
             r.text ? h('p', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, r.text) : null,
             r.method ? h('details', null, [h('summary', null, '方法、条件与试用'), h('p', null, r.method), h('p', null, r.conditions), h('p', null, r.limitations), h('pre', { style: { whiteSpace: 'pre-wrap' } }, JSON.stringify(r.trials, null, 2))]) : null,
             h('details', null, [h('summary', null, '出处'), h('pre', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, JSON.stringify(r.sources || { source: r.source, name: r.name, coverage: r.coverage }, null, 2)),
@@ -5034,7 +5057,8 @@ window.__ModuleLoader__.load({
               { op: 'revise', id: edit.id, revision: edit.revision, text: edit.text, reason: edit.reason }, function () { setEdit(null); }); }, !edit.reason.trim() || (!edit.share && !edit.text.trim()) || (edit.share && !edit.roles.trim())),
             button('取消收获编辑', function () { setEdit(null); }),
           ]) : null,
-          h('details', { className: 'dshmind-set__details' }, [h('summary', null, '关联同一段关系的会话'), h('p', { className: 'dshmind-set__hint' }, '默认各会话独立。你确认当前会话属于同一人或关系时，可填写稳定标识；不依据昵称自动合并。'),
+          ]),
+          h('div', { hidden: panel !== 'settings' }, [h('details', { className: 'dshmind-set__details' }, [h('summary', null, '关联同一段关系的会话'), h('p', { className: 'dshmind-set__hint' }, '不同关系的原文、私人记忆和项目接续分别读取；明确关联后才跨会话接续，不依据昵称自动合并。'),
             h('input', { 'aria-label': '稳定关系标识', className: 'dshmind-set__input', value: relationship, onChange: function (e) { setRelationship(e.target.value); } }),
             button('关联当前会话', function () { var id = relationshipSession(); if (id) send({ op: 'relationship', session: id, relationship: relationship, expectedRevision: data.configRevision }); }, !relationship.trim()),
             button('恢复当前会话独立范围', function () { var id = relationshipSession(); if (id) send({ op: 'relationship', session: id, relationship: null, expectedRevision: data.configRevision }); }),
@@ -5042,13 +5066,13 @@ window.__ModuleLoader__.load({
           h('details', { className: 'dshmind-set__details' }, [h('summary', null, '最近阅读状态'),
             data.runtime && data.runtime.lastFailure ? h('p', { role: 'status' }, '上次辅助处理未完成：' + data.runtime.lastFailure.code + '（' + (data.runtime.lastFailure.phase === 'scan' ? '目录收录' : '阅读整理') + '），资料仍保留，可核对后重试。') : null,
             data.runtime && data.runtime.waitingForLead ? h('p', { className: 'dshmind-set__hint' }, '部分恢复的会话等待 Lead 身份接续；正常进入会话后再安排辅助阅读。') : null,
-            data.jobs.map(function (j) { return h('p', { key: j.id }, j.at + ' · ' + ({ running: '阅读中', completed: '已整理', failed: '未完成' }[j.state] || j.state) + (j.partial ? ' · 部分材料' : '') + (j.error ? ' · ' + j.error : '') + (j.records ? ' · 关联 ' + j.records.length + ' 条记录（含复用）' : '')); })]),
+            data.jobs.map(function (j) { return h('p', { key: j.id }, j.at + ' · ' + ({ running: '阅读中', integrating: '待纳入正式记忆', completed: '已处理', failed: '未完成' }[j.state] || j.state) + (j.partial ? ' · 部分材料' : '') + (j.error ? ' · ' + j.error : '') + (j.records ? ' · 关联 ' + j.records.length + ' 条回执（含复用）' : '')); })])]),
         ]) : null,
         directory && data ? h('div', { className: 'dshmind-directory-overlay', onClick: function (event) { event.stopPropagation(); } }, h('section', {
           role: 'dialog', 'aria-modal': true, 'aria-label': '选择信息来源目录', className: 'dshmind-directory-dialog', onKeyDown: directoryKey,
         }, [
           h('h3', { className: 'dshmind-set__subtitle' }, '选择信息来源目录'),
-          h('p', { className: 'dshmind-set__hint' }, '可选择多个文件夹。默认包含子目录、跨项目且仅 Lead 使用；连接后可分别修改。'),
+          h('p', { className: 'dshmind-set__hint' }, '可选择多个文件夹。默认包含子目录，由 Lead 自主吸收和分配知识；私密范围可在来源设置中调整。'),
           h('div', { className: 'dshmind-directory-body' }, [
           directory.mode === 'browse' ? [
             h('div', { className: 'dshmind-set__actions' }, [h('input', { autoFocus: true, className: 'dshmind-set__input', 'aria-label': '浏览目录路径', value: directory.path, disabled: busy,
@@ -5082,6 +5106,8 @@ window.__ModuleLoader__.load({
         ])) : null,
         confirmation ? h('div', { role: 'alert', className: 'dshmind-set__notice' }, [h('p', null, confirmation.label), button('确认这次操作', function () { send(confirmation.body, function () { setConfirmation(null); }); }), button('取消这次操作', function () { setConfirmation(null); })]) : null,
         notice ? h('p', { role: 'status', className: 'dshmind-set__hint' }, notice) : null,
+        ]),
+        ])) : null,
       ]);
     }
 

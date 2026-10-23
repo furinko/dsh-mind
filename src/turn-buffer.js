@@ -93,7 +93,8 @@ export class TurnBufferService {
       if (state.version !== 1 || state.project !== project || state.session !== session || !integer(state.nextSeq)
           || !integer(state.floor) || state.floor > state.nextSeq || !integer(state.missing) || !integer(state.removed)
           || !Array.isArray(state.rounds) || state.rounds.length > TURN_BUFFER_LIMITS.rounds
-          || !(state.open === null || positive(state.open))) throw fail();
+           || !(state.open === null || positive(state.open))) throw fail();
+      if (state.owner !== undefined && (state.owner.kind !== 'Lead' || state.owner.project !== project || state.owner.session !== session)) throw fail();
       let count = 0; let last = -1;
       for (const round of state.rounds) {
         if (!(round.turn === null || positive(round.turn)) || !integer(round.start) || !Number.isFinite(round.at)
@@ -137,6 +138,7 @@ export class TurnBufferService {
       const before = await this.authorize(subject, project, session);
       const state = await this.load(project, session) ?? { version: 1, project, session,
         nextSeq: fromSeq, floor: fromSeq, missing: 0, removed: 0, open: null, rounds: [] };
+      state.owner = { kind: 'Lead', project, session };
       if (throughSeq <= state.nextSeq) {
         // 重复事件和清空前迟到的批次都不能复活正文；顺便物理清理已到期资料。
         const previous = JSON.stringify(state); this.prune(state);
@@ -227,7 +229,7 @@ export class TurnBufferService {
       await this.authorize(subject, project, session);
       const previous = await this.load(project, session).catch(error => { if (error.code === 'TURN_BUFFER_INVALID') return null; throw error; });
       const nextSeq = Math.max(throughSeq, previous?.nextSeq ?? 0);
-      await save(file, { version: 1, project, session, nextSeq, floor: nextSeq,
+      await save(file, { version: 1, project, session, owner: { kind: 'Lead', project, session }, nextSeq, floor: nextSeq,
         missing: 0, removed: 0, open: null, rounds: [] });
       return { 已清空: true, 下次事件序号: nextSeq };
     }, { timeoutMs: 3000 }));

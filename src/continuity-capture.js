@@ -15,34 +15,38 @@ export class ContinuityCaptureService extends ProjectBriefService {
     await this.authorize(spec);
     await this.locked(spec.project, async () => {
       const state = await this.load(spec.project);
-      if (state.seeded || state.sessions.length || state.revision) return;
+      const key = await this.relationKey(spec.session);
+      if (state.seededRelations?.includes(key)) return;
       // 升级时补读同项目已登记的来源，不要求用户重复说过的称呼。
       let prior;
       try { prior = await this.org.projectBrief.load(spec.project); }
       catch (error) { if (error.code !== 'PROJECT_BRIEF_INVALID') throw error; }
       const buffers = await this.sources(spec, prior?.sessions.map(s => s.id) ?? []);
-      state.sessions = [...buffers].filter(([, b]) => b).map(([id, b]) => ({ id, seen: b.nextSeq,
-        processed: b.floor, at: b.rounds.at(-1)?.at ?? this.clock.ms() }));
+      const known = new Set(state.sessions.map(s => s.id));
+      state.sessions = [...state.sessions, ...[...buffers].filter(([id, b]) => b && !known.has(id)).map(([id, b]) => ({ id, seen: b.nextSeq,
+        processed: b.floor, at: b.rounds.at(-1)?.at ?? this.clock.ms() }))].slice(-16);
+      state.seededRelations = [...(state.seededRelations ?? []), key].slice(-256);
       state.seeded = true;
       await this.authorize(spec);
       await this.save(spec.project, state);
     });
     return super.touch(spec);
   }
-  validateItems(items) {
+  validateItems(items, { stored = false } = {}) {
     const ids = new Set();
-    if (items.length > 12) throw new InvalidBody('每份协作提炼最多12项。');
+    if (items.length > (stored ? 12 * 16 : 12)) throw new InvalidBody('每份协作提炼最多12项。');
     for (const item of items) {
-      if (!text(item?.id, 64) || ids.has(item.id) || !categories.includes(item.kind)
+      const key = stored ? `${item?.ownerKey ?? 'legacy'}/${item?.id}` : item?.id;
+      if (!text(item?.id, 64) || ids.has(key) || (item.ownerKey !== undefined && !/^[a-f0-9]{64}$/.test(item.ownerKey)) || !categories.includes(item.kind)
           || !['部署', '项目'].includes(item.scope) || !['有效', '停止'].includes(item.state) || !text(item.text, 320)
           || !Array.isArray(item.sources) || !item.sources.length || item.sources.length > 4 || item.sources.some(r => !refValid(r))
           || !Array.isArray(item.quotes) || item.quotes.length !== item.sources.length || item.quotes.some(q => !text(q, 400))
           || !Array.isArray(item.replaces) || item.replaces.length > 4 || item.replaces.some(id => !text(id, 256))) throw new InvalidBody('协作偏好提炼或用户来源无效。');
-      ids.add(item.id);
+      ids.add(key);
     }
   }
   inputItems(items, add) {
-    return items.map(({ quotes, replaces, ...item }) => ({ ...item, sources: item.sources.map(add) }));
+    return items.map(({ quotes, replaces, ownerKey, ...item }) => ({ ...item, sources: item.sources.map(add) }));
   }
   async supplementInput(spec) {
     const known = [];

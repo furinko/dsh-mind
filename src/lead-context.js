@@ -12,7 +12,7 @@ export async function recallLeadContext({ org, subject, project, readExpression 
   const expression = readExpression();
   const focus = await readLeadFocus(org, before.actor, project);
   const frame = { 版本: 1, 项目: project, 依据: '人格和偏好保留原规则；教训按本轮已接纳用户来源文本、会话目标、近期浏览依次选材；词面零命中不补近期项，不认证语义适用', 焦点线索: expression?.description ?? focus.description,
-    每类上限: 3, 记录: [], 数据版本: {}, 截断: false };
+    每类上限: 3, 记录: [], 共同经历: [], 数据版本: {}, 截断: false };
   const observations = [];
   for (const category of LEAD_MEMORY_KINDS) {
     const query = category === '协作教训' ? (expression?.query ?? focus.query) : '';
@@ -29,12 +29,21 @@ export async function recallLeadContext({ org, subject, project, readExpression 
       if (JSON.stringify(frame).length > LEAD_CONTEXT_BUDGET - 512) { frame.记录.pop(); frame.截断 = true; }
     }
   }
+  const experiences = await org.memory.query({ subject: before.actor, 读者: before.actor, 项目: project,
+    类: '经历', 个人经历: true, limit: 2, 返回模式: '摘要', 条数上限: 2, 内容预算: 1500 });
+  frame.数据版本.共同经历 = experiences.数据版本;
+  for (const entry of experiences.条目) {
+    frame.共同经历.push({ id: entry.id, 摘要: String(entry.摘要 ?? '').slice(0, 160), 项目: entry.项目 ?? null });
+    if (JSON.stringify(frame).length > LEAD_CONTEXT_BUDGET - 512) { frame.共同经历.pop(); frame.截断 = true; }
+  }
   // 有材料进入模型前再次核对；失效、替代或来源撤回在查询中发生时，不使用旧帧。
-  if (frame.记录.length) {
+  if (frame.记录.length || frame.共同经历.length) {
     for (const { category, query, version } of observations) {
       await org.memory.query({ subject: before.actor, 读者: before.actor, 项目: project, 类: '偏好',
         连续性类别: category, 文本: query, limit: 3, 数据版本: version, 返回模式: '摘要', 条数上限: 3, 内容预算: 3000 });
     }
+    await org.memory.query({ subject: before.actor, 读者: before.actor, 项目: project, 类: '经历', 个人经历: true,
+      limit: 2, 返回模式: '摘要', 条数上限: 2, 内容预算: 1500, 数据版本: experiences.数据版本 });
   }
   const afterFocus = await readLeadFocus(org, before.actor, project);
   if (focus.stamp !== afterFocus.stamp) throw new Denied('Lead连续性 · 工作线索已变化', '本会话目标或解释变化，丢弃旧教训召回。');

@@ -49,7 +49,7 @@ export async function settingsScene(options={}) {
    const slots=makeSlots();const plugin=loaded.definition.factory(makeStrictRequire().require);const dispose=plugin.apply(makeCtx({slots:slots.slots,sessions:makeSessions([{id:'settings-fixture',main:true}]),uiWorkspace:options.uiWorkspace}));
   let r=createRenderer(slots.calls.register.find(x=>x.options.name==='settings.section').Component,{close(){}});r.flush();await settle(10);r.flush();
   // The minimal renderer does not expand React child components; render the actual registered child in isolation.
-  if(options.informationOnly){const child=collect(r.tree).elements.find(e=>typeof e.type==='function'&&e.type.name==='信息成长设置');if(!child)throw Error('Information settings child missing');r.unmount();r=createRenderer(child.type,child.props);r.flush();await settle(10);r.flush();}
+   if(options.informationOnly){const child=collect(r.tree).elements.find(e=>typeof e.type==='function'&&e.type.name==='信息成长设置');if(!child)throw Error('Information settings child missing');r.unmount();r=createRenderer(child.type,child.props);r.flush();await settle(10);r.flush();if(!options.informationClosed){collect(r.tree).elements.find(e=>e.type==='button'&&textOf(e)==='管理信息来源').props.onClick();r.flush();await settle(10);r.flush();}}
   const elements=()=>collect(r.tree,{skipStyle:true}).elements;
   const field=label=>elements().find(x=>x.props['aria-label']===label);
   const button=label=>elements().find(x=>x.type==='button'&&textOf(x)===label);

@@ -11,7 +11,7 @@ import { INFORMATION_EXTENSIONS, sourceRoot, readSourceFile, decodeMaterial, wal
 export const INFORMATION_LIMITS = Object.freeze({ sources: 64, items: 10000, records: 2000, readings: 2000,
   stateBytes: 16 * 1024 * 1024, fileBytes: 1024 * 1024, readChars: 12000, contextChars: 7000 });
 export const GROWTH_KINDS = Object.freeze(['认识', '兴趣', '共同回忆', '表达趣味', '疑问', '知识']);
-const DEFAULT_CONFIG = Object.freeze({ paused: false, autoScan: true, autoLearn: true, dailyReadChars: 48000,
+const DEFAULT_CONFIG = Object.freeze({ paused: false, autoScan: true, autoLearn: true, autoExplore: true, dailySourceReads: 1, dailyReadChars: 48000,
   dailyModelCalls: 4, scanBatch: 150, maxFileBytes: INFORMATION_LIMITS.fileBytes });
 const txt = (v, max = 256) => typeof v === 'string' && !!v.trim() && v.length <= max;
 const natural = v => Number.isSafeInteger(v) && v >= 0;
@@ -29,23 +29,24 @@ const available = s => s && s.enabled !== false;
 const scopeChanged = () => new Fault('INFORMATION_SCOPE_CHANGED', '读取期间身份或关系范围变化，本次资料未交付，请重新读取。');
 const containsScope = (parent, child) => (parent.project === null || parent.project === child.project)
   && (parent.relationship === null || parent.relationship === child.relationship)
-  && (child.audience === 'lead' || (parent.audience === 'roles' && child.roles.every(role => parent.roles.includes(role))));
+  && (child.audience === 'lead' || parent.audience === 'auto' || (child.audience === 'roles' && parent.audience === 'roles' && child.roles.every(role => parent.roles.includes(role))));
 
 function configOf(v) {
   own(v, Object.keys(DEFAULT_CONFIG));
   const c = { ...DEFAULT_CONFIG, ...v };
-  for (const name of ['paused', 'autoScan', 'autoLearn']) if (typeof c[name] !== 'boolean') throw new InvalidBody(`${name}必须是布尔值。`);
-  for (const [name, max] of [['dailyReadChars', 1000000], ['dailyModelCalls', 100], ['scanBatch', 1000], ['maxFileBytes', INFORMATION_LIMITS.fileBytes]]) {
+  for (const name of ['paused', 'autoScan', 'autoLearn', 'autoExplore']) if (typeof c[name] !== 'boolean') throw new InvalidBody(`${name}必须是布尔值。`);
+  for (const [name, max] of [['dailyReadChars', 1000000], ['dailyModelCalls', 100], ['dailySourceReads', 10], ['scanBatch', 1000], ['maxFileBytes', INFORMATION_LIMITS.fileBytes]]) {
     if (!natural(c[name]) || c[name] > max || (['scanBatch', 'maxFileBytes'].includes(name) && c[name] < 1)) throw new InvalidBody(`${name}超出允许范围。`);
   }
   return c;
 }
 function scopeOf(v) {
   own(v, ['project', 'audience', 'roles', 'relationship']);
-  if (!(v.project === null || txt(v.project)) || !['lead', 'roles'].includes(v.audience)
+  if (!(v.project === null || txt(v.project)) || !['lead', 'roles', 'auto'].includes(v.audience)
       || !Array.isArray(v.roles) || v.roles.length > 32 || v.roles.some(r => !txt(r, 80))
       || !(v.relationship === null || txt(v.relationship))) throw new InvalidBody('来源范围需要project、audience、roles、relationship。');
   if (v.audience === 'roles' && (!v.roles.length || v.relationship !== null)) throw new InvalidBody('共享范围必须明确岗位，私人关系资料不能直接共享给岗位。');
+  if (v.audience === 'auto' && (v.roles.length || v.relationship !== null)) throw new InvalidBody('自治来源不预设岗位，不能带私人关系范围。');
   return { project: v.project, audience: v.audience, roles: [...new Set(v.roles)], relationship: v.relationship };
 }
 function mergeRanges(ranges) {
@@ -63,7 +64,7 @@ export class InformationService {
     const now = this.clock.ms();
     for (const [id, r] of this.toolReceipts) if (now - r.at > 1800000) this.toolReceipts.delete(id);
     while (this.toolReceipts.size >= 64) this.toolReceipts.delete(this.toolReceipts.keys().next().value);
-    const id = key('source-receipt'); this.toolReceipts.set(id, { id, actor: subject.id, session, project, tool, content, at: now });
+    const id = key('source-receipt'); this.toolReceipts.set(id, { id, actor: subject.id, session, project, tool, content, at: now }); return id;
   }
   async submitTool(spec, input) {
     own(input, ['receiptId', 'title', 'note']); await this.authorize(spec, true);
@@ -89,7 +90,7 @@ export class InformationService {
           || !Array.isArray(state.records) || state.records.length > INFORMATION_LIMITS.records
           || !Array.isArray(state.readings) || state.readings.length > INFORMATION_LIMITS.readings
           || !object(state.usage) || !Array.isArray(state.jobs) || !object(state.conversations) || !object(state.conversationOffsets) || !object(state.bindings)) throw new Error('shape');
-      configOf(state.config);
+      state.config = configOf(state.config);
       const ids = new Set();
       for (const source of state.sources) {
         if (!txt(source.id) || ids.has(source.id) || !txt(source.path, 4096) || !txt(source.identity) || !Array.isArray(source.extensions)
@@ -102,7 +103,7 @@ export class InformationService {
         scopeOf(item.scope);
       }
       for (const r of state.records) {
-        if (!txt(r.id) || !natural(r.revision) || !['growth', 'candidate'].includes(r.type) || !txt(r.text, 6000)
+        if (!txt(r.id) || !natural(r.revision) || !['growth', 'candidate'].includes(r.type) || !(txt(r.text, 6000) || Array.isArray(r.native))
             || !Array.isArray(r.sources) || !Array.isArray(r.history) || !['active', 'dormant', 'withdrawn', 'needs-review'].includes(r.state)) throw new Error('record');
         scopeOf(r.scope);
       }
@@ -166,13 +167,161 @@ export class InformationService {
   recordVisible(state, record, spec) {
     if (spec.subject.kind === '主权者') return true;
     return this.visible(record.scope, spec) && record.sources.every(ref => {
-      const item = state.items.find(i => i.id === ref.item); return item && this.itemVisible(state, item, spec);
+      const item = state.items.find(i => i.id === ref.item); const source = item?.source ? state.sources.find(s => s.id === item.source) : null;
+      const allowed = s => s.audience === 'auto' ? containsScope(s, record.scope) : this.visible(s, spec);
+      return item && allowed(item.scope) && (!item.source || available(source) && allowed(source.scope));
     });
   }
   validRecord(state, r) {
     return r.state === 'active' && (!r.expiresAt || Date.parse(r.expiresAt) > this.clock.ms())
       && r.sources.every(ref => state.items.some(i => i.id === ref.item && i.state === 'active' && i.hash === ref.hash && containsScope(i.scope, r.scope)
         && (!i.source || (available(state.sources.find(s => s.id === i.source)) && containsScope(state.sources.find(s => s.id === i.source).scope, r.scope)))));
+  }
+  async nativeReadable(entry, query = {}) {
+    const proof = entry.收录;
+    if (proof?.version !== 1 || !txt(proof.receipt) || !hash(proof.generation)) return false;
+    const state = await this.load(); const r = state.records.find(r => r.id === proof.receipt);
+    if (!r) return false;
+    const subject = query.subject ?? query.读者;
+    if (subject?.kind === '主权者' && (query.mutation || query.含失效)) return true;
+    const project = query.项目 ?? r.executionProject ?? r.scope.project;
+    // Owner-confirmed association moves this exact conversation's records; original proof is retained.
+    const original = { ...proof.scope, relationship: r.scope.relationship };
+    if (!await this.org.dataOwnership.allows(original, subject, project) || !await this.org.dataOwnership.allows(r.scope, subject, project)) return false;
+    if (query.mutation) return !r.humanStopped || subject.kind === '主权者';
+    return r.nativeGeneration === proof.generation && r.integration === 'complete' && this.validRecord(state, r);
+  }
+  async visibilityStamp() {
+    const state = await this.load();
+    return digest(canonical({ bindings: state.bindings, sources: state.sources.map(s => [s.id, s.enabled, s.scope]),
+      items: state.items.map(i => [i.id, i.hash, i.state, i.scope]), records: state.records.map(r => [r.id, r.nativeGeneration, r.integration, r.state, r.scope, r.humanStopped, r.expiresAt]) }));
+  }
+  nativeBody(r) {
+    return r.type === 'candidate' ? `${r.text}\n\n## 方法\n\n${r.method}\n\n## 适用条件\n\n${r.conditions}\n\n## 局限\n\n${r.limitations}` : r.text;
+  }
+  nativeKind(r) { return r.type === 'candidate' || r.kind === '知识' ? '知识' : r.kind === '共同回忆' ? '经历' : '偏好'; }
+  nativeRoles(r) { return this.nativeKind(r) === '知识' && r.scope.audience === 'roles' ? r.scope.roles : ['Lead']; }
+  nativeGeneration(r) { return digest(canonical({ id: r.id, revision: r.revision, body: this.nativeBody(r), scope: r.scope })); }
+  async hydrate(r, spec) {
+    if (!r.native?.length) return { ...r, integration: r.integration ?? 'pending', claim: '待纳入正式记忆，尚不参与记忆召回' };
+    const entry = await this.org.memory.intakeEntry(r.native[0].id, { subject: spec.subject, project: spec.project, inspect: spec.subject.kind === '主权者' });
+    if (!entry) return { ...r, text: '', nativeUnavailable: true };
+    let text = entry.内容; let method = null; let conditions = null; let limitations = null;
+    if (r.type === 'candidate') {
+      const parts = text.split(/\n\n## (?:方法|适用条件|局限)\n\n/);
+      if (parts.length === 4) [text, method, conditions, limitations] = parts;
+    }
+    return { ...r, title: entry.标题, text, method, conditions, limitations, nativeId: entry.id, nativeKind: entry.类,
+      nativeState: entry.状态, nativeBody: entry.内容, nativeHistory: entry.历史, nativeActive: await this.org.memory.intakeActive(entry.id),
+      claim: '正式记忆服务为正文与生命周期真源；此处仅提供收录处理回执' };
+  }
+  async finalizeRecord(spec, id) {
+    const authorization = await this.authorize(spec, true);
+    const result = await this.locked(async state => {
+      const r = state.records.find(r => r.id === id);
+      if (!r || !this.recordVisible(state, r, spec) || !this.validRecord(state, r)) throw new Denied('正式记忆收录范围', '待处理记录的来源、关系或状态已变化。');
+      if (r.integration === 'complete' && r.native?.length && r.text === undefined) return r;
+      if (state.config.paused) throw new Fault('INFORMATION_PAUSED', '阅读与沉淀已暂停，保留待处理回执。');
+      if (!txt(r.text, 6000)) throw new Fault('INFORMATION_DRAFT_MISSING', '没有可核对的待处理正文。');
+      const generation = this.nativeGeneration(r);
+      const roles = this.nativeRoles(r); const native = [];
+      if (r.baseNative) {
+        const base = await this.org.memory.intakeEntry(r.baseNative.id, { subject: spec.subject, project: spec.project, inspect: spec.subject.kind === '主权者', mutation: true });
+        if (!base || digest(base.内容) !== r.baseNative.hash) throw new Fault('INFORMATION_NATIVE_CHANGED', '正式记忆已在别处更正，请重新核对，不覆盖原生更正。');
+      }
+      // Preflight every target before the first native write; the normal policy is authoritative.
+      for (const role of roles) {
+        if (!(await this.org.registry.get({ id: role }))) throw new InvalidBody(`岗位不存在：${role}。`);
+        const kind = this.nativeKind(r); const general = kind === '知识' && r.scope.project === null && r.scope.relationship === null && ['auto', 'roles'].includes(r.scope.audience);
+        const project = general ? '通用' : r.scope.project ?? r.executionProject ?? spec.project;
+        await this.org.policy.check({ subject: spec.subject, action: 'create', target: { id: `记忆/${kind === '知识' && !general ? project : '跨项目'}/${kind}`, kind, authority: '自治', zone: '私有', domain: '集体', project } });
+      }
+      for (const role of roles) native.push(await this.org.memory.rememberIntake({ subject: spec.subject, record: r, generation,
+        project: r.executionProject ?? spec.project, role, body: this.nativeBody(r), check: async () => {
+          const live = await this.load(); const current = live.records.find(row => row.id === r.id);
+          if (!current || current.revision !== r.revision || !this.validRecord(live, current) || live.config.paused
+              || await this.authorize(spec, true) !== authorization) throw scopeChanged();
+          if (r.baseNative) {
+            const base = await this.org.memory.intakeEntry(r.baseNative.id, { subject: spec.subject, project: spec.project, inspect: spec.subject.kind === '主权者', mutation: true });
+            if (!base || digest(base.内容) !== r.baseNative.hash) throw new Fault('INFORMATION_NATIVE_CHANGED', '正式记忆在提交前变化。');
+          }
+        } }));
+      r.native = native; r.nativeGeneration = generation; r.integration = 'complete';
+      delete r.text; delete r.method; delete r.conditions; delete r.limitations;
+      delete r.baseNative;
+      r.history = r.history.map(({ text: _text, ...receipt }) => receipt);
+      return r;
+    });
+    for (const old of result.retire ?? []) if (!result.native.some(n => n.id === old.id)) await this.org.memory.invalidate(old.id, { subject: spec.subject, 原因: '收录内容已由新的正式记忆替代' });
+    if (result.retire?.length) await this.locked(state => { const r = state.records.find(row => row.id === id); if (r?.nativeGeneration === result.nativeGeneration) r.retire = []; });
+    return this.hydrate(result, spec);
+  }
+  async settlePending(spec) {
+    const state = await this.load(); if (state.config.paused) return;
+    for (const r of state.records.filter(r => (r.integration !== 'complete' || r.retire?.length) && this.validRecord(state, r) && this.recordVisible(state, r, spec)).slice(0, 4)) await this.finalizeRecord(spec, r.id);
+    if ((await this.load()).jobs.some(j => ['integrating', 'failed'].includes(j.state) && j.records?.length)) await this.locked(live => {
+      for (const job of live.jobs) if (['integrating', 'failed'].includes(job.state) && job.records?.length
+          && job.records.every(id => live.records.some(r => r.id === id && r.integration === 'complete'))) {
+        job.state = 'completed'; job.completedAt = this.clock.iso(); delete job.error;
+      }
+    });
+  }
+  async distribute(spec, input) {
+    own(input, ['id', 'revision', 'roles', 'reason']); await this.authorize(spec, true);
+    if (spec.subject.kind !== 'Lead' || !natural(input.revision) || !txt(input.reason, 1000) || !Array.isArray(input.roles) || input.roles.length > 16 || input.roles.some(r => !txt(r, 80))) throw new InvalidBody('Lead分配需要id、revision、roles和reason；roles=[]表示仅Lead。');
+    const row = await this.locked(async state => {
+      const r = state.records.find(r => r.id === input.id);
+      if (!r || this.nativeKind(r) !== '知识' || !this.recordVisible(state, r, spec) || !this.validRecord(state, r) || r.humanStopped) throw new Denied('知识分配', '只能分配当前有效的正式知识，不能恢复人侧停止的记录。');
+      if (r.revision !== input.revision) throw new Fault('INFORMATION_CONFLICT', '收录回执已更新。');
+      for (const role of input.roles) if (!(await this.org.registry.get({ id: role }))) throw new InvalidBody(`岗位不存在：${role}。`);
+      const scope = { ...r.scope, audience: input.roles.length ? 'roles' : 'lead', roles: [...new Set(input.roles)] };
+      for (const ref of r.sources) {
+        const item = state.items.find(i => i.id === ref.item); const source = item.source ? state.sources.find(s => s.id === item.source) : null;
+        if (scope.relationship !== null || !containsScope(item.scope, scope) || source && !containsScope(source.scope, scope)) throw new Denied('知识分配私密边界', '私人对话和私密来源不能扩大范围；自治来源由Lead决定适用岗位。');
+      }
+      const native = await this.hydrate(r, spec);
+      if (native.nativeUnavailable) throw new Fault('INFORMATION_NATIVE_CHANGED', '原正式记忆不可用。');
+      r.history.push({ revision: r.revision, scope: r.scope, native: r.native?.map(n => n.id), reason: input.reason, at: this.clock.iso() });
+      Object.assign(r, { text: native.text, method: native.method, conditions: native.conditions, limitations: native.limitations,
+        scope, roles: input.roles, integration: 'pending', revision: r.revision + 1, updatedAt: this.clock.iso(), retire: r.native ?? [] });
+      if (native.nativeId) r.baseNative = { id: native.nativeId, hash: digest(native.nativeBody) };
+      return r;
+    });
+    const result = await this.finalizeRecord(spec, row.id);
+    await this.audit(spec, 'Lead自治分配正式知识', row.id, { roles: input.roles, native: result.native.map(n => n.id) }); return result;
+  }
+  async integrationPlan(spec, input) {
+    await this.authorize(spec);
+    const state = await this.load(); const operation = input.op;
+    if (!['record', 'revise', 'distribute'].includes(operation)) return null;
+    let row; let creates = false; let retires = [];
+    if (operation === 'record') row = await this.buildRecord(structuredClone(state), spec, input.data);
+    else {
+      const old = state.records.find(r => r.id === input.data?.id);
+      if (!old || old.revision !== input.data.revision || !this.recordVisible(state, old, spec)) throw new Fault('INFORMATION_CONFLICT', '待处理的正式记忆或回执版本变化。');
+      row = await this.hydrate(old, spec);
+      if (operation === 'distribute') row.scope = { ...row.scope, audience: input.data.roles?.length ? 'roles' : 'lead', roles: input.data.roles ?? [] };
+      const changed = operation === 'distribute' || input.data.text !== undefined || input.data.state === 'active';
+      if (changed) {
+        row.text = input.data.text ?? row.text; row.revision++; row.integration = 'pending';
+        retires = [...(old.native ?? []), ...(old.retire ?? [])];
+      } else if (input.data.state && input.data.state !== 'active' || input.data.stage === '需修订'
+          || ['无改善', '变差'].includes(input.data.trial?.outcome)) retires = old.native ?? [];
+    }
+    creates = row.integration !== 'complete' && (input.data.state ?? row.state) === 'active';
+    if (operation === 'record') retires = row.retire ?? [];
+    const steps = [{ 动作: 'write', 目标: { id: '信息收录', kind: '记忆', authority: '自治', zone: '私有', domain: '个体', project: spec.project }, 说明: '登记有来源的正式记忆处理回执' }];
+    const kind = this.nativeKind(row); const general = kind === '知识' && row.scope.project === null && row.scope.relationship === null && ['auto', 'roles'].includes(row.scope.audience);
+    const project = general ? '通用' : row.scope.project ?? row.executionProject ?? spec.project;
+    if (creates) {
+      const target = { id: `记忆/${kind === '知识' && !general ? project : '跨项目'}/${kind}`, kind, authority: '自治', zone: '私有', domain: '集体', project };
+      steps.push({ 动作: 'create', 目标: target, 说明: '正式记忆目标预检' });
+      for (const role of this.nativeRoles(row)) steps.push({ 动作: 'create', 目标: target,
+        上下文: { task: null, 类: kind, 介入写: `知识:intake:${row.id}:${this.nativeGeneration(row)}:${role}` },
+        说明: '通过现有记忆服务正式落账', 预览: { 标题: row.title, 内容摘要: digest(this.nativeBody(row)), 岗位: role } });
+    }
+    for (const n of [...new Map(retires.map(n => [n.id, n])).values()]) steps.push({ 动作: 'write', 目标: { id: `记忆/${n.归属}/${n.类}`, kind: n.类, authority: '自治', zone: '私有', domain: '集体', project: n.项目 }, 上下文: { id: n.id, 状态: input.data.state === 'dormant' ? '降权' : 'invalid', 介入写: `记忆:${input.data.state === 'dormant' ? '降权' : 'invalid'}:${n.id}` }, 说明: '正式记忆更正或停用旧条目', 预览: { id: n.id } });
+    return { 步骤: steps };
   }
   usage(state) { return state.usage[dayOf(this.clock)] ??= { readChars: 0, modelCalls: 0 }; }
   async blob(hashValue) {
@@ -242,9 +391,9 @@ export class InformationService {
         sourceStatus: !i.source ? 'available' : !state.sources.some(s => s.id === i.source) ? 'disconnected' : state.sources.find(s => s.id === i.source).enabled ? 'available' : 'disabled',
         processing: i.processedHash === i.hash ? '已整理' : processed.has(`${i.hash}:${scopeKey(i.scope)}`) ? '复用同文整理' : '待阅读' }));
     }
-    else if (['growth', 'candidates', 'interests'].includes(collection)) entries = state.records.filter(r => this.recordVisible(state, r, spec)
+    else if (['growth', 'candidates', 'interests'].includes(collection)) entries = await Promise.all(state.records.filter(r => this.recordVisible(state, r, spec)
       && (collection === 'candidates' ? r.type === 'candidate' : r.type === 'growth' && (collection !== 'interests' || r.kind === '兴趣' || r.kind === '疑问')))
-      .map(r => ({ ...r, usable: this.validRecord(state, r), history: undefined, trials: r.trials.slice(-3), trialsTotal: r.trials.length }));
+      .map(async r => { const row = await this.hydrate(r, spec); return { ...row, usable: this.validRecord(state, r) && !row.nativeUnavailable && (!row.nativeState || row.nativeState === '有效'), history: undefined, nativeHistory: undefined, trials: r.trials.slice(-3), trialsTotal: r.trials.length }; }));
     else throw new InvalidBody('collection只能为status/materials/growth/interests/candidates。');
     if (input.id) entries = entries.filter(i => i.id === input.id);
     entries.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)) || a.id.localeCompare(b.id));
@@ -406,14 +555,20 @@ export class InformationService {
     if (input.type === 'candidate' && (!txt(input.method, 6000) || !txt(input.conditions, 1500) || !txt(input.limitations, 1500)
         || !Array.isArray(input.roles) || !input.roles.length || input.roles.length > 16 || input.roles.some(r => !txt(r, 80)))) throw new InvalidBody('能力候选需要method、conditions、limitations和roles。');
     const sources = await this.references(state, spec, input.sources);
+    if (input.kind === '共同回忆' && sources.some(ref => state.items.find(i => i.id === ref.item)?.context?.channel !== 'conversation')) throw new InvalidBody('共同回忆需要当前真实对话来源，外部作品中的经历不能冒充双方共同经历。');
     // Intersection of source scopes: never let a model broaden confidentiality during distillation.
     const scopes = sources.map(ref => state.items.find(i => i.id === ref.item).scope);
     const relationship = scopes.find(s => s.relationship)?.relationship ?? null;
-    const restricted = scopes.some(s => s.audience === 'lead');
+    const restricted = scopes.some(s => s.audience === 'lead'); const fixed = scopes.filter(s => s.audience === 'roles');
     const projects = [...new Set(scopes.map(s => s.project).filter(Boolean))];
-    const scope = { project: projects[0] ?? null, audience: restricted ? 'lead' : 'roles',
-      roles: restricted ? [] : scopes[0].roles.filter(role => scopes.every(s => s.roles.includes(role))), relationship };
+    const scope = { project: projects[0] ?? null, audience: restricted ? 'lead' : fixed.length ? 'roles' : 'auto',
+      roles: restricted || !fixed.length ? [] : fixed[0].roles.filter(role => fixed.every(s => s.roles.includes(role))), relationship };
     if (scope.audience === 'roles' && !scope.roles.length) { scope.audience = 'lead'; scope.roles = []; }
+    if (input.roles !== undefined && (!Array.isArray(input.roles) || input.roles.length > 16 || input.roles.some(r => !txt(r, 80)))) throw new InvalidBody('roles须为至多16个岗位名称。');
+    if (scope.audience === 'auto') {
+      scope.audience = input.roles?.length && (input.type === 'candidate' || input.kind === '知识') ? 'roles' : 'lead';
+      scope.roles = scope.audience === 'roles' ? [...new Set(input.roles)] : [];
+    }
     const dedup = digest(canonical({ type: input.type, text: input.text, method: input.method ?? null, sources: sources.map(s => [s.item, s.hash]), scope }));
     const prior = state.records.find(r => r.dedup === dedup); if (prior) return prior;
     const replaced = [];
@@ -428,18 +583,20 @@ export class InformationService {
       }
     }
     if (state.records.length >= INFORMATION_LIMITS.records) throw new Fault('INFORMATION_RECORD_LIMIT', '成长记录达到上限，请先整理。');
-    const row = { id: key(input.type === 'growth' ? 'growth' : 'candidate'), revision: 1, type: input.type, kind: input.kind ?? null,
-      title: input.title, text: input.text, sources, scope, state: 'active', stage: input.type === 'candidate' ? '灵感' : null,
+    const row = { id: `${input.type === 'growth' ? 'growth' : 'candidate'}-${dedup.slice(0, 32)}`, revision: 1, type: input.type, kind: input.kind ?? null,
+      title: input.title, text: input.text, sources, scope, state: 'active', integration: 'pending', executionProject: spec.project, stage: input.type === 'candidate' ? '灵感' : null,
       method: input.method ?? null, conditions: input.conditions ?? null, limitations: input.limitations ?? null, roles: input.roles ?? [],
       expiresAt: input.expiresAt ?? null, updatedAt: this.clock.iso(), author: spec.subject.id, claim: '模型整理，未认证语义有效或人格成长', dedup, history: [], trials: [] };
     row.replaces = replaced.map(r => r.id);
+    row.retire = replaced.flatMap(r => r.native ?? []);
     for (const old of replaced) { old.history.push({ revision: old.revision, text: old.text, state: old.state, reason: `由${row.id}重新理解`, at: this.clock.iso() }); old.state = 'needs-review'; old.revision++; }
     state.records.push(row); return row;
   }
   async record(spec, input) {
     const authorization = await this.authorize(spec, true);
     const result = await this.locked(async state => { const row = await this.buildRecord(state, spec, input); if ((await this.authorize(spec, true)) !== authorization) throw scopeChanged(); return row; });
-    await this.audit(spec, '信息收获记录', result.id, { revision: result.revision }); return result;
+    const integrated = await this.finalizeRecord(spec, result.id);
+    await this.audit(spec, '信息收录纳入正式记忆', result.id, { revision: result.revision, native: integrated.native?.map(n => n.id) }); return integrated;
   }
   async revise(spec, input, human = false) {
     own(input, ['id', 'revision', 'state', 'text', 'reason', 'stage', 'trial', 'expiresAt']);
@@ -450,6 +607,7 @@ export class InformationService {
       if (!r || !this.recordVisible(state, r, spec)) throw new Denied('成长记录范围', '记录不在当前范围。');
       if (r.revision !== input.revision) throw new Fault('INFORMATION_CONFLICT', '记录已在别处变化，请重新读取后修订。');
       if (r.humanStopped && !human) throw new Denied('用户已纠正', '此记录被人侧停用，模型不能自行恢复或改写。');
+      const native = await this.hydrate(r, spec);
       if (input.state !== undefined && !['active', 'dormant', 'withdrawn', 'needs-review'].includes(input.state)) throw new InvalidBody('state无效。');
       if (input.text !== undefined && !txt(input.text, 6000)) throw new InvalidBody('修订文字不能为空或超过6000字符。');
       if (input.expiresAt !== undefined && input.expiresAt !== null && (!Number.isFinite(Date.parse(input.expiresAt)) || Date.parse(input.expiresAt) <= this.clock.ms())) throw new InvalidBody('expiresAt必须为未来时间或null。');
@@ -467,7 +625,12 @@ export class InformationService {
       if (input.stage === '已验证') {
         if (!this.validRecord(state, r) || !(trial && trial.outcome === '有帮助' && ['已采纳', '已结账'].includes(trial.taskState))) throw new InvalidBody('标为已验证需当前有效来源，并附同项目已采纳/已结账任务的一次有帮助试用；效果仍是执行者声明。');
       }
-      r.history.push({ revision: r.revision, text: r.text, state: r.state, stage: r.stage, reason: input.reason, at: this.clock.iso(), human });
+      r.history.push({ revision: r.revision, state: r.state, stage: r.stage, reason: input.reason, at: this.clock.iso(), human, native: r.native?.map(n => n.id) });
+      if (input.text !== undefined || input.state === 'active') {
+        r.text = input.text ?? native.text; r.method = native.method; r.conditions = native.conditions; r.limitations = native.limitations;
+        r.retire = [...(r.retire ?? []), ...(r.native ?? [])]; r.integration = 'pending';
+        if (native.nativeId) r.baseNative = { id: native.nativeId, hash: digest(native.nativeBody) };
+      }
       if (r.history.length > 50) throw new Fault('INFORMATION_HISTORY_LIMIT', '单条修订超过50次，请建立有出处的新记录。');
       if (trial) { r.trials.push(trial); if (r.trials.length > 50) throw new InvalidBody('单候选最多50次试用。'); }
       for (const name of ['state', 'text', 'stage', 'expiresAt']) if (input[name] !== undefined) r[name] = input[name];
@@ -476,7 +639,12 @@ export class InformationService {
       if (input.stage === '需修订') r.state = 'needs-review';
       r.revision++; r.updatedAt = this.clock.iso(); await this.authorize(spec, true); return r;
     });
-    await this.audit(spec, '成长记录修订', result.id, { revision: result.revision, human }); return result;
+    if (result.state === 'active' && result.integration !== 'complete') await this.finalizeRecord(spec, result.id);
+    else if (result.state !== 'active') for (const entry of result.native ?? []) {
+      if (input.state === 'dormant') await this.org.memory.demote(entry.id, { subject: spec.subject, 原因: input.reason });
+      else await this.org.memory.invalidate(entry.id, { subject: spec.subject, 原因: input.reason });
+    }
+    await this.audit(spec, '正式记忆收录处置', result.id, { revision: result.revision, human }); return this.hydrate((await this.load()).records.find(r => r.id === result.id), spec);
   }
   publicationRecord(state, spec, input) {
     own(input, ['id', 'revision']);
@@ -491,7 +659,8 @@ export class InformationService {
   }
   async publicationPlan(spec, input) {
     await this.authorize(spec);
-    const r = this.publicationRecord(await this.load(), spec, input);
+    const r = await this.hydrate(this.publicationRecord(await this.load(), spec, input), spec);
+    if (!r.nativeActive) throw new InvalidBody('能力候选的正式知识已停用，不能发布。');
     const id = `learned-${r.id.slice('candidate-'.length)}`;
     const old = await this.org.capability.read({ subject: spec.subject, id, 来源: '自治' });
     if (old && !old.正文.includes(this.publicationBody(r))) throw new Fault('INFORMATION_CAPABILITY_CONFLICT', '对应能力ID已有不同内容，未覆盖。');
@@ -503,7 +672,8 @@ export class InformationService {
   async publish(spec, input) {
     own(input, ['id', 'revision']); await this.authorize(spec, true);
     const result = await this.locked(async state => {
-      const r = this.publicationRecord(state, spec, input);
+      const r = await this.hydrate(this.publicationRecord(state, spec, input), spec);
+      if (!r.nativeActive) throw new InvalidBody('能力候选的正式知识已停用，不能发布。');
       if (r.published) return r.published;
       if (r.stage !== '已验证' || !this.validRecord(state, r)) throw new InvalidBody('只有来源有效、经过试用的能力候选才能发布。');
       if (r.scope.relationship || r.scope.project || r.scope.audience !== 'roles' || r.roles.some(role => !r.scope.roles.includes(role))) throw new Denied('能力发布范围', '自治能力库为组织共用；私人或项目资料不能自动扩散，适用岗位也不能越出来源共享名单。请由人侧先明确分享材料到所需范围，再重新提炼。');
@@ -513,17 +683,17 @@ export class InformationService {
       if (old && !old.正文.includes(body)) throw new Fault('INFORMATION_CAPABILITY_CONFLICT', '对应能力ID已有不同内容，未覆盖。');
       const receipt = old ? { id, 来源: '自治', path: old.path, recovered: true } : await this.org.capability.publish({ subject: spec.subject,
         id, 名: r.title, 正文: body, 适用岗位: r.roles, 依据: `信息收录候选${r.id}第${r.revision}版；来源与试用可追溯` });
-      r.published = receipt; return receipt;
+      state.records.find(row => row.id === r.id).published = receipt; return receipt;
     });
     await this.audit(spec, '信息能力发布', input.id, { capability: result.id }); return result;
   }
   async capabilityUsable(id, subject) {
-    if (!/^learned-[a-f0-9-]{36}$/.test(id)) return true;
+    if (!/^learned-(?:[a-f0-9]{32}|[a-f0-9-]{36})$/.test(id)) return true;
     const state = await this.load();
     const r = state.records.find(r => r.id === `candidate-${id.slice('learned-'.length)}`);
     const valid = !!r && r.type === 'candidate' && r.stage === '已验证' && r.scope.project === null && r.scope.relationship === null
       && r.scope.audience === 'roles' && r.roles.every(role => r.scope.roles.includes(role)) && this.validRecord(state, r);
-    if (!valid || !subject) return false;
+    if (!valid || !subject || !r.native?.length || !(await Promise.all(r.native.map(n => this.org.memory.intakeActive(n.id)))).every(Boolean)) return false;
     if (subject.kind === '主权者') return true;
     const actor = (await this.org.registry.identity()).members?.[subject.id];
     return actor?.status === '在岗' && (subject.kind === 'Lead' ? actor.岗位 === 'Lead' : subject.kind === '成员' && r.roles.includes(actor.岗位));
@@ -551,8 +721,9 @@ export class InformationService {
     if (input.op === 'record') return this.record(spec, input.data);
     if (input.op === 'revise') return this.revise(spec, input.data);
     if (input.op === 'finish') return this.finishReading(spec, input.data);
+    if (input.op === 'distribute') return this.distribute(spec, input.data);
     if (input.op === 'publish') return this.publish(spec, input.data);
-    throw new InvalidBody('op只能为submit/submit_tool/record/revise/finish/publish。');
+    throw new InvalidBody('op只能为submit/submit_tool/record/revise/finish/distribute/publish。');
   }
   /** A fixed authenticated hand-off API for other plugins; no arbitrary path, tool or command forwarding. */
   async deposit(spec, input) {
@@ -603,6 +774,12 @@ export class InformationService {
     if (input.op === 'purge') {
       await this.org.audit.append({ 动作: '信息资料快照删除意图', 主体: spec.subject, 对象: { id: input.id, kind: '信息资料' }, 项目: spec.project,
         依据: '已认证人侧明确删除；先记意图再清理快照', 结果: '已记录删除意图，非删除完成' });
+      const purgeState = await this.load();
+      const purgeItem = purgeState.items.find(i => i.id === input.id);
+      if (!purgeItem || purgeItem.revision !== input.revision || purgeItem.state !== 'withdrawn') throw new InvalidBody('先按当前版本撤回资料，再清理快照。');
+      for (const record of purgeState.records.filter(r => r.sources.some(s => s.item === input.id))) {
+        for (const entry of await this.org.memory.intakeReferences(record.id)) await this.org.memory.purge(entry.id, { subject: spec.subject, 理由: '人侧明确删除来源及派生正式记忆' });
+      }
       const removed = await this.locked(async state => {
         const item = state.items.find(i => i.id === input.id); if (!item || item.revision !== input.revision || item.state !== 'withdrawn') throw new InvalidBody('先按当前版本撤回资料，再清理快照。');
         const hashes = item.versions.map(v => v.hash);
@@ -679,8 +856,9 @@ export class InformationService {
       const offset = input.offset ?? 0; const limit = bounded(input.limit, 10, 30);
       if (!natural(offset)) throw new InvalidBody('offset越界。');
       const events = [...record.history.map(row => ({ ...row, event: 'revision' })), ...record.trials.map(row => ({ ...row, event: 'trial' }))];
-      return { id: record.id, title: record.title, revision: record.revision, format: 'growth-history', hash: null,
-        text: JSON.stringify({ current: { text: record.text, state: record.state, stage: record.stage, sources: record.sources }, events: events.slice(offset, offset + limit) }, null, 2),
+      const native = await this.hydrate(record, spec);
+      return { id: record.id, title: native.title, revision: record.revision, format: 'growth-history', hash: null,
+        text: JSON.stringify({ current: { text: native.text, state: record.state, stage: record.stage, native: record.native, nativeHistory: native.nativeHistory, sources: record.sources }, events: events.slice(offset, offset + limit) }, null, 2),
         coverage: `共${events.length}项修订与试用历史，当前从第${offset + 1}项起`, nextOffset: offset + limit < events.length ? offset + limit : null };
     }
     if (input.version !== undefined && (!natural(input.version) || input.version < 1)) throw new InvalidBody('version须为正整数。');
@@ -694,9 +872,54 @@ export class InformationService {
     return { ...this.metadata(item), ...(requested ?? item.versions.findLast(v => v.hash === version)), chars: material.text.length, hash: version, context: item.context, text, offset,
       nextOffset: offset + text.length < material.text.length ? offset + text.length : null };
   }
+  async prepareExploration(spec) {
+    const authorization = await this.authorize(spec, true);
+    if (spec.subject.kind !== 'Lead' || spec.subject.id !== spec.session) return null;
+    return this.locked(async state => {
+      const usage = this.usage(state);
+      if (state.config.paused || !state.config.autoLearn || !state.config.autoExplore
+          || (usage.sourceReads ?? 0) >= state.config.dailySourceReads || usage.modelCalls + 1 >= state.config.dailyModelCalls
+          || usage.readChars + 6000 >= state.config.dailyReadChars) return null;
+      const job = { id: key('exploration'), kind: 'exploration', state: 'running', day: dayOf(this.clock), pid: process.pid,
+        configRevision: state.configRevision, session: spec.session, project: spec.project, startedAt: this.clock.iso() };
+      usage.sourceReads = (usage.sourceReads ?? 0) + 1; usage.modelCalls++;
+      state.jobs.push(job); state.jobs = state.jobs.slice(-100);
+      return { job, authorization };
+    });
+  }
+  async checkExploration(spec, prepared, state = null) {
+    state ??= await this.load();
+    const job = state.jobs.find(j => j.id === prepared.job.id);
+    if (!job || job.state !== 'running' || state.config.paused || !state.config.autoLearn || !state.config.autoExplore
+        || state.configRevision !== prepared.job.configRevision || await this.authorize(spec, true) !== prepared.authorization) throw scopeChanged();
+    return job;
+  }
+  async explorationInput(spec, prepared, input) {
+    const chars = JSON.stringify(input).length;
+    if (chars > 6000) throw new InvalidBody('探索候选输入超过字符预算。');
+    await this.locked(async state => {
+      const job = await this.checkExploration(spec, prepared, state); const usage = this.usage(state);
+      if (usage.readChars + chars > state.config.dailyReadChars) throw new Fault('INFORMATION_BUDGET', '探索候选字符预算不足。');
+      usage.readChars += chars; job.inputChars = chars;
+    });
+  }
+  async finishExploration(spec, prepared, material = null) {
+    return this.locked(async state => {
+      const job = await this.checkExploration(spec, prepared, state);
+      let item = null;
+      if (material) item = await this.addMaterial(state, { id: `material-${digest(material.text).slice(0, 32)}`, name: 'B站自主探索',
+        material: { ...material, format: 'tool-result', coverage: '来源插件最终成功返回的文字片段，最多12000字符；字幕、提纲或抽样不代表看完视频' },
+        scope: { project: null, audience: 'auto', roles: [], relationship: null },
+        context: { channel: 'source-tool', tool: 'bili_humanism_read', autonomous: true, session: spec.session, job: job.id,
+          claim: '实际宿主工具结果；内容可信度、覆盖和语义仍需核对' } });
+      job.state = 'completed'; job.material = item?.id ?? null; job.completedAt = this.clock.iso();
+      return item ? this.metadata(item) : null;
+    });
+  }
   async prepareLearning(spec) {
     await this.authorize(spec, true);
     if (spec.subject.kind !== 'Lead' || spec.session !== spec.subject.id) return null;
+    await this.settlePending(spec);
     const buffer = await this.org.turnBuffer.load(spec.project, spec.session);
     return this.locked(async state => {
       if (state.config.paused || !state.config.autoLearn) return null;
@@ -739,12 +962,16 @@ export class InformationService {
       state.jobs.push(job); state.jobs = state.jobs.slice(-1000);
       usage.modelCalls++; usage.readChars += text.length;
       await this.authorize(spec, true);
+      const existing = (await Promise.all(state.records.filter(r => this.validRecord(state, r) && this.recordVisible(state, r, spec)).slice(-8).map(async r => {
+        const native = await this.hydrate(r, spec);
+        return native.nativeActive ? { id: r.id, revision: r.revision, title: native.title, text: (native.text ?? '').slice(0, 300), kind: r.kind, scope: r.scope, humanCorrected: !!r.humanStopped, native: r.native?.map(n => n.id) } : null;
+      }))).filter(Boolean);
       return { job, chosen, input: { source: { id: 'source', title: chosen.material.title, author: chosen.material.author ?? null, url: chosen.material.url ?? null,
         format: chosen.material.format, declaredCoverage: chosen.material.coverage, purpose: chosen.purpose ?? '两者', scope: chosen.scope, selection: chosen.selection ?? '本轮相遇', text,
         coverage: { start: chosen.offset, end: chosen.offset + text.length, total: chosen.material.text.length, complete: chosen.offset === 0 && text.length === chosen.material.text.length },
         context: chosen.conversation ? { channel: 'conversation', messages: chosen.conversation.refs }
           : { channel: chosen.context?.channel ?? 'directory', encounter: chosen.context?.encounter ?? null, tool: chosen.context?.tool ?? null } },
-        existing: state.records.filter(r => this.validRecord(state, r) && this.recordVisible(state, r, spec)).slice(-8).map(r => ({ id: r.id, revision: r.revision, title: r.title, text: r.text.slice(0, 300), kind: r.kind, scope: r.scope, humanCorrected: !!r.humanStopped })) } };
+        existing, availableRoles: (await this.org.registry.list()).map(r => r.id) } };
     });
   }
   async commitLearning(spec, prepared, response, { active = () => true } = {}) {
@@ -788,15 +1015,17 @@ export class InformationService {
           delete state.conversationOffsets[chosen.conversation.checkpoint];
         } else state.conversationOffsets[chosen.conversation.checkpoint] = { fingerprint: chosen.conversation.fingerprint, offset: prepared.input.source.coverage.end };
       }
-      job.state = 'completed'; job.records = ids; job.completedAt = this.clock.iso(); job.partial = !prepared.input.source.coverage.complete;
+      job.state = ids.length ? 'integrating' : 'completed'; job.records = ids; job.completedAt = this.clock.iso(); job.partial = !prepared.input.source.coverage.complete;
       await this.authorize(spec, true); return { job: job.id, records: ids, partial: job.partial };
     });
-    await this.audit(spec, '自动阅读整理', result.job, { records: result.records.length, partial: result.partial }); return result;
+    for (const id of result.records) await this.finalizeRecord(spec, id);
+    if (result.records.length) await this.locked(state => { const job = state.jobs.find(j => j.id === result.job); job.state = 'completed'; job.completedAt = this.clock.iso(); });
+    await this.audit(spec, '自动阅读纳入正式记忆', result.job, { records: result.records.length, partial: result.partial }); return result;
   }
   async failLearning(id, error) {
     return this.locked(async state => {
       const job = state.jobs.find(j => j.id === id);
-      if (job?.state === 'running') { job.state = 'failed'; job.error = error?.code ?? error?.name ?? 'unknown'; job.completedAt = this.clock.iso(); }
+      if (job && ['running', 'integrating'].includes(job.state)) { job.state = 'failed'; job.error = error?.code ?? error?.name ?? 'unknown'; job.completedAt = this.clock.iso(); }
     });
   }
   async recoverLearning() {
@@ -812,14 +1041,18 @@ export class InformationService {
   async context(spec) {
     const authorization = await this.authorize(spec); const state = await this.load();
     const records = state.records.filter(r => this.recordVisible(state, r, spec) && this.validRecord(state, r));
-    const recent = records.filter(r => r.type === 'growth').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 10);
+    const recent = [];
+    for (const r of records.filter(r => r.type === 'growth' && r.integration === 'complete').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))) {
+      if ((await this.hydrate(r, spec)).nativeActive) recent.push(r);
+      if (recent.length >= 10) break;
+    }
     const processed = this.processedKeys(state);
     const pending = state.items.filter(i => this.itemVisible(state, i, spec) && i.state === 'active' && !processed.has(`${i.hash}:${scopeKey(i.scope)}`));
     // Alternate recent and stable hash order: leave room for discovery outside existing interests.
     const queue = this.discoveryOrder(state, pending, spec).slice(0, 4);
     const buffer = spec.subject.kind === 'Lead' && spec.session === spec.subject.id ? await this.org.turnBuffer.load(spec.project, spec.session) : null;
     const messages = buffer?.rounds.slice(-2).flatMap(r => r.messages).slice(-8).map(m => ({ id: m.id, role: m.role, seq: m.seq, clipped: m.clipped })) ?? [];
-    const frame = { dataRevision: state.revision, paused: state.config.paused, growth: recent.map(r => ({ id: r.id, revision: r.revision, kind: r.kind, title: r.title, text: r.text.slice(0, 500), sources: r.sources.map(s => ({ item: s.item, hash: s.hash })) })),
+    const frame = { dataRevision: state.revision, paused: state.config.paused, growth: recent.map(r => ({ id: r.id, revision: r.revision, kind: r.kind, native: r.native.map(n => ({ id: n.id, 类: n.类 })), instruction: '正文通过memory_query读取；人格连续性和专业知识沿现有召回机制提供' })),
       pending: pending.length, discoveries: queue.map(({ item: i, reason }) => ({ id: i.id, title: i.title, chars: i.chars, reason })), conversationMessages: messages,
       sourceToolReceipts: [...this.toolReceipts.values()].filter(r => r.session === spec.session && r.project === spec.project && this.clock.ms() - r.at <= 1800000).slice(-4).map(r => ({ id: r.id, tool: r.tool, preview: r.content.slice(0, 120) })),
       candidates: records.filter(r => r.type === 'candidate').slice(-3).map(r => ({ id: r.id, title: r.title, stage: r.stage })) };
