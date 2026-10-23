@@ -213,7 +213,7 @@ it('自主探索使用当前真实Agent和完整工具流水线，选题与取�
 it('探索不能抓取模型自造目标；宿主拒绝、暂停和Agent被替换均不收录或重试', async () => scene(async org => {
   const session = { id: LEAD.id, header: { cwd: process.cwd() } }; const agent = { session }; let calls = 0;
   const tools = { get: () => ({}), async execute() { calls++; return { isError: true, content: [{ type: 'text', text: 'host-denied' }] }; } };
-  const args = { org, session, spec: spec(), tools, agents: { get: () => agent }, route: {}, signal: new AbortController().signal,
+  const args = { org, session, spec: spec(), tools, agents: { get: () => agent }, route: { provider: 'fixture', model: 'fixture' }, signal: new AbortController().signal,
     active: () => true, llm: fixtureModel(() => { throw Error('拒绝后不能调用模型'); }) };
   await assert.rejects(exploreSource(args), { code: 'INFORMATION_SOURCE_FAILED' });
   assert.equal(calls, 1); assert.equal((await org.information.load()).items.length, 0);
@@ -229,8 +229,9 @@ for (const mode of ['invented', 'pause', 'agent-change']) it(`探索边界 ${mod
     if (mode === 'agent-change') live = { session };
     return { id: mode === 'invented' ? 'BV1xx411c7mE' : input.candidates[0].id };
   });
-  await assert.rejects(exploreSource({ org, session, spec: spec(), tools, agents: { get: () => live }, route: {},
-    signal: new AbortController().signal, active: () => true, llm }));
+  await assert.rejects(exploreSource({ org, session, spec: spec(), tools, agents: { get: () => live }, route: { provider: 'fixture', model: 'fixture' },
+    signal: new AbortController().signal, active: () => true, llm }),
+  { code: mode === 'invented' ? 'INFORMATION_SELECTION_INVALID' : mode === 'pause' ? 'INFORMATION_SCOPE_CHANGED' : 'INFORMATION_SOURCE_CHANGED' });
   assert.equal(calls, 1); assert.equal((await org.information.load()).items.length, 0);
 }));
 
@@ -238,7 +239,7 @@ it('B站取稿成功但没有实际文字时，只留探索回执，元数据不
   const session = { id: LEAD.id, header: { cwd: process.cwd() } }; const agent = { session };
   const tools = { get: () => ({}), async execute(exec) { return { isError: false, content: [{ type: 'text', text: JSON.stringify({ result:
     exec.name === 'bili_humanism_candidates' ? [{ bvid: 'BV1xx411c7mD', title: '只有元数据' }] : { title: '只有元数据', route: null, segments: [], coverage: '未取得字幕' } }) }] }; } };
-  const result = await exploreSource({ org, session, spec: spec(), tools, agents: { get: () => agent }, route: {},
+  const result = await exploreSource({ org, session, spec: spec(), tools, agents: { get: () => agent }, route: { provider: 'fixture', model: 'fixture' },
     signal: new AbortController().signal, active: () => true, llm: fixtureModel(input => ({ id: input.candidates[0].id })) });
   assert.equal(result.reason, 'no-readable-text');
   const state = await org.information.load(); assert.equal(state.items.length, 0); assert.equal(state.records.length, 0);
