@@ -344,3 +344,25 @@ it('恢复会话在Lead重新登记前只等待，不消耗模型或形成假失
   await org.registry.assign({ subject: SOVEREIGN, 岗位: 'Lead', 实例: session.id });
   hooks.schedule(session); await hooks.flush(); assert.equal(calls, 1); assert.equal(hooks.health().lastFailure.code, 'FIXTURE_MODEL_FAILURE'); hooks.stop();
 }));
+
+it('恢复会话已有钉卡但运行绑定过期时等待；宿主真实根会话续接后才阅读', async () => scene(async (service, org) => {
+  await deposit(service); let calls = 0;
+  const old = { 代: 'information-old-host', pid: 999999 };
+  const current = { 代: 'information-current-host', pid: process.pid };
+  const session = { id: 'information-resumed-lead', header: { cwd: process.cwd() }, requestHeader: () => ({ config: { provider: 'fixture', model: 'fixture' } }) };
+  await org.registry.recordBoot(old);
+  await org.registry.ensureLeadInstance({ 实例: session.id, 代次: old });
+  await org.registry.recordBoot(current);
+  const before = (await org.registry.identity()).members[session.id];
+  const hooks = createInformationHooks({ org, projectOf: () => P,
+    llmOf: () => ({ async prepareCall() { calls++; throw Object.assign(Error('fixture route failure'), { code: 'FIXTURE_MODEL_FAILURE' }); } }) });
+  try {
+    hooks.schedule(session); await hooks.flush();
+    assert.equal(hooks.health().waitingForLead, 1); assert.equal(hooks.health().failures, 0); assert.equal(calls, 0);
+    assert.deepEqual((await org.registry.identity()).members[session.id], before, 'background work cannot rebind or revive identity');
+    assert.deepEqual((await service.load()).usage, {}, 'waiting reserves no reading/model budget');
+    assert.equal((await org.registry.ensureLeadInstance({ 实例: session.id, 代次: current, 宿主会话: session })).就绪, true);
+    hooks.schedule(session); await hooks.flush();
+    assert.equal(calls, 1); assert.equal(hooks.health().lastFailure.code, 'FIXTURE_MODEL_FAILURE');
+  } finally { hooks.stop(); }
+}));
