@@ -7,7 +7,7 @@ import { runAction } from '../lib/actions.js';
 import { recallProfessionalContext } from '../src/professional-context.js';
 import { injectProfessionalContext } from '../components/kernel/lib/professional-context.js';
 
-it('交卷后自动段变空不改写既有采用声明及来源，说明不认证采用或收益', async () => {
+it('交卷后不提供自动段，不改写既有采用声明及来源，说明不认证采用或收益', async () => {
   const f = await makeFixture(), P = 'adoption-guidance';
   try {
     const org = await Org.open({ home: f.home, privateRoot: f.privateRoot, factoryRoot: f.factoryRoot, project: P });
@@ -19,6 +19,9 @@ it('交卷后自动段变空不改写既有采用声明及来源，说明不认�
     await org.tasks.start(task.id, { subject: MEMBER, 项目: P });
     const before = await recallProfessionalContext({ org, subject: MEMBER, project: P });
     assert.deepEqual(before.知识.map(row => row.id), [knowledge.id]);
+    const contextOptions = { agent: { session: { id: MEMBER.id, header: { cwd: process.cwd(), origin: 'subagent', delegationDepth: 1 } } }, org, projectOf: () => P };
+    const activeAssembly = await injectProfessionalContext({ sections: [] }, contextOptions);
+    assert.match(activeAssembly.sections[0].text, /看到不等于采用/);
     const result = await runAction({ org, 项目: P, 主体: MEMBER, args: { action: 'task_submit', id: task.id,
       结论: '交付待验收', 采用知识: [{ id: knowledge.id, 用途: '检查跨块状态', 适用判断: '输入为分块字节', 使用结果: '未知' }] } });
     assert.match(result.知识采用说明, /交卷后变空不证明此前未召回/);
@@ -26,8 +29,8 @@ it('交卷后自动段变空不改写既有采用声明及来源，说明不认�
     const log = await readFile(org.layout.taskLog(P), 'utf8');
     const after = await recallProfessionalContext({ org, subject: MEMBER, project: P });
     assert.deepEqual(after.知识, []);
-    const assembly = await injectProfessionalContext({ sections: [] }, { agent: { session: { id: MEMBER.id, header: { cwd: process.cwd(), origin: 'subagent', delegationDepth: 1 } } }, org, projectOf: () => P });
-    assert.match(assembly.sections[0].text, /看到不等于采用/);
+    const assembly = await injectProfessionalContext(activeAssembly, contextOptions);
+    assert.deepEqual(assembly.sections, [], '未执行查询时不提供空结果，也不续用旧段');
     const query = await org.knowledgeReuse.query({ subject: LEAD, 项目: P, 任务: task.id });
     const entry = query.采用页.条目[0].采用知识[0];
     assert.equal(entry.id, knowledge.id); assert.equal(entry.使用结果, '未知');
