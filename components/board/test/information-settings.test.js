@@ -9,13 +9,13 @@ import { Org } from '../../../src/org.js';
 import { information路由 } from '../../kernel/lib/routes.js';
 
 const project = 'information-ui';
-async function scene(run) {
+async function scene(run, options = {}) {
   const f = await makeFixture(); const org = await Org.open({ ...f, project });
   const ctx = { get: () => ({ requestRejection: () => undefined }) };
   const handlers = { settings: information路由({ org, ctx, 项目: project }), preview: information路由({ org, ctx, 项目: project, mode: 'preview' }) };
   const calls = [];
   let pending = 0;
-  const s = await settingsScene({ informationOnly: true, informationRequest: async (url, init) => {
+  const s = await settingsScene({ informationOnly: true, uiWorkspace: options.uiWorkspace?.(f), informationRequest: async (url, init) => {
     pending++;
     try {
     calls.push({ url, method: init.method, body: init.body && JSON.parse(init.body) });
@@ -67,3 +67,35 @@ it('成长记录修订、停用和历史均经真实服务，人侧预览不计�
   await s.click('停止使用 听叶子'); assert.equal((await org.information.query(target, { collection: 'growth' })).entries[0].state, 'withdrawn');
   assert.deepEqual((await org.information.load()).usage, usage);
 }));
+
+const listing = (path, entries = [], home = path) => ({ path, home, crumbs: [{ name: '主目录', path: home }, ...(path === home ? [] : [{ name: path.split('/').at(-1), path }])], entries: entries.map(p => ({ name: p.split('/').at(-1), path: p, hidden: p.split('/').at(-1).startsWith('.') })), truncated: false });
+it('像工作区一样浏览并跨目录多选，一次保存全部来源；取消不连接，已连接项不可重复选择', async () => scene(async (s, org, f, calls) => {
+  const one = join(f.home, '知识库甲'); const two = join(f.home, '插件导出乙');
+  await mkdir(one); await mkdir(two);
+  await s.click('选择信息来源目录');
+  s.change('选择目录 ' + one, true); await s.click('进入 插件导出乙'); await s.click('选择当前目录');
+  assert.match(s.text(), /已选择 2 个目录/); assert.equal((await org.information.load()).sources.length, 0);
+  await s.click('取消选择目录'); assert.equal((await org.information.load()).sources.length, 0);
+  await s.click('选择信息来源目录'); assert.match(s.text(), /已选择 0 个目录/);
+  s.change('选择目录 ' + one, true); s.change('选择目录 ' + two, true);
+  await s.click('连接选中目录（2）');
+  const state = await org.information.load(); assert.deepEqual(state.sources.map(x => x.path).sort(), [one, two].sort());
+  assert.equal(state.configRevision, 1); assert.equal(calls.filter(c => c.body?.op === 'sources_add').length, 1);
+  assert.ok(state.sources.every(x => x.scope.audience === 'lead' && x.scope.project === null && x.recursive));
+  await s.click('选择信息来源目录'); assert.equal(s.field('选择目录 ' + one).props.disabled, true); assert.equal(s.field('选择目录 ' + two).props.checked, true);
+}, { uiWorkspace: f => ({ async listDirectory(path = f.home) { return listing(path, path === f.home ? [join(f.home, '知识库甲'), join(f.home, '插件导出乙')] : [], f.home); } }) }));
+
+it('原生目录选择宿主允许连续添加，取消不丢所选目录，保存冲突保留选择并要求重新核对', async () => {
+  let picks = 0; let home;
+  await scene(async (s, org, f) => {
+    const dir = join(f.home, '原生选择'); await mkdir(dir);
+    await s.click('选择信息来源目录'); assert.match(s.text(), /已选择 1 个目录/);
+    await s.click('继续选择文件夹'); assert.match(s.text(), /已选择 1 个目录/);
+    const state = await org.information.load();
+    await org.information.admin({ subject: SOVEREIGN, project }, { op: 'configure', expectedRevision: state.configRevision, config: { ...state.config, paused: true } });
+    await s.click('刷新见闻与成长'); assert.equal(s.button('连接选中目录（1）').props.disabled, true);
+    await s.click('按当前设置核对所选目录'); await s.click('连接选中目录（1）');
+    assert.equal((await org.information.load()).sources[0].path, dir);
+    assert.equal((await org.information.load()).config.paused, true);
+  }, { uiWorkspace: f => { home = f.home; return { async listDirectory() { throw Object.assign(Error('native only'), { rpcError: { code: 'directory-picker/unavailable' } }); }, async pickDirectory() { return picks++ === 0 ? join(home, '原生选择') : null; } }; } });
+});

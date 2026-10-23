@@ -574,7 +574,7 @@ export class InformationService {
   async admin(spec, input) {
     if (spec.subject.kind !== '主权者') throw new Denied('信息来源设置', '来源目录、范围和预算只能从已认证人侧入口修改。');
     await this.authorize(spec, true);
-    own(input, ['op', 'expectedRevision', 'config', 'source', 'id', 'revision', 'state', 'text', 'reason', 'scope', 'session', 'relationship']);
+    own(input, ['op', 'expectedRevision', 'config', 'source', 'sources', 'id', 'revision', 'state', 'text', 'reason', 'scope', 'session', 'relationship']);
     if (input.op === 'revise') return this.revise(spec, { id: input.id, revision: input.revision, state: input.state, text: input.text, reason: input.reason }, true);
     if (input.op === 'scan') return this.scan();
     if (input.op === 'forget') {
@@ -617,17 +617,19 @@ export class InformationService {
       });
       await this.audit(spec, '信息资料快照删除', input.id); return { id: input.id, removedSnapshots: removed.length };
     }
-    if (!['configure', 'source_save', 'source_remove', 'relationship'].includes(input.op)) throw new InvalidBody('未知信息设置操作。');
-    let checked = null;
-    if (input.op === 'source_save') {
-      own(input.source, ['id', 'name', 'path', 'enabled', 'recursive', 'extensions', 'purpose', 'scope']);
-      const s = input.source;
+    if (!['configure', 'source_save', 'sources_add', 'source_remove', 'relationship'].includes(input.op)) throw new InvalidBody('未知信息设置操作。');
+    const checked = [];
+    if (input.op === 'sources_add' && (!Array.isArray(input.sources) || !input.sources.length || input.sources.length > INFORMATION_LIMITS.sources)) throw new InvalidBody('一次选择1至64个目录。');
+    const previousSources = input.op === 'source_save' ? (await this.load()).sources : [];
+    for (const s of input.op === 'source_save' ? [input.source] : input.op === 'sources_add' ? input.sources : []) {
+      own(s, ['id', 'name', 'path', 'enabled', 'recursive', 'extensions', 'purpose', 'scope']);
+      if (input.op === 'sources_add' && s.id !== undefined) throw new InvalidBody('批量新增目录不能带已有来源id。');
       if (!txt(s.name, 120) || typeof s.enabled !== 'boolean' || typeof s.recursive !== 'boolean'
           || !['探索', '专业', '两者'].includes(s.purpose) || !Array.isArray(s.extensions) || !s.extensions.length || s.extensions.some(e => !INFORMATION_EXTENSIONS.includes(e))) throw new InvalidBody('来源名称、开关、文件类型或用途无效。');
-      const previous = (await this.load()).sources.find(old => old.id === s.id && old.path === s.path);
+      const previous = previousSources.find(old => old.id === s.id && old.path === s.path);
       const root = !s.enabled && previous ? { path: previous.path, identity: previous.identity }
         : await sourceRoot(s.path, [this.layout.privateRoot, this.layout.factoryRoot]);
-      checked = { ...s, ...root, scope: scopeOf(s.scope) };
+      checked.push({ ...s, ...root, scope: scopeOf(s.scope) });
     }
     const result = await this.locked(async state => {
       if (input.expectedRevision !== state.configRevision) throw new Fault('INFORMATION_CONFLICT', '信息来源设置已在别处更新，请重新读取。');
@@ -643,16 +645,16 @@ export class InformationService {
         }
       }
       if (input.op === 'source_remove') { if (!state.sources.some(s => s.id === input.id)) throw new InvalidBody('来源不存在。'); state.sources = state.sources.filter(s => s.id !== input.id); }
-      if (checked) {
-        let previous = state.sources.find(s => s.id === checked.id);
-        if (!previous && checked.id) throw new InvalidBody('来源ID不存在；新增时省略id。');
-        if (state.sources.some(s => s.path === checked.path && s.id !== checked.id)) throw new InvalidBody('该真实目录已经连接。');
+      for (const source of checked) {
+        let previous = state.sources.find(s => s.id === source.id);
+        if (!previous && source.id) throw new InvalidBody('来源ID不存在；新增时省略id。');
+        if (state.sources.some(s => s.path === source.path && s.id !== source.id)) throw new InvalidBody('该真实目录已经连接。');
         if (!previous && state.sources.length >= INFORMATION_LIMITS.sources) throw new InvalidBody('最多连接64个目录。');
         if (previous) {
-          const scopeChanged = scopeKey(previous.scope) !== scopeKey(checked.scope);
-          Object.assign(previous, checked, { scan: null });
-          for (const item of state.items.filter(i => i.source === previous.id)) { item.scope = checked.scope; if (scopeChanged) { item.processedHash = null; item.readRanges = []; } }
-        } else state.sources.push({ ...checked, id: key('source'), scan: null });
+          const scopeChanged = scopeKey(previous.scope) !== scopeKey(source.scope);
+          Object.assign(previous, source, { scan: null });
+          for (const item of state.items.filter(i => i.source === previous.id)) { item.scope = source.scope; if (scopeChanged) { item.processedHash = null; item.readRanges = []; } }
+        } else state.sources.push({ ...source, id: key('source'), scan: null });
       }
       state.configRevision++; return { configRevision: state.configRevision };
     });

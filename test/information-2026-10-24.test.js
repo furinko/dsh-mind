@@ -366,3 +366,17 @@ it('恢复会话已有钉卡但运行绑定过期时等待；宿主真实根会�
     assert.equal(calls, 1); assert.equal(hooks.health().lastFailure.code, 'FIXTURE_MODEL_FAILURE');
   } finally { hooks.stop(); }
 }));
+
+it('人侧多目录新增原子保存：无效路径、重复目录和旧设置版本都不能部分连接', async () => scene(async (service, org, f) => {
+  const one = join(f.home, '批量甲'); const two = join(f.home, '批量乙'); await mkdir(one); await mkdir(two);
+  const source = path => ({ name: path.split('/').at(-1), path, enabled: true, recursive: true, extensions: ['.md'], purpose: '两者', scope: scope() });
+  await assert.rejects(service.admin(human(), { op: 'sources_add', expectedRevision: 0, sources: [source(one), source(join(f.home, '不存在'))] }));
+  assert.equal((await service.load()).sources.length, 0);
+  await assert.rejects(service.admin(human(), { op: 'sources_add', expectedRevision: 0, sources: [source(one), source(one)] }));
+  assert.equal((await service.load()).sources.length, 0);
+  await service.admin(human(), { op: 'sources_add', expectedRevision: 0, sources: [source(one), source(two)] });
+  const saved = await service.load(); assert.equal(saved.sources.length, 2); assert.equal(saved.configRevision, 1);
+  await assert.rejects(service.admin(human(), { op: 'sources_add', expectedRevision: 0, sources: [source(one)] }), { code: 'INFORMATION_CONFLICT' });
+  assert.deepEqual(await service.load(), saved);
+  await assert.rejects(service.admin(spec(), { op: 'sources_add', expectedRevision: 1, sources: [source(f.home)] }), { code: 'DENIED' });
+}));

@@ -1656,6 +1656,7 @@ window.__ModuleLoader__.load({
       '.dshmind-set__toast--ok{border:1px solid var(--dsw-alias-state-success-primary,#2f9e44);color:var(--dsw-alias-state-success-primary,#2f9e44);background:var(--dsw-alias-state-success-tertiary,#eaf7ec)}',
       '.dshmind-set__details{margin-top:16px;color:var(--dsw-alias-label-secondary,#61666b);font-size:12px}.dshmind-set__details>summary{cursor:pointer;padding:4px 0;max-width:100%}.dshmind-set__details[open]>summary{margin-bottom:8px}.dshmind-set__details p{margin:7px 0}',
       '.dshmind-set__details .dshmind-set__row{align-items:flex-start;padding:9px 0}.dshmind-set__details .dshmind-set__control{flex:1 1 55%;overflow-wrap:anywhere}.dshmind-set__details .dshmind-set__label{font-size:12px}',
+      '.dshmind-directory-overlay{position:fixed;inset:0;z-index:10000;background:#0006;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}.dshmind-directory-dialog{width:680px;max-width:100%;max-height:88vh;overflow:auto;box-sizing:border-box;padding:24px;border-radius:12px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#202225);box-shadow:0 16px 64px #0004;font-size:14px;line-height:1.6}.dshmind-directory-dialog .dshmind-set__actions{flex-wrap:wrap}.dshmind-directory-dialog input[type=text]{min-width:0;flex:1 1 280px}.dshmind-directory-entries{height:220px;overflow:auto;border:1px solid var(--dsw-alias-border-l2,#ddd);border-radius:8px;margin:12px 0}.dshmind-directory-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 10px}.dshmind-directory-row>label{display:flex;align-items:center;gap:8px;min-width:0;overflow-wrap:anywhere;flex:1}.dshmind-directory-row .dshmind-set__mono{overflow-wrap:anywhere;min-width:0}.dshmind-directory-row .dshmind-set__btn{flex-shrink:0}.dshmind-directory-selected{max-height:150px;overflow:auto}.dshmind-directory-dialog button:focus-visible,.dshmind-directory-dialog input:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#3076ee);outline-offset:2px}',
       '.dshmind-set__status{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:400;color:var(--dsw-alias-label-secondary,#61666b)}.dshmind-set__dot{display:inline-block;width:7px;height:7px;border-radius:50%;flex:0 0 auto}',
       '.dshmind-set__foot{display:flex;align-items:center;gap:12px;justify-content:space-between;padding-top:16px;border-top:1px solid var(--dsw-alias-border-l2,#d3dcea)}.dshmind-set__foot p{margin:0}.dshmind-set__mono{font-family:var(--ds-font-family-code,ui-monospace,monospace);overflow-wrap:anywhere}',
       '@media(max-width:560px){.dshmind-set__section{padding:16px}.dshmind-set__row{align-items:flex-start;flex-direction:column;gap:10px}.dshmind-set__row .dshmind-set__control{width:100%}.dshmind-set__select{width:100%}.dshmind-set__header{gap:12px}.dshmind-set__actions{gap:8px}.dshmind-set__editState{flex-basis:100%}.dshmind-set__details .dshmind-set__control{flex:auto}.dshmind-set__groupTitle{align-items:flex-start;flex-wrap:wrap}}',
@@ -4838,6 +4839,8 @@ window.__ModuleLoader__.load({
       var noticeState = useState(''); var notice = noticeState[0]; var setNotice = noticeState[1];
       var sourceState = useState({ name: '', path: '', purpose: '两者', project: '', audience: 'lead', roles: '', recursive: true });
       var source = sourceState[0]; var setSource = sourceState[1];
+      var directoryState = useState(null); var directory = directoryState[0]; var setDirectory = directoryState[1];
+      var directoryControl = useState(function () { return { seq: 0, closed: true, controller: null }; })[0];
       var configState = useState(null); var draft = configState[0]; var setDraft = configState[1];
       var configRevisionState = useState(null); var draftRevision = configRevisionState[0]; var setDraftRevision = configRevisionState[1];
       var tabState = useState('materials'); var tab = tabState[0]; var setTab = tabState[1];
@@ -4848,6 +4851,7 @@ window.__ModuleLoader__.load({
       var relationshipState = useState(''); var relationship = relationshipState[0]; var setRelationship = relationshipState[1];
       var confirmState = useState(null); var confirmation = confirmState[0]; var setConfirmation = confirmState[1];
       useEffect(function () { 刷新信息(true); }, []);
+      useEffect(function () { return function () { directoryControl.closed = true; directoryControl.seq++; if (directoryControl.controller) directoryControl.controller.abort(); }; }, []);
       function patchSource(k, v) { var next = Object.assign({}, source); next[k] = v; setSource(next); }
       function patchConfig(k, v) { if (!draft) setDraftRevision(data.configRevision); var next = Object.assign({}, draft || data.config); next[k] = v; setDraft(next); }
       function refresh() { return 刷新信息(true); }
@@ -4879,6 +4883,80 @@ window.__ModuleLoader__.load({
         if (source.id) value.id = source.id;
         send({ op: 'source_save', expectedRevision: source.expectedRevision === undefined ? data.configRevision : source.expectedRevision, source: value }, function () { setSource({ name: '', path: '', purpose: '两者', project: '', audience: 'lead', roles: '', recursive: true }); });
       }
+      function closeDirectories() {
+        if (lock.saving) return;
+        directoryControl.closed = true; directoryControl.seq++;
+        if (directoryControl.controller) directoryControl.controller.abort();
+        setDirectory(null);
+        if (directoryControl.trigger && typeof directoryControl.trigger.focus === 'function') directoryControl.trigger.focus();
+      }
+      function workspaceDirectories() { try { return activeCtx && (typeof activeCtx.get === 'function' ? activeCtx.get('uiWorkspace') : activeCtx.uiWorkspace); } catch (_) { return null; } }
+      function browseDirectory(target) {
+        var ui = workspaceDirectories(); var ticket = ++directoryControl.seq;
+        if (directoryControl.controller) directoryControl.controller.abort();
+        var controller = typeof AbortController === 'function' ? new AbortController() : null; directoryControl.controller = controller;
+        setDirectory(function (old) { return Object.assign({}, old, { loading: true, error: '' }); });
+        var request = ui && typeof ui.listDirectory === 'function' ? Promise.resolve().then(function () { return ui.listDirectory(target, controller && controller.signal); }) : Promise.reject(new Error('宿主目录浏览服务暂不可用，请稍后重试，或使用手动填写目录。'));
+        return request.then(function (listing) {
+          if (directoryControl.closed || ticket !== directoryControl.seq) return;
+          if (!listing || typeof listing.path !== 'string' || !Array.isArray(listing.entries) || !Array.isArray(listing.crumbs)) throw new Error('宿主未返回完整目录列表。');
+          setDirectory(function (old) { return Object.assign({}, old, { listing: listing, path: listing.path, loading: false, mode: 'browse' }); });
+        }).catch(function (error) {
+          if (directoryControl.closed || ticket !== directoryControl.seq) return;
+          // Native-only hosts explicitly refuse browse; other failures remain visible for retry.
+          if (error && error.rpcError && error.rpcError.code === 'directory-picker/unavailable') { nativeDirectory(); return; }
+          setDirectory(function (old) { return Object.assign({}, old, { loading: false, error: error && error.message || '目录读取失败，请重试。' }); });
+        });
+      }
+      function nativeDirectory() {
+        var ui = workspaceDirectories(); var desktop = window.__DSH_DIRECTORY_PICKER__; var ticket = ++directoryControl.seq;
+        setDirectory(function (old) { return Object.assign({}, old, { loading: true, mode: 'native', error: '' }); });
+        Promise.resolve().then(function () {
+          if (desktop && typeof desktop.pick === 'function') return desktop.pick();
+          if (ui && typeof ui.pickDirectory === 'function') return ui.pickDirectory();
+          throw new Error('宿主文件夹选择器暂不可用。');
+        }).then(function (picked) {
+          if (directoryControl.closed || ticket !== directoryControl.seq) return;
+          setDirectory(function (old) {
+            var paths = old.selected.slice(); var connected = data.sources.some(function (s) { return s.path === picked; });
+            if (typeof picked === 'string' && picked && !connected && paths.indexOf(picked) < 0 && paths.length + data.sources.length < data.limits.sources) paths.push(picked);
+            return Object.assign({}, old, { selected: paths, loading: false, error: connected ? '这个目录已经连接。' : '' });
+          });
+        }).catch(function (error) {
+          if (!directoryControl.closed && ticket === directoryControl.seq) setDirectory(function (old) { return Object.assign({}, old, { loading: false, error: error && error.message || '文件夹选择失败，请重试。' }); });
+        });
+      }
+      function chooseDirectories(event) {
+        directoryControl.trigger = event && event.currentTarget;
+        directoryControl.closed = false; setNotice('');
+        setDirectory({ selected: [], listing: null, loading: true, error: '', path: '', hidden: false, mode: 'browse', expectedRevision: data.configRevision });
+        browseDirectory();
+      }
+      function toggleDirectory(pathValue) {
+        setDirectory(function (old) {
+          var paths = old.selected.slice(); var index = paths.indexOf(pathValue);
+          if (index >= 0) paths.splice(index, 1); else if (paths.length + data.sources.length < data.limits.sources) paths.push(pathValue);
+          else return Object.assign({}, old, { error: '最多连接 ' + data.limits.sources + ' 个目录。' });
+          return Object.assign({}, old, { selected: paths, error: '' });
+        });
+      }
+      function connectDirectories() {
+        var values = directory.selected.map(function (pathValue) { return { name: (pathValue.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || pathValue).slice(0, 120), path: pathValue,
+          enabled: true, recursive: true, purpose: '两者', extensions: ['.md', '.txt', '.json', '.jsonl', '.html', '.htm', '.vtt', '.srt'],
+          scope: { project: null, audience: 'lead', roles: [], relationship: null } }; });
+        send({ op: 'sources_add', sources: values, expectedRevision: directory.expectedRevision }, function () {
+          directoryControl.closed = true; directoryControl.seq++; setDirectory(null);
+          if (directoryControl.trigger && typeof directoryControl.trigger.focus === 'function') directoryControl.trigger.focus();
+        });
+      }
+      function directoryKey(event) {
+        if (event.key === 'Escape') { event.stopPropagation(); event.preventDefault(); closeDirectories(); }
+        if (event.key === 'Tab' && event.currentTarget && typeof event.currentTarget.querySelectorAll === 'function') {
+          var controls = Array.prototype.slice.call(event.currentTarget.querySelectorAll('button:not(:disabled),input:not(:disabled),[tabindex="0"]')).filter(function (el) { return el.getClientRects().length; });
+          var first = controls[0]; var last = controls[controls.length - 1];
+          if (first && (event.shiftKey && document.activeElement === first || !event.shiftKey && document.activeElement === last)) { event.preventDefault(); (event.shiftKey ? last : first).focus(); }
+        }
+      }
       var config = draft || (data && data.config);
       var page = data && data[tab];
       var stateLabels = { active: '使用中', dormant: '暂时淡去', withdrawn: '已撤回', 'needs-review': '待重新理解', missing: '来源不可用', error: '读取失败' };
@@ -4901,6 +4979,8 @@ window.__ModuleLoader__.load({
             draft ? button('放弃阅读设置修改', function () { setDraft(null); }) : null,
           ]),
           h('h4', { className: 'dshmind-set__groupTitle' }, '信息来源'),
+          button('选择信息来源目录', chooseDirectories, data.sources.length >= data.limits.sources),
+          h('p', { className: 'dshmind-set__hint' }, '像选择工作区一样浏览文件夹，可勾选多个目录一起连接，也可随时继续添加。'),
           data.sources.length ? data.sources.map(function (s) { return h('article', { key: s.id, style: { padding: '12px 0', borderBottom: '1px solid var(--dsw-alias-border-l2,#444)' } }, [
             h('strong', null, s.name), h('p', { className: 'dshmind-set__mono' }, s.path),
             h('p', { className: 'dshmind-set__hint' }, (s.enabled ? '已连接' : '已停用') + ' · ' + s.purpose + ' · ' + (s.scope.project || '跨项目') + ' · ' + (s.scope.audience === 'lead' ? '仅 Lead' : '共享给 ' + s.scope.roles.join('、')) + (s.scanPending ? ' · 本轮扫描未完，下批续接' : '') + (s.lastError ? ' · ' + s.lastError : '')),
@@ -4909,7 +4989,7 @@ window.__ModuleLoader__.load({
             button('断开 ' + s.name, function () { setConfirmation({ label: '断开来源 ' + s.name + ' 后，其派生资料停止自动使用。', body: { op: 'source_remove', id: s.id, expectedRevision: data.configRevision } }); }),
           ]); }) : h('p', null, '尚未连接目录。可以连接外部插件导出目录，也可以连接你的本地知识库。'),
           h('details', { className: 'dshmind-set__details', open: source.id ? true : undefined }, [
-            h('summary', null, source.id ? '编辑信息来源' : '连接一个目录'), sourceInput('来源名称', 'name'), sourceInput('本地目录绝对路径', 'path'),
+            h('summary', null, source.id ? '编辑信息来源' : '手动填写目录'), sourceInput('来源名称', 'name'), sourceInput('本地目录绝对路径', 'path'),
             设置行('information-purpose', '阅读用途', '', h('select', { 'aria-label': '阅读用途', value: source.purpose, disabled: busy, onChange: function (e) { patchSource('purpose', e.target.value); } }, ['两者', '探索', '专业'].map(function (v) { return h('option', { value: v }, v); }))),
             sourceInput('所属项目（留空跨项目）', 'project'),
             设置行('information-audience', '可用范围', '', h('select', { 'aria-label': '可用范围', value: source.audience, disabled: busy, onChange: function (e) { patchSource('audience', e.target.value); } }, [h('option', { value: 'lead' }, '仅 Lead'), h('option', { value: 'roles' }, 'Lead 与指定岗位') ])),
@@ -4963,6 +5043,40 @@ window.__ModuleLoader__.load({
             data.runtime && data.runtime.waitingForLead ? h('p', { className: 'dshmind-set__hint' }, '部分恢复的会话等待 Lead 身份接续；正常进入会话后再安排辅助阅读。') : null,
             data.jobs.map(function (j) { return h('p', { key: j.id }, j.at + ' · ' + ({ running: '阅读中', completed: '已整理', failed: '未完成' }[j.state] || j.state) + (j.partial ? ' · 部分材料' : '') + (j.error ? ' · ' + j.error : '') + (j.records ? ' · 关联 ' + j.records.length + ' 条记录（含复用）' : '')); })]),
         ]) : null,
+        directory && data ? h('div', { className: 'dshmind-directory-overlay', onClick: function (event) { event.stopPropagation(); } }, h('section', {
+          role: 'dialog', 'aria-modal': true, 'aria-label': '选择信息来源目录', className: 'dshmind-directory-dialog', onKeyDown: directoryKey,
+        }, [
+          h('h3', { className: 'dshmind-set__subtitle' }, '选择信息来源目录'),
+          h('p', { className: 'dshmind-set__hint' }, '可选择多个文件夹。默认包含子目录、跨项目且仅 Lead 使用；连接后可分别修改。'),
+          directory.mode === 'browse' ? [
+            h('div', { className: 'dshmind-set__actions' }, [h('input', { autoFocus: true, className: 'dshmind-set__input', 'aria-label': '浏览目录路径', value: directory.path, disabled: busy,
+              onChange: function (event) { var value = event.target.value; setDirectory(function (old) { return Object.assign({}, old, { path: value }); }); },
+              onKeyDown: function (event) { if (event.key === 'Enter' && !event.nativeEvent?.isComposing) { event.preventDefault(); browseDirectory(directory.path); } } }), button('前往目录', function () { browseDirectory(directory.path); }, directory.loading), button('主目录', function () { browseDirectory(); }, directory.loading)]),
+            directory.listing ? [
+              h('nav', { 'aria-label': '目录层级', className: 'dshmind-set__actions' }, directory.listing.crumbs.map(function (c) { return button(c.name || c.path, function () { browseDirectory(c.path); }, directory.loading); })),
+              h('p', { className: 'dshmind-set__mono' }, directory.listing.path),
+              button(directory.selected.indexOf(directory.listing.path) >= 0 ? '取消选择当前目录' : '选择当前目录', function () { toggleDirectory(directory.listing.path); }, directory.loading || data.sources.some(function (s) { return s.path === directory.listing.path; })),
+              h('div', { role: 'group', 'aria-label': '可选文件夹', className: 'dshmind-directory-entries' }, directory.listing.entries.filter(function (entry) { return directory.hidden || !entry.hidden; }).map(function (entry) {
+                var connected = data.sources.some(function (s) { return s.path === entry.path; });
+                return h('div', { key: entry.path, className: 'dshmind-directory-row' }, [h('label', null, [h('input', { type: 'checkbox', 'aria-label': '选择目录 ' + entry.path,
+                  checked: connected || directory.selected.indexOf(entry.path) >= 0, disabled: busy || directory.loading || connected,
+                  onChange: function () { toggleDirectory(entry.path); } }), h('span', null, entry.name), connected ? h('span', { className: 'dshmind-set__hint' }, '已连接') : null]),
+                  button('进入 ' + entry.name, function () { browseDirectory(entry.path); }, directory.loading)]);
+              })),
+              !directory.listing.entries.some(function (entry) { return directory.hidden || !entry.hidden; }) ? h('p', { className: 'dshmind-set__hint' }, '没有可显示的子目录，可选择当前目录或返回上一级。') : null,
+              directory.listing.truncated ? h('p', { role: 'status' }, '文件夹较多，仅显示开头部分；可输入目标路径继续浏览。') : null,
+              h('label', null, [h('input', { type: 'checkbox', 'aria-label': '显示隐藏目录', checked: directory.hidden, onChange: function () { setDirectory(function (old) { return Object.assign({}, old, { hidden: !old.hidden }); }); } }), '显示隐藏目录']),
+            ] : null,
+          ] : button('继续选择文件夹', nativeDirectory, directory.loading),
+          directory.loading ? h('p', { role: 'status' }, directory.mode === 'native' ? '等待文件夹选择…' : '正在读取目录…') : null,
+          directory.error ? h('p', { role: 'alert' }, directory.error) : null,
+          h('h4', null, '已选择 ' + directory.selected.length + ' 个目录'),
+          h('div', { className: 'dshmind-directory-selected' }, directory.selected.map(function (p) { return h('div', { key: p, className: 'dshmind-directory-row' }, [h('span', { className: 'dshmind-set__mono' }, p), button('移除选择 ' + p, function () { toggleDirectory(p); })]); })),
+          directory.expectedRevision !== data.configRevision ? h('p', { role: 'status' }, '来源设置已变化，所选目录保留；请先核对，再按当前设置连接。') : null,
+          directory.expectedRevision !== data.configRevision ? button('按当前设置核对所选目录', function () { setDirectory(function (old) { return Object.assign({}, old, { selected: old.selected.filter(function (p) { return !data.sources.some(function (s) { return s.path === p; }); }), expectedRevision: data.configRevision }); }); }) : null,
+          notice ? h('p', { role: 'status' }, notice) : null,
+          h('div', { className: 'dshmind-set__actions' }, [button('取消选择目录', closeDirectories), button('连接选中目录（' + directory.selected.length + '）', connectDirectories, !directory.selected.length || directory.loading || directory.expectedRevision !== data.configRevision)]),
+        ])) : null,
         confirmation ? h('div', { role: 'alert', className: 'dshmind-set__notice' }, [h('p', null, confirmation.label), button('确认这次操作', function () { send(confirmation.body, function () { setConfirmation(null); }); }), button('取消这次操作', function () { setConfirmation(null); })]) : null,
         notice ? h('p', { role: 'status', className: 'dshmind-set__hint' }, notice) : null,
       ]);

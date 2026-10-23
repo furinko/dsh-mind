@@ -46,7 +46,7 @@ export async function settingsScene(options={}) {
     }
     return jsonResponse(sampleView());
   }});
-  const slots=makeSlots();const plugin=loaded.definition.factory(makeStrictRequire().require);const dispose=plugin.apply(makeCtx({slots:slots.slots,sessions:makeSessions([{id:'settings-fixture',main:true}])}));
+   const slots=makeSlots();const plugin=loaded.definition.factory(makeStrictRequire().require);const dispose=plugin.apply(makeCtx({slots:slots.slots,sessions:makeSessions([{id:'settings-fixture',main:true}]),uiWorkspace:options.uiWorkspace}));
   let r=createRenderer(slots.calls.register.find(x=>x.options.name==='settings.section').Component,{close(){}});r.flush();await settle(10);r.flush();
   // The minimal renderer does not expand React child components; render the actual registered child in isolation.
   if(options.informationOnly){const child=collect(r.tree).elements.find(e=>typeof e.type==='function'&&e.type.name==='信息成长设置');if(!child)throw Error('Information settings child missing');r.unmount();r=createRenderer(child.type,child.props);r.flush();await settle(10);r.flush();}

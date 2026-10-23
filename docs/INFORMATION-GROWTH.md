@@ -5,7 +5,7 @@
 ## 三种入口，一套流程
 
 - **会话是人的主入口**：分享链接、文字，或说“这个记一下”。Lead 引用当前宿主已接纳消息的真实 ID 收录。链接不代表已抓正文，附件引用不等于附件内容；普通问答不必归档。轮末辅助阅读可选择有意义的相遇，无收获时不保存整段对话。
-- **目录是持续来源**：在“心智设置 → 见闻与成长”连接多个绝对目录，适用于知识库、插件导出和字幕。支持 UTF-8 Markdown、TXT、JSON、JSONL、HTML/HTM、VTT/SRT；HTML仅抽取文字，不执行网页。PDF、Office、图片、音视频需外部插件先转换，当前不声称理解这些二进制格式。
+- **目录是持续来源**：在“心智设置 → 见闻与成长 → 选择信息来源目录”像选择工作区一样浏览文件夹，勾选多个目录后一次连接。跨层级保留选择、标明已连接目录；桌面原生选择器可连续添加后一次保存。默认跨项目、仅Lead、包含子目录，连接后可分别编辑用途和范围；手填路径保留为备用。目录适用于知识库、插件导出和字幕。支持 UTF-8 Markdown、TXT、JSON、JSONL、HTML/HTM、VTT/SRT；HTML仅抽取文字，不执行网页。PDF、Office、图片、音视频需外部插件先转换，当前不声称理解这些二进制格式。
 - **插件交接**：已认证固定端点接收结构化文字；Lead也可使用原插件的读取工具，将正式结果回执接入。没有任意命令、工具名或URL转发器。
 
 收录 → 版本快照 → 分页阅读 → 兴趣/认识/共同回忆/表达趣味/疑问/知识或能力候选 → 召回与试用。缓存、阅读、反思、试用与掌握分别记录；没有收获可以只完成阅读。
@@ -58,11 +58,13 @@
 
 | 端点 | 合同 |
 | --- | --- |
-| `/plugins/dsh-mind/information` | GET：配置、来源、分页资料/成长/候选、用量和任务；POST：configure/source_save/source_remove/scan/revise/forget/purge/share/relationship |
+| `/plugins/dsh-mind/information` | GET：配置、来源、分页资料/成长/候选、用量和任务；POST：configure/source_save/sources_add/source_remove/scan/revise/forget/purge/share/relationship |
 | `/plugins/dsh-mind/information-material` | GET：id/hash/version/offset/limit查看原文；人侧预览不消耗模型阅读预算 |
 | `/plugins/dsh-mind/information-deposit` | POST：producer、externalId、title、text、coverage、scope，可附author/url；不主动访问URL |
 
 配置修改带expectedRevision=configRevision，记录修改带revision，旧草稿返回409。投递ID绑定producer、externalId和范围，同文幂等、新文留版。HTTP体最多64KiB，大材料走目录；单文件默认最多1MiB。scope为 `{project:null或项目键,audience:"lead|roles",roles:[],relationship:null或稳定标识}`；共享岗位必须明确给出。
+
+`sources_add`接收`{op:"sources_add",expectedRevision,sources:[来源配置,...]}`，一次新增1至64个来源，不接受已有id。全部路径、范围、重复与容量校验通过后才原子保存；任何一项失败不部分连接。目录选择只使用宿主公开的`uiWorkspace.listDirectory/pickDirectory`与桌面窄选择接口，不创建工作区或会话，也不修改宿主服务。
 
 账号评论、私信、点赞等不属于本功能；第三方插件的账号开关与调度仍归其自身。本功能不以收录数、反思数或模型自评证明人格成长与任务收益。
 
