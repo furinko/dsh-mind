@@ -295,6 +295,7 @@ export class Org {
     });
     // （读者已在上面解析过——会审盲评遮罩与切片共用同一口径。）
     const visible = 读者 ? sliceForViewer(view, 读者) : view;
+    visible.核心人设保护 = this.personaProtection?.health() ?? null;
     // 成员目前没有目标全文读域；不从任务可见性推导整个目标/其他任务的可读性。
     const 可读目标 = !读者 || 读者.kind === '主权者' || (读者.kind === 'Lead' && identity.members?.[读者.id]?.岗位 === 'Lead' && identity.members?.[读者.id]?.status === '在岗');
     if (!可读目标) { visible.目标 = null; visible.模型用量 = null; visible.创建操作 = null; visible.知识复用 = null; }
@@ -375,6 +376,7 @@ export class Org {
     return {
       项目,
       于: this.clock.iso(),
+      核心人设保护: this.personaProtection?.health() ?? null,
       策略: { healthy: this.policy.healthy, 错误: this.policy.state.error, 规则数: this.policy.state.rules.length, 介入度: this.policy.intervention() },
       失联: this.policy.presence(),
       探针,

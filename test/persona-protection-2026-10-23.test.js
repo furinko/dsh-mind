@@ -25,7 +25,7 @@ it('核心写路径及父目录替换被拒，普通工作文件和只读工具�
   assert.equal(protection.guard(exec('write', join(workspace, 'app.js'))), undefined);
   assert.equal(protection.guard(exec('read', core)), undefined);
   for (const name of ['terminal_open', 'terminal_send']) assert.ok(protection.guard({ name, arguments: {} }), '旧持久PTY不能绕过新核心保护');
-  await symlink(join(root, 'private'), join(workspace, 'alias'));
+  await symlink(join(root, 'private'), join(workspace, 'alias'), process.platform === 'win32' ? 'junction' : 'dir');
   assert.ok(protection.guard(exec('write', join(workspace, 'alias', '主权人设', '核心人设.md'))));
 }));
 
@@ -37,12 +37,12 @@ it('任意命令和显式danger覆盖都要完整沙箱，工作区包住核心�
   assert.equal(sandboxPolicy.resolve({ root: core }).mode, 'read-only');
 }));
 
-it('部分沙箱不能启动命令，卸载恢复原宿主方法', async () => scene(async ({ org, protection }) => {
+it('Linux部分沙箱不能启动命令，卸载恢复原宿主方法', async () => scene(async ({ org, protection }) => {
   protection.stop();
   const resolve = () => ({ mode: 'danger-full-access', workspaceRoot: '/tmp' });
   const confine = async () => ({ argv: ['should-not-run'], enforcement: 'partial' });
   const sandboxPolicy = { resolve }; const sandbox = { confine };
-  const p = createPersonaProtection({ org, sandboxPolicy, sandbox });
+  const p = createPersonaProtection({ org, sandboxPolicy, sandbox, platform: 'linux' });
   await assert.rejects(sandbox.confine(['command'], resolve()), { code: 'PERSONA_CORE_CONFINEMENT' });
   p.stop();
   assert.equal(sandboxPolicy.resolve, resolve); assert.equal(sandbox.confine, confine);

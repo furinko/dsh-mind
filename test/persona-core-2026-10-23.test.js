@@ -134,13 +134,10 @@ it('坏UTF8、控制字节、超字数及超字节均拒绝，保留原件且日
   assert.equal((await org.personaCore.read(spec())).bytes, PERSONA_CORE_LIMITS.bytes);
 }));
 
-it('目录、符号链接、硬链接及经链接目录进入的文件均不能成为核心卡', async () => scene(async (org, f) => {
+it('目录、硬链接及经链接目录进入的文件均不能成为核心卡', async () => scene(async (org, f) => {
   await mkdir(dirname(org.personaCore.file()), { recursive: true });
   const outside = join(f.home, 'outside-persona.md');
   await writeFile(outside, 'private-external-card');
-  await symlink(outside, org.personaCore.file());
-  await assert.rejects(org.personaCore.read(spec()), error => error.code === 'PERSONA_CORE_INVALID');
-  await rm(org.personaCore.file());
   await link(outside, org.personaCore.file());
   await assert.rejects(org.personaCore.read(spec()), error => error.code === 'PERSONA_CORE_INVALID');
   await rm(org.personaCore.file());
@@ -148,12 +145,24 @@ it('目录、符号链接、硬链接及经链接目录进入的文件均不能�
   await assert.rejects(org.personaCore.read(spec()), error => error.code === 'PERSONA_CORE_INVALID');
   await rm(org.personaCore.file(), { recursive: true });
   const linkedDir = join(org.layout.privateRoot, 'linked-persona-directory');
-  await symlink(f.home, linkedDir);
+  await symlink(f.home, linkedDir, process.platform === 'win32' ? 'junction' : 'dir');
   const linkedLayout = { privateRoot: org.layout.privateRoot, personaCoreFile: () => join(linkedDir, 'outside-persona.md') };
   const linkedService = new PersonaCoreService({ layout: linkedLayout, policy: org.policy, clock: org.clock });
   await assert.rejects(linkedService.read(spec()), error => error.code === 'PERSONA_CORE_INVALID');
   const escaped = new PersonaCoreService({ layout: { privateRoot: org.layout.privateRoot, personaCoreFile: () => outside }, policy: org.policy });
   await assert.rejects(escaped.read(spec()), error => error.code === 'PERSONA_CORE_INVALID');
+}));
+
+it('普通文件符号链接不能成为核心卡', async t => scene(async (org, f) => {
+  await mkdir(dirname(org.personaCore.file()), { recursive: true });
+  const outside = join(f.home, 'outside-persona.md');
+  await writeFile(outside, 'private-external-card');
+  try { await symlink(outside, org.personaCore.file(), 'file'); }
+  catch (error) {
+    if (process.platform === 'win32' && error.code === 'EPERM') return t.skip('当前Windows账户没有文件符号链接权限；目录junction和硬链接另行验证');
+    throw error;
+  }
+  await assert.rejects(org.personaCore.read(spec()), error => error.code === 'PERSONA_CORE_INVALID');
 }));
 
 it('成员与缺真实根会话事实不读卡，旧段被移除；直接成员读面也拒绝', async () => scene(async org => {

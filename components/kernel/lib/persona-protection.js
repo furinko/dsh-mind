@@ -1,4 +1,4 @@
-/** 核心卡的文件边界：原生文件工具拒写，执行器必须使用完整沙箱。 */
+/** 核心卡的文件边界：文件工具拒写；Windows 保留宿主原生的部分隔离。 */
 import { dirname, isAbsolute, resolve, relative, sep } from 'node:path';
 import { lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -70,9 +70,10 @@ function attach(service, registry, method, root, factory) {
 }
 
 export function createPersonaProtection({ org, sandboxPolicy, sandbox, terminals, getServices,
-  cwdOf = exec => exec?.agent?.session?.header?.cwd }) {
+  cwdOf = exec => exec?.agent?.session?.header?.cwd, platform = process.platform }) {
   const lexical = resolve(dirname(org.layout.personaCoreFile()));
   const root = canonicalFileTarget(lexical);
+  const acceptedEnforcement = platform === 'win32' ? ['full', 'partial'] : ['full'];
   let stopped = false;
   const installed = new Map();
   const current = name => {
@@ -96,8 +97,11 @@ export function createPersonaProtection({ org, sandboxPolicy, sandbox, terminals
     });
     install('runner', services.sandbox, runners, 'confine', entry => async function (argv, policy, signal) {
       const roots = [...entry.roots.keys()];
+      entry.lastEnforcement = null;
       const result = await entry.original.call(this, argv, constrain(policy, roots), signal);
-      if (result.enforcement !== 'full') throw new Fault('PERSONA_CORE_CONFINEMENT', '当前执行沙箱不能完整保护核心人设，拒绝启动命令。');
+      entry.lastEnforcement = ['full', 'partial'].includes(result?.enforcement) ? result.enforcement : 'unknown';
+      if (!acceptedEnforcement.includes(result?.enforcement)) throw new Fault('PERSONA_CORE_CONFINEMENT',
+        platform === 'win32' ? '执行沙箱未提供可核验的隔离程度，拒绝启动命令。' : '当前平台要求完整文件隔离，拒绝启动命令。');
       const evidence = spawnEvidence.getStore();
       if (evidence) evidence.roots = roots;
       return result;
@@ -106,7 +110,7 @@ export function createPersonaProtection({ org, sandboxPolicy, sandbox, terminals
       const evidence = { roots: [] };
       const result = await spawnEvidence.run(evidence, () => entry.original.call(this, owner, request, signal));
       if (![...entry.roots.keys()].every(root => evidence.roots.includes(root))) {
-        await this.kill(owner, result.sessionId, '核心人设：终端未提供完整沙箱创建证明');
+        await this.kill(owner, result.sessionId, '核心人设：终端未提供当前平台沙箱创建证明');
         throw new Fault('PERSONA_CORE_TERMINAL', '终端缺少核心人设沙箱创建证明。');
       }
       const identity = original(this), actor = original(owner);
@@ -126,8 +130,18 @@ export function createPersonaProtection({ org, sandboxPolicy, sandbox, terminals
   connect({ sandboxPolicy, sandbox, terminals });
   return {
     connect,
-    health() { return { stopped, nativePolicy: current('policy'), confinedExecution: current('runner'),
-      terminalProof: current('spawn') && current('send') }; },
+    health() {
+      const wired = current('policy') && current('runner');
+      const lastEnforcement = current('runner') ? runners.get(installed.get('runner').service)?.lastEnforcement ?? null : null;
+      return { stopped, nativePolicy: current('policy'), confinedExecution: current('runner'),
+        terminalProof: current('spawn') && current('send'), platform, acceptedEnforcement: [...acceptedEnforcement], lastEnforcement,
+        执行状态: stopped ? '已停止' : !wired ? '执行服务未接线' : lastEnforcement === null ? '尚未核实执行隔离'
+          : lastEnforcement === 'full' ? '最近返回完整隔离' : lastEnforcement === 'partial' ? '最近返回部分隔离' : '隔离程度未知',
+        保护范围: platform === 'win32'
+          ? '文件工具禁止改写核心人设；命令沿Windows原生沙箱运行，允许部分隔离，不能保证任意命令都无法改卡。'
+          : '文件工具禁止改写核心人设；命令要求完整文件隔离，核心目录与可写根重叠时只读。',
+      };
+    },
     guard(exec) {
       if (READ_TOOLS.has(exec?.name)) return undefined;
       if (stopped) return '[dsh-mind] 核心人设保护已卸载，拒绝继续执行。';
@@ -136,7 +150,7 @@ export function createPersonaProtection({ org, sandboxPolicy, sandbox, terminals
         if ([...installed.keys()].some(name => !current(name))) return '[dsh-mind] 核心人设保护的宿主方法已变化，请重新加载保护。';
       } catch { return '[dsh-mind] 核心人设保护的宿主服务已变化，请重新加载保护。'; }
       if (['terminal_open', 'terminal_send'].includes(exec?.name) && (!current('spawn') || !current('send'))) return '[dsh-mind] 终端缺少核心人设保护证明，暂不可用。';
-      if (EXEC_TOOLS.has(exec?.name) && (!current('policy') || !current('runner'))) return '[dsh-mind] 核心人设缺少完整执行沙箱，命令暂不可执行。';
+      if (EXEC_TOOLS.has(exec?.name) && (!current('policy') || !current('runner'))) return '[dsh-mind] 核心人设缺少执行沙箱服务，命令暂不可执行。';
       // 直接文件写入不依赖模型是否把路径称作“人设”，父目录替换也受保护。
       const args = exec?.arguments;
       for (const key of ['file_path', 'path', 'source', 'destination', 'target_path', 'new_path', 'old_path']) {

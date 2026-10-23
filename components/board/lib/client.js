@@ -432,6 +432,7 @@ window.__ModuleLoader__.load({
       if (失联原值 === undefined) 失联原值 = firstOf(obj(失联详情袋) || {}, ['读数']);
       return {
         原始: v,
+        核心人设保护: obj(v.核心人设保护),
         项目: line(firstOf(v, ['项目', '项目键', 'project', 'projectKey']), '（未指定）'),
         // 项目清单（2026-10-11，主权者指令「修」）：面板默认只看一个项目，而活账可能在别的
         // 项目下 —— 不带这份清单，界面就无法说出「还有哪些项目有账」，只能干显示一片空白。
@@ -4148,6 +4149,10 @@ window.__ModuleLoader__.load({
               readout('生成时刻', view ? (shortTime(view.生成于) || '宿主没给') : '未接入'),
             ]),
             readoutGroup('健康', [
+              view && view.核心人设保护
+                ? readout('人设保护', line(view.核心人设保护.执行状态, '隔离程度未知'), null, false,
+                    h('span', { className: 'dshmind-readoutNote' }, line(view.核心人设保护.保护范围, '保护范围未提供')))
+                : null,
               readout('策略引擎闸', null, h('span', { className: 'dshmind-dot-line' }, [
                 dot(!gate ? GREY : gate.在位 === true ? GREEN : gate.在位 === false ? RED : GREY),
                 h('span', { key: 'v' }, !gate ? '未接入' : gate.在位 === true ? '闸在位' : gate.在位 === false ? '闸不在位' : '未知'),

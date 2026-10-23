@@ -86,11 +86,11 @@ it('新PTY跨服务/this/owner代理可以续写，旧PTY及另一个真实owner
   assert.throws(() => services().terminals.startSend(trace({}), created.sessionId, {}), { code: 'PERSONA_CORE_TERMINAL' });
 }));
 
-it('部分sandbox与没有confine证据的后端不能取得PTY续写资格，未证明PTY会清理', async () => scene(async ({ org, protection, directory }) => {
+it('Linux部分sandbox与没有confine证据的后端不能取得PTY续写资格，未证明PTY会清理', async () => scene(async ({ org, protection, directory }) => {
   protection.stop();
   for (const options of [{ enforcement: 'partial' }, { confine: false }]) {
     const h = host(join(directory, 'workspace'), options);
-    const p = createPersonaProtection({ org, ...h.services(), getServices: h.services });
+    const p = createPersonaProtection({ org, ...h.services(), getServices: h.services, platform: 'linux' });
     try {
       await assert.rejects(h.services().terminals.spawn({}, {}), error => ['PERSONA_CORE_CONFINEMENT', 'PERSONA_CORE_TERMINAL'].includes(error.code));
       if (options.confine === false) assert.deepEqual(h.killed, ['pty-1']);

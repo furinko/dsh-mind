@@ -60,7 +60,9 @@ it('用户接纳即落盘，未结束轮次重开服务仍能读取，助手中�
   emit('turn/end', { turn: 1, reason: { kind: 'aborted', private: 'secret-error' } }); await hooks.flush();
   out = await read(); assert.equal(out.轮次[0].结束原因, 'aborted'); assert.equal(out.轮次[0].消息[1].中断, true);
   assert.doesNotMatch(await readFile(org.turnBuffer.file(P, session.id), 'utf8'), /hidden-thinking|secret-tool|secret-arguments|secret-stream|secret-error/);
-  assert.equal((await stat(org.turnBuffer.file(P, session.id))).mode & 0o777, 0o600);
+  const file = await stat(org.turnBuffer.file(P, session.id));
+  assert.ok(file.isFile());
+  if (process.platform !== 'win32') assert.equal(file.mode & 0o777, 0o600);
 }));
 
 it('公开用户来源可采集，插件回报、图片、推理和未提交模型流均不冒充对话', async () => scene(async ({ emit, hooks, read }) => {

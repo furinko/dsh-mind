@@ -76,7 +76,9 @@ it('两个真实根会话按项目接续：用户约束与助手推断分开，�
   assert.equal(frame.条目[0].来源[0].会话, LEAD.id);
   const detail = await reopened.projectBrief.read(fresh, { id: 'work' });
   assert.match(detail.条目[0].来源[0].原文, /不要全塞历史/);
-  assert.equal((await stat(org.projectBrief.file(P))).mode & 0o777, 0o600);
+  const file = await stat(org.projectBrief.file(P));
+  assert.ok(file.isFile());
+  if (process.platform !== 'win32') assert.equal(file.mode & 0o777, 0o600);
   assert.deepEqual((await reopened.projectBrief.read({ ...fresh, project: 'other' })).条目, []);
   await assert.rejects(reopened.projectBrief.read(spec(MEMBER)), { code: 'DENIED' });
 }));
