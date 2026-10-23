@@ -15,6 +15,7 @@
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { InvalidBody } from './kernel/errors.js';
+import { memoryScopePath, memoryWorkPath } from './memory-layout.js';
 
 /** 会审讨论的真实线程前缀；服务落线与策略边界共用，避免同义键漂移。 */
 export const COUNCIL_THREAD_PREFIX = '会审-';
@@ -305,9 +306,11 @@ export class Layout {
     return join(this.busDir(project), `${assertPathSegment(thread, '线程')}.jsonl`);
   }
 
-  /** 记忆服务目录：`记忆服务/跨项目/` 或 `记忆服务/<项目>/`。 */
+  memoryRoot() { return this.private(DIR.基础设施, DIR.记忆服务); }
+
+  /** 版本只改变路径，不改变项目键、记忆类别与权限。 */
   memoryDir(scope) {
-    return this.private(DIR.基础设施, DIR.记忆服务, assertPathSegment(scope, '记忆范围'));
+    return memoryScopePath(this.memoryRoot(), assertPathSegment(scope, '记忆范围'));
   }
 
   /** 某一类记忆的账本文件。 */
@@ -317,16 +320,16 @@ export class Layout {
 
   /** 轮级缓冲为可清理的会话资料；会话键由服务散列，不直接用外部字符串作路径。 */
   turnBufferFile(project, sessionKey) {
-    return this.private(DIR.基础设施, DIR.记忆服务, '轮级缓冲', assertPathSegment(project, '项目'),
+    return memoryWorkPath(this.memoryRoot(), '轮级缓冲', assertPathSegment(project, '项目'),
       `${assertPathSegment(sessionKey, '会话摘要')}.json`);
   }
 
   projectBriefFile(project) {
-    return this.private(DIR.基础设施, DIR.记忆服务, '项目接续', `${assertPathSegment(project, '项目')}.json`);
+    return memoryWorkPath(this.memoryRoot(), '项目接续', `${assertPathSegment(project, '项目')}.json`);
   }
 
   continuityCaptureFile(project) {
-    return this.private(DIR.基础设施, DIR.记忆服务, '连续性提炼', `${assertPathSegment(project, '项目')}.json`);
+    return memoryWorkPath(this.memoryRoot(), '连续性提炼', `${assertPathSegment(project, '项目')}.json`);
   }
 
   personaCoreFile() {

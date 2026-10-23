@@ -12,6 +12,7 @@
  */
 import { appendLines, exists, listDirs, readJsonl, readJsonlHealth, readTextOrNull, atomicWrite, withLock } from './kernel/fsx.js';
 import { readTaskLedger, parseTaskLedger } from './task-ledger.js';
+import { listMemoryProjects } from './memory-layout.js';
 import { stat } from 'node:fs/promises';
 import { InvalidBody, Denied, Fault } from './kernel/errors.js';
 import { objectId } from './kernel/ids.js';
@@ -1810,8 +1811,7 @@ export class MemoryService {
 
   /** 记忆服务目录下出现过的项目键（目录名即项目键，§14.4-5）。 */
   async #projectScopes() {
-    const names = await listDirs(this.layout.memoryDir(DIR.跨项目), { up: true });
-    return names.filter((n) => n !== DIR.跨项目);
+    return listMemoryProjects(this.layout.memoryRoot());
   }
 
   /** @param {string} id */
