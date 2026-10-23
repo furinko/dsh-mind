@@ -95,16 +95,20 @@ export function createPersonaProtection({ org, sandboxPolicy, sandbox, terminals
     install('policy', services.sandboxPolicy, policies, 'resolve', entry => function (request) {
       return constrain(entry.original.call(this, request), [...entry.roots.keys()]);
     });
-    install('runner', services.sandbox, runners, 'confine', entry => async function (argv, policy, signal) {
+    install('runner', services.sandbox, runners, 'confine', entry => function (argv, policy, signal) {
       const roots = [...entry.roots.keys()];
       entry.lastEnforcement = null;
-      const result = await entry.original.call(this, argv, constrain(policy, roots), signal);
-      entry.lastEnforcement = ['full', 'partial'].includes(result?.enforcement) ? result.enforcement : 'unknown';
-      if (!acceptedEnforcement.includes(result?.enforcement)) throw new Fault('PERSONA_CORE_CONFINEMENT',
-        platform === 'win32' ? '执行沙箱未提供可核验的隔离程度，拒绝启动命令。' : '当前平台要求完整文件隔离，拒绝启动命令。');
       const evidence = spawnEvidence.getStore();
-      if (evidence) evidence.roots = roots;
-      return result;
+      const verify = result => {
+        entry.lastEnforcement = ['full', 'partial'].includes(result?.enforcement) ? result.enforcement : 'unknown';
+        if (!acceptedEnforcement.includes(result?.enforcement)) throw new Fault('PERSONA_CORE_CONFINEMENT',
+          platform === 'win32' ? '执行沙箱未提供可核验的隔离程度，拒绝启动命令。' : '当前平台要求完整文件隔离，拒绝启动命令。');
+        if (evidence) evidence.roots = roots;
+        return result;
+      };
+      const result = entry.original.call(this, argv, constrain(policy, roots), signal);
+      // SDK confine为同步合同，真实PTY立即读取.argv；异步provider仍沿原Promise路径核验。
+      return typeof result?.then === 'function' ? Promise.resolve(result).then(verify) : verify(result);
     });
     install('spawn', services.terminals, terminalSpawns, 'spawn', entry => async function (owner, request, signal) {
       const evidence = { roots: [] };
