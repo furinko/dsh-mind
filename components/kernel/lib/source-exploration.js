@@ -3,9 +3,10 @@ import { randomUUID } from 'node:crypto';
 import { Fault } from '../../../src/kernel/errors.js';
 import { extractProjectBrief } from './project-brief-hooks.js';
 
-const textOf = result => {
+const textOf = (result, limit = 12000) => {
   if (result?.isError !== false) throw new Fault('INFORMATION_SOURCE_FAILED', '来源工具未成功，未收录其结果。');
-  const text = (result.content ?? []).filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('\n').slice(0, 12000);
+  const text = (result.content ?? []).filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('\n');
+  if (text.length > limit) throw new Fault('INFORMATION_SOURCE_TOO_LARGE', '来源工具单页过大，未将截断JSON当作正文。');
   if (!text.trim()) throw new Fault('INFORMATION_SOURCE_EMPTY', '来源工具没有提供文字。');
   try { const value = JSON.parse(text); if (value?.success === false || value?.成功 === false || value?.ok === false || value?.error) throw new Fault('INFORMATION_SOURCE_FAILED', '来源插件报告失败，未收录其结果。'); }
   catch (error) { if (error?.code === 'INFORMATION_SOURCE_FAILED') throw error; }
@@ -30,7 +31,7 @@ export async function exploreSource({ org, session, spec, tools, agents, llm, ro
   const call = async (name, args) => {
     await check(); controller.signal.throwIfAborted();
     const result = await tools.execute({ agent, name, arguments: args, callId: `mind-explore:${randomUUID()}`, signal: controller.signal });
-    await check(); controller.signal.throwIfAborted(); return textOf(result);
+    await check(); controller.signal.throwIfAborted(); return textOf(result, name === 'bili_humanism_read' ? 131072 : 12000);
   };
   try {
     const raw = JSON.parse(await call('bili_humanism_candidates', { count: 3 }));
@@ -49,9 +50,20 @@ export async function exploreSource({ org, session, spec, tools, agents, llm, ro
     if (!choice || Object.keys(choice).some(k => k !== 'id') || !(choice.id === null || candidates.some(c => c.id === choice.id))) throw new Fault('INFORMATION_SELECTION_INVALID', '候选选择无效，未抓取其他目标。');
     if (choice.id === null) { await org.information.finishExploration(spec, prepared); return { available: true, selected: null }; }
     const candidate = candidates.find(c => c.id === choice.id);
-    const text = await call('bili_humanism_read', { video: candidate.id });
+    const payload = JSON.parse(await call('bili_humanism_read', { video: candidate.id }));
+    const source = payload.result;
+    const segments = Array.isArray(source?.segments) ? source.segments.filter(s => typeof s?.text === 'string' && s.text.trim()) : [];
+    if (!segments.length) {
+      await org.information.finishExploration(spec, prepared);
+      return { available: true, selected: candidate.id, material: null, reason: 'no-readable-text' };
+    }
+    const provided = segments.map(s => `${Number.isFinite(s.start) ? '[' + s.start + '秒] ' : ''}${s.text}`).join('\n');
+    const text = provided.slice(0, 12000);
     const material = await org.information.finishExploration(spec, prepared, { text, title: candidate.title || candidate.id,
-      author: candidate.author, url: `https://www.bilibili.com/video/${candidate.id}/` });
+      author: candidate.author, url: `https://www.bilibili.com/video/${candidate.id}/`,
+      coverage: JSON.stringify({ plugin: 'bili_humanism_read', readingId: source.id ?? null, route: source.route ?? null,
+        declared: source.coverage ?? null, returnedSegments: segments.length, providedChars: text.length, sourceTextPartial: source.source_text_partial ?? null,
+        nextOffset: source.next_offset ?? null, clipped: provided.length > text.length, note: '实际返回的文字片段，不代表完整观看或全文' }).slice(0, 1800) });
     return { available: true, selected: candidate.id, material: material.id };
   } catch (error) { await org.information.failLearning(prepared.job.id, error); throw error; }
   finally { clearTimeout(timer); clearInterval(poll); signal.removeEventListener('abort', abort); }

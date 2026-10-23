@@ -913,7 +913,7 @@ export class InformationService {
       const job = await this.checkExploration(spec, prepared, state);
       let item = null;
       if (material) item = await this.addMaterial(state, { id: `material-${digest(material.text).slice(0, 32)}`, name: 'B站自主探索',
-        material: { ...material, format: 'tool-result', coverage: '来源插件最终成功返回的文字片段，最多12000字符；字幕、提纲或抽样不代表看完视频' },
+        material: { ...material, format: 'tool-result', coverage: material.coverage ?? '来源插件最终成功返回的文字片段，最多12000字符；字幕、提纲或抽样不代表看完视频' },
         scope: { project: null, audience: 'auto', roles: [], relationship: null },
         context: { channel: 'source-tool', tool: 'bili_humanism_read', autonomous: true, session: spec.session, job: job.id,
           claim: '实际宿主工具结果；内容可信度、覆盖和语义仍需核对' } });

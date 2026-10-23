@@ -233,3 +233,14 @@ for (const mode of ['invented', 'pause', 'agent-change']) it(`探索边界 ${mod
     signal: new AbortController().signal, active: () => true, llm }));
   assert.equal(calls, 1); assert.equal((await org.information.load()).items.length, 0);
 }));
+
+it('B站取稿成功但没有实际文字时，只留探索回执，元数据不冒充阅读或知识', async () => scene(async org => {
+  const session = { id: LEAD.id, header: { cwd: process.cwd() } }; const agent = { session };
+  const tools = { get: () => ({}), async execute(exec) { return { isError: false, content: [{ type: 'text', text: JSON.stringify({ result:
+    exec.name === 'bili_humanism_candidates' ? [{ bvid: 'BV1xx411c7mD', title: '只有元数据' }] : { title: '只有元数据', route: null, segments: [], coverage: '未取得字幕' } }) }] }; } };
+  const result = await exploreSource({ org, session, spec: spec(), tools, agents: { get: () => agent }, route: {},
+    signal: new AbortController().signal, active: () => true, llm: fixtureModel(input => ({ id: input.candidates[0].id })) });
+  assert.equal(result.reason, 'no-readable-text');
+  const state = await org.information.load(); assert.equal(state.items.length, 0); assert.equal(state.records.length, 0);
+  assert.equal(state.jobs.at(-1).state, 'completed'); assert.equal(state.jobs.at(-1).material, null);
+}));
