@@ -327,3 +327,48 @@ it('较长恢复分批推进，检查点不将尚未补齐的后缀报告为已�
   assert.equal((await read()).下次事件序号, 2049);
   await checkpoint(session); assert.deepEqual(texts(await read()), ['积压尾部消息']); dispose();
 }));
+
+it('检查点写盘期间后台任务追加事件，只核验开始时的前缀，下一检查点补齐新事件', async () => scene(async ({ org, session, hooks, emit, read }) => {
+  emit('turn/start', { turn: 1 }); emit('user/message', human('后台任务完成前的需求'), 'append');
+  await hooks.flush();
+  session.append('step/start', { turn: 1, step: 0 });
+  const throughSeq = session.seq;
+  const capture = org.turnBuffer.capture.bind(org.turnBuffer);
+  let appendDuringCapture = true;
+  org.turnBuffer.capture = async args => {
+    if (appendDuringCapture) {
+      appendDuringCapture = false;
+      // 对应真实宿主在flush等待期间产生的通知，均不含需复制的正文。
+      session.append('job/settled', { id: 'background-job' });
+      session.append('agent/inbox/spliced', {});
+    }
+    return capture(args);
+  };
+  const recoveryHooks = createTurnBufferHooks({ org, projectOf: () => P, queryOf: () => ({ async observeSession() {
+    return { source: 'live', header: session.header, inheritedEventCount: 0, cursor: session.seq - 1,
+      events: [...session.events], [Symbol.dispose]() {} };
+  } }) });
+  const host = fakeHost(); const dispose = recoveryHooks.attach(host.ctx);
+  try {
+    const checkpoint = host.钩子.get('session/flush')[0];
+    await checkpoint(session);
+    assert.equal((await read()).下次事件序号, throughSeq);
+    assert.ok(session.seq > throughSeq);
+    await checkpoint(session);
+    assert.equal((await read()).下次事件序号, session.seq);
+    assert.deepEqual(texts(await read()), ['后台任务完成前的需求']);
+  } finally { org.turnBuffer.capture = capture; dispose(); }
+}));
+
+it('空会话检查点不要求不存在的缓冲文件，首条新消息仍须真实落盘', async () => scene(async ({ org, session, hooks, emit, read }) => {
+  const host = fakeHost(); const dispose = hooks.attach(host.ctx);
+  try {
+    const checkpoint = host.钩子.get('session/flush')[0];
+    await checkpoint(session);
+    await assert.rejects(stat(org.turnBuffer.file(P, session.id)), { code: 'ENOENT' });
+    emit('turn/start', { turn: 1 }); emit('user/message', human('空会话后的第一条消息'), 'append');
+    await checkpoint(session);
+    assert.equal((await read()).下次事件序号, session.seq);
+    assert.deepEqual(texts(await read()), ['空会话后的第一条消息']);
+  } finally { dispose(); }
+}));

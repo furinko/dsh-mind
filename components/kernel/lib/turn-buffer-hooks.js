@@ -147,10 +147,14 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
         disposers.push(ctx.on('session/flush', async session => {
           const spec = scope(session);
           if (!spec) return;
+          // 检查点只承诺调用时已存在的前缀。等待磁盘期间后台任务还会
+          // 追加事件；这些新事件留给下一检查点，不能把已完成的前缀误判为失败。
+          const throughSeq = session.seq;
+          const inherited = natural(session.inheritedEventCount) ? session.inheritedEventCount : 0;
           await api.sync(session);
           if (!scope(session) || scope(session).project !== spec.project) return;
           const position = await org.turnBuffer.position(spec);
-          if (!position || position.nextSeq < session.seq) {
+          if ((position?.nextSeq ?? inherited) < throughSeq) {
             throw Object.assign(new Error('轮级缓冲尚有待补事件；下一次检查点继续，不报告完整持久化。'), { code: 'TURN_BUFFER_RECOVERY_PENDING' });
           }
         }));
