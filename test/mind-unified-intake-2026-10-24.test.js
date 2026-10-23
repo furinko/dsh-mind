@@ -62,6 +62,8 @@ it('收录正文只存在原生记忆；人格召回、原生更正、停用和�
 }));
 
 it('正式知识由Lead分配到真实岗位；重新分配退休旧原生条目，私密来源不能扩大', async () => scene(async org => {
+  await assert.rejects(org.information.record(spec(), await draft(org, await material(org), { kind: '知识', roles: ['不存在的岗位'] })), /岗位不存在/);
+  assert.equal((await org.information.load()).records.length, 0, '无效岗位不能留下阻塞后续整理的草稿');
   const r = await org.information.record(spec(), await draft(org, await material(org), { kind: '知识', text: '比较短片与气息的小样本方法', roles: ['插件工程'] }));
   assert.match(r.nativeId, /^know-/);
   const knowledge = await query(org, LEAD, { 类: '知识', 岗位: '插件工程' });

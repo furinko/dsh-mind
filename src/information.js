@@ -565,6 +565,11 @@ export class InformationService {
       roles: restricted || !fixed.length ? [] : fixed[0].roles.filter(role => fixed.every(s => s.roles.includes(role))), relationship };
     if (scope.audience === 'roles' && !scope.roles.length) { scope.audience = 'lead'; scope.roles = []; }
     if (input.roles !== undefined && (!Array.isArray(input.roles) || input.roles.length > 16 || input.roles.some(r => !txt(r, 80)))) throw new InvalidBody('roles须为至多16个岗位名称。');
+    for (const role of input.roles ?? []) if (!await this.org.registry.get({ id: role })) throw new InvalidBody(`岗位不存在：${role}。`);
+    if (!restricted && fixed.length && input.roles !== undefined) {
+      if (input.roles.some(role => !scope.roles.includes(role))) throw new Denied('知识分配来源上限', '适用岗位不能越出来源已有的显式共享上限。');
+      scope.audience = input.roles.length ? 'roles' : 'lead'; scope.roles = [...new Set(input.roles)];
+    }
     if (scope.audience === 'auto') {
       scope.audience = input.roles?.length && (input.type === 'candidate' || input.kind === '知识') ? 'roles' : 'lead';
       scope.roles = scope.audience === 'roles' ? [...new Set(input.roles)] : [];
