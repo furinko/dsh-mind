@@ -45,6 +45,7 @@ import { createKernelObservations } from './observability-hooks.js';
 import { createGoalBudgetHooks } from './goal-budget-hooks.js';
 import { createModelUsageHooks } from './model-usage-hooks.js';
 import { injectProfessionalContext } from './professional-context.js';
+import { createProfessionalReceipts } from './professional-receipts.js';
 import { injectLeadContext } from './lead-context.js';
 import { injectWorkContext } from './work-context.js';
 import { createTurnBufferHooks, injectTurnBuffer } from './turn-buffer-hooks.js';
@@ -117,6 +118,8 @@ export async function apply(ctx, config = {}) {
   }
   const 当前项目键 = (exec) => 解析项目(会话工作目录(exec, { ctx }), 项目);
   const observations = createKernelObservations({ org, projectOf: 当前项目键, logger, enabled: config.audit工具调用 !== false });
+  const professionalReceipts = createProfessionalReceipts({ org, projectOf: 当前项目键 });
+  ctx.effect?.(() => () => professionalReceipts.close());
   try { observations.attach(ctx); }
   catch (error) { org.observability.setCoverage({ nativeTools: 'hook-registration-failed' }); logger.warn?.('[dsh-mind] 监控钩子不可用，覆盖不完整。'); }
   const budgetHooks = createGoalBudgetHooks({ org, projectOf: 当前项目键, cwdOf: exec => 会话工作目录(exec, { ctx }), logger, observe: config.audit工具调用 !== false });
@@ -253,7 +256,7 @@ export async function apply(ctx, config = {}) {
         const 已钉规程 = await 注入Lead已钉规程(已接调度, context?.agent, org, logger, {
           agent: context?.agent, agents: 取服务(ctx, 'agents'), project: 当前项目键({ agent: context?.agent }),
         });
-        const 专业上下文 = await injectProfessionalContext(已钉规程, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
+        const 专业上下文 = await injectProfessionalContext(已钉规程, { agent: context?.agent, org, projectOf: 当前项目键, logger, receipts: professionalReceipts, active: () => !delegation.closed });
         const 当前工作 = await injectWorkContext(专业上下文, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
         const 轮缓冲 = await injectTurnBuffer(当前工作, { agent: context?.agent, org, hooks: turnBufferHooks,
           projectOf: 当前项目键, logger, active: () => !delegation.closed });
@@ -338,7 +341,7 @@ export async function apply(ctx, config = {}) {
 
   // 主面（工具）**不吞异常**：注册不上就等于这个组件没生效，
   // 让宿主如实报出装载失败，而不是留下一个「看起来装好了」的假象。
-  ctx.tools.register(mindTool({ org, 项目, 项目键: 当前项目键, 宿主服务, logger, observations }));
+  ctx.tools.register(mindTool({ org, 项目, 项目键: 当前项目键, 宿主服务, logger, observations, professionalReceipts }));
 
   ctx.inject?.(['commands'], (scoped) => {
     try {
@@ -428,7 +431,7 @@ export function degradedTool(error) {
  * 返回 JSON 文本，于是模型与工作台读的是同一份字节。
  * @param {{ org: object, 项目: string, 项目键: (exec: object) => string, 宿主服务?: (exec: object) => object }} spec
  */
-function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }) {
+function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations, professionalReceipts }) {
   return {
     name: 'mind',
     description: [
@@ -605,11 +608,16 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         // 分类与 runAction / isConcurrencySafe 共用 READ_ONLY_ACTIONS 这一张表。
         const 本次入参 = normalizeArgs(args);
         断言Lead业务就绪(主体, 本次入参.action, 登记);
+        const 装配记录 = 本次入参.action === 'task_submit' ? await professionalReceipts.beforeSubmit(exec?.agent, 本次入参.id) : null;
         const 响应 = {
           成功: true,
           ...(登记 && 登记.就绪 === false ? { 实例登记: 登记 } : {}),
           ...(await runAction({ org, 项目: 本次项目, subject: 主体, 主体, args: 本次入参, ...(本次宿主 ? { 宿主: 本次宿主 } : {}) })),
         };
+        if (装配记录) {
+          const 回执 = await professionalReceipts.afterSubmit(exec?.agent, 装配记录, 响应.节点);
+          if (回执) 响应.知识装配回执 = 回执;
+        }
         return 本次入参.action === 'memory_query' ? serializeMemoryEnvelope(响应) : JSON.stringify(响应, null, 1);
       }); } catch (error) {
         return JSON.stringify({ 成功: false, ...describeFailure(error) }, null, 1);

@@ -28,14 +28,15 @@ async function currentScope(org, subject, project) {
       target: { id: node.id, kind: '任务', authority: '自治', zone: '私有', domain: '集体', project }, context: { task: node } });
   }
   const domain = await 取复核读域({ tasks: org.tasks, 项目: project, subject: actor });
-  const stamp = digest(canonical({ actor, 代: member.代, 代次: member.代次 ?? null, 委派者: member.委派者 ?? null,
-    会审绑定: member.会审绑定 ?? null, nodes, domain: domain?.限定 ? [...domain.集合].sort() : null }));
-  return { actor, role, nodes, domain, stamp, council: Boolean(member.会审绑定) };
+  const credential = { actor, 代: member.代, 代次: member.代次 ?? null, 委派者: member.委派者 ?? null, 会审绑定: member.会审绑定 ?? null };
+  const credentialStamp = digest(canonical(credential));
+  const stamp = digest(canonical({ ...credential, nodes, domain: domain?.限定 ? [...domain.集合].sort() : null }));
+  return { actor, role, nodes, domain, stamp, credentialStamp, council: Boolean(member.会审绑定) };
 }
 
 export { currentScope as currentProfessionalScope };
 
-export async function recallProfessionalContext({ org, subject, project }) {
+export async function recallProfessionalContext({ org, subject, project, onAssembled }) {
   if (typeof project !== 'string' || !project.trim() || project.length > 256) throw new InvalidBody('专业上下文需要长度不超过256的当前项目键。');
   const before = await currentScope(org, subject, project);
   const base = { 版本: 1, 项目: project, 岗位: before.role, 类型: '知识', 条数上限: PROFESSIONAL_CONTEXT_LIMIT,
@@ -66,5 +67,7 @@ export async function recallProfessionalContext({ org, subject, project }) {
     if (JSON.stringify(frame).length > PROFESSIONAL_CONTEXT_BUDGET - 64) { knowledge.pop(); clipped = true; break; }
   }
   frame.截断 = clipped;
+  // 只给内核的进程内观察者；凭证及读域戳不进入模型帧或记忆账本。
+  onAssembled?.({ stamp: after.stamp, credentialStamp: after.credentialStamp });
   return frame;
 }
