@@ -5,11 +5,14 @@ import { tmpdir } from 'node:os';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { canonicalFileTarget, insideFileRoot } from '../../../src/tool-file-scope.js';
 import { Fault } from '../../../src/kernel/errors.js';
+import { protectPersonaProcess } from './persona-process-boundary.js';
 
 const policies = new WeakMap();
 const runners = new WeakMap();
 const terminalSpawns = new WeakMap();
 const terminalSends = new WeakMap();
+const processes = new WeakMap();
+const ptyProcesses = new WeakMap();
 const spawnEvidence = new AsyncLocalStorage();
 const terminalEvidence = new WeakMap();
 // Cordis 为每次服务访问生成 traceable Proxy；身份和方法还原必须以原服务为准。
@@ -69,12 +72,14 @@ function attach(service, registry, method, root, factory) {
   };
 }
 
-export function createPersonaProtection({ org, sandboxPolicy, sandbox, terminals, getServices,
+export function createPersonaProtection({ org, sandboxPolicy, sandbox, terminals, subprocess, getServices,
+  processBoundary = protectPersonaProcess,
   cwdOf = exec => exec?.agent?.session?.header?.cwd, platform = process.platform }) {
   const lexical = resolve(dirname(org.layout.personaCoreFile()));
   const root = canonicalFileTarget(lexical);
   const acceptedEnforcement = platform === 'win32' ? ['full', 'partial'] : ['full'];
   let stopped = false;
+  let directoryBoundary = platform === 'linux' && !!subprocess;
   const installed = new Map();
   const current = name => {
     const entry = installed.get(name);
@@ -92,9 +97,21 @@ export function createPersonaProtection({ org, sandboxPolicy, sandbox, terminals
   };
   const connect = (services = {}) => {
     if (stopped) return;
+    directoryBoundary ||= platform === 'linux' && !!services.subprocess;
     install('policy', services.sandboxPolicy, policies, 'resolve', entry => function (request) {
-      return constrain(entry.original.call(this, request), [...entry.roots.keys()]);
+      const policy = entry.original.call(this, request);
+      return directoryBoundary ? policy : constrain(policy, [...entry.roots.keys()]);
     });
+    if (directoryBoundary) for (const [name, registry, method] of [['process', processes, 'spawn'], ['pty-process', ptyProcesses, 'spawnTerminal']]) {
+      install(name, services.subprocess, registry, method, entry => function (spec) {
+        const roots = [...entry.roots.keys()];
+        const argv = processBoundary(spec.argv, roots);
+        const result = entry.original.call(this, { ...spec, argv });
+        const evidence = spawnEvidence.getStore();
+        if (evidence) evidence.roots = roots;
+        return result;
+      });
+    }
     install('runner', services.sandbox, runners, 'confine', entry => function (argv, policy, signal) {
       const roots = [...entry.roots.keys()];
       entry.lastEnforcement = null;
@@ -106,7 +123,7 @@ export function createPersonaProtection({ org, sandboxPolicy, sandbox, terminals
         if (evidence) evidence.roots = roots;
         return result;
       };
-      const result = entry.original.call(this, argv, constrain(policy, roots), signal);
+      const result = entry.original.call(this, argv, directoryBoundary ? policy : constrain(policy, roots), signal);
       // SDK confine为同步合同，真实PTY立即读取.argv；异步provider仍沿原Promise路径核验。
       return typeof result?.then === 'function' ? Promise.resolve(result).then(verify) : verify(result);
     });
@@ -131,19 +148,22 @@ export function createPersonaProtection({ org, sandboxPolicy, sandbox, terminals
       return entry.original.call(this, owner, id, request);
     });
   };
-  connect({ sandboxPolicy, sandbox, terminals });
+  connect({ sandboxPolicy, sandbox, terminals, subprocess });
   return {
     connect,
     health() {
-      const wired = current('policy') && current('runner');
+      const wired = current('policy') && current('runner') && (!directoryBoundary || current('process') && current('pty-process'));
       const lastEnforcement = current('runner') ? runners.get(installed.get('runner').service)?.lastEnforcement ?? null : null;
-      return { stopped, nativePolicy: current('policy'), confinedExecution: current('runner'),
+      return { stopped, nativePolicy: current('policy'), confinedExecution: wired,
+        directoryBoundary, processBoundary: directoryBoundary && current('process') && current('pty-process'),
         terminalProof: current('spawn') && current('send'), platform, acceptedEnforcement: [...acceptedEnforcement], lastEnforcement,
-        执行状态: stopped ? '已停止' : !wired ? '执行服务未接线' : lastEnforcement === null ? '尚未核实执行隔离'
+        执行状态: stopped ? '已停止' : !wired ? '执行服务未接线' : directoryBoundary ? '人设目录只读边界已接线，宿主权限保持用户选择'
+          : lastEnforcement === null ? '尚未核实执行隔离'
           : lastEnforcement === 'full' ? '最近返回完整隔离' : lastEnforcement === 'partial' ? '最近返回部分隔离' : '隔离程度未知',
         保护范围: platform === 'win32'
           ? '文件工具禁止改写核心人设；命令沿Windows原生沙箱运行，允许部分隔离，不能保证任意命令都无法改卡。'
-          : '文件工具禁止改写核心人设；命令要求完整文件隔离，核心目录与可写根重叠时只读。',
+          : directoryBoundary ? '文件工具禁止改写核心人设；进程仅将核心目录及挂载别名设为只读，保留用户选择的权限模式。'
+            : '文件工具禁止改写核心人设；命令要求完整文件隔离，核心目录与可写根重叠时只读。',
       };
     },
     guard(exec) {
@@ -155,6 +175,7 @@ export function createPersonaProtection({ org, sandboxPolicy, sandbox, terminals
       } catch { return '[dsh-mind] 核心人设保护的宿主服务已变化，请重新加载保护。'; }
       if (['terminal_open', 'terminal_send'].includes(exec?.name) && (!current('spawn') || !current('send'))) return '[dsh-mind] 终端缺少核心人设保护证明，暂不可用。';
       if (EXEC_TOOLS.has(exec?.name) && (!current('policy') || !current('runner'))) return '[dsh-mind] 核心人设缺少执行沙箱服务，命令暂不可执行。';
+      if (directoryBoundary && EXEC_TOOLS.has(exec?.name) && (!current('process') || !current('pty-process'))) return '[dsh-mind] 人设目录只读保护缺少进程服务，请重新加载；未静默降级用户权限。';
       // 直接文件写入不依赖模型是否把路径称作“人设”，父目录替换也受保护。
       const args = exec?.arguments;
       for (const key of ['file_path', 'path', 'source', 'destination', 'target_path', 'new_path', 'old_path']) {

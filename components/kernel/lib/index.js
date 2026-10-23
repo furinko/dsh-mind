@@ -101,12 +101,12 @@ export async function apply(ctx, config = {}) {
   const 项目 = config.project ?? DEFAULT_PROJECT;
   const personaProtection = createPersonaProtection({ org,
     sandboxPolicy: 取服务(ctx, 'sandboxPolicy'), sandbox: 取服务(ctx, 'sandbox'),
-    terminals: 取服务(ctx, 'terminals'),
-    getServices: () => ({ sandboxPolicy: 取服务(ctx, 'sandboxPolicy'), sandbox: 取服务(ctx, 'sandbox'), terminals: 取服务(ctx, 'terminals') }),
+    terminals: 取服务(ctx, 'terminals'), subprocess: 取服务(ctx, 'subprocess'),
+    getServices: () => ({ sandboxPolicy: 取服务(ctx, 'sandboxPolicy'), sandbox: 取服务(ctx, 'sandbox'), terminals: 取服务(ctx, 'terminals'), subprocess: 取服务(ctx, 'subprocess') }),
     cwdOf: exec => 会话工作目录(exec, { ctx }),
   });
   org.personaProtection = personaProtection;
-  ctx.inject?.(['sandboxPolicy', 'sandbox'], scoped => personaProtection.connect({ sandboxPolicy: scoped.sandboxPolicy, sandbox: scoped.sandbox, terminals: 取服务(ctx, 'terminals') }));
+  ctx.inject?.(['sandboxPolicy', 'sandbox'], scoped => personaProtection.connect({ sandboxPolicy: scoped.sandboxPolicy, sandbox: scoped.sandbox, terminals: 取服务(ctx, 'terminals'), subprocess: 取服务(ctx, 'subprocess') }));
   ctx.effect?.(() => () => personaProtection.stop());
   let 解析项目;
   try { 解析项目 = createProjectResolver({ bindings: config.projectBindings, layout: org.layout }); }
