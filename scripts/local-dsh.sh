@@ -16,7 +16,12 @@ chmod 700 -- "$MIND_AUDIT_DIR"
 task_git() { "$MIND_GIT" -C "$task_root" "$@"; }
 task_runtime_git() { "$MIND_GIT" -C "$MIND_RUNTIME_DIR" "$@"; }
 task_clean() {
-  [[ -z "$("$MIND_GIT" -C "$1" status --porcelain)" ]] || {
+  local task_status
+  if ! task_status="$("$MIND_GIT" -C "$1" status --porcelain)"; then
+    echo "无法核对工作区状态，停止部署：$1" >&2
+    return 1
+  fi
+  [[ -z "$task_status" ]] || {
     echo "工作区有未提交修改，请先提交后再部署：$1" >&2; exit 1;
   }
 }
@@ -38,9 +43,17 @@ task_check() {
     return 1
   fi
 }
+task_layout_compatible() {
+  "$MIND_NODE" "$task_root/scripts/check-deployment-layout.mjs" \
+    --repo "$task_root" --git "$MIND_GIT" --target "$1" \
+    --profile "$MIND_PROFILE_DIR" --runtime "$MIND_RUNTIME_DIR" \
+    --home-root "${DSH_HOME:-$HOME/.dsh}" --private-root "${MIND_PRIVATE_ROOT:-}"
+}
 task_switch_runtime() {
   local task_target="$1" task_previous task_stamp task_evidence
   task_previous="$(task_runtime_git rev-parse HEAD)"
+  # Check both directions before stopping a live service or changing recovery refs.
+  task_layout_compatible "$task_target" && task_layout_compatible "$task_previous" || return 1
   task_stamp="$(date -u +%Y%m%dT%H%M%S)-$$"
   task_evidence="$MIND_AUDIT_DIR/deploy-$task_stamp"
   mkdir -m 700 -- "$task_evidence"
@@ -49,8 +62,13 @@ task_switch_runtime() {
   task_git update-ref "refs/dsh-local/history/$task_stamp" "$task_previous"
   task_git update-ref refs/dsh-local/previous "$task_previous"
   "$MIND_APP_DIR/stop.sh"
-  if task_runtime_git checkout --detach "$task_target" &&
+  # Recheck after shutdown and immediately before launch: startup or another
+  # offline operation may have changed a storage format since the first check.
+  if task_layout_compatible "$task_target" &&
+     task_layout_compatible "$task_previous" &&
+     task_runtime_git checkout --detach "$task_target" &&
      "$MIND_NODE" "$MIND_RUNTIME_DIR/scripts/verify-profile-install.mjs" "$MIND_PROFILE_DIR" &&
+     task_layout_compatible "$task_target" &&
      "$MIND_APP_DIR/launch.sh" --no-open; then
     task_git update-ref refs/dsh-local/current "$task_target"
     "$MIND_NODE" --input-type=module - "$task_evidence/deployment.json" "$task_target" "$task_previous" <<'JS'
@@ -64,10 +82,16 @@ JS
     echo "回执：$task_evidence/deployment.json"
     echo '请刷新客户端，核对心智看板，并执行 /mind-guard probe。'
   else
-    echo '部署失败，恢复此前运行提交。' >&2
-    "$MIND_APP_DIR/stop.sh"
-    task_runtime_git checkout --detach "$task_previous"
-    "$MIND_APP_DIR/launch.sh" --no-open
+    echo '部署失败，先重新核对数据兼容性再尝试恢复此前运行提交。' >&2
+    "$MIND_APP_DIR/stop.sh" || return 1
+    if ! task_layout_compatible "$task_previous"; then
+      echo '当前数据不能安全交给旧源码；保持停机，未回退数据，请核对部署回执。' >&2
+      return 1
+    fi
+    task_runtime_git checkout --detach "$task_previous" || return 1
+    "$MIND_NODE" "$MIND_RUNTIME_DIR/scripts/verify-profile-install.mjs" "$MIND_PROFILE_DIR" || return 1
+    task_layout_compatible "$task_previous" || return 1
+    "$MIND_APP_DIR/launch.sh" --no-open || return 1
     return 1
   fi
 }

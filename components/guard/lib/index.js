@@ -202,7 +202,7 @@ async function runGuardAction(org, args, subject) {
     case 'probe_health':
       return { 健康: await org.probes.evaluateHealth(), 影响面: await org.probes.impactStatement() };
     case 'probe_rollback':
-      return { 回滚: await org.probes.autoRollback() };
+      return { 回滚: await org.probes.rollback({ subject }) };
     case 'upgrade_compare':
       if (!args.对象) throw new InvalidBody('upgrade_compare 需要 对象');
       // 主体透传（2026-10-14 审查 P2-15）：比对告警要记真实调用者，不再记 system/factory。

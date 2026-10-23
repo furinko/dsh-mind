@@ -19,6 +19,63 @@ import { RULE_FILES } from './paths.js';
 /** 走对象存储的 kind。其余 kind 由各自的服务负责。 */
 export const DOCUMENT_KINDS = ['规则', '身份', '能力', '产物'];
 
+/** 历史的物理身份含类型与来源；旧 id 自身不允许冒号，索引键不会与旧键相撞。 */
+function historyIdentity(kind, zone = '私有') {
+  if (!DOCUMENT_KINDS.includes(kind) || !['私有', '出厂'].includes(zone) || (kind === '产物' && zone === '出厂')) {
+    throw new InvalidBody('版本历史需要明确有效的对象类与来源区。');
+  }
+  return { kind, zone };
+}
+const historyKey = (id, { kind, zone }) => `${kind}:${zone}:${id}`;
+const historyFault = (id, version) => new Fault('STORE_HISTORY_AMBIGUOUS',
+  `旧历史 ${id}@v${version} 缺少唯一可验证的类型、来源及内容回执；保留原件，不猜测归属。`);
+
+/** 旧共享路径不以正文自报标签认归属，须核对完整审计链中的原写入摘要回执。 */
+async function legacyHistoryIdentity(id, version, content, evidence) {
+  const parsed = parseDocument(content.toString());
+  if (String(parsed.meta.id) !== id || !DOCUMENT_KINDS.includes(parsed.meta.kind)
+      || Number(parsed.meta.version) !== version) throw historyFault(id, version);
+  const hash = digest(content);
+  const matches = new Map();
+  let rows;
+  try { rows = await evidence(); } catch { throw historyFault(id, version); }
+  for (const row of rows) {
+    if (row.动作 !== '状态变更' || row.对象?.id !== id || row.对象?.kind !== parsed.meta.kind
+        || row.详情?.版本指针 !== `${id}@v${version}` || row.详情?.摘要 !== hash
+        || !['私有', '出厂'].includes(row.详情?.区)) continue;
+    const identity = historyIdentity(parsed.meta.kind, row.详情.区);
+    if (parsed.meta.zone && parsed.meta.zone !== identity.zone) continue;
+    matches.set(historyKey(id, identity), identity);
+  }
+  if (matches.size !== 1) throw historyFault(id, version);
+  return [...matches.values()][0];
+}
+
+/**
+ * 对象库及交付物核验共用历史解析。read可保留调用方更严格的链接/句柄核验；
+ * 返回本次读出的正文，不在验证归属后重新读取一个可能变化的文件。
+ */
+export async function readObjectHistory({ layout, audit, id, version, kind, zone = '私有',
+  read = readTextOrNull, evidence = () => audit.readVerified() }) {
+  const identity = historyIdentity(kind, zone);
+  if (!Number.isSafeInteger(version) || version < 1) throw new InvalidBody('历史版本必须是正整数。');
+  let path = layout.historyFile(id, `v${version}`, identity);
+  let content = await read(path);
+  if (content === null) {
+    path = layout.historyFile(id, `v${version}`);
+    content = await read(path);
+    if (content === null) return null;
+    const owner = await legacyHistoryIdentity(id, version, content, evidence);
+    if (owner.kind !== kind || owner.zone !== zone) return null;
+  }
+  const parsed = parseDocument(content.toString());
+  if (String(parsed.meta.id) !== id || parsed.meta.kind !== kind
+      || (parsed.meta.zone && parsed.meta.zone !== zone) || Number(parsed.meta.version) !== version) {
+    throw new Fault('STORE_HISTORY_INVALID', `版本历史 ${id}@v${version} 与对象身份不符，保留原件。`);
+  }
+  return { path, content };
+}
+
 export class ObjectStore {
   /**
    * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock }} spec
@@ -88,12 +145,10 @@ export class ObjectStore {
       });
     }
 
-    // 对象级锁（W3 批1·2026-10-09）：read-existing → keepVersion → atomicWrite →
-    // recordPointer 全程包进按对象锁（照 bus 线程锁 `${file}.lock` 先例）。不锁的话
-    // 两个并发 write 同 id 会算出同一个 version、互相覆盖正文、留下撕开的版本史。
-    // 锁路径与目标文件同目录同主名——path 只由 id/authority/zone 决定（不含 version），
-    // 所以在算 version 之前就能定。
-    const lockPath = `${this.#pathFor(kind, { id }, zone, meta.authority ?? '自治')}.lock`;
+    // 正文、历史和指针共用类型/来源/id身份锁；同对象并发更新不能共用版本号，
+    // 不同对象即使id相同也不能共用历史。锁先落v2目录，旧写入器从此不得接管。
+    historyIdentity(kind, zone);
+    const lockPath = this.layout.historyObjectLock(id, { kind, zone });
     return withLock(lockPath, async () => {
       // existing 读取带 zone 限定（2026-10-13 审查 P2-15）：修前按 私有→出厂 合并读——
       // 出厂作者更新出厂件时 existing 会命中私有叠加层 ⇒ version 按私有副本续算、
@@ -102,6 +157,8 @@ export class ObjectStore {
       const existing = await this.read(kind, id, { subject: spec.subject, zone });
       // version 从 front matter 里读回来是**字符串**；不转数字就会得到 v1 → v11 这种版本号。
       const previous = existing ? Number(existing.meta.version ?? 1) : null;
+      if (existing && (!Number.isSafeInteger(previous) || previous < 1 || existing.meta.kind !== kind
+          || (existing.meta.zone && existing.meta.zone !== zone))) throw new InvalidBody('既有对象类型、来源或版本无效，不能继续版本链。');
       // R17（审查 2026-10-16 · 按旧/新最高档判定，档位标签不可被重写降级）：修前判定用
       // 【调用方想写成的】meta.authority——既有法律档对象被同 id 低档位重发覆盖成自治
       // （审查实证：正确针对既有法律卡的 write 判 deny，经生产能力发布服务却覆盖成功）。
@@ -144,16 +201,18 @@ export class ObjectStore {
 
       const version = previous === null ? 1 : previous + 1;
       meta.version = version;
+      meta.zone = zone;
       const text = `${formatFrontMatter(meta)}${document.body.startsWith('\n') ? document.body.slice(1) : document.body}`;
       const parsed = parseDocument(text, { defaultAuthority: meta.authority });
       assertStructure(kind, parsed);
 
       const path = this.#pathFor(kind, meta, zone, meta.authority);
       if (!path) throw new InvalidBody(`对象存储没有 ${kind} 的落点`);
-      if (existing) await this.#keepVersion(id, existing, previous);
+      if (existing) await this.#keepVersion(id, existing, previous, { kind, zone });
 
       await atomicWrite(path, text);
-      const pointer = { id, kind, zone, version, digest: digest(text), at: this.clock.iso(), path };
+      const pointer = { id, kind, zone, version, digest: digest(text), at: this.clock.iso(), path,
+        ...(spec.restoredFrom === undefined ? {} : { 回滚自: spec.restoredFrom }) };
       // R16（审查 2026-10-16 · 部分提交明确化）：正文落盘、版本指针/审计是后续两笔——
       // 修前后续失败只把原错误裸抛，调用方会误判「没写成」而盲重试（重试 = 又一个版本）。
       // 最低限度实现（判据允许）：失败必须明示「正文已提交到 vX」并禁止盲重试语义；
@@ -219,33 +278,60 @@ export class ObjectStore {
   /**
    * 版本历史。审计只记指针，正文在这里。
    * @param {string} id
+   * @param {{kind?: string, zone?: '私有'|'出厂'}} [options] 省略时只接受唯一归属。
    * @returns {Promise<Array<{ version: number, at: string, digest: string, path: string }>>}
    */
-  async history(id) {
-    const dir = this.layout.historyDir(id);
-    const files = await listFiles(dir, { recursive: false, filter: (n) => n.endsWith('.md') });
-    /** @type {Array<{version:number, at:string, digest:string, path:string}>} */
+  async history(id, options = {}) {
+    const identity = await this.#historyIdentity(id, options);
+    if (!identity) return [];
+    const names = new Set();
+    for (const dir of [this.layout.historyDir(id, identity), this.layout.historyDir(id)]) {
+      for (const name of await listFiles(dir, { recursive: false, filter: n => /^v[1-9]\d*\.md$/.test(n) })) names.add(name);
+    }
+    let evidence;
     const out = [];
-    for (const name of files) {
+    for (const name of names) {
       const version = parseVersionName(name);
-      if (version === null) continue;
-      const path = this.layout.historyFile(id, `v${version}`);
-      const text = await readTextOrNull(path);
-      if (text === null) continue;
-      const parsed = parseDocument(text);
-      out.push({ version, at: String(parsed.meta.保存于 ?? ''), digest: digest(text), path });
+      const found = await readObjectHistory({ layout: this.layout, audit: this.audit, id, version, ...identity,
+        evidence: () => evidence ??= this.audit.readVerified() });
+      if (!found) continue;
+      const parsed = parseDocument(found.content.toString());
+      out.push({ version, at: String(parsed.meta.保存于 ?? ''), digest: digest(found.content), path: found.path });
     }
     return out.sort((a, b) => a.version - b.version);
   }
 
-  /**
-   * 读某一版历史正文。
-   * @param {string} id
-   * @param {number} version
-   * @returns {Promise<string|null>}
-   */
-  async readVersion(id, version) {
-    return readTextOrNull(this.layout.historyFile(id, `v${version}`));
+  /** 可省身份仅为旧API兼容；同id多类型/多来源必须显式指定，不能任选一个。 */
+  async readVersion(id, version, options = {}) {
+    const identity = await this.#historyIdentity(id, options);
+    if (!identity) return null;
+    const found = await readObjectHistory({ layout: this.layout, audit: this.audit, id, version, ...identity });
+    return found?.content.toString() ?? null;
+  }
+
+  async #historyIdentity(id, options) {
+    if (options.kind !== undefined) return historyIdentity(options.kind, options.zone ?? '私有');
+    if (options.zone !== undefined) throw new InvalidBody('历史来源必须与对象类一起指定。');
+    const candidates = new Map();
+    const add = identity => candidates.set(historyKey(id, identity), identity);
+    for (const kind of DOCUMENT_KINDS) {
+      for (const zone of ['私有', '出厂']) {
+        if (kind === '产物' && zone === '出厂') continue;
+        const identity = { kind, zone };
+        const path = kind === '规则' ? this.layout.rulePath(id, zone) : this.#pathFor(kind, { id }, zone);
+        const current = path ? await readTextOrNull(path) : null;
+        const history = await listFiles(this.layout.historyDir(id, identity), { recursive: false, filter: n => /^v[1-9]\d*\.md$/.test(n) });
+        if (current !== null || history.length) add(identity);
+      }
+    }
+    let evidence;
+    for (const name of await listFiles(this.layout.historyDir(id), { recursive: false, filter: n => /^v[1-9]\d*\.md$/.test(n) })) {
+      const version = parseVersionName(name);
+      const content = await readTextOrNull(this.layout.historyFile(id, `v${version}`));
+      if (content !== null) add(await legacyHistoryIdentity(id, version, content, () => evidence ??= this.audit.readVerified()));
+    }
+    if (candidates.size > 1) throw new Fault('STORE_HISTORY_AMBIGUOUS', `对象id ${id} 有多种类型或来源；请显式指定kind和zone。`);
+    return [...candidates.values()][0] ?? null;
   }
 
   /**
@@ -260,7 +346,8 @@ export class ObjectStore {
    * @returns {Promise<{ id: string, version: number, restoredFrom: number }>}
    */
   async rollback(kind, id, version, spec) {
-    const text = await this.readVersion(id, version);
+    const zone = spec.zone ?? '私有';
+    const text = await this.readVersion(id, version, { kind, zone });
     if (text === null) throw new InvalidBody(`版本历史里没有 ${id}@v${version}`);
     const parsed = parseDocument(text);
     // authority 取**被回滚版本自己写的**（W3 批2·2026-10-09）：此前硬编码 '法律'，
@@ -272,31 +359,45 @@ export class ObjectStore {
     await this.policy.check({
       subject: spec.subject,
       action: 'rollback',
-      target: { id, kind, authority, zone: '私有', textVersion: true },
+      target: { id, kind, authority, zone, textVersion: true },
       context: { reason: spec.reason, version },
     });
-    const result = await this.write(kind, { meta: parsed.meta, body: parsed.body }, { ...spec, reason: `${spec.reason}（回滚自 v${version}）` });
-    await this.#recordPointer(id, {
-      id,
-      kind,
-      zone: '私有',
-      version: result.version,
-      digest: result.digest,
-      at: this.clock.iso(),
-      path: result.path,
-      回滚自: version,
-    });
+    const result = await this.write(kind, { meta: parsed.meta, body: parsed.body }, { ...spec, zone, restoredFrom: version, reason: `${spec.reason}（回滚自 v${version}）` });
     return { id, version: result.version, restoredFrom: version };
   }
 
   /**
    * 当前版本指针（审计用；正文不在这里）。
    * @param {string} [id]
+   * @param {{kind?: string, zone?: '私有'|'出厂'}} [options]
    * @returns {Promise<Record<string, object>>}
    */
-  async pointers(id) {
+  async pointers(id, options = {}) {
     const index = (await readJsonOrNull(this.layout.historyIndex())) ?? {};
-    return id ? { [id]: index[id] } : index;
+    if (!id) {
+      // 对外保留id索引形状；内部旧/新键同一身份时取新指针，跨身份绝不静默择一。
+      const visible = new Map();
+      for (const [key, pointer] of Object.entries(index)) {
+        const owner = historyIdentity(pointer?.kind, pointer?.zone);
+        const qualified = historyKey(pointer.id, owner);
+        if ((key !== pointer.id && key !== qualified)
+            || pointer.path !== this.#pathFor(owner.kind, { id: pointer.id }, owner.zone)) {
+          throw new Fault('STORE_HISTORY_INVALID', '版本指针与对象身份不符。');
+        }
+        const prior = visible.get(pointer.id);
+        if (prior && historyKey(pointer.id, prior.pointer) !== qualified) throw new Fault('STORE_HISTORY_AMBIGUOUS', '版本指针含同id多身份；请按kind和zone分别查询。');
+        if (!prior || key === qualified) visible.set(pointer.id, { pointer });
+      }
+      return Object.fromEntries([...visible].map(([key, value]) => [key, value.pointer]));
+    }
+    const identity = await this.#historyIdentity(id, options);
+    if (!identity) return { [id]: undefined };
+    const current = index[historyKey(id, identity)];
+    const legacy = index[id];
+    const matches = pointer => pointer?.id === id && pointer.kind === identity.kind && pointer.zone === identity.zone
+      && pointer.path === this.#pathFor(identity.kind, { id }, identity.zone);
+    if (current && !matches(current)) throw new Fault('STORE_HISTORY_INVALID', '版本指针与对象身份不符。');
+    return { [id]: current ?? (matches(legacy) ? legacy : undefined) };
   }
 
   /** @param {string} kind @param {'出厂'|'私有'} zone */
@@ -364,19 +465,22 @@ export class ObjectStore {
   }
 
   /** 改动前留前一版：这是「任何带 version 的对象，改动前自动留前一版」的全部实现。 */
-  async #keepVersion(id, existing, version) {
-    const path = this.layout.historyFile(id, `v${version}`);
+  async #keepVersion(id, existing, version, identity) {
+    const path = this.layout.historyFile(id, `v${version}`, identity);
     const stamped = existing.raw ?? `${formatFrontMatter({ ...existing.meta, 保存于: this.clock.iso() })}${existing.body}`;
-    await atomicWrite(path, stamped);
+    const previous = await readTextOrNull(path);
+    if (previous !== null && previous !== stamped) throw new Fault('STORE_HISTORY_CONFLICT',
+      `历史 ${identity.kind}/${identity.zone}/${id}@v${version} 已有不同正文；保留原件，不覆盖历史。`);
+    if (previous === null) await atomicWrite(path, stamped);
   }
 
-  /** 版本指针索引：只记指针与摘要，正文永远在文件里。 */
+  /** 同一索引锁内更新身份键；保留旧键供兼容读取，不自动迁移或覆盖旧证据。 */
   async #recordPointer(id, pointer) {
     await mutateLocked({
       file: this.layout.historyIndex(),
       lockPath: `${this.layout.historyIndex()}.lock`,
       read: () => readJsonOrNull(this.layout.historyIndex()),
-      apply: (current) => ({ next: { ...(current ?? {}), [id]: pointer }, result: pointer }),
+      apply: (current) => ({ next: { ...(current ?? {}), [historyKey(id, pointer)]: pointer }, result: pointer }),
     });
   }
 }

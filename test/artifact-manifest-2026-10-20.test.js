@@ -108,9 +108,9 @@ describe('交付物内容清单与复核票绑定', () => {
     assert.ok(n.交付物清单.条目.every((e) => e.版本 === 1));
     await store.write('产物', document('第二版'), { subject: LEAD, reason: '后续版本' });
     const ticket = (await review(f, n.id)).待采纳.票;
-    await writeFile(f.layout.historyFile('report', 'v1'), objectText('report', 1, '篡改历史'));
+    await writeFile(f.layout.historyFile('report', 'v1', { kind: '产物', zone: '私有' }), objectText('report', 1, '篡改历史'));
     await assert.rejects(accept(f, n.id, ticket), blocked);
-    await writeFile(f.layout.historyFile('report', 'v1'), v1);
+    await writeFile(f.layout.historyFile('report', 'v1', { kind: '产物', zone: '私有' }), v1);
     assert.equal((await accept(f, n.id, ticket)).状态, '已采纳');
   });
 

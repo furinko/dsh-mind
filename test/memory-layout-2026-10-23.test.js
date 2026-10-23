@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, writeFile, rm, link, chmod, stat } from 'node
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { Layout } from '../src/paths.js';
 import { memoryLayoutVersion, listMemoryProjects, MEMORY_TRANSACTION_FILE } from '../src/memory-layout.js';
 import { memoryTree, planMemoryMigration, migrateMemoryLayout, recoverMemoryMigration, rollbackMemoryMigration } from '../src/memory-layout-migration.js';
@@ -170,16 +171,16 @@ it('缺少停机校核或校核仍活跃时，源目录与元数据不变', () =
 }));
 
 it('实际CLI缺省只读，未确认停机不得实际迁移', () => scene(async ({ layout, root }) => {
-  const script = new URL('../scripts/migrate-memory-layout.mjs', import.meta.url);
+  const script = fileURLToPath(new URL('../scripts/migrate-memory-layout.mjs', import.meta.url));
   const before = await memoryTree(root);
-  const output = execFileSync(process.execPath, [script.pathname.replace(/^\/(\w:)/, '$1'), '--private-root', layout.privateRoot], { encoding: 'utf8' });
+  const output = execFileSync(process.execPath, [script, '--private-root', layout.privateRoot], { encoding: 'utf8' });
   assert.equal(JSON.parse(output).mode, 'plan');
-  assert.throws(() => execFileSync(process.execPath, [script.pathname.replace(/^\/(\w:)/, '$1'), '--private-root', layout.privateRoot, '--apply'], { encoding: 'utf8', stdio: 'pipe' }), /Command failed/);
+  assert.throws(() => execFileSync(process.execPath, [script, '--private-root', layout.privateRoot, '--apply'], { encoding: 'utf8', stdio: 'pipe' }), /Command failed/);
   assert.deepEqual(await memoryTree(root), before);
 }));
 
 it('停机CLI拒绝身份档案中仍存活的真实PID，不因人工确认而跳过检查', t => scene(async ({ layout, root }) => {
-  const script = new URL('../scripts/migrate-memory-layout.mjs', import.meta.url).pathname.replace(/^\/(\w:)/, '$1');
+  const script = fileURLToPath(new URL('../scripts/migrate-memory-layout.mjs', import.meta.url));
   await mkdir(dirname(layout.identityFile()), { recursive: true });
   await writeFile(layout.identityFile(), JSON.stringify({ members: { synthetic: { pid: process.pid } } }));
   const before = await memoryTree(root);

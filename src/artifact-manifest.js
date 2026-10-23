@@ -4,6 +4,7 @@ import { lstat, open, readdir } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { Denied, InvalidBody } from './kernel/errors.js';
 import { parseDocument } from './tags.js';
+import { readObjectHistory } from './store.js';
 import { assertSingleLinkFile, canonicalFileTarget, insideFileRoot } from './tool-file-scope.js';
 
 const hash = (value) => createHash('sha256').update(value).digest('hex');
@@ -144,9 +145,12 @@ async function readObjectVersion(object, spec) {
   try { content = await objectBytes(path); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   let parsed = content ? parseDocument(content.toString('utf8')) : null;
   if (object.版本 != null && Number(parsed?.meta?.version) !== object.版本) {
-    const history = layout.historyFile(object.id, `v${object.版本}`);
-    content = await objectBytes(history);
-    parsed = parseDocument(content.toString('utf8'));
+    const history = await readObjectHistory({ layout, audit: policy.audit, id: object.id, version: object.版本,
+      kind: object.对象类, zone: object.区, read: async file => {
+        try { return await objectBytes(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+      } });
+    content = history?.content;
+    parsed = content ? parseDocument(content.toString('utf8')) : null;
   }
   if (!content || content.length > MAX_BYTES || String(parsed?.meta?.id) !== object.id || String(parsed?.meta?.kind) !== object.对象类 || (parsed?.meta?.zone && parsed.meta.zone !== object.区) || !Number.isSafeInteger(Number(parsed?.meta?.version)) || Number(parsed.meta.version) < 1 || (object.版本 != null && Number(parsed.meta.version) !== object.版本)) throw denied(`对象 ${object.id} 没有身份与版本一致的真实正文。`);
   await policy.check({ subject, action: 'read', target: { id: object.id, kind: object.对象类, authority: parsed.meta.authority ?? '自治', zone: object.区, project: task?.项目 }, context: { task } });

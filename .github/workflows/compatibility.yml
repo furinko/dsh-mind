@@ -15,12 +15,18 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        node: ['22', '24']
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: workspace-中文 空格
     steps:
       - uses: actions/checkout@v7
+        with:
+          path: workspace-中文 空格
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version: ${{ matrix.node }}
       - run: npm test
       - run: node scripts/verify-profile-install.mjs --selftest

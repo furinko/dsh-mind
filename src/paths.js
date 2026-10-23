@@ -442,16 +442,31 @@ export class Layout {
     return join(this.pendingDir(), `${assertPathSegment(id, '挂起项id')}.json`);
   }
 
-  /** 版本历史：`版本历史/<对象id>/<版本号>.md`（§14.4-4）。 */
-  historyDir(objectId) {
-    return this.private(DIR.版本历史, assertPathSegment(objectId, '对象id'));
+  /** 新历史含类型、来源；目录一旦出现，旧写入器不能安全接管。 */
+  historyV2Root() {
+    return this.private(DIR.版本历史, '.objects-v2');
   }
 
-  historyFile(objectId, version) {
+  /** 无identity参数仅定位旧共享路径，供有证据的兼容读取；新写入必须给完整身份。 */
+  historyDir(objectId, identity) {
+    const id = assertPathSegment(objectId, '对象id');
+    if (identity === undefined) return this.private(DIR.版本历史, id);
+    const { kind, zone } = identity;
+    if (!['规则', '身份', '能力', '产物'].includes(kind) || !['出厂', '私有'].includes(zone)
+        || (kind === '产物' && zone === '出厂')) throw new InvalidBody('历史路径需要有效对象类与来源区。');
+    return join(this.historyV2Root(), kind, zone, id);
+  }
+
+  historyObjectLock(objectId, identity) {
+    if (!identity) throw new InvalidBody('对象锁需要完整历史身份。');
+    return join(this.historyDir(objectId, identity), '.object.lock');
+  }
+
+  historyFile(objectId, version, identity) {
     // version 也过路径段校验（设计评审 #13 · 2026-10-15）：这是全文件唯一没校验的
     // 入口可控片段——store_rollback 的 version 从动作面进来，`'../../x'` 一行就能把
     // 版本历史写出私有区外。与 objectId 同一道闸（本文件 :32 assertPathSegment）。
-    return join(this.historyDir(objectId), `${assertPathSegment(version, '版本号')}.md`);
+    return join(this.historyDir(objectId, identity), `${assertPathSegment(version, '版本号')}.md`);
   }
 
   /** 版本历史的索引（记录每个对象当前版本指针；审计只记指针）。 */

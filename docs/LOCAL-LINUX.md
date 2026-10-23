@@ -28,9 +28,13 @@ bash scripts/local-dsh.sh deploy
 
 Node 在 PATH 时也可使用 `npm run dsh:check`、`npm run dsh:deploy`、`npm run dsh:status`、`npm run dsh:rollback`。
 
-部署拒绝未提交的源码或脏运行工作树。通过检查后，记录旧提交，停止本机 DSH 服务，切换运行工作树，核对 profile 安装，再冷启动原服务。启动失败尝试恢复旧提交。完整冷启动会中断正在运行的会话，应在本轮任务结束后执行。
+部署拒绝未提交的源码或脏运行工作树。通过检查后，先核对目标和失败回退提交均支持磁盘上的记忆与对象历史布局，再记录旧提交、停止本机 DSH 服务、切换运行工作树、核对 profile 安装并冷启动。停服后和启动前再次检查兼容性；启动失败仅在旧提交仍兼容当前数据时恢复，否则保持停机并报告原因，不自动还原数据。完整冷启动会中断正在运行的会话，应在本轮任务结束后执行。
 
 `bash scripts/local-dsh.sh status` 核对磁盘提交与安装。`bash scripts/local-dsh.sh rollback` 恢复上一次运行提交并重启；每次旧提交也保存于 `refs/dsh-local/history/`。回退源码不回滚私有数据或第三方插件。
+
+新提交通过 `scripts/storage-compatibility.json` 声明支持的数据布局；无声明的旧提交仅接受已核验的实现。记忆布局2、或新增的 `版本历史/.objects-v2/`，均不能交给只支持旧格式的代码。旧历史保留在原处不表示旧代码能读回新增历史。兼容检查只读元数据，不读取记忆正文或运行目标提交代码。
+
+默认私有根仅从标准 `$DSH_HOME/profiles/<profile>` 和无根路径覆盖的装载配置推导；自定义数据根、动态配置或无法核对的目录会拒绝部署。在仓外 `local.env` 中设置已确认的绝对路径 `MIND_PRIVATE_ROOT` 可明确实际数据根，不能用一个空目录绕过检查。
 
 ## 客户端验收
 

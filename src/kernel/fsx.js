@@ -226,44 +226,12 @@ export async function withLock(lockPath, fn, options = {}) {
   const started = Date.now();
   await ensureDir(lockPath);
   for (;;) {
+    let handle;
     try {
-      const handle = await open(lockPath, 'wx');
-      // 持有令牌：pid+at 双字段。验后删靠它比对——同进程并发抢同一路径时 pid 相同，
-      // at（毫秒级时刻）区分两次持有。
-      const token = { pid: process.pid, at: new Date().toISOString() };
-      // writeFile 抛错也要关句柄（2026-10-14 审查 P3）：修前只有 fn() 的 finally 里
-      // close——令牌写不进去时句柄泄漏，Windows 上还会顶住后续 rm。
-      try {
-        await handle.writeFile(JSON.stringify(token));
-      } catch (error) {
-        await handle.close().catch(() => {});
-        throw error;
-      }
-      try {
-        return await fn();
-      } finally {
-        await handle.close();
-        // **验后删**（W3 批1·2026-10-09）：删除前读回锁文件，令牌还是自己的才 rm。
-        // 此前的无条件 rm 有三方同进洞：持有者 A 超时（fn 慢）⇒ 等待者 B 判 stale 抢锁
-        // 并建出新锁文件 ⇒ A 的 finally 这时才跑，无条件 rm 删掉的是 **B 的锁** ⇒
-        // 第三个等待者 C 又能建锁进入——A/B/C 三方同在临界区。
-        const current = await readFile(lockPath, 'utf8').catch(() => null);
-        let mine = false;
-        try {
-          const parsed = JSON.parse(current ?? '{}');
-          mine = parsed.pid === token.pid && parsed.at === token.at;
-        } catch {
-          mine = false; // 读不懂 = 不是自己的令牌（或已损坏），一律不删。
-        }
-        if (mine) {
-          await rm(lockPath, { force: true });
-        } else {
-          // 不是自己的锁：说明持有权已被夺走，删它就是上面的洞。留痕不吞声（§3.6）——
-          // fsx 是底座没有审计依赖，console 是这里的唯一出口。
-          console.warn(`[dsh-mind] withLock(${lockPath})：锁已易主（自己的令牌不在锁文件里），跳过删除以保护新持有者。`);
-        }
-      }
+      handle = await open(lockPath, 'wx');
     } catch (error) {
+      // 只有获取锁失败才允许重试。业务、令牌写入和释放阶段的文件错误必须向外返回；
+      // fn 可能已经落账，不能因它抛 EPERM/EEXIST 就悄悄重放整次操作。
       // Windows 的已知行为：对已存在文件 open('wx') 常抛 EPERM 而非 EEXIST
       // （文件被别的句柄持有或处于删除挂起态时尤其如此）。锁文件路径只会指向普通文件，
       // 这里的 EPERM 按「锁被占着」处理：进入等待/夺取分支，而不是炸掉调用方。
@@ -290,6 +258,36 @@ export async function withLock(lockPath, fn, options = {}) {
         throw new Error(`获取锁超时：${lockPath}（持有者未在 ${timeoutMs}ms 内释放）`);
       }
       await sleep(20 + Math.floor(Math.random() * 40));
+      continue;
+    }
+    // 持有令牌：pid+at 双字段。验后删靠它比对——同进程并发抢同一路径时 pid 相同，
+    // at（毫秒级时刻）区分两次持有。
+    const token = { pid: process.pid, at: new Date().toISOString() };
+    // 令牌写失败也要关句柄；获取成功后不再进入抢锁重试分支。
+    try {
+      await handle.writeFile(JSON.stringify(token));
+    } catch (error) {
+      await handle.close().catch(() => {});
+      throw error;
+    }
+    try {
+      return await fn();
+    } finally {
+      await handle.close();
+      // 删除前读回令牌。旧持有者超时后不得删掉新持有者的锁。
+      const current = await readFile(lockPath, 'utf8').catch(() => null);
+      let mine = false;
+      try {
+        const parsed = JSON.parse(current ?? '{}');
+        mine = parsed.pid === token.pid && parsed.at === token.at;
+      } catch {
+        mine = false; // 读不懂 = 不是自己的令牌（或已损坏），一律不删。
+      }
+      if (mine) {
+        await rm(lockPath, { force: true });
+      } else {
+        console.warn(`[dsh-mind] withLock(${lockPath})：锁已易主（自己的令牌不在锁文件里），跳过删除以保护新持有者。`);
+      }
     }
   }
 }

@@ -41,6 +41,18 @@ const PRUNE_TO = 150;
  */
 const PROBE_RUNNERS = ['Lead', '主权者', '系统'];
 
+/** 手工定位与巡检共用结构性主体闸，不依赖可能已经故障的策略引擎。 */
+function assertProbeRunner(subject, action) {
+  if (PROBE_RUNNERS.includes(subject?.kind)) return;
+  const 巡检 = action === 'probe_run';
+  const 操作 = 巡检 ? '探针巡检' : '回滚定位';
+  throw new Denied(`安全类 · ${操作}的主体闸（§4：机制内置动作，不挂策略引擎——引擎不健康时探针必须照常跑）`,
+    `主体 ${subject?.id ?? '（缺席）'}（${subject?.kind ?? '未知'}）无权${巡检 ? '跑探针' : '执行回滚定位'}：${巡检 ? '落快照 + 入账' : '定位 + 告警入账'}是写动作，只有 Lead / 主权者 / 系统能触发。`, {
+      requireAuthority: 'Lead',
+      howToChange: `由 Lead（根会话）执行 ${action}；成员要探针读数用 probe_health（只读）。`,
+    });
+}
+
 export class ProbeRunner {
   /**
    * @param {{ layout: import('./paths.js').Layout, policy: import('./policy.js').PolicyEngine, audit: import('./audit.js').AuditLog, clock: import('./kernel/time.js').Clock, capability?: object, 无内核装配?: boolean }} spec
@@ -109,12 +121,7 @@ export class ProbeRunner {
    * @returns {Promise<{全绿: boolean, 结果: Array<object>, 见红: Array<object>, 机制版本: string, 于: string, 声明问题: string[]}>}
    */
   async run(spec = {}) {
-    if (!PROBE_RUNNERS.includes(spec.subject?.kind)) {
-      throw new Denied('安全类 · 探针巡检的主体闸（§4：机制内置动作，不挂策略引擎——引擎不健康时探针必须照常跑）', `主体 ${spec.subject?.id ?? '（缺席）'}（${spec.subject?.kind ?? '未知'}）无权跑探针：落快照 + 入账是写动作，只有 Lead / 主权者 / 系统能触发。`, {
-        requireAuthority: 'Lead',
-        howToChange: '由 Lead（根会话）执行 probe_run；成员要探针读数用 probe_health（只读）。',
-      });
-    }
+    assertProbeRunner(spec.subject, 'probe_run');
     const declaration = await this.declare();
     const 结果 = [];
     for (const 探针 of CLOSED_LIST) {
@@ -235,6 +242,16 @@ export class ProbeRunner {
    * @returns {Promise<object>} 定位/未知/拒绝的可读结果；副作用仅无条件审计告警，审计或定位故障抛出。
    */
   async autoRollback(reference) {
+    return this.#locateRollback(reference, { id: 'system', kind: '系统' }, '探针自动');
+  }
+
+  /** 手工请求有独立主体闸；不能因复用系统定位逻辑而获得系统身份。 */
+  async rollback(spec = {}) {
+    assertProbeRunner(spec.subject, 'probe_rollback');
+    return this.#locateRollback(undefined, spec.subject, '手工请求');
+  }
+
+  async #locateRollback(reference, subject, 触发方式) {
     let result = { 执行: false, 已定位: false, 目标版本: null, 可恢复: '不可确定', 制品来源: null, 状态: '不可确定', 原因: '' };
     let failure = null;
     try {
@@ -287,9 +304,9 @@ export class ProbeRunner {
     }
     // 包括未知、拒绝与读取异常，均必须审计告警；审计失败直接抛，不得伪报“已入账”。
     await this.audit.append({
-      动作: '自动回滚', 主体: { id: 'system', kind: '系统' }, 对象: { id: '机制版本', kind: '账目' },
+      动作: '自动回滚', 主体: subject, 对象: { id: '机制版本', kind: '账目' },
       依据: '§4 甲′：定位全绿最近一版＋无条件入账＋告警升级主权者；运行态不自动改文件、不自建回滚制品',
-      结果: result.原因, 告警: true, 详情: { ...result, 触发快照: result.触发快照 ?? reference ?? null, 升级: '主权者' },
+      结果: result.原因, 告警: true, 详情: { ...result, 触发方式, 触发快照: result.触发快照 ?? reference ?? null, 升级: '主权者' },
     });
     if (failure) throw new Error(result.原因, { cause: failure });
     return result;
