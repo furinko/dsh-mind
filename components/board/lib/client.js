@@ -4824,6 +4824,7 @@ window.__ModuleLoader__.load({
         if (ticket !== 信息请求序) return { ok: false, error: '信息回读已被新请求替代' };
         var data = out.ok && out.value.数据;
         if (out.ok && (!data || !obj(data.config) || !Array.isArray(data.sources) || !obj(data.materials) || !obj(data.growth) || !obj(data.candidates))) out = { ok: false, error: '信息收录未返回完整读数。' };
+        if (out.ok) data.runtime = out.value.runtime || null;
         发通知(信息store, { phase: out.ok ? 'live' : 'error', data: out.ok ? data : null, error: out.ok ? '' : out.error });
         return out;
       });
@@ -4957,7 +4958,10 @@ window.__ModuleLoader__.load({
             button('关联当前会话', function () { var id = relationshipSession(); if (id) send({ op: 'relationship', session: id, relationship: relationship, expectedRevision: data.configRevision }); }, !relationship.trim()),
             button('恢复当前会话独立范围', function () { var id = relationshipSession(); if (id) send({ op: 'relationship', session: id, relationship: null, expectedRevision: data.configRevision }); }),
           ]),
-          h('details', { className: 'dshmind-set__details' }, [h('summary', null, '最近阅读状态'), data.jobs.map(function (j) { return h('p', { key: j.id }, j.at + ' · ' + ({ running: '阅读中', completed: '已整理', failed: '未完成' }[j.state] || j.state) + (j.partial ? ' · 部分材料' : '') + (j.error ? ' · ' + j.error : '') + (j.records ? ' · 留下 ' + j.records.length + ' 条收获' : '')); })]),
+          h('details', { className: 'dshmind-set__details' }, [h('summary', null, '最近阅读状态'),
+            data.runtime && data.runtime.lastFailure ? h('p', { role: 'status' }, '上次辅助处理未完成：' + data.runtime.lastFailure.code + '（' + (data.runtime.lastFailure.phase === 'scan' ? '目录收录' : '阅读整理') + '），资料仍保留，可核对后重试。') : null,
+            data.runtime && data.runtime.waitingForLead ? h('p', { className: 'dshmind-set__hint' }, '部分恢复的会话等待 Lead 身份接续；正常进入会话后再安排辅助阅读。') : null,
+            data.jobs.map(function (j) { return h('p', { key: j.id }, j.at + ' · ' + ({ running: '阅读中', completed: '已整理', failed: '未完成' }[j.state] || j.state) + (j.partial ? ' · 部分材料' : '') + (j.error ? ' · ' + j.error : '') + (j.records ? ' · 关联 ' + j.records.length + ' 条记录（含复用）' : '')); })]),
         ]) : null,
         confirmation ? h('div', { role: 'alert', className: 'dshmind-set__notice' }, [h('p', null, confirmation.label), button('确认这次操作', function () { send(confirmation.body, function () { setConfirmation(null); }); }), button('取消这次操作', function () { setConfirmation(null); })]) : null,
         notice ? h('p', { role: 'status', className: 'dshmind-set__hint' }, notice) : null,

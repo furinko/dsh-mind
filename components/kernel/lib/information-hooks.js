@@ -20,7 +20,7 @@ export const INFORMATION_SYSTEM = [
 ].join('\n');
 
 export function createInformationHooks({ org, projectOf, llmOf = () => null, logger = console }) {
-  const jobs = new Map(); let stopped = false; let scanning = null; let failures = 0; let calls = 0;
+  const jobs = new Map(); let stopped = false; let scanning = null; let failures = 0; let calls = 0; let waitingForLead = 0; let lastFailure = null;
   const service = org.information;
   const currentSpec = session => {
     if (stopped || !session?.id || !session?.header?.cwd) return null;
@@ -28,7 +28,7 @@ export function createInformationHooks({ org, projectOf, llmOf = () => null, log
     return subject.kind === 'Lead' ? { subject, project: projectOf({ agent: { session } }), session: session.id } : null;
   };
   const same = (session, spec) => { const next = currentSpec(session); return !!next && next.project === spec.project && next.session === spec.session; };
-  const warn = error => { failures++; if (failures === 1) logger.warn?.(`[dsh-mind] 信息阅读暂未完成（${error?.code ?? error?.name ?? 'unknown'}），保留待阅读状态与预算回执。`); };
+  const warn = (error, phase) => { failures++; lastFailure = { code: String(error?.code ?? error?.name ?? 'unknown'), phase, at: org.clock.iso() }; if (failures === 1) logger.warn?.(`[dsh-mind] 信息阅读暂未完成（${lastFailure.code}），保留待阅读状态与预算回执。`); };
   const api = {
     attach(ctx) {
       const disposeSources = ctx.on?.('tools/result', (exec, result) => {
@@ -52,7 +52,7 @@ export function createInformationHooks({ org, projectOf, llmOf = () => null, log
       if (stopped) return;
       if (scanning) return scanning;
       scanning = (async () => { const state = await service.load(); if (state.config.autoScan && !state.config.paused && state.sources.some(s => s.enabled)) return service.scan(); })()
-        .catch(warn).finally(() => { scanning = null; });
+        .catch(error => warn(error, 'scan')).finally(() => { scanning = null; });
       return scanning;
     },
     async persisted(session, { summarize = false } = {}) {
@@ -66,6 +66,12 @@ export function createInformationHooks({ org, projectOf, llmOf = () => null, log
       const entry = { controller, promise: null };
       entry.promise = Promise.resolve().then(async () => {
         await api.scan();
+        // Restoring a session can persist its buffer before the first real prompt rebinds its Lead.
+        // Defer auxiliary work instead of treating an imported/sealed identity as a failed reading.
+        const member = (await org.registry.identity()).members?.[spec.subject.id];
+        if (member?.status !== '在岗' || member.岗位 !== 'Lead') { waitingForLead++; return; }
+        const card = await org.registry.cardOf(spec.subject.id);
+        if (card?.就绪 !== true || card.卡版本?.摘要 !== member.卡版本?.摘要) { waitingForLead++; return; }
         for (let i = 0; i < 2 && same(session, spec); i++) {
           const prepared = await service.prepareLearning(spec); if (!prepared) break;
           let poll = null;
@@ -80,12 +86,12 @@ export function createInformationHooks({ org, projectOf, llmOf = () => null, log
           } catch (error) { await service.failLearning(prepared.job.id, error); throw error; }
           finally { clearInterval(poll); }
         }
-      }).catch(warn).finally(() => jobs.delete(spec.session));
+      }).catch(error => warn(error, 'reading')).finally(() => jobs.delete(spec.session));
       jobs.set(spec.session, entry);
     },
     async flush() { if (scanning) await scanning; while (jobs.size) await Promise.all([...jobs.values()].map(j => j.promise)); },
     stop() { stopped = true; service.toolReceipts.clear(); for (const entry of jobs.values()) entry.controller.abort(new Error('信息组件已卸载')); },
-    health() { return { stopped, pending: jobs.size, scanning: !!scanning, calls, failures,
+    health() { return { stopped, pending: jobs.size, scanning: !!scanning, calls, failures, lastFailure, waitingForLead,
       modelUsage: '辅助阅读准入与字符预算单独记录；并非宿主token或账单计量', execution: '仅当前真实Lead的模型路由，无额外工具或宿主权限包装' }; },
   };
   return api;

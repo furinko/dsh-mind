@@ -334,3 +334,13 @@ it('删除快照先记意图，审计失败不删除；相同快照最后一份�
   await assert.rejects(service.admin(human(), { op: 'purge', id: two.id, revision: 2 })); assert.ok(await service.blob(two.hash));
   org.audit.append = append; await service.admin(human(), { op: 'purge', id: two.id, revision: 2 }); await assert.rejects(service.blob(two.hash));
 }));
+
+it('恢复会话在Lead重新登记前只等待，不消耗模型或形成假失败；真正失败保留错误码', async () => scene(async (service, org) => {
+  await deposit(service); let calls = 0;
+  const llm = { async prepareCall() { calls++; throw Object.assign(Error('fixture route failure'), { code: 'FIXTURE_MODEL_FAILURE' }); } };
+  const hooks = createInformationHooks({ org, projectOf: () => P, llmOf: () => llm });
+  const session = { id: 'restored-lead', header: { cwd: process.cwd() }, requestHeader: () => ({ config: { provider: 'fixture', model: 'fixture' } }) };
+  hooks.schedule(session); await hooks.flush(); assert.equal(calls, 0); assert.equal(hooks.health().failures, 0); assert.equal(hooks.health().waitingForLead, 1);
+  await org.registry.assign({ subject: SOVEREIGN, 岗位: 'Lead', 实例: session.id });
+  hooks.schedule(session); await hooks.flush(); assert.equal(calls, 1); assert.equal(hooks.health().lastFailure.code, 'FIXTURE_MODEL_FAILURE'); hooks.stop();
+}));
