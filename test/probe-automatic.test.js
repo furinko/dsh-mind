@@ -11,6 +11,7 @@ import { ProbeRunner, CLOSED_LIST } from '../src/probes.js';
 import { mechanismArtifact } from '../src/mechanism-artifact.js';
 import { shareOrg } from '../src/runtime.js';
 import { apply } from '../components/guard/lib/index.js';
+import { atomicWrite } from '../src/kernel/fsx.js';
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const runner = (f) => new ProbeRunner({ ...f, 无内核装配: true });
 const rollbackRows = async (f) => (await f.audit.read({})).filter((r) => r.动作 === '自动回滚');
@@ -166,7 +167,9 @@ describe('探针巡检唯一自动落点', () => {
     const cmd=await command.handler({agent:fakeExec({sessionId:'probe-cmd-root'}).agent,rawInput:'probe'});
     assert.equal(cmd.kind,'success');
     assert.ok(JSON.parse(cmd.text).探针.回滚);
-    let boot;const run=org.probes.run.bind(org.probes);org.probes.run=(...args)=>(boot=run(...args));
+    await atomicWrite(org.layout.guardReceiptFile(),JSON.stringify({范围闸:{registered:true},调度创建闸:{registered:true}}));
+    let complete;const boot=new Promise((resolve)=>{complete=resolve;});
+    const run=org.probes.run.bind(org.probes);org.probes.run=(...args)=>{const result=run(...args);complete(result);return result;};
     const host2=fakeHost();await apply(host2.ctx,config);const bootResult=await boot;
     assert.notEqual(bootResult.机制版本,'boot');assert.ok(bootResult.回滚);
     assert.equal((await rollbackRows(org)).length,3);

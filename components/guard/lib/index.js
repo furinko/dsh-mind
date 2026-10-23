@@ -14,6 +14,7 @@ import { kernelFactoryRoot } from '../../../src/paths.js';
 import { DEFAULT_PROJECT } from '../../../src/org.js';
 import { agentSubject } from '../../../src/subject.js';
 import { InvalidBody, describeFailure } from '../../../src/kernel/errors.js';
+import { runStartupProbe } from './startup-probe.js';
 
 export const name = 'dsh-mind-guard';
 export const inject = ['tools'];
@@ -59,14 +60,16 @@ export async function apply(ctx, config = {}) {
   });
 
   if (config.开机自检 !== false) {
-    // 开机自检：探针每次启动跑一遍并留快照。
-    // 「回滚到全绿的最近一版」需要连续的历史，不跑就没有历史可回。
-    void org.probes
-      .run({ subject: { id: 'system', kind: '系统' } })
-      .then((result) => {
-        logger.info?.(`[dsh-mind] 开机自检：${result.全绿 ? '四道探针全绿' : `见红 ${result.见红.length} 项（${result.见红.map((r) => r.探针).join('、')}）；${result.回滚?.原因 ?? '未提供定位读数'}`}；代码身份=${result.机制版本 ?? '不可确定'}`);
-      })
-      .catch((error) => logger.warn?.(`[dsh-mind] 开机自检失败：${error instanceof Error ? error.message : String(error)}`));
+    ctx.effect(() => {
+      const controller = new AbortController();
+      void runStartupProbe(org, { signal: controller.signal })
+        .then((result) => {
+          if (!result) return;
+          logger.info?.(`[dsh-mind] 开机自检：${result.全绿 ? '四道探针全绿' : `见红 ${result.见红.length} 项（${result.见红.map((r) => r.探针).join('、')}）；${result.回滚?.原因 ?? '未提供定位读数'}`}；代码身份=${result.机制版本 ?? '不可确定'}`);
+        })
+        .catch((error) => logger.warn?.(`[dsh-mind] 开机自检失败：${error instanceof Error ? error.message : String(error)}`));
+      return () => controller.abort();
+    }, 'dsh-mind: 开机自检');
   }
 
   logger.info?.('[dsh-mind] 安全类组件就位。');
