@@ -289,11 +289,12 @@ describe('恢复入口：真作用域、工具闸、审批计划', () => {
     const s = await setup();
     try {
       await s.open();
+      const 原绑定 = (await s.org.registry.identity()).members['consult-1'].会审绑定;
       assert.match(s.guard(s.exec('consult-1', 'read', { file_path: s.brief }, join(s.f.home, 'other'))), /不是绑定项目/);
       await alterIdentity(s, (d) => { d.members['consult-1'].会审绑定 = {}; });
       assert.match(s.guard(s.exec('consult-1', 'mind', { action: 'status' })), /绑定不可用/);
       assert.equal(s.guard(s.exec('consult-1', 'send_message', { target: 'lead', message: '故障' })), undefined);
-      await alterIdentity(s, (d) => { d.members['consult-1'].会审绑定 = { 会审: 'c', 项目: P, 来源会话: 'lead', 资料: [s.materials] }; });
+      await alterIdentity(s, (d) => { d.members['consult-1'].会审绑定 = 原绑定; });
       await s.f.write('集体L2-共享基础设施/defaults/工具总范围.json', JSON.stringify({ 允许: [], 拒绝: ['read'] }));
       const second = fakeHost();
       try {
