@@ -11,8 +11,8 @@ import { Denied, InvalidBody, Fault, NeedsApproval } from '../src/kernel/errors.
 
 const P = 'member-shared-plan';
 
-async function scene(run) {
-  const f = await makeFixture();
+async function scene(run, options = {}) {
+  const f = await makeFixture(options);
   try {
     const org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
     const calls = { spawn: 0, message: 0, release: 0 };
@@ -41,6 +41,28 @@ async function scene(run) {
 const request = (node, extra = {}) => ({ action: 'member_spawn', 方式: 'subagent', 岗位: '插件工程', 节点: node.id, 任务书: '实现当前判据', ...extra });
 
 describe('member_spawn 共享计划', () => {
+  it('冷岗位误建成Lead负责后，拒绝改派但可按指引终止并建立正式后继，再真实登记绑定', async () => scene(async ({ org, calls, create, act }) => {
+    const seated = async () => Object.values((await org.registry.identity()).members).some((member) => member.岗位 === '插件工程' && member.status === '在岗');
+    assert.equal(await seated(), false);
+    const old = await create('Lead');
+    await assert.rejects(act(request(old)), (error) => error instanceof Denied && /task_close.*task_successor/.test(error.howToChange));
+    assert.equal(calls.spawn, 0);
+    await assert.rejects(act({ action: 'task_reassign', id: old.id, 负责人: '插件工程' }), /负责人未就位/);
+    await act({ action: 'task_close', id: old.id, 原因: '误建为Lead自领，改为委派冷岗位' });
+    const recovery = await act({ action: 'task_successor', id: old.id, 负责人: '插件工程', 原因: '按原判据委派插件工程' });
+    const successor = recovery.节点;
+    assert.equal(await seated(), false, '创建后继不伪造在岗实例');
+    assert.deepEqual(successor.判据, old.判据);
+    assert.equal(successor.前序任务, old.id);
+    await act(request(successor));
+    const current = await org.tasks.get(successor.id, { 项目: P });
+    assert.equal(calls.spawn, 1);
+    assert.equal(await seated(), true);
+    assert.equal(current.状态, '已派发');
+    assert.equal(current.绑定.length, 1);
+    assert.equal((await org.tasks.get(old.id, { 项目: P })).状态, '已终止');
+  }, { members: {} }));
+
   it('准备只读；审批步骤、完整预览和执行阶段来自同一个不可变计划', async () => scene(async ({ org, host, calls, create }) => {
     const node = await create();
     const before = (await org.audit.read({})).length;
