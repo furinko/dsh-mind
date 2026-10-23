@@ -48,7 +48,7 @@ Node 在 PATH 时也可使用 `npm run dsh:check`、`npm run dsh:deploy`、`npm 
 
 ## 完全权限与插件安装
 
-Linux人设目录保护通过系统bubblewrap作用于官方`subprocess.spawn/spawnTerminal`进程入口，不再将完全权限统一降为工作区可写。工作区外的profile可按用户权限修改，核心目录仍只读。系统需要可用且当前用户不可改写的`/usr/bin/bwrap`或`/bin/bwrap`；缺失时返回明确诊断。Windows/macOS尚沿原有保守保护策略。
+Mind不再包装宿主的权限、沙箱、终端或进程服务，也不引入bubblewrap依赖。三档权限均由宿主原生执行；完全权限可写工作区外的profile，也可通过shell修改人设文件。Mind只保留自身文件接口与记忆服务的人设只读规则，状态页明确显示不提供命令层隔离。该边界对Linux、Windows和macOS一致。
 
 DSH 0.2.1-rc.2默认禁用`tool-plugin-manager`。要让聊天使用正式安装工具，须由人侧在该profile启用这一宿主内置组件；它继续执行宿主的完全权限/逐次审批检查，改变工作区权限不会自动授予安装资格。本机此次修复同时启用该组件，不在Mind出厂补丁中为其他部署自动打开。插件源码和本机profile变更分别留存回执。
 

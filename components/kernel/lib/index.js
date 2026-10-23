@@ -100,13 +100,9 @@ export async function apply(ctx, config = {}) {
 
   const 项目 = config.project ?? DEFAULT_PROJECT;
   const personaProtection = createPersonaProtection({ org,
-    sandboxPolicy: 取服务(ctx, 'sandboxPolicy'), sandbox: 取服务(ctx, 'sandbox'),
-    terminals: 取服务(ctx, 'terminals'), subprocess: 取服务(ctx, 'subprocess'),
-    getServices: () => ({ sandboxPolicy: 取服务(ctx, 'sandboxPolicy'), sandbox: 取服务(ctx, 'sandbox'), terminals: 取服务(ctx, 'terminals'), subprocess: 取服务(ctx, 'subprocess') }),
     cwdOf: exec => 会话工作目录(exec, { ctx }),
   });
   org.personaProtection = personaProtection;
-  ctx.inject?.(['sandboxPolicy', 'sandbox'], scoped => personaProtection.connect({ sandboxPolicy: scoped.sandboxPolicy, sandbox: scoped.sandbox, terminals: 取服务(ctx, 'terminals'), subprocess: 取服务(ctx, 'subprocess') }));
   ctx.effect?.(() => () => personaProtection.stop());
   let 解析项目;
   try { 解析项目 = createProjectResolver({ bindings: config.projectBindings, layout: org.layout }); }
@@ -201,13 +197,13 @@ export async function apply(ctx, config = {}) {
     // 单调闸：只读部署偏好，不读路径，不接受任何人的「通融」。
     // v2 条目6/7 补修：同一个 guard 里先判**复核员角色边界**（见 闸判定），不新注册平行 guard。
     启动范围闸.activate((exec) => {
-      const 核心人设保护 = personaProtection.guard(exec);
-      if (核心人设保护 !== undefined) return 核心人设保护;
       const 原范围判定 = observations.guard(exec, 'kernel.tool-scope', (observationBlock) => {
         try { return 闸判定(exec, 项目, { org, ctx, 项目键: 当前项目键, observationBlock, budgetHooks }); }
         catch (error) { return `[dsh-mind] 工具闸无法确认项目/任务权限，按 fail-closed 拒绝：${错误消息(error)}`; }
       });
       if (原范围判定 !== undefined) return 原范围判定;
+      const 核心人设保护 = personaProtection.guard(exec);
+      if (核心人设保护 !== undefined) return 核心人设保护;
       return 调度接线回执.creationGuardRegistered ? undefined : 创建判定(exec);
     });
     闸回执.范围闸 = { registered: true, error: null };
