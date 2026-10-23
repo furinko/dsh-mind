@@ -112,17 +112,25 @@ export class ToolFileAuthority {
     const parent = snapshot.成员?.[member?.委派者id];
     const grant = task?.工具文件范围;
     if (!snapshot.ok || !member?.就绪 || !parent?.就绪 || parent.岗位 !== 'Lead'
-      || grant?.版本 !== 1 || grant.授予者 !== member.委派者id
       || !(task.绑定 ?? []).some((b) => matchingBinding(b, subject.id, member))) return false;
+    // 复核员的文件读权来自 Lead 的 task_attach，不来自通用文件写权。
+    // 这里只允许冻结显式引用的已授权文件内容；不授予写权、不自动把读根列成交付物。
+    if (member.岗位 === '复核员') {
+      if (task.判据冻结 !== true || !(task.负责人 ?? []).some(owner => owner === subject.id || owner === member.岗位)
+        || this.#decision(subject, task, 'write', 'submit').verdict !== 'allow') return false;
+      return (task.复核读根 ?? []).some(root => typeof root === 'string' && isAbsolute(root)
+        && this.#rootStillValid(root) && insideFileRoot(path, root));
+    }
+    if (grant?.版本 !== 1 || grant.授予者 !== member.委派者id) return false;
     if (this.#decision(subject, task, 'write').verdict !== 'allow') return false;
     return [[grant.读, this.#read], [grant.写, this.#write]].some(([list, ceiling]) => Array.isArray(list)
       && list.some((root) => typeof root === 'string' && this.#rootStillValid(root) && insideFileRoot(path, root)
         && ceiling.some((up) => this.#rootStillValid(up) && insideFileRoot(root, up))));
   }
-  #decision(subject, task, action) {
+  #decision(subject, task, action, operation = 'tool_file') {
     return this.#policy?.decideCurrentSync?.({ subject, action,
       target: { id: task.id, kind: '任务', authority: '自治', zone: '私有', project: task.项目 },
-      context: { task, 节点操作: 'tool_file' } }) ?? { verdict: 'deny', rule: '同步策略资格缺失', reason: '策略引擎没有同步新鲜度判定，不能授权通用文件工具。' };
+      context: { task, 节点操作: operation } }) ?? { verdict: 'deny', rule: '同步策略资格缺失', reason: '策略引擎没有同步新鲜度判定，不能授权通用文件工具。' };
   }
   /** 授权候选与递归交集同源；预算只能引用这些实际范围，不接受自报任务归属。 */
   scopeTasks({ tool, args, cwd, nodes, instance, parent, member }) {
