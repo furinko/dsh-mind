@@ -785,7 +785,8 @@ export class CouncilService {
   async #校验资料(输入) {
     const 清单 = 列表(输入);
     if (清单.length === 0) return [];
-    const 私有 = 规范路径(this.layout.privateRoot);
+    // 与资料目标使用同一真实路径；Windows 8.3短名及目录别名不能绕过私有区边界。
+    const 私有 = 规范路径(await realpath(this.layout.privateRoot));
     const 结果 = [];
     for (const 路径 of 清单) {
       if (!isAbsolute(路径)) {

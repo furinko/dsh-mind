@@ -980,7 +980,8 @@ function 会话工作目录(exec, deps) {
 function 规范路径(路径) {
   const 绝对 = resolvePath(路径);
   let 真 = 绝对;
-  try { 真 = realpathSync(绝对); } catch { /* 不存在的路径按词法判：写入类本就已被闭名单拦掉 */ }
+  // native与fs.promises.realpath一致，在Windows上展开8.3短名，避免与已冻结资料根分歧。
+  try { 真 = realpathSync.native(绝对); } catch { /* 不存在的路径按词法判：写入类本就已被闭名单拦掉 */ }
   assertSingleLinkTarget(真);
   return process.platform === 'win32' ? 真.toLowerCase() : 真;
 }

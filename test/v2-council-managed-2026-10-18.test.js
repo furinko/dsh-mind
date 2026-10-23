@@ -22,7 +22,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { makeFixture, writeUnder, LEAD, MEMBER, REVIEWER } from './helpers.mjs';
 import { Org } from '../src/org.js';
@@ -256,6 +256,21 @@ describe('② 复核岗与副作用前拒绝', () => {
       await assert.rejects(() => 打开(私有文件), (e) => e instanceof Denied && /私有区/.test(e.rule));
       assert.equal(a.calls.创建.length, 0);
       assert.deepEqual(await org.council.list({ 项目: P }), []);
+    } finally { await f.cleanup(); }
+  });
+
+  it('私有根使用目录别名时，真实私有文件仍须在副作用前拒绝', async () => {
+    const { f } = await 起组织();
+    try {
+      const alias = join(f.home, 'private-alias');
+      await symlink(f.privateRoot, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      await writeUnder(f.privateRoot, 'secret.md', 'isolated-private');
+      const org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: alias, project: P });
+      const a = 造适配器(org);
+      await assert.rejects(() => org.council.open({ subject: LEAD, 项目: P, 问题: 'q',
+        参与者: [MEMBER.id], 参与岗位: ['插件工程'], 资料: [join(f.privateRoot, 'secret.md')], ...a }),
+      (error) => error instanceof Denied && /私有区/.test(error.rule));
+      assert.equal(a.calls.创建.length, 0);
     } finally { await f.cleanup(); }
   });
 
