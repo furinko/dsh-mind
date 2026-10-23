@@ -79,6 +79,16 @@ it('Windows CREATOR OWNER继承权限在新层级仍保持相同访问规则', {
   await migrate();
 }));
 
+it('Windows原根含拒绝规则时不自动转换继承，保留源目录等待人工核对权限顺序', { skip: process.platform !== 'win32' }, () => scene(async ({ root, migrate }) => {
+  const command = `$ErrorActionPreference='Stop'; [Console]::InputEncoding=[Text.UTF8Encoding]::new($false); $p=ConvertFrom-Json ([Console]::In.ReadToEnd()); $acl=[IO.Directory]::GetAccessControl($p); $rule=[System.Security.AccessControl.FileSystemAccessRule]::new([System.Security.Principal.SecurityIdentifier]::new('S-1-5-21-1-2-3-9999'),[System.Security.AccessControl.FileSystemRights]::WriteData,[System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit',[System.Security.AccessControl.PropagationFlags]::None,[System.Security.AccessControl.AccessControlType]::Deny); $acl.AddAccessRule($rule); [IO.Directory]::SetAccessControl($p,$acl)`;
+  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { input: JSON.stringify(root), encoding: 'utf8', windowsHide: true });
+  const before = await memoryTree(root);
+  try { await migrate(); assert.fail('拒绝规则必须人工核对'); }
+  catch (error) { assert.match(error.stderr, /Root ACL contains deny rules/); }
+  assert.equal(memoryLayoutVersion(root), 1);
+  assert.deepEqual(await memoryTree(root), before);
+}));
+
 it('重复迁移只读返回当前版本；不另造备份或双写旧路径', () => scene(async ({ layout, root, migrate }) => {
   await migrate(); const before = await memoryTree(root);
   assert.equal((await migrate()).alreadyCurrent, true);

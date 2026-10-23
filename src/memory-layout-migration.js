@@ -108,6 +108,7 @@ function Rules($acl,$ignoreInherited) {
 }
 foreach($pair in $pairs) {
   if([IO.Directory]::Exists($pair.from)) {$acl=[IO.Directory]::GetAccessControl($pair.from)} else {$acl=[IO.File]::GetAccessControl($pair.from)}
+  if($pair.newLayer -and @($acl.GetAccessRules($true,$true,$sid) | Where-Object {$_.AccessControlType -eq 'Deny'}).Count) {throw 'Root ACL contains deny rules; explicit permission maintenance is required before adding protected layers'}
   if([IO.Directory]::Exists($pair.to)) {$copy=[System.Security.AccessControl.DirectorySecurity]::new()} else {$copy=[System.Security.AccessControl.FileSecurity]::new()}
   $copy.SetSecurityDescriptorSddlForm($acl.GetSecurityDescriptorSddlForm($access),$access)
   # 新的语义层复制原根的有效权限并固定继承，避免多一层时CREATOR OWNER自动增加授权。
