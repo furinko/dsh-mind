@@ -502,7 +502,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         决定: { type: 'string', description: '待决项的裁决内容（task_resolve）' },
         复核者: { type: 'string', description: '复核结论归属的复核者 id（task_review）；省略取主体' },
         待决类型: { type: 'string', description: '待决类型（task_pending）；省略取「升级差异」' },
-        产出物引用: { type: 'string' },
+        产出物引用: { type: 'string', description: 'task_submit 的交付引用；task_attach 则由 Lead 在复核任务 id 上明确授予文件读根，须为真实存在的产物文件/目录绝对路径，多个用逗号分隔或 JSON 数组。交卷引用本身不授予复核读域；不要附私有原始账本。' },
         阻塞引用: { type: 'string', description: 'monitor_* 返回的真实 at-* 阻塞编号；不授予权限或审批' },
         监控偏移: { type: 'integer', minimum: 0, description: 'monitor_query 阻塞分页的偏移；默认0，limit 默认50且最大100，统计仍基于全部已验证观测' },
         跟进: { type: 'string', enum: ['retry', 'abandon'], description: 'monitor_followup：登记下一次相同调用为重试，或记录主动放弃；不能声明恢复成功' },
@@ -1088,7 +1088,7 @@ function 复核授权读根(exec, deps) {
   }
   if (根.size === 0) {
     return {
-      拒: `[dsh-mind] 复核员读路径 · 本复核任务没有可用的授权产出引用（复核任务 ${域.复核任务.length} 个 / 复核对象 ${域.复核对象.length} 个）：不能默认把工作区或整台机器授给复核员。请 Lead 在复核任务上 attach 源码目录/产物文件（产出物引用，绝对路径）。`,
+      拒: `[dsh-mind] 复核员读路径 · 本复核任务没有可用的授权产出引用（复核任务 ${域.复核任务.length} 个 / 复核对象 ${域.复核对象.length} 个）：不能默认把工作区或整台机器授给复核员。请 Lead 用 task_attach(id=复核任务id, 产出物引用=必要的源码目录/产物文件绝对路径) 授予读根，再联系原复核员。`,
     };
   }
   return { 根: [...根] };
@@ -1254,6 +1254,7 @@ function 组织说明(org) {
     '对话中自然使用用户约定的称呼和交流方式；岗位与实例名用于内部协作，不限定对外称呼，不必反复自报岗位或解释记忆机制。角色形象约定不改变真实模型、能力与权限。',
     '派活流程（仅正式任务）：定判据→判权限→Lead 直接执行或按需 member_spawn（方式=team/subagent＋岗位＋节点＋任务书；机制完成 registry_assign 登记→绑定节点→装载岗位与判据→发开工消息，不等待成员确认）→交卷→复核→采纳/打回→记忆处置→结账。',
     '委派新任务时，task_create 的负责人直接填目标岗位；该岗可尚无实例，member_spawn 负责创建登记。若错建为 Lead 负责且目标岗位尚无实例，不能先 task_reassign：用 task_close＋task_successor（负责人=目标岗位）保留原判据与正式后继关系，再 member_spawn；不要伪造实例。',
+    '正式复核：复核任务负责人填复核员，复核对象显式引用被验业务任务（不是依赖）。文件交付后，由 Lead 用 task_attach(id=复核任务id, 产出物引用=必要产物的真实绝对路径) 授予读根；交卷引用本身不授权读取。维护若提示缺少复核对象或读根，按返回的正式动作修复原任务，再用 member_message 联系原实例；无需重新创建或申请创建授权。',
     '推进方式由任务需要决定，不为流程额外建岗或起实例。任务判据派发后冻结；信息不足只停依赖它的动作，继续其他已授权工作；被拦时说明恢复条件，不自行绕闸。',
     '纪律：写操作一律先过策略引擎；被拒绝时结果里会带「哪条规则 + 改它要什么授权」，照着改，不要绕。',
     '按需拉取：需要组织状态时调 `mind` 的 status / workbench；需要知识时调 memory_query；需要技能规程时调 capability_list。不要假设历史会出现在上下文里。',

@@ -6,14 +6,14 @@ import {runAction} from '../lib/actions.js';
 import {DelegationPolicy} from '../src/delegation-policy.js';
 import {describeFailure} from '../src/kernel/errors.js';
 const P='maintenance';const CHILD='precise-child';const SECRET='PRIVATE-MESSAGE-NOT-IN-AUDIT';
-async function scene(fn,{role='插件工程'}={}){
+async function scene(fn,{role='插件工程',readRoot=true,reviewTargets=true}={}){
  const f=await makeFixture();try{
  const org=await Org.open({home:f.home,factoryRoot:f.factoryRoot,privateRoot:f.privateRoot,project:P});
  await org.registry.assign({subject:LEAD,岗位:role,实例:CHILD});
  let business;if(role==='复核员')business=await org.tasks.create({subject:LEAD,项目:P,描述:'被验业务',负责人:['插件工程'],判据:['原判据']});
- const node=await org.tasks.create({subject:LEAD,项目:P,描述:'已有委派',负责人:[role],判据:['判据'],...(business?{复核对象:[business.id]}:{})});
+ const node=await org.tasks.create({subject:LEAD,项目:P,描述:'已有委派',负责人:[role],判据:['判据'],...(business&&reviewTargets?{复核对象:[business.id]}:{})});
  await org.tasks.bind(node.id,{subject:LEAD,项目:P,实例:CHILD,岗位:role});await org.tasks.dispatch(node.id,{subject:LEAD,项目:P});
- if(role==='复核员')await org.tasks.attach(node.id,{subject:LEAD,项目:P,产出物:f.factoryRoot,读根:true});
+ if(role==='复核员'&&readRoot)await org.tasks.attach(node.id,{subject:LEAD,项目:P,产出物:f.factoryRoot,读根:true});
  const agent={id:LEAD.id,session:{id:LEAD.id,header:{id:LEAD.id,cwd:f.home}}};const calls={sub:[],team:[]};
  const host={project:P,agent,agents:{get:id=>id===agent.id?agent:undefined},delegation:new DelegationPolicy({}),agentTeams:{listMembers:()=>[]},subagents:{listChildren:async()=>[{id:CHILD,mode:'continuable',label:'owned',status:'inactive'}],sendMessage:async(sender,id,content,options)=>{assert.equal(sender,agent);assert.ok(options.signal instanceof AbortSignal);calls.sub.push({id,content});return 'accepted-inbox-id';}}};
  const act=(args,extra={})=>runAction({org,项目:P,主体:LEAD,面:'tool',宿主:host,args,...extra});
@@ -54,6 +54,38 @@ test('接收后审计失败返回已接收+不可盲重试，不回滚也不自�
 });assert.equal(s.calls.sub.length,1);}));
 test('意图审计失败零发送；关闭调度维护即拒；查询途中封存也零发送',()=>scene(async s=>{const append=s.org.audit.append.bind(s.org.audit);s.org.audit.append=async row=>{if(row.动作==='成员消息'&&row.结果==='意图')throw Error('audit disk');return append(row);};await assert.rejects(send(s),/audit disk/);assert.equal(s.calls.sub.length,0);s.org.audit.append=append;s.host.delegation.close();await assert.rejects(send(s),e=>e.code==='DELEGATION_DISPOSED');s.host.delegation=new DelegationPolicy({});s.host.subagents.listChildren=async()=>{await s.org.registry.seal({subject:LEAD,实例:CHILD,理由:'mid-query revoke'});return [{id:CHILD,mode:'continuable'}];};await assert.rejects(send(s),/不在册|不在岗/);assert.equal(s.calls.sub.length,0);}));
 test('复核员实例正控：显式复核对象/冻结判据/正式读根齐全方能续发',()=>scene(async s=>{assert.equal((await send(s)).已接收,true);s.tasks(n=>({...n,复核读根:[]}));await assert.rejects(send(s),/绑定|现行任务/);s.tasks(n=>({...n,复核对象:[]}));await assert.rejects(send(s),/绑定|现行任务/);},{role:'复核员'}));
+test('缺复核读根给出公开动作指引，Lead补根后维护原实例且不取得创建权',()=>scene(async s=>{
+ await assert.rejects(send(s),e=>{
+  const r=describeFailure(e);assert.match(r.理由,/复核读根/);assert.ok(r.怎么改.includes(`task_attach(id=${s.node.id}, 产出物引用=`));assert.match(r.怎么改,/原实例/);return true;
+ });assert.equal(s.calls.sub.length,0);
+ await assert.rejects(s.act({action:'task_attach',id:s.node.id,产出物引用:s.f.factoryRoot},{主体:{id:CHILD,kind:'成员',roleId:'复核员'}}),/仅 Lead|不能给自己/);
+ await assert.rejects(s.act({action:'task_attach',id:s.node.id,产出物引用:'relative.txt'}),/绝对路径/);
+ await assert.rejects(s.act({action:'task_attach',id:s.node.id,产出物引用:s.f.privateRoot}),/私有/);
+ assert.equal(s.calls.sub.length,0);
+ const r=await s.act({action:'task_attach',id:s.node.id,产出物引用:s.f.factoryRoot});assert.equal(r.节点.id,s.node.id);
+ assert.equal((await send(s)).已接收,true);assert.equal(s.calls.sub.length,1);assert.equal(s.calls.sub[0].id,CHILD);assert.equal(s.host.delegation.status(P).authorized,false);
+},{role:'复核员',readRoot:false}));
+test('缺复核对象由Lead公开task_bind补齐后继续同一实例',()=>scene(async s=>{
+ await assert.rejects(send(s),e=>{const r=describeFailure(e);assert.match(r.理由,/显式复核对象/);assert.ok(r.怎么改.includes(`task_bind(id=${s.node.id}, 复核对象=`));return true;});
+ assert.equal(s.calls.sub.length,0);
+ await s.act({action:'task_bind',id:s.node.id,复核对象:[s.business.id]});assert.equal((await send(s)).已接收,true);
+},{role:'复核员',reviewTargets:false}));
+test('已执行的缺对象复核任务不提示可直接补绑，须正式恢复',()=>scene(async s=>{
+ await s.org.tasks.start(s.node.id,{subject:{id:CHILD,kind:'成员',roleId:'复核员'},项目:P});
+ await assert.rejects(send(s),e=>{const r=describeFailure(e);assert.match(r.怎么改,/task_close \/ task_successor/);assert.ok(!r.怎么改.includes('task_bind('));return true;});assert.equal(s.calls.sub.length,0);
+},{role:'复核员',reviewTargets:false}));
+test('显式缺根任务不能被同实例另一可用任务替代',()=>scene(async s=>{
+ const second=await s.org.tasks.create({subject:LEAD,项目:P,描述:'另一复核',负责人:['复核员'],判据:['另一判据'],复核对象:[s.business.id]});
+ await s.org.tasks.bind(second.id,{subject:LEAD,项目:P,实例:CHILD,岗位:'复核员'});await s.org.tasks.dispatch(second.id,{subject:LEAD,项目:P});
+ await s.org.tasks.attach(second.id,{subject:LEAD,项目:P,产出物:s.f.factoryRoot,读根:true});
+ await assert.rejects(s.act({action:'member_message',实例:CHILD,任务:s.node.id,内容:SECRET}),e=>{assert.ok(describeFailure(e).怎么改.includes(`id=${s.node.id}`));return true;});assert.equal(s.calls.sub.length,0);
+ assert.equal((await s.act({action:'member_message',实例:CHILD,任务:second.id,内容:SECRET})).任务,second.id);
+},{role:'复核员',readRoot:false}));
+test('未通过归属或冻结绑定检查时不提供复核修复指引',()=>scene(async s=>{
+ for(const change of [n=>({...n,绑定:[]}),n=>({...n,判据冻结:false}),n=>({...n,负责人:['文档整理']})]){
+  s.tasks(change);await assert.rejects(send(s),e=>{const r=describeFailure(e);assert.ok(!r.怎么改.includes('task_attach'));assert.ok(!r.怎么改.includes(s.node.id));return true;});
+ }s.org.tasks.list=s.list;s.member(m=>({...m,委派者:{id:'other-parent',kind:'Lead'}}));await assert.rejects(send(s),/委派归属/);assert.equal(s.calls.sub.length,0);
+},{role:'复核员',readRoot:false}));
 test('真实任务生命周期：执行中、已交卷和打回返工仍可维护，终态不靠旧绑定放行',()=>scene(async s=>{
  const child={id:CHILD,kind:'成员',roleId:'插件工程'};
  await s.org.tasks.start(s.node.id,{subject:child,项目:P});assert.equal((await send(s)).已接收,true);
