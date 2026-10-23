@@ -491,7 +491,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         分歧清单: { type: 'string' },
         反例面: { type: 'string' },
         知识候选: { type: 'string', description: '交卷附的知识候选（task_submit，v2 条目15）：值得蒸馏成知识的点，多个用逗号分隔或 JSON 数组。成员不得直接写知识——候选随卷入账，结账时 Lead 逐条判' },
-        采用知识: { type: 'array', maxItems: 16, items: { type: 'object', properties: { id: { type: 'string', minLength: 1, maxLength: 256 }, 用途: { type: 'string', minLength: 1, maxLength: 512 }, 适用判断: { type: 'string', minLength: 1, maxLength: 512 }, 使用结果: { type: 'string', enum: ['有帮助', '不适用', '发现问题', '未知'] }, 说明: { type: 'string', maxLength: 1024 } }, required: ['id', '用途', '适用判断', '使用结果'], additionalProperties: false }, description: 'task_submit可选采用声明，最多16项；省略=未知，[]=明确未声明采用，null拒。仅调用者声明，不证明知识有效、采纳或收益；不填服务器版本、来源及哈希。命令传JSON数组' },
+        采用知识: { type: 'array', maxItems: 16, items: { type: 'object', properties: { id: { type: 'string', minLength: 1, maxLength: 256 }, 用途: { type: 'string', minLength: 1, maxLength: 512 }, 适用判断: { type: 'string', minLength: 1, maxLength: 512 }, 使用结果: { type: 'string', enum: ['有帮助', '不适用', '发现问题', '未知'] }, 说明: { type: 'string', maxLength: 1024 } }, required: ['id', '用途', '适用判断', '使用结果'], additionalProperties: false }, description: 'task_submit可选采用声明，最多16项；按此前实际见到的自动召回摘要或memory_query全文及实际使用填写真实id，不确定效果填未知，未用=[]，省略=未知，null拒。交卷后当前召回段变空不证明此前未召回。仅本人声明，不证明知识有效或收益；不填服务器来源/版本/哈希。命令传JSON数组' },
         知识id: { type: 'string', minLength: 1, maxLength: 256, description: 'knowledge_reuse_query的精确知识id过滤；只查声明，不授权读域或修改知识状态' },
         知识说明: { type: 'object', minProperties: 1, properties: { 适用条件: { type: 'array', minItems: 1, maxItems: 16, items: { type: 'string', minLength: 1, maxLength: 512 } }, 已知反例: { type: 'array', minItems: 1, maxItems: 16, items: { type: 'string', minLength: 1, maxLength: 512 } }, 复验条件: { type: 'array', minItems: 1, maxItems: 16, items: { type: 'string', minLength: 1, maxLength: 512 } }, 复验期限: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$' } }, additionalProperties: false, description: '仅知识类memory_write或overturn新替代知识可附；至少一项作者声明，不接受null、未知字段、验证状态或哈希；期限须规范UTC秒或毫秒格式，不代表机器认证或授权' },
         反馈引用: { type: 'object', properties: { 任务: { type: 'string', minLength: 1, maxLength: 256 }, 提交序: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER } }, required: ['任务', '提交序'], additionalProperties: false, description: '仅治理身份memory_lifecycle的invalidate/demote/overturn可附，引用真实同项目交卷中的本知识负反馈；不接受hash、proof、身份或处理状态自报。核验与完整审批仍由服务端完成，不证明复验完成' },
@@ -561,8 +561,8 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations }
         引用: { type: 'string' },
         未投递: { type: 'boolean' },
         档位: { type: 'string', enum: ['全记', '记汇总', '不逐次记'] },
-        动作: { type: 'string', description: 'policy_check 要判定的动作' },
-        target: { type: 'string', description: 'policy_check 的目标 JSON：{"id","kind","authority","zone","sandbox":true}；sandbox 仅为隔离实验预检标记，不授予或扩大权限' },
+        动作: { type: 'string', description: 'policy_check 要判定的动作，如read/write；任务内动作另带顶层任务=真实任务id。该预检不代替真实工具范围闸，不是原生文件路径授权' },
+        target: { type: 'string', description: 'policy_check 的目标JSON对象，例如{"id":"真实对象id","kind":"产物","authority":"自治","zone":"私有"}。authority是对象真实标签（宪章/法律/自治/只增），不是任务id或岗位；zone是来源区（出厂/私有/合并/旧数据），不是workspace或路径。任务内动作另传顶层任务=真实任务id；不能为求allow降标签。sandbox:true仅作隔离实验预检，不授予权限' },
         代: { type: 'number' },
         审计条数: { type: 'number' },
         limit: { type: 'number', description: '返回条数上限（memory_query 的命中 / bus_read / audit_tail）' },
@@ -1429,6 +1429,7 @@ function normalizeArgs(args) {
     try {
       out.target = JSON.parse(out.target);
     } catch {
+      if (out.action === 'policy_check') throw new InvalidBody('policy_check target必须是合法JSON对象，不能传裸路径或坏JSON；请核对对象真实标签后纠正参数，本次尚未形成权限判定。');
       out.target = { id: out.target, kind: '未知' };
     }
   }
