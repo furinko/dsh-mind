@@ -340,6 +340,7 @@ window.__ModuleLoader__.load({
     // v2 条目14/17：主权者逐请求放行的读数/决议端点（仅同源 + 宿主 Connection 认证可达）。
     var ROUTE_INTERVENTION = '/plugins/dsh-mind/intervention';
     var ROUTE_DELEGATION = '/plugins/dsh-mind/delegation';
+    var ROUTE_PERSONA_CORE = '/plugins/dsh-mind/persona-core';
     var ROUTE_WORKBENCH = '/plugins/dsh-mind/workbench';
     /** 上一次已知快照：取不到投影时仍然有东西可看。 */
     var CACHE_KEY = 'dsh-mind.dashboard.v1';
@@ -1643,6 +1644,7 @@ window.__ModuleLoader__.load({
       '.dshmind-set__select{min-width:160px}.dshmind-set__number{width:96px}.dshmind-set__select:focus-visible,.dshmind-set__number:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4d6bfe);outline-offset:2px}',
       '.dshmind-set__select:disabled,.dshmind-set__number:disabled{opacity:.55;cursor:default}',
       '.dshmind-set__row--field{display:block}.dshmind-set__row--field .dshmind-set__control{width:100%;margin-top:9px}.dshmind-set__text{width:100%;max-width:none}',
+      '.dshmind-set__persona{display:block;width:100%;box-sizing:border-box;min-height:240px;resize:vertical;padding:12px;border:1px solid var(--dsw-alias-border-l2,#d3dcea);border-radius:8px;background:var(--dsw-alias-bg-layer-2,#fff);color:var(--dsw-alias-label-primary,#1a2233);font:inherit;line-height:1.65}.dshmind-set__persona:focus{outline:2px solid var(--dsw-alias-brand-primary,#4c78ff);outline-offset:1px}.dshmind-set__persona:disabled{opacity:.65}',
       '.dshmind-set__actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:16px}.dshmind-set__editState{font-size:12px;color:var(--dsw-alias-label-secondary,#61666b);margin-right:auto}',
       '.dshmind-set__btn{min-height:32px;padding:5px 13px;font:inherit;font-size:12px;border-radius:6px;border:1px solid var(--dsw-alias-border-l2,#d3dcea);background:var(--dsw-alias-bg-layer-2,#fff);color:inherit;cursor:pointer}',
       '.dshmind-set__btn:hover{background:var(--dsw-alias-interactive-bg-hover,#eff1f5)}.dshmind-set__btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4d6bfe);outline-offset:2px}.dshmind-set__btn:disabled{opacity:.45;cursor:default}',
@@ -2905,6 +2907,25 @@ window.__ModuleLoader__.load({
       });
     }
 
+    function 刷新人设() {
+      if (!人设页已访问) return Promise.resolve({ ok: false, error: '设置页尚未打开' });
+      var 号 = 人设序号.取号();
+      return runCommand(activeCtx, '', { method: 'GET', path: ROUTE_PERSONA_CORE }).then(function (out) {
+        if (!人设序号.该用(号)) return { ok: false, error: '人设回读已被较新的请求替代。' };
+        var data = out.ok && obj(out.value.数据);
+        if (out.ok && (!data || typeof data.text !== 'string' || typeof data.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(data.fingerprint))) out = { ok: false, error: '未读到完整的核心人设与版本。' };
+        发通知(人设store, { phase: out.ok ? 'live' : 'error', data: out.ok ? data : null, error: out.ok ? '' : out.error });
+        return out.ok ? { ok: true, data: data } : out;
+      });
+    }
+
+    function writePersonaCore(text, expectedFingerprint) {
+      return runCommand(activeCtx, '', { method: 'POST', path: ROUTE_PERSONA_CORE, body: { text: text, expectedFingerprint: expectedFingerprint } }).then(function (post) {
+        人设序号.该用(人设序号.取号());
+        return 刷新人设().then(function (back) { return { post: post, back: back }; });
+      });
+    }
+
     // ── 设置页的数据通道：读 / 写 `mind presence` ────────────────────────────
     /** 设置页命令：与看板**同一条通道**（同源 `fetch` 路由，见 `runCommand`），不同子命令。 */
     var PRESENCE_COMMAND = '/mind presence';
@@ -3114,6 +3135,8 @@ window.__ModuleLoader__.load({
      */
     var 调度页已访问 = false;
     var 调度store = { 快照: { phase: 'reading', data: null, error: '' }, 订阅者: [] };
+    var 人设页已访问 = false;
+    var 人设store = { 快照: { phase: 'reading', data: null, error: '' }, 订阅者: [] };
     var 投影store = { 快照: EMPTY, 订阅者: [] };
     var 设置store = { 快照: { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' }, 订阅者: [] };
     /** 待批准清单（v2 条目14/17）：状态机投影由域服务给，前端只读、只发批准/拒绝/撤销。 */
@@ -3155,6 +3178,7 @@ window.__ModuleLoader__.load({
     var 投影序号 = 序号器();
     var 设置序号 = 序号器();
     var 调度序号 = 序号器();
+    var 人设序号 = 序号器();
     /**
      * 投影变更签名（2026-10-14 审查 P2-23）：轮询 3s 一拍，**数据没变就不重渲染**——
      * 修前每拍都全量 发通知（7 页 reconcile）+ writeCache 大 JSON.stringify，投影变大后
@@ -3198,6 +3222,8 @@ window.__ModuleLoader__.load({
     function 清空store() {
       调度页已访问 = false;
       调度store.快照 = { phase: 'reading', data: null, error: '' };
+      人设页已访问 = false;
+      人设store.快照 = { phase: 'reading', data: null, error: '' };
       投影store.快照 = EMPTY;
       设置store.快照 = { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' };
       界面store.快照 = { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null, 当前页: null, 图谱选中: null, 图谱视图: null, 审计展开: null };
@@ -3976,7 +4002,7 @@ window.__ModuleLoader__.load({
 
     /** 立刻拉一次（两个页面都刷）。给"手动刷新"按钮与 effect 增强用。 */
     function 立即刷新() {
-      return Promise.all([刷新投影(), 刷新设置(), 刷新调度()]);
+      return Promise.all([刷新投影(), 刷新设置(), 刷新调度(), 刷新人设()]);
     }
 
     /**
@@ -4788,8 +4814,48 @@ window.__ModuleLoader__.load({
       // ⚠️ 读数来自**模块级 store**（由 `apply` 的裸 setInterval 轮询喂），**不来自 effect**：
       // 这个宿主的 `useEffect` 很可能是空实现 ⇒ 挂在它上面的取数永远不会跑。
       var snap = useStore(设置store);
-      var actionLocks = useState(function () { return { policy: false, delegation: false, refreshing: false }; })[0];
+      var actionLocks = useState(function () { return { policy: false, delegation: false, persona: false, refreshing: false }; })[0];
       var refreshing = useState(false);
+      // 核心人设独立保存，轮询只更新读数，不覆盖正在编辑的草稿。
+      人设页已访问 = true;
+      var 人设快照 = useStore(人设store);
+      useEffect(function () { 刷新人设(); }, []);
+      var 人设表态 = useState({ text: '', fingerprint: '', dirty: false });
+      var 人设表 = 人设表态[0];
+      var 设人设表 = 人设表态[1];
+      var 人设提示态 = useState({ saving: false, text: '', ok: false });
+      var 人设提示 = 人设提示态[0];
+      var 设人设提示 = 人设提示态[1];
+      var 人设读数 = 人设快照.data;
+      if (人设读数 && !人设表.dirty && !actionLocks.persona && 人设表.fingerprint !== 人设读数.fingerprint) {
+        设人设表({ text: 人设读数.text, fingerprint: 人设读数.fingerprint, dirty: false });
+      }
+      var 人设有修改 = !!人设读数 && 人设表.text !== 人设读数.text;
+      var 人设外部更新 = !!人设读数 && 人设表.dirty && 人设表.fingerprint !== 人设读数.fingerprint;
+      var 人设字数 = Array.from(人设表.text).length;
+      function 重置人设() {
+        if (!人设读数 || actionLocks.persona) return;
+        设人设表({ text: 人设读数.text, fingerprint: 人设读数.fingerprint, dirty: false });
+        设人设提示({ saving: false, text: '', ok: false });
+      }
+      function 保存人设() {
+        if (actionLocks.persona || !人设读数 || !人设有修改 || 人设外部更新 || 人设字数 > 3000 || !人设表.fingerprint) return;
+        var requested = 人设表.text;
+        actionLocks.persona = true;
+        设人设提示({ saving: true, text: '正在保存并重新读取…', ok: false });
+        writePersonaCore(requested, 人设表.fingerprint).then(function (out) {
+          var receipt = obj(out.post.value) || {};
+          var same = out.back.ok && out.back.data.text === requested && out.back.data.fingerprint === receipt.requestedFingerprint;
+          var ok = !!(same && out.post.ok && receipt.commit && receipt.commit.state === 'written' && receipt.audit && receipt.audit.state === 'recorded');
+          var text = ok ? '核心人设已保存并回读一致，下一轮开始读取。'
+            : !out.back.ok ? '保存结果尚未确认，重新读取失败；草稿已保留。请先重新读取核对。'
+            : out.back.data.text === requested ? '已回读到提交内容，但保存或审计回执未完整确认；请核对，避免重复提交。'
+            : (out.post.error || '保存后内容未一致') + ' 草稿已保留。';
+          if (ok) 设人设表({ text: out.back.data.text, fingerprint: out.back.data.fingerprint, dirty: false });
+          actionLocks.persona = false;
+          设人设提示({ saving: false, text: text, ok: ok });
+        });
+      }
       // ══ 调度授权区：订阅 / 草稿 / 保存链 ══
       调度页已访问 = true;
       var 调度快照 = useStore(调度store);
@@ -4938,9 +5004,9 @@ window.__ModuleLoader__.load({
         set提示({ 保存中: false, 提示: '', 提示调: 'warn' });
       }
       function 手动刷新() {
-        if (actionLocks.refreshing || actionLocks.policy || actionLocks.delegation) return;
+        if (actionLocks.refreshing || actionLocks.policy || actionLocks.delegation || actionLocks.persona) return;
         actionLocks.refreshing = true; refreshing[1](true);
-        Promise.all([刷新设置(), 刷新调度()]).then(function () { actionLocks.refreshing = false; refreshing[1](false); });
+        Promise.all([刷新设置(), 刷新调度(), 刷新人设()]).then(function () { actionLocks.refreshing = false; refreshing[1](false); });
       }
 
       function 保存() {
@@ -5231,6 +5297,32 @@ window.__ModuleLoader__.load({
         ]),
       ]);
 
+      var 人设块 = h('section', { key: 'persona', className: 'dshmind-set__section', 'data-dshmind': 'persona-core-settings', 'aria-labelledby': 'dshmind-persona-title', 'aria-busy': 人设提示.saving }, [
+        h('h3', { key: 'title', id: 'dshmind-persona-title', className: 'dshmind-set__subtitle' }, '核心人设'),
+        h('p', { key: 'scope', className: 'dshmind-set__lede' }, '由你维护，适用于当前部署的所有项目。保存后下一轮读取；留空保存可停用。'),
+        !人设读数 ? h('div', { key: 'error', role: 人设快照.phase === 'reading' ? 'status' : 'alert', className: 'dshmind-set__notice' }, 人设快照.phase === 'reading' ? '正在读取核心人设…' : '核心人设暂不可用：' + 人设快照.error) : null,
+        人设读数 && 人设读数.state === 'missing' ? h('p', { key: 'missing', className: 'dshmind-set__hint' }, '尚未创建核心人设卡，填写后保存即可创建。') : null,
+        设置行('persona-core', '核心人设内容', '填写性格、表达方式与关系称呼。此卡可用于公开聊天，请勿填写秘密或密钥。', h('textarea', {
+          className: 'dshmind-set__persona', 'aria-label': '核心人设内容', rows: 10, value: 人设表.text,
+          disabled: !人设读数 || 人设提示.saving,
+          placeholder: '例如：保持好奇、坦诚，有独立判断；不知道时直接说明。',
+          onChange: function (event) {
+            if (actionLocks.persona || !人设读数) return;
+            var text = event.target.value;
+            设人设表({ text: text, fingerprint: 人设表.fingerprint, dirty: text !== 人设读数.text || 人设表.fingerprint !== 人设读数.fingerprint });
+          },
+        }), 'field'),
+        h('p', { key: 'count', className: 'dshmind-set__hint', role: 人设字数 > 3000 ? 'alert' : undefined }, 人设字数 + ' / 3000 字符' + (人设字数 > 3000 ? '，请缩短后保存。' : '')),
+        人设外部更新 ? h('p', { key: 'changed', role: 'status', className: 'dshmind-set__notice' }, '核心人设已在别处更新，当前草稿已保留。核对后可采用当前人设继续修改。') : null,
+        h('div', { key: 'actions', className: 'dshmind-set__actions' }, [
+          h('span', { key: 'dirty', className: 'dshmind-set__editState' }, 人设提示.saving ? '正在保存并核对…' : 人设有修改 ? '有未保存的人设修改' : '核心人设单独保存'),
+          人设有修改 || 人设外部更新 ? h('button', { key: 'reset', type: 'button', className: 'dshmind-set__btn', disabled: 人设提示.saving || !人设读数, onClick: 重置人设 }, 人设外部更新 ? '采用当前人设' : '取消人设修改') : null,
+          h('button', { key: 'save', type: 'button', className: 'dshmind-set__btn dshmind-set__btn--primary', disabled: 人设提示.saving || !人设读数 || !人设有修改 || 人设外部更新 || 人设字数 > 3000, onClick: 保存人设 }, 人设提示.saving ? '人设保存中…' : '保存核心人设'),
+        ]),
+        人设提示.text ? h('div', { key: 'receipt', role: 人设提示.ok ? 'status' : 'alert', className: 'dshmind-set__toast ' + (人设提示.ok ? 'dshmind-set__toast--ok' : 'dshmind-set__toast--warn') }, 人设提示.text) : null,
+        人设读数 ? h('details', { key: 'file', className: 'dshmind-set__details' }, [h('summary', { key: 'title' }, '人设卡位置'), h('p', { key: 'path', className: 'dshmind-set__mono' }, 人设读数.file)]) : null,
+      ]);
+
       var 操作块 = h('div', { key: 'acts', className: 'dshmind-set__actions' }, [
         h('span', { key: 'dirty', className: 'dshmind-set__editState' }, 提示.保存中 ? '正在保存并核对…' : 策略有修改 ? '有未保存的策略修改' : '修改后保存'),
         策略有修改 || 策略外部更新 ? h('button', { key: 'reset', type: 'button', className: 'dshmind-set__btn', disabled: 表单禁用, onClick: 重置策略 }, 策略外部更新 ? '采用当前策略' : '取消修改') : null,
@@ -5241,9 +5333,10 @@ window.__ModuleLoader__.load({
       ] : 提示.提示) : null;
       return h('section', { className: 'dshmind-set__', 'aria-label': '心智设置' }, [
         h('header', { key: 'header', className: 'dshmind-set__header' }, [
-          h('div', { key: 'title' }, [h('h2', { key: 'h', className: 'dshmind-set__title' }, '心智'), h('p', { key: 's', className: 'dshmind-set__lede' }, '配置审批方式、失联保护与成员调度。')]),
-          h('button', { key: 'read', type: 'button', className: 'dshmind-set__btn', disabled: refreshing[0] || 提示.保存中 || 调度提示.saving, onClick: 手动刷新 }, refreshing[0] ? '读取中…' : '重新读取'),
+          h('div', { key: 'title' }, [h('h2', { key: 'h', className: 'dshmind-set__title' }, '心智'), h('p', { key: 's', className: 'dshmind-set__lede' }, '配置核心人设、审批方式、失联保护与成员调度。')]),
+          h('button', { key: 'read', type: 'button', className: 'dshmind-set__btn', disabled: refreshing[0] || 提示.保存中 || 调度提示.saving || 人设提示.saving, onClick: 手动刷新 }, refreshing[0] ? '读取中…' : '重新读取'),
         ]),
+        人设块,
         h('section', { key: 'policy', className: 'dshmind-set__section', 'data-dshmind': 'policy-settings', 'aria-labelledby': 'dshmind-policy-title', 'aria-busy': 提示.保存中 }, [
           h('h3', { key: 'title', id: 'dshmind-policy-title', className: 'dshmind-set__subtitle' }, '运行与审批'),
           未接入块, 坏值块,

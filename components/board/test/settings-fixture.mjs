@@ -1,14 +1,30 @@
 import {DelegationPolicy} from '../../../src/delegation-policy.js';
+import {digest} from '../../../src/kernel/text.js';
 import {loadClient,makeDocument,makeSlots,makeCtx,makeSessions,makeStrictRequire,createRenderer,collect,textOf,jsonResponse,settle,sampleView} from './client-harness.mjs';
 
 // Public routes and the actual registered settings component, with isolated in-memory settings.
 export async function settingsScene(options={}) {
   const state={presence:{失联限制:true,生效响应期限小时:72,介入度:'预审',复核免审:false,lost:false,响应期限小时来源:'出厂',失联限制来源:'出厂',值不合法:false,...options.presence},delegation:new DelegationPolicy(options.delegation||{mode:'explicit-user',projects:[],authorizationRef:''}).config,fail:false,hold:'',release:null};
+  state.persona={text:options.personaText??'',exists:options.personaText!==undefined};
+  const personaData=()=>({text:state.persona.text,fingerprint:state.persona.exists?digest(state.persona.text):digest('mind:persona-core:missing'),state:!state.persona.exists?'missing':state.persona.text.trim()?'active':'empty',file:'fixture/private/主权人设/核心人设.md',limits:{characters:3000,bytes:12000}});
   const calls=[];const doc=makeDocument();
   const loaded=loadClient({document:doc.document,fetch:async(url,init)=>{
     const call={url,method:init.method,body:init.body?JSON.parse(init.body):undefined};calls.push(call);
     if(state.fail&&url!=='/plugins/dsh-mind/workbench')return jsonResponse({成功:false,理由:'读取暂不可用'},503);
     if(init.method==='POST'&&state.hold===url){state.hold='';await new Promise(resolve=>{state.release=resolve;});}
+    if(url==='/plugins/dsh-mind/persona-core'){
+      if(options.personaRequest)return options.personaRequest(url,init);
+      if(call.method==='POST'){
+        options.beforePersonaSave?.(state);
+        if(call.body.expectedFingerprint!==personaData().fingerprint)return jsonResponse({成功:false,理由:'核心人设已在别处更新'},409);
+        if(state.personaMode!=='no-save')state.persona={text:call.body.text,exists:true};
+        return jsonResponse({成功:state.personaMode!=='audit-failure',requestedFingerprint:digest(call.body.text),commit:{state:'written'},audit:{state:state.personaMode==='audit-failure'?'failed':'recorded'}});
+      }
+      if(state.personaReadFailure)return jsonResponse({成功:false,理由:'人设读取失败'},503);
+      const snapshot=personaData();
+      if(state.holdPersonaRead){state.holdPersonaRead=false;await new Promise(resolve=>{state.releasePersonaRead=resolve;});}
+      return jsonResponse({成功:true,数据:snapshot});
+    }
     if(url==='/plugins/dsh-mind/presence'){
       if(call.method==='POST'){
         const body=call.body;

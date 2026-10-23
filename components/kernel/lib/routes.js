@@ -40,6 +40,7 @@ export const 端点表 = Object.freeze({
   monitor: `${路由前缀}/monitor`,
   ping: `${路由前缀}/ping`,
   delegation: `${路由前缀}/delegation`,
+  personaCore: `${路由前缀}/persona-core`,
   // v2 条目14/17（2026-10-18 补修F）：介入度待决清单与主权者逐请求决议。
   // 与调度授权同一档：读/写都要求宿主 Connection 认证，不退回无头本机通道。
   intervention: `${路由前缀}/intervention`,
@@ -587,6 +588,34 @@ export function delegation路由({ ctx, settings }) {
   };
 }
 
+/** 核心卡正文只经过宿主认证的同源人侧入口；不接受路径、主体或任意模型动作。 */
+export function personaCore路由({ ctx, settings }) {
+  return async function personaCore端点(req, res) {
+    const method = String(req?.method ?? 'GET').toUpperCase();
+    if (!['GET', 'POST'].includes(method)) return 回方法不对(res, method, 'GET 或 POST');
+    try {
+      const connection = ctx?.get?.('connection');
+      if (!connection || typeof connection.requestRejection !== 'function' || !settings) return 回JSON(res, 503, { 成功: false, 理由: '核心人设设置需要宿主认证服务。' });
+      const rejection = connection.requestRejection(req);
+      if (rejection !== undefined) return 回JSON(res, rejection === 401 ? 401 : 403, { 成功: false, 理由: '核心人设设置需要已认证的同源人侧入口。' });
+      if (method === 'POST' && 取头(req, 'content-type').split(';')[0].trim().toLowerCase() !== 'application/json') return 回JSON(res, 415, { 成功: false, 理由: '核心人设设置只接受 application/json。' });
+      const gate = method === 'GET' ? 读栅栏(req) : 写栅栏(req);
+      if (!gate.ok) return 回JSON(res, 403, { 成功: false, 理由: '核心人设设置的同源请求被拒绝。' });
+      if (method === 'GET') return 回JSON(res, 200, await settings.read());
+      let raw;
+      try { raw = await 读请求体(req); }
+      catch { return 回JSON(res, 413, { 成功: false, 理由: '请求体读取失败或超过 64 KiB。' }); }
+      let input;
+      try { input = JSON.parse(raw); }
+      catch { return 回JSON(res, 400, { 成功: false, 理由: '请求体不是合法 JSON。' }); }
+      const result = await settings.save(input);
+      return 回JSON(res, result.status, result.body);
+    } catch (error) {
+      return 回JSON(res, ['DENIED', 'NEEDS_APPROVAL'].includes(error.code) ? 403 : 503, { 成功: false, ...describeFailure(error) });
+    }
+  };
+}
+
 // ── 注册（webServer 可能晚于插件激活）────────────────────────────────────────
 
 /** 取 webServer 服务：先 `ctx.get`，再退回 `ctx.webServer`（两种宿主形状都认）。 */
@@ -646,6 +675,7 @@ export function 挂同源路由(spec) {
         新挂.push(ws.register({ kind: 'exact', path: 端点表.workbench, handler: workbench路由({ org, 项目 }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.ping, handler: ping路由({ org, ctx }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.delegation, handler: delegation路由({ ctx, settings: spec.调度设置 }) }));
+        新挂.push(ws.register({ kind: 'exact', path: 端点表.personaCore, handler: personaCore路由({ ctx, settings: spec.人设设置 }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.intervention, handler: intervention路由({ org, 项目, ctx }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.monitor, handler: monitor路由({ org, ctx }) }));
       } catch (error) {
@@ -695,7 +725,7 @@ export function 挂同源路由(spec) {
           logger.warn?.(
             `[dsh-mind] 同源路由放弃挂载：轮询 ${次数} 次（${间隔毫秒}ms/次）都没挂上。`
             + (最近错误 ? ` 最后一次注册失败：${最近错误}。` : ' 原因：一直没拿到 webServer。')
-            + ` 未注册的端点：${端点表.presence}（设置页读写）、${端点表.workbench}（看板投影）、${端点表.ping}（自检）、${端点表.delegation}（调度授权设置）、${端点表.intervention}（介入度待决与决议）。`
+            + ` 未注册的端点：${端点表.presence}（设置页读写）、${端点表.workbench}（看板投影）、${端点表.ping}（自检）、${端点表.delegation}（调度授权设置）、${端点表.personaCore}（核心人设设置）、${端点表.intervention}（介入度待决与决议）。`
             + ` 影响面：工作台面板与设置页将保持空白/读取中，命令面（/mind）不受影响。`,
           );
         }

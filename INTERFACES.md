@@ -1020,6 +1020,7 @@ await runAction({ org, 项目, subject, 主体, args: { action, ...args }, 面: 
 | `/plugins/dsh-mind/workbench` | GET只读同一工作台投影，不另造状态真源 |
 | `/plugins/dsh-mind/ping` | GET诊断当前内核与通道，不以历史探针绿代替入口在位 |
 | `/plugins/dsh-mind/delegation` | 已认证GET/POST调度设置，正式ConfigEditor保存；认证缺失即不可用 |
+| `/plugins/dsh-mind/persona-core` | 已认证同源GET读取当前部署核心卡；POST只收text与expectedFingerprint，独立人侧服务锁内核对版本、原子保存并仅审计指纹；不开放模型改卡动作 |
 | `/plugins/dsh-mind/intervention` | 已认证同源、精确sessionId范围读待审批，POST/PUT接请求id/决定/理由/审阅指纹；只落人侧决议，不执行原写；模型不能调用成主权者 |
 | `/plugins/dsh-mind/monitor` | 已认证同源 GET 查询指定 `sessionId` 的监控投影，可带 `limit/offset`；POST 仅收阻塞引用/原因分类/判定/原因/来源引用，追加人侧确认，不改权限或任务 |
 

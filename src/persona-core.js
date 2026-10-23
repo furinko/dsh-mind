@@ -9,21 +9,34 @@ const invalid = () => new Fault('PERSONA_CORE_INVALID', '核心人设文件不�
 const changed = () => new Fault('PERSONA_CORE_CHANGED', '核心人设在读取中变化，本轮不沿用旧人设。');
 const same = (a, b) => ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'nlink'].every(key => a[key] === b[key]);
 
-function noLinks(file) {
+export function assertPersonaCorePath(file, { allowMissing = false } = {}) {
   for (let path = file; ; path = dirname(path)) {
-    const info = lstatSync(path, { bigint: true });
-    if (info.isSymbolicLink() || (info.isFile() && info.nlink !== 1n)) throw invalid();
+    let info;
+    try { info = lstatSync(path, { bigint: true }); }
+    catch (error) { if (!allowMissing || error.code !== 'ENOENT') throw error; }
+    if (info && (info.isSymbolicLink() || (info.isFile() && info.nlink !== 1n) || (path !== file && !info.isDirectory()))) throw invalid();
     if (dirname(path) === path) return;
   }
 }
 
+/** 读写共用正文限制；设置页不把非法 UTF-16 静默替换成另一份人设。 */
+export function validatePersonaCoreText(text) {
+  if (typeof text !== 'string' || Buffer.from(text, 'utf8').toString('utf8') !== text ||
+      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(text)) {
+    throw new InvalidBody('核心人设必须是有效的 Unicode 文本，不能包含控制字符。');
+  }
+  if (Buffer.byteLength(text, 'utf8') > PERSONA_CORE_LIMITS.bytes || [...text].length > PERSONA_CORE_LIMITS.characters) {
+    throw new InvalidBody('核心人设最多 3000 个 Unicode 字符、12000 个 UTF-8 字节。');
+  }
+}
+
 /** 至多12KiB的同步复核使最终装配检查后不再让出事件循环。 */
-function readCore(file) {
+export function readPersonaCoreFile(file) {
   let named;
   try { named = lstatSync(file, { bigint: true }); }
-  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  catch (error) { if (error.code === 'ENOENT') { assertPersonaCorePath(file, { allowMissing: true }); return null; } throw error; }
   if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1n || named.size > BigInt(PERSONA_CORE_LIMITS.bytes)) throw invalid();
-  noLinks(file);
+  assertPersonaCorePath(file);
   const handle = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const before = fstatSync(handle, { bigint: true });
@@ -38,11 +51,11 @@ function readCore(file) {
     if (size > PERSONA_CORE_LIMITS.bytes) throw invalid();
     const after = fstatSync(handle, { bigint: true });
     if (size !== Number(before.size) || !same(before, after) || !same(after, lstatSync(file, { bigint: true }))) throw changed();
-    noLinks(file);
+    assertPersonaCorePath(file);
     const bytes = buffer.subarray(0, size);
-    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-    if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(text) || [...text].length > PERSONA_CORE_LIMITS.characters) throw invalid();
-    return text.trim() ? Object.freeze({ text, digest: digest(bytes), bytes: size }) : null;
+    const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+    try { validatePersonaCoreText(text); } catch { throw invalid(); }
+    return Object.freeze({ text, digest: digest(bytes), bytes: size });
   } finally { closeSync(handle); }
 }
 
@@ -57,7 +70,7 @@ export class PersonaCoreService {
     if (!file) return false;
     try {
       if (resolve(this.file()) !== file) return false;
-      return readCore(file)?.digest === frame.digest;
+      return readPersonaCoreFile(file)?.digest === frame.digest;
     } catch { return false; }
   }
 
@@ -75,7 +88,8 @@ export class PersonaCoreService {
       file = resolve(this.file());
       const inside = relative(resolve(this.layout.privateRoot), file);
       if (!inside || inside === '..' || inside.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(inside)) throw invalid();
-      frame = readCore(file);
+      frame = readPersonaCoreFile(file);
+      if (!frame?.text.trim()) frame = null;
     } catch (error) {
       if (['PERSONA_CORE_INVALID', 'PERSONA_CORE_CHANGED'].includes(error.code)) throw error;
       throw invalid();

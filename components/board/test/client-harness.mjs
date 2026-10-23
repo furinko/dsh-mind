@@ -190,7 +190,7 @@ export function collect(tree, options = {}) {
     if (Array.isArray(node)) { node.forEach(visit); return; }
     if (typeof node === 'string' || typeof node === 'number') { texts.push(String(node)); return; }
     if (!node || node.$$element !== true) return;
-    if (options.presenceOnly && node.props['data-dshmind'] === 'delegation-settings') return;
+    if (options.presenceOnly && ['delegation-settings', 'persona-core-settings'].includes(node.props['data-dshmind'])) return;
     elements.push(node);
     if (options.skipStyle && node.type === 'style') return;
     visit(node.props.children);
@@ -1486,7 +1486,7 @@ export async function runHarness() {
     renderer.flush();
     spyBound.calls.length = 0;
     collect(renderer.tree, { skipStyle: true }).elements
-      .find((el) => el.type === 'button' && String(el.props.children).indexOf('保存') >= 0).props.onClick();
+      .find((el) => el.type === 'button' && String(el.props.children) === '保存').props.onClick();
     await settle();
     renderer.flush();
     const 文本 = collect(renderer.tree, { skipStyle: true }).text;
@@ -1540,7 +1540,7 @@ export async function runHarness() {
     '⑥ 改动的草稿留在表单里（否 / 168）',
     JSON.stringify([改后.find((el) => el.type === 'select').props.value, 改后.find((el) => el.type === 'input').props.value])));
   const 保存钮 = collect(sr2.tree, { skipStyle: true }).elements
-    .find((el) => el.type === 'button' && String(el.props.children).indexOf('保存') >= 0);
+    .find((el) => el.type === 'button' && String(el.props.children) === '保存');
   passed.push(check(!!保存钮, '⑥ 设置页有「保存」按钮，且它是写入口'));
   写日志.length = 0;
   保存钮.props.onClick();
@@ -1594,7 +1594,7 @@ export async function runHarness() {
     .props.onChange({ target: { value: '168' } });
   sr3.flush();
   collect(sr3.tree, { skipStyle: true }).elements
-    .find((el) => el.type === 'button' && String(el.props.children).indexOf('保存') >= 0).props.onClick();
+    .find((el) => el.type === 'button' && String(el.props.children) === '保存').props.onClick();
   await settle();
   sr3.flush();
   const 文本3 = collect(sr3.tree, { skipStyle: true }).text;
@@ -1653,7 +1653,7 @@ export async function runHarness() {
       .props.onChange({ target: { value: '168' } });
     sr3b.flush();
     collect(sr3b.tree, { skipStyle: true }).elements
-      .find((el) => el.type === 'button' && String(el.props.children).indexOf('保存') >= 0).props.onClick();
+      .find((el) => el.type === 'button' && String(el.props.children) === '保存').props.onClick();
     await settle();
     sr3b.flush();
     const 文本3b = collect(sr3b.tree, { skipStyle: true }).text;
@@ -1716,7 +1716,7 @@ export async function runHarness() {
       .props.onChange({ target: { value: '168' } });
     sr3c.flush();
     collect(sr3c.tree, { skipStyle: true }).elements
-      .find((el) => el.type === 'button' && String(el.props.children).indexOf('保存') >= 0).props.onClick();
+      .find((el) => el.type === 'button' && String(el.props.children) === '保存').props.onClick();
     await settle();
     sr3c.flush();
     const 文本3c = collect(sr3c.tree, { skipStyle: true }).text;
@@ -1904,7 +1904,8 @@ export async function runHarness() {
       '⑪ 未接入文案里没有实现细节'));
     // ⚠️ 这条必须打**未接入那块自己**：页脚本来就有「命令 /mind presence」，
     //    整页搜 `PRESENCE_COMMAND` 会被页脚接住 ⇒ 提示里就算没给命令也照样绿（空转）。
-    const 未接提示 = findAllByClass(未接.renderer.tree, 'dshmind-set__notice')[0];
+    const 未接策略节 = collect(未接.renderer.tree, { skipStyle: true }).elements.find(el => el.props['data-dshmind'] === 'policy-settings');
+    const 未接提示 = findAllByClass(未接策略节, 'dshmind-set__notice')[0];
     const 提示文本 = 未接提示 ? textOf(未接提示) : '';
     passed.push(check(!!未接提示 && 提示文本.indexOf(PRESENCE_EXAMPLE) >= 0,
       '⑪ 未接入那块自己给出可复制去敲的完整命令（' + PRESENCE_EXAMPLE + '）', 提示文本.slice(0, 120)));
@@ -1944,12 +1945,12 @@ export async function runHarness() {
         && 字段框.every((el) => String(el.props.className).split(/\s+/).indexOf('dshmind-set__text') >= 0),
         '⑬ 授权项目/授权依据输入框带 dshmind-set__text（吃满行宽）',
         JSON.stringify(字段框.map((el) => el.props.className))));
-      const 字段行 = 全元素.filter((el) => String(el.props.className || '').split(/\s+/).indexOf('dshmind-set__row--field') >= 0);
+      const 字段行 = collect(调度节, { skipStyle: true }).elements.filter((el) => String(el.props.className || '').split(/\s+/).indexOf('dshmind-set__row--field') >= 0);
       passed.push(check(字段行.length === 2, '⑬ 两个长文本字段行都挂上下排变体（dshmind-set__row--field）', String(字段行.length)));
       // ⑬d 未接入时表单禁用：没有回读真源，框里只是硬编码草稿，不许再让人编它冒充读数；
       //     「重新读取」是唯一该亮的操作（它是恢复动作）。
       const 离线控 = 未接.元素().filter((el) => ['select', 'input', 'button'].indexOf(el.type) >= 0);
-      const 离线保存 = 离线控.find((el) => el.type === 'button' && String(el.props.children).indexOf('保存') >= 0);
+      const 离线保存 = 离线控.find((el) => el.type === 'button' && String(el.props.children) === '保存');
       const 离线重读 = 离线控.find((el) => el.type === 'button' && String(el.props.children) === '重新读取');
       passed.push(check(离线控.filter((el) => el.type !== 'button').every((el) => el.props.disabled === true)
         && !!离线保存 && 离线保存.props.disabled === true,
@@ -1993,7 +1994,7 @@ export async function runHarness() {
       // 态点（dshmind-set__dot）是**纯视觉标记**：无文本无控件是它的本分，不是空框（2026-10-17 优化批新增）。
       if (el.props.className.split(/\s+/).indexOf('dshmind-set__dot') >= 0) return false;
       const 子 = collect(el, { skipStyle: true });
-      const 有控件 = 子.elements.some((x) => ['button', 'select', 'input'].indexOf(x.type) >= 0);
+      const 有控件 = 子.elements.some((x) => ['button', 'select', 'input', 'textarea'].indexOf(x.type) >= 0);
       return 子.text.trim() === '' && !有控件;
     });
     for (const 场景 of [{ name: '能读', 渲染器: 常驻.renderer }, { name: '未接入', 渲染器: 未接.renderer }]) {
@@ -2208,7 +2209,7 @@ export async function runHarness() {
       .props.onChange({ target: { value: '168' } });
     sr双.flush();
     collect(sr双.tree, { skipStyle: true }).elements
-      .find((el) => el.type === 'button' && String(el.props.children).indexOf('保存') >= 0).props.onClick();
+      .find((el) => el.type === 'button' && String(el.props.children) === '保存').props.onClick();
     await settle();
     sr双.flush();
     const 存后文本 = collect(sr双.tree, { skipStyle: true }).text;
@@ -2985,7 +2986,7 @@ export async function runHarness() {
       .props.onChange({ target: { value: '168' } });
     保存渲染.flush();
     collect(保存渲染.tree, { skipStyle: true }).elements.find((el) => el.type === 'button'
-      && String(el.props.children).indexOf('保存') >= 0).props.onClick();
+      && String(el.props.children) === '保存').props.onClick();
     await settle();
     保存渲染.flush();
     保存挂死.timers.fireTimeouts();
@@ -2993,7 +2994,7 @@ export async function runHarness() {
     保存渲染.flush();
     const 保存文本 = collect(保存渲染.tree, { skipStyle: true }).text;
     const 保存钮 = collect(保存渲染.tree, { skipStyle: true }).elements.find((el) => el.type === 'button'
-      && String(el.props.children).indexOf('保存') >= 0);
+      && String(el.props.children) === '保存');
     passed.push(check(!!保存钮 && 保存钮.props.disabled !== true && String(保存钮.props.children) === '保存',
       '⑯ 保存链超时 ⇒ 按钮**不永久「保存中」**，回到可点', JSON.stringify(保存钮 && String(保存钮.props.children))));
     passed.push(check(保存文本.includes('没写进去'),

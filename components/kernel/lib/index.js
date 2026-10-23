@@ -36,6 +36,7 @@ import { 看板审计尾条数 } from '../../../src/audit.js';
 import { MESSAGE_TYPES } from '../../../src/bus.js';
 import { 挂同源路由, 看板包 } from './routes.js';
 import { createDelegationSettings } from './delegation-settings.js';
+import { createPersonaCoreSettings } from './persona-core-settings.js';
 // Lead 自主调度（2026-10-15 主权者授权）：提示词、创建闸与成员入口共用同一份授权判据。
 import { DelegationPolicy, isCreationTool } from '../../../src/delegation-policy.js';
 import { ReviewExperimentService } from '../../../src/review-experiments.js';
@@ -365,6 +366,7 @@ export async function apply(ctx, config = {}) {
     间隔毫秒: config.webServer间隔毫秒,
     次数: config.webServer次数,
     调度设置: createDelegationSettings({ ctx, org, delegation, project: 项目, readiness: 调度接线回执 }),
+    人设设置: createPersonaCoreSettings({ org, project: 项目 }),
   });
 
   // （范围闸注册已上移至装配早期并带 R06 回执/降级——见上方 闸回执 块，此处不再重复注册。）

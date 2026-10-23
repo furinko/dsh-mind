@@ -8,7 +8,7 @@ const posts=t=>t.calls.filter(x=>x.method==='POST');
 
 test('设置分组清楚：首屏隐藏诊断、项目指纹及冗长回执；只有一个刷新入口',async()=>{
   const t=await settingsScene();try{
-    assert.deepEqual(t.elements().filter(x=>x.type==='h3').map(textOf),['运行与审批','Lead 调度授权']);
+    assert.deepEqual(t.elements().filter(x=>x.type==='h3').map(textOf),['核心人设','运行与审批','Lead 调度授权']);
     assert.deepEqual(t.elements().filter(x=>x.type==='h4').map(x=>textOf(x).split('\n')[0]),['失联保护','审批与复核']);
     const visible=visibleElements(t.r.tree);assert.ok(!visible.some(x=>x.type==='input'&&x.props['aria-label']==='授权项目'));
     assert.ok(!visible.some(x=>['授权真源','盘面 / 运行指纹','设置文件 fixture/private/settings.json'].includes(textOf(x))));
