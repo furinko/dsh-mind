@@ -73,6 +73,12 @@ it('迁移保留原有权限，新增层级沿用原根权限', () => scene(asyn
   } // Windows每个源与目标的DACL/所有者/组由迁移本身逐项比较；含上面禁止继承的文件。
 }));
 
+it('Windows CREATOR OWNER继承权限在新层级仍保持相同访问规则', { skip: process.platform !== 'win32' }, () => scene(async ({ root, migrate }) => {
+  const command = `$ErrorActionPreference='Stop'; [Console]::InputEncoding=[Text.UTF8Encoding]::new($false); $p=ConvertFrom-Json ([Console]::In.ReadToEnd()); $acl=[IO.Directory]::GetAccessControl($p); $rule=[System.Security.AccessControl.FileSystemAccessRule]::new([System.Security.Principal.SecurityIdentifier]::new('S-1-3-0'),[System.Security.AccessControl.FileSystemRights]::FullControl,[System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit',[System.Security.AccessControl.PropagationFlags]::InheritOnly,[System.Security.AccessControl.AccessControlType]::Allow); $acl.AddAccessRule($rule); [IO.Directory]::SetAccessControl($p,$acl)`;
+  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { input: JSON.stringify(root), encoding: 'utf8', windowsHide: true });
+  await migrate();
+}));
+
 it('重复迁移只读返回当前版本；不另造备份或双写旧路径', () => scene(async ({ layout, root, migrate }) => {
   await migrate(); const before = await memoryTree(root);
   assert.equal((await migrate()).alreadyCurrent, true);

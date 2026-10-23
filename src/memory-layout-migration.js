@@ -91,10 +91,34 @@ async function preservePermissions(paths, entries) {
   const originals = new Map(entries.map((row) => [row.to, row.path]));
   const staged = [{ path: '', type: 'directory' }, ...(await memoryTree(paths.stage)).filter((row) => row.path !== MEMORY_LAYOUT_FILE)];
   staged.sort((a, b) => a.path.split('/').length - b.path.split('/').length || ordered(a, b));
-  const pairs = staged.map((row) => ({ from: join(paths.root, originals.get(row.path) ?? ''), to: join(paths.stage, row.path) }));
+  const pairs = staged.map((row) => ({ from: join(paths.root, originals.get(row.path) ?? ''), to: join(paths.stage, row.path), newLayer: row.type === 'directory' && row.path !== '' && !originals.has(row.path) }));
   if (process.platform === 'win32') {
     // 路径只经stdin传JSON，绝不拼接为PowerShell代码；同时核对DACL、所有者和组。
-    const command = `$ErrorActionPreference='Stop'; [Console]::InputEncoding=[Text.UTF8Encoding]::new($false); $pairs=ConvertFrom-Json ([Console]::In.ReadToEnd()); $sections=[System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner -bor [System.Security.AccessControl.AccessControlSections]::Group; foreach($pair in $pairs) { $dir=[IO.Directory]::Exists($pair.from); if($dir) { $acl=[IO.Directory]::GetAccessControl($pair.from) } else { $acl=[IO.File]::GetAccessControl($pair.from) }; $expected=$acl.GetSecurityDescriptorSddlForm($sections); if([IO.Directory]::Exists($pair.to)) { $copy=[System.Security.AccessControl.DirectorySecurity]::new(); $copy.SetSecurityDescriptorSddlForm($expected,[System.Security.AccessControl.AccessControlSections]::Access); [IO.Directory]::SetAccessControl($pair.to,$copy); $actual=[IO.Directory]::GetAccessControl($pair.to) } else { $copy=[System.Security.AccessControl.FileSecurity]::new(); $copy.SetSecurityDescriptorSddlForm($expected,[System.Security.AccessControl.AccessControlSections]::Access); [IO.File]::SetAccessControl($pair.to,$copy); $actual=[IO.File]::GetAccessControl($pair.to) }; if($expected -cne $actual.GetSecurityDescriptorSddlForm($sections)) { throw 'ACL verification failed' } }; [Console]::Write($pairs.Count)`;
+    const command = `
+$ErrorActionPreference='Stop'
+[Console]::InputEncoding=[Text.UTF8Encoding]::new($false)
+$pairs=ConvertFrom-Json ([Console]::In.ReadToEnd())
+$access=[System.Security.AccessControl.AccessControlSections]::Access
+$sid=[System.Security.Principal.SecurityIdentifier]
+function Rules($acl,$ignoreInherited) {
+  ($acl.GetAccessRules($true,$true,$sid) | ForEach-Object {
+    $key=$_.IdentityReference.Value+'|'+[int]$_.FileSystemRights+'|'+[int]$_.AccessControlType+'|'+[int]$_.InheritanceFlags+'|'+[int]$_.PropagationFlags
+    if(!$ignoreInherited){$key+='|'+$_.IsInherited}; $key
+  } | Sort-Object) -join ';'
+}
+foreach($pair in $pairs) {
+  if([IO.Directory]::Exists($pair.from)) {$acl=[IO.Directory]::GetAccessControl($pair.from)} else {$acl=[IO.File]::GetAccessControl($pair.from)}
+  if([IO.Directory]::Exists($pair.to)) {$copy=[System.Security.AccessControl.DirectorySecurity]::new()} else {$copy=[System.Security.AccessControl.FileSecurity]::new()}
+  $copy.SetSecurityDescriptorSddlForm($acl.GetSecurityDescriptorSddlForm($access),$access)
+  # 新的语义层复制原根的有效权限并固定继承，避免多一层时CREATOR OWNER自动增加授权。
+  if($pair.newLayer){$copy.SetAccessRuleProtection($true,$true)}
+  if([IO.Directory]::Exists($pair.to)) {[IO.Directory]::SetAccessControl($pair.to,$copy); $actual=[IO.Directory]::GetAccessControl($pair.to)} else {[IO.File]::SetAccessControl($pair.to,$copy); $actual=[IO.File]::GetAccessControl($pair.to)}
+  $protected=if($pair.newLayer){$true}else{$acl.AreAccessRulesProtected}
+  if(!$acl.AreAccessRulesCanonical -or !$actual.AreAccessRulesCanonical -or $actual.AreAccessRulesProtected -ne $protected -or
+    $acl.GetOwner($sid).Value -cne $actual.GetOwner($sid).Value -or $acl.GetGroup($sid).Value -cne $actual.GetGroup($sid).Value -or
+    (Rules $acl $pair.newLayer) -cne (Rules $actual $pair.newLayer)) {throw 'ACL verification failed'}
+}
+[Console]::Write($pairs.Count)`;
     const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { input: JSON.stringify(pairs), encoding: 'utf8', windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     if (Number(output) !== pairs.length) throw fail('Windows访问权限核对未完成，停止切换。');
   } else {
