@@ -34,7 +34,7 @@ describe('探针巡检唯一自动落点', () => {
     assert.equal(green.全绿, true);
     assert.equal(green.回滚, null);
     assert.equal((await rollbackRows(f)).length, 0);
-    assert.match(green.机制版本, /^dsh-mind@1\.2\.0\+sha256:[0-9a-f]{64}$/);
+    assert.match(green.机制版本, /^dsh-mind@1\.3\.0\+sha256:[0-9a-f]{64}$/);
     f.policy.state.ok = false;
     const red = await p.run({ subject: LEAD, 机制版本: 'model-forged' });
     assert.equal(red.全绿, false);
