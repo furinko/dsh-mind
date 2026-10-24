@@ -3148,6 +3148,8 @@ window.__ModuleLoader__.load({
     var 信息请求序 = 0;
     var 信息最近读取 = 0;
     var 信息store = { 快照: { phase: 'reading', data: null, error: '' }, 订阅者: [] };
+    var 自由页已访问 = false; var 自由最近读取 = 0; var 自由请求序 = 0;
+    var 自由store = { 快照: { phase: 'reading', data: null, runtime: null, error: '' }, 订阅者: [] };
     var 投影store = { 快照: EMPTY, 订阅者: [] };
     var 设置store = { 快照: { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' }, 订阅者: [] };
     /** 待批准清单（v2 条目14/17）：状态机投影由域服务给，前端只读、只发批准/拒绝/撤销。 */
@@ -3237,6 +3239,8 @@ window.__ModuleLoader__.load({
       人设store.快照 = { phase: 'reading', data: null, error: '' };
       信息页已访问 = false; 信息请求序 += 1; 信息最近读取 = 0; 信息参数 = { offset: 0, query: '' };
       信息store.快照 = { phase: 'reading', data: null, error: '' };
+      自由页已访问 = false; 自由最近读取 = 0; 自由请求序++;
+      自由store.快照 = { phase: 'reading', data: null, runtime: null, error: '' };
       投影store.快照 = EMPTY;
       设置store.快照 = { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' };
       界面store.快照 = { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null, 当前页: null, 图谱选中: null, 图谱视图: null, 审计展开: null };
@@ -4015,7 +4019,7 @@ window.__ModuleLoader__.load({
 
     /** 立刻拉一次（两个页面都刷）。给"手动刷新"按钮与 effect 增强用。 */
     function 立即刷新() {
-      return Promise.all([刷新投影(), 刷新设置(), 刷新调度(), 刷新人设(), 刷新信息(false)]);
+      return Promise.all([刷新投影(), 刷新设置(), 刷新调度(), 刷新人设(), 刷新信息(false), 刷新自由(false)]);
     }
 
     /**
@@ -5146,6 +5150,131 @@ window.__ModuleLoader__.load({
       ]);
     }
 
+    function 刷新自由(force) {
+      if (!自由页已访问 || (!force && Date.now() - 自由最近读取 < 15000)) return Promise.resolve({ ok: false });
+      自由最近读取 = Date.now(); var ticket = ++自由请求序;
+      return runCommand(activeCtx, '', { method: 'GET', path: '/plugins/dsh-mind/lead-space' }).then(function (out) {
+        if (ticket !== 自由请求序) return { ok: false };
+        var data = out.ok && out.value.数据;
+        if (out.ok && (!data || !obj(data.config) || !Array.isArray(data.entries) || !Array.isArray(data.wakes))) out = { ok: false, error: '自由空间未返回完整状态。' };
+        发通知(自由store, { phase: out.ok ? 'live' : 'error', data: out.ok ? data : null, runtime: out.ok ? out.value.runtime : null, error: out.error || '' });
+        return out;
+      });
+    }
+
+    function 自由空间设置() {
+      自由页已访问 = true;
+      var snapshot = useStore(自由store); var data = snapshot.data;
+      var openState = useState(false); var opened = openState[0]; var setOpen = openState[1];
+      var tabState = useState('time'); var tab = tabState[0]; var setTab = tabState[1];
+      var draftState = useState(null); var draft = draftState[0]; var setDraft = draftState[1];
+      var revisionState = useState(null); var draftRevision = revisionState[0]; var setDraftRevision = revisionState[1];
+      var busyState = useState(false); var busy = busyState[0]; var setBusy = busyState[1];
+      var noticeState = useState(''); var notice = noticeState[0]; var setNotice = noticeState[1];
+      var noteState = useState(null); var note = noteState[0]; var setNote = noteState[1];
+      var deleteState = useState(false); var deleting = deleteState[0]; var setDeleting = deleteState[1];
+      var pageState = useState(null); var page = pageState[0]; var setPage = pageState[1];
+      var lock = useState(function () { return { saving: false, trigger: null, sequence: 0 }; })[0];
+      useEffect(function () { 刷新自由(true); }, []);
+      var config = draft || (data && data.config);
+      var runtime = snapshot.runtime || {};
+      var status = !data ? '正在读取' : !data.config.enabled ? '已关闭' : ({ 'waiting-for-lead': '等待 Lead 接续', 'waiting-for-model': '等待模型', 'waiting-for-permission': '等待权限', busy: '为当前对话让路', running: '自由活动中', failed: '上次未完成' }[runtime.state] || '已安排');
+      function patch(key, value) {
+        if (!config) return;
+        if (!draft) setDraftRevision(data.revision);
+        var next = Object.assign({}, config); next[key] = value; setDraft(next);
+      }
+      function close() {
+        if (lock.saving) return;
+        lock.sequence++; setOpen(false);
+        if (lock.trigger && typeof lock.trigger.focus === 'function') lock.trigger.focus();
+      }
+      function keydown(event) {
+        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
+        if (event.key !== 'Tab') return;
+        var nodes = Array.prototype.filter.call(event.currentTarget.querySelectorAll('button,input,select,textarea,[tabindex="0"]'), function (n) { return !n.disabled && n.getClientRects().length > 0; });
+        if (!nodes.length) return;
+        var index = nodes.indexOf(event.target);
+        if (event.shiftKey && index <= 0) { event.preventDefault(); nodes[nodes.length - 1].focus(); }
+        else if (!event.shiftKey && index === nodes.length - 1) { event.preventDefault(); nodes[0].focus(); }
+      }
+      function button(label, fn, disabled) { return h('button', { type: 'button', className: 'dshmind-set__btn', disabled: busy || disabled, onClick: fn }, label); }
+      function send(body, after) {
+        if (lock.saving) return;
+        lock.saving = true; setBusy(true); setNotice('正在保存…');
+        return runCommand(activeCtx, '', { method: 'POST', path: '/plugins/dsh-mind/lead-space', body: body }).then(function (out) {
+          return 刷新自由(true).then(function (back) {
+            setNotice(out.ok && back.ok ? '已保存。' : out.ok ? '保存已返回，请重新读取核对。' : out.error + '；草稿已保留。');
+            if (out.ok && back.ok && after) after(back.value.数据);
+          });
+        }).then(function () { lock.saving = false; setBusy(false); }, function () { lock.saving = false; setBusy(false); setNotice('未能确认保存，请重新读取核对。'); });
+      }
+      function toggle() {
+        if (!data) return;
+        // Turning off never saves or discards an unrelated schedule draft.
+        var next = Object.assign({}, data.config, { enabled: !data.config.enabled });
+        send({ op: 'configure', expectedRevision: data.revision, config: next });
+      }
+      function readNote(id) {
+        if (note && note.dirty) { setNotice('请先保存或取消当前随笔编辑。'); return; }
+        var ticket = ++lock.sequence;
+        runCommand(activeCtx, '', { method: 'GET', path: '/plugins/dsh-mind/lead-space?id=' + encodeURIComponent(id) }).then(function (out) {
+          if (ticket !== lock.sequence) return;
+          if (out.ok) { setNote(Object.assign({}, out.value.数据, { dirty: false })); setDeleting(false); } else setNotice(out.error);
+        });
+      }
+      function loadPage(offset) {
+        var ticket = ++lock.sequence;
+        runCommand(activeCtx, '', { method: 'GET', path: '/plugins/dsh-mind/lead-space?offset=' + offset }).then(function (out) {
+          if (ticket !== lock.sequence) return;
+          if (out.ok) setPage(out.value.数据); else setNotice(out.error);
+        });
+      }
+      var list = page || data;
+      var wakeLabels = { running: '活动中', completed: '已结束', rested: '选择休息', failed: '未完成', interrupted: '已中止', 'no-material': '暂无可读材料' };
+      return h('section', { className: 'dshmind-set__section', 'aria-label': '自由时光', 'data-dshmind': 'lead-space-settings' }, [
+        h('div', { className: 'dshmind-set__cardHead' }, [h('h3', { className: 'dshmind-set__subtitle' }, '自由时光'), h('span', { className: 'dshmind-set__badge' }, status)]),
+        h('p', { className: 'dshmind-set__lede' }, '留一点时间给好奇、随笔和未完成的想法，也可以什么都不做。'),
+        h('div', { className: 'dshmind-set__compactActions' }, [
+          button('安排与随笔', function (event) { lock.trigger = event && event.currentTarget; setOpen(true); 刷新自由(true); }),
+          data ? h('label', { className: 'dshmind-set__hint' }, [h('input', { type: 'checkbox', 'aria-label': '开启自由活动', checked: data.config.enabled, disabled: busy, onChange: toggle }), ' 自由活动']) : null,
+        ]),
+        snapshot.phase === 'error' ? h('p', { role: 'alert', className: 'dshmind-set__hint' }, snapshot.error) : null,
+        !opened && notice ? h('p', { role: 'status', className: 'dshmind-set__hint' }, notice) : null,
+        opened ? h('div', { className: 'dshmind-growth-overlay', onClick: function (event) { event.stopPropagation(); } }, h('section', { role: 'dialog', 'aria-modal': true, 'aria-label': '自由时光与随笔', className: 'dshmind-growth-dialog', onKeyDown: keydown }, [
+          h('header', { className: 'dshmind-growth-header' }, [h('div', null, [h('h3', { className: 'dshmind-set__subtitle' }, '自由时光'), h('p', { className: 'dshmind-set__hint' }, '无需交卷，也不打扰你。')]), h('button', { type: 'button', autoFocus: true, className: 'dshmind-set__btn', 'aria-label': '关闭自由时光', disabled: busy, onClick: close }, '关闭')]),
+          h('nav', { className: 'dshmind-growth-tabs', 'aria-label': '自由时光分类' }, [['time', '活动安排'], ['notes', '自己的随笔']].map(function (item) { return h('button', { key: item[0], type: 'button', className: 'dshmind-set__btn', 'aria-pressed': tab === item[0], onClick: function () { setTab(item[0]); } }, item[1]); })),
+          h('div', { className: 'dshmind-growth-body' }, [
+            data && config ? h('div', { hidden: tab !== 'time' }, [
+              h('p', { className: 'dshmind-set__hint' }, '每天一至两次。Lead 可以休息、创作或阅读；你开始对话时，活动会让路。'),
+              设置行('free-times', '活动时段', '按下方时区运行；留空第二项表示每天一次。', h('div', { className: 'dshmind-set__compactActions' }, [0, 1].map(function (index) { return h('input', { key: index, type: 'time', className: 'dshmind-set__input', 'aria-label': index ? '第二个自由活动时间' : '第一个自由活动时间', value: config.times[index] || '', disabled: busy, onChange: function (e) { var times = config.times.slice(); times[index] = e.target.value; patch('times', times.filter(Boolean)); } }); }))),
+              设置行('free-timezone', '时区', '', h('input', { className: 'dshmind-set__input', 'aria-label': '自由活动时区', value: config.timezone, disabled: busy, onChange: function (e) { patch('timezone', e.target.value); } })),
+              设置行('free-calls', '每日请求上限', '每段至多两次；失败也占用额度。', h('input', { type: 'number', min: 1, max: 4, className: 'dshmind-set__input', 'aria-label': '自由活动每日请求上限', value: config.dailyCalls, disabled: busy, onChange: function (e) { patch('dailyCalls', Number(e.target.value)); } })),
+              设置行('free-seconds', '每段最长时间', '10–60 秒；单次请求输出上限 1500 token。', h('input', { type: 'number', min: 10, max: 60, className: 'dshmind-set__input', 'aria-label': '自由活动最长秒数', value: config.seconds, disabled: busy, onChange: function (e) { patch('seconds', Number(e.target.value)); } })),
+              h('div', { className: 'dshmind-set__compactActions' }, [button('保存活动安排', function () { send({ op: 'configure', expectedRevision: draftRevision === null ? data.revision : draftRevision, config: config }, function () { setDraft(null); setDraftRevision(null); }); }, !draft), button('取消安排修改', function () { setDraft(null); setDraftRevision(null); }, !draft)]),
+              h('p', { className: 'dshmind-set__hint' }, '今日已准入 ' + data.usage.calls + ' 次请求（UTC 日计量）。这限制调用与输出规模，不是精确费用封顶。'),
+              h('p', { className: 'dshmind-set__hint' }, '需要 DSH 保持运行，并先正常进入一次 Lead 会话完成身份接续。离线不补跑，默认不推送消息。'),
+              h('details', { className: 'dshmind-set__details' }, [h('summary', null, '最近活动'), data.wakes.length ? data.wakes.map(function (wake) { return h('p', { key: wake.id, className: 'dshmind-set__hint' }, wake.localDay + ' ' + wake.slot + ' · ' + (wakeLabels[wake.state] || '未知') + ' · ' + wake.calls + ' 次请求' + (wake.error ? ' · ' + wake.error : '')); }) : h('p', { className: 'dshmind-set__hint' }, '还没有活动记录。没有产出也是正常的一次活动。')]),
+            ]) : null,
+            h('div', { hidden: tab !== 'notes' }, [
+              h('p', { className: 'dshmind-set__hint' }, '随笔、虚构创作与半成品都可以留在这里。不会自动进入正式记忆，也不作为任务证据。'),
+              list && list.entries.length ? list.entries.map(function (row) { return h('div', { key: row.id, className: 'dshmind-set__row' }, [h('div', { className: 'dshmind-set__texts' }, [h('span', { className: 'dshmind-set__label' }, row.title), h('span', { className: 'dshmind-set__hint' }, (row.share ? '可在交谈时分享 · ' : '') + (row.humanEdited ? '你已修订 · ' : '') + row.updatedAt)]), button('查看随笔', function () { readNote(row.id); })]); }) : h('p', { className: 'dshmind-set__hint' }, '这里还空着。不需要为了填满它而写。'),
+              list ? h('div', { className: 'dshmind-set__compactActions' }, [button('回到最新随笔', function () { setPage(null); 刷新自由(true); }, !page), button('下一页随笔', function () { loadPage(list.nextOffset); }, list.nextOffset === null)]) : null,
+              note ? h('div', { className: 'dshmind-set__rows' }, [
+                h('input', { className: 'dshmind-set__input', 'aria-label': '随笔标题', value: note.title, disabled: busy, onChange: function (e) { setNote(Object.assign({}, note, { title: e.target.value, dirty: true })); } }),
+                h('textarea', { className: 'dshmind-set__persona', 'aria-label': '随笔内容', value: note.text, disabled: busy, onChange: function (e) { setNote(Object.assign({}, note, { text: e.target.value, dirty: true })); } }),
+                h('div', { className: 'dshmind-set__compactActions' }, [button('保存随笔修订', function () { send({ op: 'write', id: note.id, revision: note.revision, hash: note.hash, title: note.title, text: note.text }, function () { setNote(null); setPage(null); }); }, !note.dirty || !note.title.trim() || !note.text.trim()), button('取消随笔编辑', function () { lock.sequence++; setNote(null); setDeleting(false); }), button('删除这篇随笔', function () { setDeleting(true); })]),
+                deleting ? h('div', { role: 'alert', className: 'dshmind-set__notice' }, [h('p', null, '删除后无法恢复；正式记忆和原始来源需分别管理。'), button('确认删除随笔', function () { send({ op: 'remove', id: note.id, revision: note.revision, hash: note.hash }, function () { setNote(null); setDeleting(false); setPage(null); }); }), button('保留随笔', function () { setDeleting(false); })]) : null,
+              ]) : null,
+              data ? h('details', { className: 'dshmind-set__details' }, [h('summary', null, '存放位置'), h('p', { className: 'dshmind-set__hint' }, data.root)]) : null,
+            ]),
+            snapshot.phase === 'error' ? h('p', { role: 'alert' }, snapshot.error) : null,
+            notice ? h('p', { role: 'status', className: 'dshmind-set__hint' }, notice) : null,
+          ]),
+        ])) : null,
+      ]);
+    }
+
     function 心智设置(props) {
       var close = props && typeof props.close === 'function' ? props.close : null;
       var 页面状态 = useState('personality'); var 当前页面 = 页面状态[0]; var 设置页面 = 页面状态[1];
@@ -5691,7 +5820,7 @@ window.__ModuleLoader__.load({
           var changed = entry[0] === 'personality' ? 人设有修改 : entry[0] === 'policy' ? 策略有修改 : 调度有修改;
           return h('button', { key: entry[0], type: 'button', role: 'tab', id: 'dshmind-tab-' + entry[0], className: 'dshmind-set__tab', 'aria-label': entry[1], 'aria-selected': 当前页面 === entry[0], 'aria-controls': 'dshmind-panel-' + entry[0], tabIndex: 当前页面 === entry[0] ? 0 : -1, title: changed ? entry[1] + ' · 有未保存的修改' : entry[1], onClick: function () { 设置页面(entry[0]); }, onKeyDown: function (event) { 分区键盘(event, index); } }, [entry[1], changed ? h('span', { key: 'dirty', className: 'dshmind-set__unsaved', 'aria-hidden': true }) : null]);
         })),
-        h('div', { key: 'personality-panel', role: 'tabpanel', id: 'dshmind-panel-personality', 'aria-labelledby': 'dshmind-tab-personality', hidden: 当前页面 !== 'personality' }, [人设块, h(信息成长设置, { key: 'information' })]),
+        h('div', { key: 'personality-panel', role: 'tabpanel', id: 'dshmind-panel-personality', 'aria-labelledby': 'dshmind-tab-personality', hidden: 当前页面 !== 'personality' }, [人设块, h(信息成长设置, { key: 'information' }), h(自由空间设置, { key: 'free-space' })]),
         h('div', { key: 'policy-panel', role: 'tabpanel', id: 'dshmind-panel-policy', 'aria-labelledby': 'dshmind-tab-policy', hidden: 当前页面 !== 'policy' }, [
         h('section', { key: 'policy', className: 'dshmind-set__section', 'data-dshmind': 'policy-settings', 'aria-labelledby': 'dshmind-policy-title', 'aria-busy': 提示.保存中 }, [
           h('h3', { key: 'title', id: 'dshmind-policy-title', className: 'dshmind-set__subtitle' }, '运行与审批'),

@@ -55,6 +55,7 @@ import { injectPersonaCore } from './persona-core.js';
 import { createPersonaProtection } from './persona-protection.js';
 import { collaborationFeedbackSchema } from '../../../src/collaboration-feedback.js';
 import { createInformationHooks, injectInformationContext } from './information-hooks.js';
+import { createLeadSpaceHooks, injectLeadSpace } from './lead-space-hooks.js';
 
 export const name = 'dsh-mind-kernel';
 export const inject = ['tools'];
@@ -137,6 +138,15 @@ export async function apply(ctx, config = {}) {
   ctx.effect?.(() => () => continuityCaptureHooks.stop());
   const informationHooks = createInformationHooks({ org, projectOf: 当前项目键, llmOf: () => 取服务(ctx, 'llm'), toolsOf: () => 取服务(ctx, 'tools'), agentsOf: () => 取服务(ctx, 'agents'), logger });
   org.informationHooks = informationHooks;
+  const leadSpaceHooks = createLeadSpaceHooks({ org, projectOf: 当前项目键, llmOf: () => 取服务(ctx, 'llm'), logger });
+  org.leadSpaceHooks = leadSpaceHooks;
+  const disposeLeadSpace = leadSpaceHooks.attach(ctx);
+  try { await org.leadSpace.recover(); }
+  catch (error) { logger.warn?.(`[dsh-mind] 自由活动账本暂不可用（${error.code ?? error.name}），保留原件并停止活动。`); }
+  ctx.effect?.(() => {
+    const timer = setInterval(() => { void leadSpaceHooks.tick(); }, 60000); timer.unref?.();
+    return () => { clearInterval(timer); disposeLeadSpace?.(); };
+  }, 'dsh-mind: Lead自由活动');
   const disposeInformationSources = informationHooks.attach(ctx);
   try { await org.information.recoverLearning(); }
   catch (error) { logger.warn?.(`[dsh-mind] 信息阅读恢复未确认：${error?.code ?? 'unknown'}`); }
@@ -272,7 +282,8 @@ export async function apply(ctx, config = {}) {
         const 项目接续 = await injectProjectBrief(Lead连续性, { agent: context?.agent, org, hooks: projectBriefHooks,
           projectOf: 当前项目键, logger, active: () => !delegation.closed });
         const 见闻与成长 = await injectInformationContext(项目接续, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
-        return injectPersonaCore(见闻与成长, { agent: context?.agent, org,
+        const 自由空间 = await injectLeadSpace(见闻与成长, { agent: context?.agent, org, hooks: leadSpaceHooks, projectOf: 当前项目键, logger });
+        return injectPersonaCore(自由空间, { agent: context?.agent, org,
           projectOf: 当前项目键, logger, active: () => !delegation.closed });
       }, { prepend: true }));
       调度接线回执.promptRegistered = true;
@@ -460,6 +471,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations, 
     parameters: {
       type: 'object',
       properties: {
+        自由空间: { type: 'object', description: 'lead_space_query={id?,offset?,limit?}；lead_space_update={op:write/remove,id?,revision?,hash?,title?,text?,share?}。随笔为非任务草稿，不自动写正式记忆；更新/删除需当前revision和hash；不能配置自由活动或扩大关系边界。' },
         信息: { type: 'object', description: 'information_query: {collection:status/materials/growth/interests/candidates,id?,query?,offset?,limit?}; information_read: {id,hash?,version?,offset?,limit?}; information_update: {op,data}。submit={messageIds:[真实消息ID],title?,note?}；submit_tool={receiptId,title,note?}；record={type:growth/candidate,kind?,title,text,sources:[{readingId,quote}],expiresAt?,method?,conditions?,limitations?,roles?,replaces?:[{id,revision}]}，经原记忆服务写成pref-/exp-/know-；distribute={id:收录回执id,revision,roles,reason}，Lead自治调整正式知识的适用岗位；revise={id,revision,reason,state?,text?,stage?,trial?:{task,outcome,detail},expiresAt?}；finish={readingIds:[]}；publish={id,revision}。正式正文与生命周期可用memory_query/memory_lifecycle。模型不配置目录、预算或扩大私人来源范围。', additionalProperties: true },
         action: { type: 'string', enum: ACTIONS, description: '要执行的动作' },
         project: { type: 'string', description: '项目键；省略则用当前项目' },

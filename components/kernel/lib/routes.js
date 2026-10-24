@@ -24,7 +24,7 @@
  * 处理函数**复用命令面那一条路**（`runAction({ 面: 'command' })`）：策略引擎、merge 写、
  * `withLock`、`atomicWrite`、无条件入账、校验/拒绝口径全部照旧，这里既不复制也不放宽。
  */
-import { describeFailure } from '../../../src/kernel/errors.js';
+import { describeFailure, InvalidBody } from '../../../src/kernel/errors.js';
 import { runAction } from '../../../lib/actions.js';
 // 看板尾长单源（设计评审 #17 · 2026-10-15）：本文件与 kernel/lib/index.js 的「40」
 // 都引 src/audit.js 的常量，值不变、出处归一。
@@ -44,6 +44,7 @@ export const 端点表 = Object.freeze({
   information: `${路由前缀}/information`,
   informationMaterial: `${路由前缀}/information-material`,
   informationDeposit: `${路由前缀}/information-deposit`,
+  leadSpace: `${路由前缀}/lead-space`,
   // v2 条目14/17（2026-10-18 补修F）：介入度待决清单与主权者逐请求决议。
   // 与调度授权同一档：读/写都要求宿主 Connection 认证，不退回无头本机通道。
   intervention: `${路由前缀}/intervention`,
@@ -656,6 +657,38 @@ export function information路由({ ctx, org, 项目, mode = 'settings' }) {
   };
 }
 
+/** Human-only free-time configuration and draft inspection; no arbitrary action proxy. */
+export function leadSpace路由({ ctx, org, 项目 }) {
+  return async function leadSpace端点(req, res) {
+    const method = String(req?.method ?? 'GET').toUpperCase();
+    if (!['GET', 'POST'].includes(method)) return 回方法不对(res, method, 'GET 或 POST');
+    try {
+      const connection = ctx?.get?.('connection');
+      if (typeof connection?.requestRejection !== 'function') return 回JSON(res, 503, { 成功: false, 理由: '自由空间需要宿主Connection认证。' });
+      const rejection = connection.requestRejection(req);
+      if (rejection !== undefined) return 回JSON(res, rejection === 401 ? 401 : 403, { 成功: false, 理由: '需要已认证的同源人侧入口。' });
+      if (!(method === 'GET' ? 读栅栏(req) : 写栅栏(req)).ok) return 回JSON(res, 403, { 成功: false, 理由: '自由空间同源请求被拒绝。' });
+      const spec = { subject: { id: '自由空间设置页', kind: '主权者' }, project: 取项目(req, 项目), session: null };
+      if (method === 'GET') {
+        const url = new URL(req.url, 'http://localhost'); const input = {};
+        for (const key of ['id', 'offset', 'limit']) if (url.searchParams.has(key)) input[key] = key === 'id' ? url.searchParams.get(key) : Number(url.searchParams.get(key));
+        return 回JSON(res, 200, { 成功: true, 数据: await org.leadSpace.query(spec, input), runtime: org.leadSpaceHooks?.health() ?? { state: 'waiting-for-lead', bound: false } });
+      }
+      if (取头(req, 'content-type').split(';')[0].trim().toLowerCase() !== 'application/json') return 回JSON(res, 415, { 成功: false, 理由: '只接受application/json。' });
+      let raw; try { raw = await 读请求体(req); } catch { return 回JSON(res, 413, { 成功: false, 理由: '请求体超过64KiB。' }); }
+      let input; try { input = JSON.parse(raw); } catch { return 回JSON(res, 400, { 成功: false, 理由: '请求体不是合法JSON。' }); }
+      let result;
+      if (input?.op === 'configure') {
+        if (Object.keys(input).some(k => !['op', 'expectedRevision', 'config'].includes(k))) throw new InvalidBody('自由活动设置含未知字段。');
+        result = await org.leadSpace.configure(spec, { expectedRevision: input.expectedRevision, config: input.config });
+      } else result = await org.leadSpace.update(spec, input);
+      return 回JSON(res, 200, { 成功: true, 数据: result });
+    } catch (error) {
+      return 回JSON(res, error.code === 'LEAD_SPACE_CONFLICT' ? 409 : error.code === 'INVALID_BODY' ? 400 : ['DENIED', 'NEEDS_APPROVAL'].includes(error.code) ? 403 : 503, { 成功: false, ...describeFailure(error) });
+    }
+  };
+}
+
 /** 取 webServer 服务：先 `ctx.get`，再退回 `ctx.webServer`（两种宿主形状都认）。 */
 function 取webServer(ctx) {
   let ws = null;
@@ -717,6 +750,7 @@ export function 挂同源路由(spec) {
         新挂.push(ws.register({ kind: 'exact', path: 端点表.information, handler: information路由({ ctx, org, 项目 }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.informationMaterial, handler: information路由({ ctx, org, 项目, mode: 'preview' }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.informationDeposit, handler: information路由({ ctx, org, 项目, mode: 'deposit' }) }));
+        新挂.push(ws.register({ kind: 'exact', path: 端点表.leadSpace, handler: leadSpace路由({ ctx, org, 项目 }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.intervention, handler: intervention路由({ org, 项目, ctx }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.monitor, handler: monitor路由({ org, ctx }) }));
       } catch (error) {

@@ -226,7 +226,8 @@ export class InformationService {
       nativeState: entry.状态, nativeBody: entry.内容, nativeHistory: entry.历史, nativeActive: await this.org.memory.intakeActive(entry.id),
       claim: '正式记忆服务为正文与生命周期真源；此处仅提供收录处理回执' };
   }
-  async finalizeRecord(spec, id) {
+  async finalizeRecord(spec, id, { guard = async () => {} } = {}) {
+    await guard();
     const authorization = await this.authorize(spec, true);
     const result = await this.locked(async state => {
       const r = state.records.find(r => r.id === id);
@@ -249,6 +250,7 @@ export class InformationService {
       }
       for (const role of roles) native.push(await this.org.memory.rememberIntake({ subject: spec.subject, record: r, generation,
         project: r.executionProject ?? spec.project, role, body: this.nativeBody(r), check: async () => {
+          await guard();
           const live = await this.load(); const current = live.records.find(row => row.id === r.id);
           if (!current || current.revision !== r.revision || !this.validRecord(live, current) || live.config.paused
               || await this.authorize(spec, true) !== authorization) throw scopeChanged();
@@ -1044,11 +1046,11 @@ export class InformationService {
       return item ? this.metadata(item) : null;
     });
   }
-  async prepareLearning(spec) {
+  async prepareLearning(spec, { publicOnly = false, materialId = null } = {}) {
     await this.authorize(spec, true);
     if (spec.subject.kind !== 'Lead' || spec.session !== spec.subject.id) return null;
-    await this.settlePending(spec);
-    const buffer = await this.org.turnBuffer.load(spec.project, spec.session);
+    if (!publicOnly) await this.settlePending(spec);
+    const buffer = publicOnly ? null : await this.org.turnBuffer.load(spec.project, spec.session);
     return this.locked(async state => {
       if (state.config.paused || !state.config.autoLearn) return null;
       const usage = this.usage(state);
@@ -1065,6 +1067,8 @@ export class InformationService {
       const conversationKey = messages.length ? `conversation:${checkpoint}:${messages.at(-1).seq}` : null;
       const processed = this.processedKeys(state);
       const pending = state.items.filter(i => i.state === 'active' && !processed.has(`${i.hash}:${scopeKey(i.scope)}`) && this.itemVisible(state, i, spec)
+        && (!publicOnly || i.scope.project === null && i.scope.relationship === null && i.scope.audience === 'auto')
+        && (!materialId || i.id === materialId)
         && !attempted.has(`${i.id}:${i.hash}`));
       const discoveries = this.discoveryOrder(state, pending, spec);
       const preferConversation = usage.modelCalls % 2 === 0 || !pending.length;
@@ -1090,7 +1094,10 @@ export class InformationService {
       state.jobs.push(job); state.jobs = state.jobs.slice(-1000);
       usage.modelCalls++; usage.readChars += text.length;
       await this.authorize(spec, true);
-      const existing = (await Promise.all(state.records.filter(r => this.validRecord(state, r) && this.recordVisible(state, r, spec)).slice(-8).map(async r => {
+      const existing = (await Promise.all(state.records.filter(r => this.validRecord(state, r) && this.recordVisible(state, r, spec)
+        && (!publicOnly || r.scope.project === null && r.scope.relationship === null && r.sources.every(ref => {
+          const item = state.items.find(i => i.id === ref.item); return item?.scope.project === null && item.scope.relationship === null && item.scope.audience === 'auto';
+        }))).slice(-8).map(async r => {
         const native = await this.hydrate(r, spec);
         return native.nativeActive ? { id: r.id, revision: r.revision, title: native.title, text: (native.text ?? '').slice(0, 300), kind: r.kind, scope: r.scope, humanCorrected: !!r.humanStopped, native: r.native?.map(n => n.id) } : null;
       }))).filter(Boolean);
@@ -1103,7 +1110,8 @@ export class InformationService {
         existing, availableRoles: (await this.org.registry.list()).map(r => r.id) } };
     });
   }
-  async commitLearning(spec, prepared, response, { active = () => true } = {}) {
+  async commitLearning(spec, prepared, response, { active = () => true, guard = async () => {} } = {}) {
+    await guard();
     await this.authorize(spec, true);
     own(response, ['records']);
     if (!Array.isArray(response.records) || response.records.length > 3) throw new InvalidBody('自动阅读最多产生3条收获；没有收获允许空数组。');
@@ -1113,6 +1121,7 @@ export class InformationService {
       if (!chosen.conversation.refs.every(ref => buffer?.rounds.flatMap(r => r.messages).some(m => m.id === ref.id && m.seq === ref.seq && digest(m.text) === ref.hash))) throw new Fault('INFORMATION_SOURCE_CHANGED', '对话来源已清空、裁剪或改变，本次提炼未提交。');
     }
     const result = await this.locked(async state => {
+      await guard();
       const job = state.jobs.find(j => j.id === prepared.job.id);
       if (!job || job.state !== 'running' || !active() || state.config.paused || !state.config.autoLearn || state.configRevision !== job.configRevision) throw new Fault('INFORMATION_LEARNING_CANCELED', '阅读期间设置变化、暂停或会话切换；未提交收获。');
       let item = chosen.item ? state.items.find(i => i.id === chosen.item) : null;
@@ -1145,16 +1154,19 @@ export class InformationService {
         } else state.conversationOffsets[chosen.conversation.checkpoint] = { fingerprint: chosen.conversation.fingerprint, offset: prepared.input.source.coverage.end };
       }
       job.state = ids.length ? 'integrating' : 'completed'; job.records = ids; job.completedAt = this.clock.iso(); job.partial = !prepared.input.source.coverage.complete;
-      await this.authorize(spec, true); return { job: job.id, records: ids, partial: job.partial };
+      await this.authorize(spec, true); await guard(); return { job: job.id, records: ids, partial: job.partial };
     });
-    for (const id of result.records) await this.finalizeRecord(spec, id);
+    for (const id of result.records) await this.finalizeRecord(spec, id, { guard });
     if (result.records.length) await this.locked(state => { const job = state.jobs.find(j => j.id === result.job); job.state = 'completed'; job.completedAt = this.clock.iso(); });
     await this.audit(spec, '自动阅读纳入正式记忆', result.job, { records: result.records.length, partial: result.partial }); return result;
   }
-  async failLearning(id, error) {
+  async failLearning(id, error, { discardPending = false } = {}) {
     return this.locked(async state => {
       const job = state.jobs.find(j => j.id === id);
       if (job && ['running', 'integrating'].includes(job.state)) { job.state = 'failed'; job.error = error?.code ?? error?.name ?? 'unknown'; job.completedAt = this.clock.iso(); }
+      if (discardPending && job) for (const record of state.records.filter(r => job.records?.includes(r.id) && r.integration !== 'complete')) {
+        record.state = 'withdrawn'; record.revision++;
+      }
     });
   }
   async recoverLearning() {

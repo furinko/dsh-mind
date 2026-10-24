@@ -20,7 +20,7 @@ const root = session => typeof session?.id === 'string' && session.id.trim()
   && session.header.origin !== 'subagent' && !(session.header.delegationDepth >= 1)
   && Number.isSafeInteger(session.seq) && typeof session.isOwnSeq === 'function';
 
-export async function extractProjectBrief(llm, route, input, { signal, timeoutMs = 20000, system = PROJECT_BRIEF_SYSTEM, sourceKind = 'dsh-mind-project-brief' } = {}) {
+export async function extractProjectBrief(llm, route, input, { signal, timeoutMs = 20000, system = PROJECT_BRIEF_SYSTEM, sourceKind = 'dsh-mind-project-brief', maxTokens = 3000 } = {}) {
   if (typeof llm?.prepareCall !== 'function' || !route?.provider || !route.model) throw new Fault('PROJECT_BRIEF_MODEL_UNAVAILABLE', '当前宿主模型路由不可用，保留未整理来源。');
   const controller = new AbortController();
   const abort = () => controller.abort(signal.reason);
@@ -28,7 +28,7 @@ export async function extractProjectBrief(llm, route, input, { signal, timeoutMs
   const timer = setTimeout(() => controller.abort(new Error('项目提炼超时')), timeoutMs);
   timer.unref?.();
   try {
-    const call = await llm.prepareCall({ provider: route.provider, model: route.model, maxTokens: 3000 }, controller.signal,
+    const call = await llm.prepareCall({ provider: route.provider, model: route.model, maxTokens }, controller.signal,
       (controls, model) => ({ ...controls, ...(model.reasoning?.efforts?.[0]?.id ? { reasoningEffort: model.reasoning.efforts[0].id } : {}) }));
     controller.signal.throwIfAborted();
     let finish = null; let size = 0; const blocks = new Map();

@@ -118,6 +118,8 @@ const 冻结动作表 = [
   'information_query',
   'information_read',
   'information_update',
+  'lead_space_query',
+  'lead_space_update',
   'memory_query',
   'turn_buffer_query',
   'project_brief_query',
