@@ -1631,22 +1631,23 @@ window.__ModuleLoader__.load({
      * 并按 `style[data-plugin='<id>']` 判重，所以热重载不会叠出第二份。
      */
     var SETTINGS_CSS = [
-      '.dshmind-set__{box-sizing:border-box;width:100%;min-width:0;max-width:880px;padding:4px 0 20px;color:var(--dsw-alias-label-primary,#1a2233);font:13px/1.6 var(--ds-font-family-sans,system-ui,sans-serif)}',
-      '.dshmind-set__ *{box-sizing:border-box}.dshmind-set__header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:24px}.dshmind-set__header>div{min-width:0;flex:1}.dshmind-set__header>button{flex:0 0 auto}',
-      '.dshmind-set__title{margin:0 0 4px;font-size:18px;line-height:26px;font-weight:600}.dshmind-set__lede{margin:0;color:var(--dsw-alias-label-secondary,#61666b);font-size:13px}',
-      '.dshmind-set__section{margin:0 0 18px;padding:20px;border:1px solid var(--dsw-alias-border-l2,#d3dcea);border-radius:12px;background:var(--dsw-alias-bg-layer-1,#fff)}',
+      '.dshmind-set__{box-sizing:border-box;width:100%;min-width:0;max-width:760px;padding:4px 0 12px;color:var(--dsw-alias-label-primary,#1a2233);font:13px/1.65 var(--ds-font-family-sans,system-ui,sans-serif);container-type:inline-size}',
+      '.dshmind-set__ *{box-sizing:border-box}.dshmind-set__ [hidden]{display:none!important}.dshmind-set__header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:24px}.dshmind-set__header>div{min-width:0;flex:1}.dshmind-set__header>button{flex:0 0 auto}',
+      '.dshmind-set__title{margin:0 0 5px;font-size:21px;line-height:30px;letter-spacing:-.4px;font-weight:650}.dshmind-set__lede{margin:0;color:var(--dsw-alias-label-secondary,#61666b);font-size:12px;line-height:1.75}',
+      '.dshmind-set__tabs{display:flex;gap:24px;margin-bottom:24px;border-bottom:1px solid var(--dsw-alias-border-l2,#e5e7eb)}.dshmind-set__tab{display:flex;align-items:center;gap:6px;position:relative;min-height:42px;padding:0 0 12px;border:0;background:transparent;font:inherit;font-size:13px;white-space:nowrap;color:var(--dsw-alias-label-secondary,#737880);cursor:pointer}.dshmind-set__tab[aria-selected=true]{color:var(--dsw-alias-label-primary,#202225);font-weight:600}.dshmind-set__tab[aria-selected=true]:after{content:"";position:absolute;bottom:-1px;left:0;right:0;height:2px;border-radius:2px;background:var(--dsw-alias-label-primary,#202225)}.dshmind-set__tab:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4d6bfe);outline-offset:4px;border-radius:3px}.dshmind-set__unsaved{width:5px;height:5px;border-radius:50%;background:var(--dsw-alias-brand-primary,#4d6bfe)}',
+      '.dshmind-set__section{margin:0 0 16px;padding:22px;border:1px solid var(--dsw-alias-border-l2,#e3e6ec);border-radius:12px;background:var(--dsw-alias-bg-layer-1,#fff)}.dshmind-set__cardHead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px}.dshmind-set__cardHead .dshmind-set__subtitle{margin:0}.dshmind-set__badge{flex:0 0 auto;padding:3px 8px;border-radius:5px;font-size:11px;line-height:18px;color:var(--dsw-alias-label-secondary,#737880);background:var(--dsw-alias-bg-layer-2,#f5f6f8)}.dshmind-set__compactActions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:18px}.dshmind-set__compactActions .dshmind-set__hint{margin:0}.dshmind-set__editor{margin-top:18px;padding-top:2px;border-top:1px solid var(--dsw-alias-border-l2,#e5e7eb)}',
       '.dshmind-set__subtitle{font-size:15px;line-height:24px;font-weight:600;margin:0 0 6px}.dshmind-set__groupTitle{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:22px 0 0;font-size:13px;font-weight:600}',
       '.dshmind-set__rows{display:flex;flex-direction:column}.dshmind-set__row{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:15px 0;border-bottom:1px solid var(--dsw-alias-border-l2,#d3dcea)}',
       '.dshmind-set__texts{flex:1 1 auto;min-width:0}.dshmind-set__label{display:block;margin-bottom:3px;font-size:14px;font-weight:500;color:var(--dsw-alias-label-primary,#1a2233)}',
       '.dshmind-set__hint{font-size:12px;line-height:1.65;color:var(--dsw-alias-label-secondary,#61666b);overflow-wrap:anywhere}',
       '.dshmind-set__control{display:flex;align-items:center;gap:8px;flex:0 0 auto;min-width:0;max-width:100%}.dshmind-set__value{display:flex;align-items:center;gap:7px;min-width:0;flex-wrap:wrap;overflow-wrap:anywhere}',
-      '.dshmind-set__select,.dshmind-set__number{height:34px;max-width:100%;padding:0 10px;font:inherit;border-radius:6px;border:1px solid var(--dsw-alias-border-l2,#d3dcea);background:var(--dsw-alias-bg-layer-2,#fff);color:inherit}',
-      '.dshmind-set__select{min-width:160px}.dshmind-set__number{width:96px}.dshmind-set__select:focus-visible,.dshmind-set__number:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4d6bfe);outline-offset:2px}',
+      '.dshmind-set__select,.dshmind-set__number,.dshmind-set__input{box-sizing:border-box;min-height:36px;max-width:100%;padding:6px 11px;font:inherit;border-radius:8px;border:1px solid var(--dsw-alias-border-l2,#d3dcea);background:var(--dsw-alias-bg-layer-2,#fff);color:inherit}.dshmind-set__input{width:220px;min-width:0}.dshmind-set__row:last-child{border-bottom:0}.dshmind-set__ input[type=checkbox],.dshmind-growth-dialog input[type=checkbox]{width:16px;height:16px;accent-color:var(--dsw-alias-brand-primary,#4d6bfe)}',
+      '.dshmind-set__select{min-width:160px}.dshmind-set__number{width:96px}.dshmind-set__select:focus-visible,.dshmind-set__number:focus-visible,.dshmind-set__input:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4d6bfe);outline-offset:2px}',
       '.dshmind-set__select:disabled,.dshmind-set__number:disabled{opacity:.55;cursor:default}',
       '.dshmind-set__row--field{display:block}.dshmind-set__row--field .dshmind-set__control{width:100%;margin-top:9px}.dshmind-set__text{width:100%;max-width:none}',
       '.dshmind-set__persona{display:block;width:100%;box-sizing:border-box;min-height:240px;resize:vertical;padding:12px;border:1px solid var(--dsw-alias-border-l2,#d3dcea);border-radius:8px;background:var(--dsw-alias-bg-layer-2,#fff);color:var(--dsw-alias-label-primary,#1a2233);font:inherit;line-height:1.65}.dshmind-set__persona:focus{outline:2px solid var(--dsw-alias-brand-primary,#4c78ff);outline-offset:1px}.dshmind-set__persona:disabled{opacity:.65}',
       '.dshmind-set__actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:16px}.dshmind-set__editState{font-size:12px;color:var(--dsw-alias-label-secondary,#61666b);margin-right:auto}',
-      '.dshmind-set__btn{min-height:32px;padding:5px 13px;font:inherit;font-size:12px;border-radius:6px;border:1px solid var(--dsw-alias-border-l2,#d3dcea);background:var(--dsw-alias-bg-layer-2,#fff);color:inherit;cursor:pointer}',
+      '.dshmind-set__btn{min-height:34px;padding:6px 13px;font:inherit;font-size:12px;line-height:20px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2,#d3dcea);background:var(--dsw-alias-bg-layer-2,#fff);color:inherit;cursor:pointer;transition:background-color .15s,border-color .15s}',
       '.dshmind-set__btn:hover{background:var(--dsw-alias-interactive-bg-hover,#eff1f5)}.dshmind-set__btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4d6bfe);outline-offset:2px}.dshmind-set__btn:disabled{opacity:.45;cursor:default}',
       '.dshmind-set__btn--primary{background:var(--dsw-alias-brand-primary,#4d6bfe);border-color:transparent;color:var(--dsw-alias-label-primary-inverted,#fff);font-weight:500}.dshmind-set__btn--primary:hover{background:var(--dsw-alias-brand-primary-hover,#3f5be8)}',
       '.dshmind-set__notice,.dshmind-set__bad,.dshmind-set__toast{margin:12px 0;padding:10px 12px;border-radius:6px;font-size:12px;line-height:1.7;overflow-wrap:anywhere}',
@@ -1654,15 +1655,16 @@ window.__ModuleLoader__.load({
       '.dshmind-set__noticeCmd{display:block;margin-top:6px;font-family:var(--ds-font-family-code,ui-monospace,monospace);font-size:11px;overflow-wrap:anywhere;user-select:text}',
       '.dshmind-set__bad,.dshmind-set__toast--warn{border:1px solid var(--dsw-alias-state-error-primary,#d54941);color:var(--dsw-alias-state-error-primary,#d54941);background:var(--dsw-alias-state-error-tertiary,#fdecea)}',
       '.dshmind-set__toast--ok{border:1px solid var(--dsw-alias-state-success-primary,#2f9e44);color:var(--dsw-alias-state-success-primary,#2f9e44);background:var(--dsw-alias-state-success-tertiary,#eaf7ec)}',
-      '.dshmind-set__details{margin-top:16px;color:var(--dsw-alias-label-secondary,#61666b);font-size:12px}.dshmind-set__details>summary{cursor:pointer;padding:4px 0;max-width:100%}.dshmind-set__details[open]>summary{margin-bottom:8px}.dshmind-set__details p{margin:7px 0}',
+      '.dshmind-set__details{margin-top:16px;color:var(--dsw-alias-label-secondary,#61666b);font-size:12px}.dshmind-set__details>summary{cursor:pointer;padding:7px 0;max-width:100%}.dshmind-set__details>summary:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4d6bfe);outline-offset:3px;border-radius:4px}.dshmind-set__details[open]>summary{margin-bottom:8px}.dshmind-set__details p{margin:7px 0}',
       '.dshmind-set__details .dshmind-set__row{align-items:flex-start;padding:9px 0}.dshmind-set__details .dshmind-set__control{flex:1 1 55%;overflow-wrap:anywhere}.dshmind-set__details .dshmind-set__label{font-size:12px}',
       '.dshmind-directory-overlay{position:fixed;inset:0;z-index:10000;background:#0006;display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box}.dshmind-directory-dialog{display:flex;flex-direction:column;width:940px;max-width:100%;height:650px;max-height:90vh;overflow:hidden;box-sizing:border-box;border-radius:16px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#202225);box-shadow:0 20px 80px #0004;font-size:14px;line-height:1.6}.dshmind-directory-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:22px 24px 16px;flex-shrink:0}.dshmind-directory-header h3{margin:0 0 5px;font-size:18px}.dshmind-directory-header p{margin:0;color:var(--dsw-alias-label-secondary,#737880);font-size:12px}.dshmind-directory-address{display:flex;align-items:center;gap:8px;padding:0 24px 18px;flex-shrink:0}.dshmind-directory-address input{flex:1;min-width:0;width:auto}.dshmind-directory-layout{display:grid;grid-template-columns:190px minmax(0,1fr);min-height:0;flex:1;border-top:1px solid var(--dsw-alias-border-l2,#e5e7eb);border-bottom:1px solid var(--dsw-alias-border-l2,#e5e7eb)}.dshmind-directory-places{overflow:auto;min-height:0;padding:16px 10px;background:var(--dsw-alias-bg-layer-2,#f6f7f9);border-right:1px solid var(--dsw-alias-border-l2,#e5e7eb)}.dshmind-directory-places h4{margin:2px 10px 8px;font-size:11px;font-weight:600;color:var(--dsw-alias-label-secondary,#737880)}.dshmind-directory-place{display:flex;align-items:center;gap:9px;width:100%;min-width:0;text-align:left;border:0;background:transparent;color:inherit;padding:9px 10px;border-radius:7px;cursor:pointer;box-sizing:border-box}.dshmind-directory-place:hover,.dshmind-directory-place[aria-current="location"]{background:var(--dsw-alias-state-business-primary-soft,#e8effe)}.dshmind-directory-place:disabled{opacity:.5;cursor:default}.dshmind-directory-place span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dshmind-directory-place small{display:block;font-size:10px;color:var(--dsw-alias-label-secondary,#737880)}.dshmind-directory-icon{width:20px;height:20px;flex-shrink:0;color:var(--dsw-alias-label-secondary,#747e90)}.dshmind-directory-places p{padding:0 10px;font-size:11px;color:var(--dsw-alias-label-secondary,#737880);overflow-wrap:anywhere}',
       '.dshmind-directory-body{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;padding:14px 18px}.dshmind-directory-crumbs{display:flex;align-items:center;gap:3px;overflow:auto;white-space:nowrap;flex-shrink:0;margin-bottom:12px}.dshmind-directory-crumbs button{border:0;background:transparent;color:inherit;padding:4px 6px;border-radius:4px;cursor:pointer;max-width:190px;text-overflow:ellipsis;overflow:hidden;white-space:nowrap;flex-shrink:0}.dshmind-directory-crumbs button:hover{background:var(--dsw-alias-bg-layer-2,#f3f5f8)}.dshmind-directory-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-bottom:12px;flex-shrink:0}.dshmind-directory-toolbar label{font-size:12px;display:flex;align-items:center;gap:5px;white-space:nowrap}.dshmind-directory-entries{min-height:80px;flex:1;overflow:auto;border:1px solid var(--dsw-alias-border-l2,#e5e7eb);border-radius:9px}.dshmind-directory-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;min-width:0}.dshmind-directory-entries .dshmind-directory-row:nth-child(even){background:var(--dsw-alias-bg-layer-2,#f8f9fb)}.dshmind-directory-row>label{display:flex;align-items:center;gap:9px;min-width:0;overflow-wrap:anywhere;flex:1}.dshmind-directory-row .dshmind-set__mono{overflow-wrap:anywhere;min-width:0;flex:1}.dshmind-directory-row .dshmind-set__btn{flex-shrink:0}.dshmind-directory-row input{flex-shrink:0}.dshmind-directory-row .dshmind-directory-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.dshmind-directory-empty{padding:28px 16px;text-align:center;color:var(--dsw-alias-label-secondary,#737880)}.dshmind-directory-message{padding:8px 12px;font-size:12px;overflow-wrap:anywhere;flex-shrink:0}.dshmind-directory-error{color:var(--dsw-alias-state-danger-primary,#bb3940);background:var(--dsw-alias-state-danger-soft,#fff0f0);border-radius:6px;margin:8px 0 0}.dshmind-directory-selection{flex-shrink:0;max-height:120px;overflow:auto;padding:10px 24px 0}.dshmind-directory-selection summary{font-size:12px;cursor:pointer;color:var(--dsw-alias-label-secondary,#737880)}.dshmind-directory-selected{max-height:80px;overflow:auto}.dshmind-directory-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 24px;flex-shrink:0}.dshmind-directory-footer p{margin:0;font-size:12px;color:var(--dsw-alias-label-secondary,#737880)}.dshmind-directory-footer .dshmind-set__actions{display:flex;gap:8px;flex-wrap:wrap}.dshmind-directory-dialog button:focus-visible,.dshmind-directory-dialog input:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#3076ee);outline-offset:2px}',
       '@media(max-width:640px){.dshmind-directory-overlay{padding:10px}.dshmind-directory-dialog{max-height:94vh}.dshmind-directory-header{padding:16px}.dshmind-directory-address{padding:0 16px 12px}.dshmind-directory-layout{grid-template-columns:136px minmax(0,1fr)}.dshmind-directory-body{padding:12px 10px}.dshmind-directory-row{padding:8px;gap:6px}.dshmind-directory-row .dshmind-directory-icon{display:none}.dshmind-directory-toolbar{align-items:flex-start;flex-direction:column;gap:6px}.dshmind-directory-selection{padding:8px 16px 0}.dshmind-directory-footer{padding:12px 16px;align-items:flex-start;flex-direction:column}.dshmind-directory-footer .dshmind-set__actions{width:100%;justify-content:flex-end}}',
-      '.dshmind-growth-overlay{position:fixed;inset:0;z-index:9000;background:#0005;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}.dshmind-growth-dialog{display:flex;flex-direction:column;width:740px;max-width:100%;height:620px;max-height:85vh;border-radius:14px;overflow:hidden;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#202225);box-shadow:0 16px 64px #0004;font-size:14px;line-height:1.6}.dshmind-growth-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:20px 24px 12px}.dshmind-growth-header p{margin:6px 0 0}.dshmind-growth-tabs{display:flex;gap:8px;padding:0 24px 14px;border-bottom:1px solid var(--dsw-alias-border-l2,#ddd)}.dshmind-growth-tabs button[aria-pressed=true]{background:var(--dsw-alias-interactive-bg-active,#eaf2ff);font-weight:600}.dshmind-growth-body{overflow:auto;min-height:0;flex:1;padding:18px 24px 24px}.dshmind-growth-body>.dshmind-set__btn{margin-bottom:12px}.dshmind-growth-body article p{margin:7px 0}.dshmind-growth-body article{overflow-wrap:anywhere}.dshmind-growth-dialog .dshmind-set__actions{flex-wrap:wrap}.dshmind-growth-dialog .dshmind-set__mono{overflow-wrap:anywhere}.dshmind-growth-body [hidden]{display:none!important}.dshmind-growth-header .dshmind-set__btn{flex-shrink:0}@media(max-width:560px){.dshmind-growth-header{padding:16px}.dshmind-growth-tabs{padding:0 16px 12px;gap:6px;flex-wrap:wrap}.dshmind-growth-body{padding:16px}}',
+      '.dshmind-growth-overlay{position:fixed;inset:0;z-index:9000;background:#0005;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}.dshmind-growth-dialog{display:flex;flex-direction:column;width:740px;max-width:100%;height:620px;max-height:85vh;border-radius:14px;overflow:hidden;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#202225);box-shadow:0 16px 64px #0004;font-size:14px;line-height:1.6}.dshmind-growth-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:20px 24px 12px}.dshmind-growth-header p{margin:6px 0 0}.dshmind-growth-tabs{display:flex;gap:6px;padding:0 24px 14px;border-bottom:1px solid var(--dsw-alias-border-l2,#ddd)}.dshmind-growth-tabs button{border-color:transparent;background:transparent;color:var(--dsw-alias-label-secondary,#737880)}.dshmind-growth-tabs button[aria-pressed=true]{background:var(--dsw-alias-bg-layer-2,#f1f3f6);color:var(--dsw-alias-label-primary,#202225);font-weight:600}.dshmind-growth-body{overflow:auto;min-height:0;flex:1;padding:18px 24px 24px}.dshmind-growth-body>.dshmind-set__btn{margin-bottom:12px}.dshmind-growth-body article p{margin:7px 0}.dshmind-growth-body article{overflow-wrap:anywhere}.dshmind-growth-dialog .dshmind-set__actions{flex-wrap:wrap}.dshmind-growth-dialog .dshmind-set__mono{overflow-wrap:anywhere}.dshmind-growth-body [hidden]{display:none!important}.dshmind-growth-header .dshmind-set__btn{flex-shrink:0}@media(max-width:560px){.dshmind-growth-header{padding:16px}.dshmind-growth-tabs{padding:0 16px 12px;gap:6px;flex-wrap:wrap}.dshmind-growth-body{padding:16px}}',
       '.dshmind-set__status{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:400;color:var(--dsw-alias-label-secondary,#61666b)}.dshmind-set__dot{display:inline-block;width:7px;height:7px;border-radius:50%;flex:0 0 auto}',
       '.dshmind-set__foot{display:flex;align-items:center;gap:12px;justify-content:space-between;padding-top:16px;border-top:1px solid var(--dsw-alias-border-l2,#d3dcea)}.dshmind-set__foot p{margin:0}.dshmind-set__mono{font-family:var(--ds-font-family-code,ui-monospace,monospace);overflow-wrap:anywhere}',
       '@media(max-width:560px){.dshmind-set__section{padding:16px}.dshmind-set__row{align-items:flex-start;flex-direction:column;gap:10px}.dshmind-set__row .dshmind-set__control{width:100%}.dshmind-set__select{width:100%}.dshmind-set__header{gap:12px}.dshmind-set__actions{gap:8px}.dshmind-set__editState{flex-basis:100%}.dshmind-set__details .dshmind-set__control{flex:auto}.dshmind-set__groupTitle{align-items:flex-start;flex-wrap:wrap}}',
+      '@container(max-width:480px){.dshmind-set__row{align-items:flex-start;flex-direction:column;gap:10px}.dshmind-set__row .dshmind-set__control{width:100%}.dshmind-set__select,.dshmind-set__input{width:100%}.dshmind-set__details .dshmind-set__control{flex:auto}.dshmind-set__tabs{gap:20px}.dshmind-set__cardHead{align-items:flex-start}}@media(prefers-reduced-motion:reduce){.dshmind-set__btn{transition:none}}',
     ].join('');
 
     /** 注入设置页样式的 `<style>` 标记（判重用），与宿主里 `installStyle` 的做法同源。 */
@@ -5027,12 +5029,13 @@ window.__ModuleLoader__.load({
       var page = data && data[tab];
       var stateLabels = { active: '使用中', dormant: '暂时淡去', withdrawn: '已撤回', 'needs-review': '待重新理解', missing: '来源不可用', error: '读取失败' };
       return h('section', { className: 'dshmind-set__section', 'data-dshmind': 'information-settings', 'aria-label': '见闻与成长' }, [
-        h('h3', { className: 'dshmind-set__subtitle' }, '见闻与成长'),
-        h('p', { className: 'dshmind-set__hint' }, '在会话中分享即可。你连接来源，Lead 自主吸收并纳入 Mind 原有记忆和能力体系。'),
-        data ? h('p', { className: 'dshmind-set__hint' }, '已连接 ' + data.sources.length + ' 个目录 · ' + (data.config.paused ? '阅读已暂停' : '阅读已开启')) : null,
-        button('管理信息来源', function (event) { lock.managerTrigger = event && event.currentTarget; setManagerOpen(true); refresh(); }),
+        h('div', { className: 'dshmind-set__cardHead' }, [h('h3', { className: 'dshmind-set__subtitle' }, '见闻与成长'), data ? h('span', { className: 'dshmind-set__badge' }, data.sources.length + ' 个来源目录') : null]),
+        h('p', { className: 'dshmind-set__lede' }, '在会话中分享，或连接知识库与插件导出目录，让 Lead 自主阅读与积累。'),
+        !managerOpen && snapshot.phase === 'error' ? h('p', { role: 'alert', className: 'dshmind-set__hint' }, snapshot.error) : null,
+        h('div', { className: 'dshmind-set__compactActions' }, [button('管理信息来源', function (event) { lock.managerTrigger = event && event.currentTarget; setManagerOpen(true); refresh(); }),
+          data ? h('span', { className: 'dshmind-set__hint' }, data.config.paused ? '阅读已暂停' : '阅读已开启') : null]),
         managerOpen && !directory ? h('div', { className: 'dshmind-growth-overlay', onClick: function (event) { event.stopPropagation(); } }, h('section', { role: 'dialog', 'aria-modal': true, 'aria-label': '信息来源与沉淀管理', className: 'dshmind-growth-dialog', onKeyDown: managerKey }, [
-        h('header', { className: 'dshmind-growth-header' }, [h('div', null, [h('h3', { className: 'dshmind-set__subtitle' }, '信息来源'), h('p', { className: 'dshmind-set__hint' }, '整理、归类与知识分配交给 Lead；正式内容沿用 Mind 记忆服务。')]), h('button', { type: 'button', autoFocus: true, className: 'dshmind-set__btn', disabled: busy || !!directory, onClick: closeManager, 'aria-label': '关闭信息来源管理' }, '关闭')]),
+        h('header', { className: 'dshmind-growth-header' }, [h('div', null, [h('h3', { className: 'dshmind-set__subtitle' }, '信息来源'), h('p', { className: 'dshmind-set__hint' }, '连接你的资料，查看 Lead 的阅读与收获。')]), h('button', { type: 'button', autoFocus: true, className: 'dshmind-set__btn', disabled: busy || !!directory, onClick: closeManager, 'aria-label': '关闭信息来源管理' }, '关闭')]),
         h('nav', { className: 'dshmind-growth-tabs', 'aria-label': '来源管理分类' }, [['sources', '连接目录'], ['records', '收录与沉淀'], ['settings', '阅读设置']].map(function (entry) { return h('button', { type: 'button', className: 'dshmind-set__btn', 'aria-pressed': panel === entry[0], onClick: function () { setPanel(entry[0]); } }, entry[1]); })),
         h('div', { className: 'dshmind-growth-body' }, [
         snapshot.phase === 'error' ? h('p', { role: 'alert' }, snapshot.error) : null,
@@ -5054,12 +5057,7 @@ window.__ModuleLoader__.load({
           ]),
           ]),
           h('div', { hidden: panel !== 'sources' }, [
-          h('details', { className: 'dshmind-set__details' }, [h('summary', null, '文件格式与本地解析'),
-            h('p', { className: 'dshmind-set__hint' }, data.parser && data.parser.available ? '本地文档解析环境可用，各格式就绪情况见下方。扫描件与图片需 OCR，音视频需字幕或转录。' : '文本收录可用；文档解析组件尚未就绪，PDF、Office 和电子书会保留待处理状态。'),
-            h('p', { className: 'dshmind-set__hint' }, '来源目录始终只读。转换结果和临时文件保存在 Mind 私有目录，原文件不变；解析完成不代表 Lead 已经读完。'),
-            data.parser && data.parser.formats ? h('p', { className: 'dshmind-set__mono' }, Object.keys(data.parser.formats).map(function (ext) { return ext + (data.parser.formats[ext] ? ' 可用' : ' 缺少组件'); }).join(' · ')) : null,
-          ]),
-          h('button', { key: 'information-folder-trigger', type: 'button', className: 'dshmind-set__btn', disabled: busy || data.sources.length >= data.limits.sources, onClick: chooseDirectories, ref: function (node) { if (node && directoryControl.returning) { directoryControl.returning = false; Promise.resolve().then(function () { if (node.isConnected && directoryControl.closed) node.focus(); }); } } }, '选择信息来源目录'),
+          h('button', { key: 'information-folder-trigger', type: 'button', className: 'dshmind-set__btn dshmind-set__btn--primary', disabled: busy || data.sources.length >= data.limits.sources, onClick: chooseDirectories, ref: function (node) { if (node && directoryControl.returning) { directoryControl.returning = false; Promise.resolve().then(function () { if (node.isConnected && directoryControl.closed) node.focus(); }); } } }, '选择信息来源目录'),
           h('p', { className: 'dshmind-set__hint' }, '像选择工作区一样浏览文件夹，可勾选多个目录一起连接，也可随时继续添加。'),
           data.sources.length ? data.sources.map(function (s) { return h('article', { key: s.id, style: { padding: '12px 0', borderBottom: '1px solid var(--dsw-alias-border-l2,#444)' } }, [
             h('strong', null, s.name), h('p', { className: 'dshmind-set__mono' }, s.path),
@@ -5078,6 +5076,11 @@ window.__ModuleLoader__.load({
             button(source.id ? '保存信息来源' : '连接信息来源', saveSource, !source.name.trim() || !source.path.trim() || (source.audience === 'roles' && !source.roles.trim())),
           ]),
           button('现在收录一批', function () { send({ op: 'scan' }); }),
+          h('details', { className: 'dshmind-set__details' }, [h('summary', null, '文件格式与本地解析'),
+            h('p', { className: 'dshmind-set__hint' }, data.parser && data.parser.available ? '本地文档解析环境可用，各格式就绪情况见下方。扫描件与图片需 OCR，音视频需字幕或转录。' : '文本收录可用；文档解析组件尚未就绪，PDF、Office 和电子书会保留待处理状态。'),
+            h('p', { className: 'dshmind-set__hint' }, '来源目录始终只读。转换结果和临时文件保存在 Mind 私有目录，原文件不变；解析完成不代表 Lead 已经读完。'),
+            data.parser && data.parser.formats ? h('p', { className: 'dshmind-set__mono' }, Object.keys(data.parser.formats).map(function (ext) { return ext + (data.parser.formats[ext] ? ' 可用' : ' 缺少组件'); }).join(' · ')) : null,
+          ]),
           data.documents && data.documents.length ? h('details', { className: 'dshmind-set__details' }, [h('summary', null, '文件处理进度（最近100份）'),
             data.documents.map(function (doc) { var labels = { pending: '待解析', parsing: '正在解析', complete: '文字解析完成', partial: '部分解析', 'needs-component': '缺少解析组件', failed: '解析失败', missing: '原件缺失', withdrawn: '已撤回' }; return h('article', { key: doc.id, style: { padding: '10px 0', borderBottom: '1px solid var(--dsw-alias-border-l2,#444)' } }, [
               h('strong', { style: { overflowWrap: 'anywhere' } }, doc.name), h('p', { className: 'dshmind-set__hint' }, (labels[doc.status] || doc.status) + (doc.chars ? ' · ' + doc.chars + ' 字符' : '') + (doc.error ? ' · ' + doc.error : '')),
@@ -5145,6 +5148,16 @@ window.__ModuleLoader__.load({
 
     function 心智设置(props) {
       var close = props && typeof props.close === 'function' ? props.close : null;
+      var 页面状态 = useState('personality'); var 当前页面 = 页面状态[0]; var 设置页面 = 页面状态[1];
+      var 人设展开状态 = useState(false); var 人设展开 = 人设展开状态[0]; var 设置人设展开 = 人设展开状态[1];
+      var 设置分区 = [['personality', '个性与成长'], ['policy', '运行与审批'], ['delegation', '成员调度']];
+      function 分区键盘(event, index) {
+        var next = event.key === 'ArrowRight' ? (index + 1) % 设置分区.length : event.key === 'ArrowLeft' ? (index + 设置分区.length - 1) % 设置分区.length : event.key === 'Home' ? 0 : event.key === 'End' ? 设置分区.length - 1 : null;
+        if (next === null) return;
+        event.preventDefault(); 设置页面(设置分区[next][0]);
+        var buttons = event.currentTarget.parentElement.querySelectorAll('[role="tab"]');
+        if (buttons[next]) buttons[next].focus();
+      }
       // ⚠️ 读数来自**模块级 store**（由 `apply` 的裸 setInterval 轮询喂），**不来自 effect**：
       // 这个宿主的 `useEffect` 很可能是空实现 ⇒ 挂在它上面的取数永远不会跑。
       var snap = useStore(设置store);
@@ -5632,10 +5645,13 @@ window.__ModuleLoader__.load({
       ]);
 
       var 人设块 = h('section', { key: 'persona', className: 'dshmind-set__section', 'data-dshmind': 'persona-core-settings', 'aria-labelledby': 'dshmind-persona-title', 'aria-busy': 人设提示.saving }, [
-        h('h3', { key: 'title', id: 'dshmind-persona-title', className: 'dshmind-set__subtitle' }, '核心人设'),
-        h('p', { key: 'scope', className: 'dshmind-set__lede' }, '由你维护，适用于当前部署的所有项目。保存后下一轮读取；留空保存可停用。'),
+        h('div', { key: 'header', className: 'dshmind-set__cardHead' }, [h('h3', { key: 'title', id: 'dshmind-persona-title', className: 'dshmind-set__subtitle' }, '核心人设'),
+          h('span', { key: 'state', className: 'dshmind-set__badge' }, 人设外部更新 ? '有外部更新' : 人设有修改 ? '有未保存修改' : !人设读数 ? '尚未读到' : 人设读数.state === 'active' ? '已设置' : 人设读数.state === 'empty' ? '已停用' : '未设置')]),
+        h('p', { key: 'scope', className: 'dshmind-set__lede' }, '定义 Lead 的性格与表达，由你维护，适用于所有项目。'),
         !人设读数 ? h('div', { key: 'error', role: 人设快照.phase === 'reading' ? 'status' : 'alert', className: 'dshmind-set__notice' }, 人设快照.phase === 'reading' ? '正在读取核心人设…' : '核心人设暂不可用：' + 人设快照.error) : null,
         人设读数 && 人设读数.state === 'missing' ? h('p', { key: 'missing', className: 'dshmind-set__hint' }, '尚未创建核心人设卡，填写后保存即可创建。') : null,
+        h('div', { key: 'toggle', className: 'dshmind-set__compactActions' }, [h('button', { key: 'edit', type: 'button', className: 'dshmind-set__btn', 'aria-expanded': 人设展开, 'aria-controls': 'dshmind-persona-editor', disabled: 人设提示.saving, onClick: function () { 设置人设展开(!人设展开); } }, 人设展开 ? '收起编辑' : 人设读数 && 人设读数.state === 'missing' ? '编写核心人设' : '编辑核心人设')]),
+        h('div', { key: 'editor', id: 'dshmind-persona-editor', className: 'dshmind-set__editor', hidden: !人设展开 }, [
         设置行('persona-core', '核心人设内容', '填写性格、表达方式与关系称呼。此卡可用于公开聊天，请勿填写秘密或密钥。', h('textarea', {
           className: 'dshmind-set__persona', 'aria-label': '核心人设内容', rows: 10, value: 人设表.text,
           disabled: !人设读数 || 人设提示.saving,
@@ -5646,7 +5662,7 @@ window.__ModuleLoader__.load({
             设人设表({ text: text, fingerprint: 人设表.fingerprint, dirty: text !== 人设读数.text || 人设表.fingerprint !== 人设读数.fingerprint });
           },
         }), 'field'),
-        h('p', { key: 'count', className: 'dshmind-set__hint', role: 人设字数 > 3000 ? 'alert' : undefined }, 人设字数 + ' / 3000 字符' + (人设字数 > 3000 ? '，请缩短后保存。' : '')),
+        h('p', { key: 'count', className: 'dshmind-set__hint', role: 人设字数 > 3000 ? 'alert' : undefined }, 人设字数 + ' / 3000 字符' + (人设字数 > 3000 ? '，请缩短后保存。' : ' 保存后下一轮生效；留空保存可停用。')),
         人设外部更新 ? h('p', { key: 'changed', role: 'status', className: 'dshmind-set__notice' }, '核心人设已在别处更新，当前草稿已保留。核对后可采用当前人设继续修改。') : null,
         h('div', { key: 'actions', className: 'dshmind-set__actions' }, [
           h('span', { key: 'dirty', className: 'dshmind-set__editState' }, 人设提示.saving ? '正在保存并核对…' : 人设有修改 ? '有未保存的人设修改' : '核心人设单独保存'),
@@ -5655,6 +5671,7 @@ window.__ModuleLoader__.load({
         ]),
         人设提示.text ? h('div', { key: 'receipt', role: 人设提示.ok ? 'status' : 'alert', className: 'dshmind-set__toast ' + (人设提示.ok ? 'dshmind-set__toast--ok' : 'dshmind-set__toast--warn') }, 人设提示.text) : null,
         人设读数 ? h('details', { key: 'file', className: 'dshmind-set__details' }, [h('summary', { key: 'title' }, '人设卡位置'), h('p', { key: 'path', className: 'dshmind-set__mono' }, 人设读数.file)]) : null,
+        ]),
       ]);
 
       var 操作块 = h('div', { key: 'acts', className: 'dshmind-set__actions' }, [
@@ -5667,11 +5684,15 @@ window.__ModuleLoader__.load({
       ] : 提示.提示) : null;
       return h('section', { className: 'dshmind-set__', 'aria-label': '心智设置' }, [
         h('header', { key: 'header', className: 'dshmind-set__header' }, [
-          h('div', { key: 'title' }, [h('h2', { key: 'h', className: 'dshmind-set__title' }, '心智'), h('p', { key: 's', className: 'dshmind-set__lede' }, '配置核心人设、审批方式、失联保护与成员调度。')]),
+          h('div', { key: 'title' }, [h('h2', { key: 'h', className: 'dshmind-set__title' }, '心智'), h('p', { key: 's', className: 'dshmind-set__lede' }, '个性、见闻，以及与你协作的方式。')]),
           h('button', { key: 'read', type: 'button', className: 'dshmind-set__btn', disabled: refreshing[0] || 提示.保存中 || 调度提示.saving || 人设提示.saving, onClick: 手动刷新 }, refreshing[0] ? '读取中…' : '重新读取'),
         ]),
-        人设块,
-        h(信息成长设置, { key: 'information' }),
+        h('nav', { key: 'tabs', role: 'tablist', 'aria-label': '心智设置分类', className: 'dshmind-set__tabs' }, 设置分区.map(function (entry, index) {
+          var changed = entry[0] === 'personality' ? 人设有修改 : entry[0] === 'policy' ? 策略有修改 : 调度有修改;
+          return h('button', { key: entry[0], type: 'button', role: 'tab', id: 'dshmind-tab-' + entry[0], className: 'dshmind-set__tab', 'aria-label': entry[1], 'aria-selected': 当前页面 === entry[0], 'aria-controls': 'dshmind-panel-' + entry[0], tabIndex: 当前页面 === entry[0] ? 0 : -1, title: changed ? entry[1] + ' · 有未保存的修改' : entry[1], onClick: function () { 设置页面(entry[0]); }, onKeyDown: function (event) { 分区键盘(event, index); } }, [entry[1], changed ? h('span', { key: 'dirty', className: 'dshmind-set__unsaved', 'aria-hidden': true }) : null]);
+        })),
+        h('div', { key: 'personality-panel', role: 'tabpanel', id: 'dshmind-panel-personality', 'aria-labelledby': 'dshmind-tab-personality', hidden: 当前页面 !== 'personality' }, [人设块, h(信息成长设置, { key: 'information' })]),
+        h('div', { key: 'policy-panel', role: 'tabpanel', id: 'dshmind-panel-policy', 'aria-labelledby': 'dshmind-tab-policy', hidden: 当前页面 !== 'policy' }, [
         h('section', { key: 'policy', className: 'dshmind-set__section', 'data-dshmind': 'policy-settings', 'aria-labelledby': 'dshmind-policy-title', 'aria-busy': 提示.保存中 }, [
           h('h3', { key: 'title', id: 'dshmind-policy-title', className: 'dshmind-set__subtitle' }, '运行与审批'),
           未接入块, 坏值块,
@@ -5688,9 +5709,10 @@ window.__ModuleLoader__.load({
             h('p', { key: 'command', className: 'dshmind-set__mono' }, '命令 ' + PRESENCE_COMMAND),
           ]),
         ]),
-        调度块,
+        ]),
+        h('div', { key: 'delegation-panel', role: 'tabpanel', id: 'dshmind-panel-delegation', 'aria-labelledby': 'dshmind-tab-delegation', hidden: 当前页面 !== 'delegation' }, [调度块]),
         h('footer', { key: 'foot', className: 'dshmind-set__foot' }, [
-          h('p', { key: 'location', className: 'dshmind-set__hint' }, '审批请求在心智「待你决定」处理。'),
+          h('p', { key: 'location', className: 'dshmind-set__hint' }, 当前页面 === 'policy' ? '审批请求在心智「待你决定」处理。' : '各项设置分别保存。'),
           close ? h('button', { key: 'close', type: 'button', className: 'dshmind-set__btn', onClick: function () { close(); } }, '关闭') : null,
         ]),
       ]);

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {settingsScene} from './settings-fixture.mjs';
 import {collect,textOf} from './client-harness.mjs';
 
-function visibleElements(tree){const result=[];function visit(n){if(Array.isArray(n))return n.forEach(visit);if(!n||typeof n!=='object'||!n.props)return;result.push(n);if(n.type==='details'&&!n.props.open){visit(n.props.children.find(x=>x.type==='summary'));return;}visit(n.props.children);}visit(tree);return result;}
+function visibleElements(tree){const result=[];function visit(n){if(Array.isArray(n))return n.forEach(visit);if(!n||typeof n!=='object'||!n.props||n.props.hidden)return;result.push(n);if(n.type==='details'&&!n.props.open){visit(n.props.children.find(x=>x.type==='summary'));return;}visit(n.props.children);}visit(tree);return result;}
 const posts=t=>t.calls.filter(x=>x.method==='POST');
 
 test('设置分组清楚：首屏隐藏诊断、项目指纹及冗长回执；只有一个刷新入口',async()=>{
@@ -79,5 +79,38 @@ test('调度改回原值或取消后恢复跟随；未接入不显示硬编码�
     t.change('调度模式','lead-discretion');t.change('调度模式','explicit-user');assert.equal(t.button('保存调度授权').props.disabled,true);
     t.state.delegation={mode:'lead-discretion',projects:['external'],authorizationRef:'external-grant'};await t.poll();assert.equal(t.field('调度模式').props.value,'lead-discretion');
     t.state.fail=true;await t.poll();assert.equal(t.field('调度模式').props.value,'');assert.equal(t.field('授权项目').props.value,'');assert.equal(t.field('调度模式').props.disabled,true);assert.equal(t.button('保存').props.disabled,true);
+  }finally{t.close();}
+});
+
+test('常用页收起人设正文；切换分类和收起编辑保留三组草稿，不产生隐式保存',async()=>{
+  const t=await settingsScene({personaText:'原有人设'});try{
+    assert.equal(t.button('个性与成长').props['aria-selected'],true);
+    assert.ok(!visibleElements(t.r.tree).some(x=>x.type==='textarea'));
+    await t.click('编辑核心人设');t.change('核心人设内容','尚未保存的人设草稿');
+    await t.click('运行与审批');t.change('响应期限小时','168');
+    assert.ok(!visibleElements(t.r.tree).some(x=>x.props['aria-label']==='核心人设内容'));
+    await t.click('成员调度');t.change('调度模式','lead-discretion');t.change('授权项目','plugins');t.change('授权依据','用户明确授权');
+    await t.click('个性与成长');assert.equal(t.field('核心人设内容').props.value,'尚未保存的人设草稿');
+    await t.click('收起编辑');assert.ok(!visibleElements(t.r.tree).some(x=>x.type==='textarea'));
+    assert.match(t.text(),/有未保存修改/);await t.click('编辑核心人设');
+    assert.equal(t.field('核心人设内容').props.value,'尚未保存的人设草稿');
+    assert.equal(t.field('响应期限小时').props.value,'168');assert.equal(t.field('授权依据').props.value,'用户明确授权');
+    assert.equal(posts(t).length,0);
+  }finally{t.close();}
+});
+
+test('分类键盘导航关联唯一可见面板，方向键循环并正确移动焦点',async()=>{
+  const t=await settingsScene();try{
+    let focused=null;let prevented=0;
+    const tabs=()=>t.elements().filter(x=>x.props.role==='tab');
+    const key=async(label,value)=>{t.button(label).props.onKeyDown({key:value,preventDefault(){prevented++;},currentTarget:{parentElement:{querySelectorAll(){return tabs().map(x=>({focus(){focused=textOf(x);}}));}}}});t.r.flush();await t.flush();};
+    await key('个性与成长','ArrowLeft');assert.equal(focused,'成员调度');assert.equal(t.button('成员调度').props['aria-selected'],true);
+    await key('成员调度','Home');assert.equal(focused,'个性与成长');
+    await key('个性与成长','ArrowRight');assert.equal(focused,'运行与审批');
+    await key('运行与审批','End');assert.equal(focused,'成员调度');assert.equal(prevented,4);
+    const active=tabs().filter(x=>x.props['aria-selected']);assert.equal(active.length,1);assert.equal(active[0].props.tabIndex,0);
+    const visible=visibleElements(t.r.tree).filter(x=>x.props.role==='tabpanel');assert.equal(visible.length,1);
+    assert.equal(visible[0].props.id,active[0].props['aria-controls']);assert.equal(visible[0].props['aria-labelledby'],active[0].props.id);
+    assert.equal(posts(t).length,0);
   }finally{t.close();}
 });
