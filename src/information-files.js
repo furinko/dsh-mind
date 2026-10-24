@@ -89,10 +89,10 @@ export function decodeMaterial(raw, name) {
 }
 
 /** Resumable sorted depth-first walk. A bounded batch never treats unseen files as deleted. */
-export async function walkBatch(source, scan, limit, fileLimit = limit) {
+export async function walkBatch(source, scan, limit, documentLimit = limit) {
   await verifyRoot(source);
-  const files = []; const errors = []; let visited = 0;
-  while (scan.queue.length && visited < limit && files.length < fileLimit) {
+  const files = []; const errors = []; let visited = 0; let documents = 0;
+  while (scan.queue.length && visited < limit && documents < documentLimit) {
     const frame = scan.queue.at(-1);
     const directory = join(source.path, frame.dir);
     try {
@@ -103,7 +103,7 @@ export async function walkBatch(source, scan, limit, fileLimit = limit) {
       const remaining = entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0).filter(e => e.name > frame.after);
       if (!remaining.length) { scan.queue.pop(); continue; }
       for (const entry of remaining) {
-        if (visited >= limit || files.length >= fileLimit) break;
+        if (visited >= limit || documents >= documentLimit) break;
         visited++; frame.after = entry.name;
         if (entry.name.startsWith('.') || ['node_modules', '__pycache__'].includes(entry.name)) continue;
         const rel = frame.dir ? `${frame.dir}/${entry.name}` : entry.name;
@@ -112,7 +112,10 @@ export async function walkBatch(source, scan, limit, fileLimit = limit) {
             if (rel.split('/').length > 24) { errors.push({ file: rel, error: '目录层数超过24' }); scan.incomplete = true; }
             else { scan.queue.push({ dir: rel, after: '' }); break; }
           }
-        } else if (entry.isFile() && source.extensions.includes(extname(entry.name).toLowerCase())) files.push(rel);
+        } else if (entry.isFile() && source.extensions.includes(extname(entry.name).toLowerCase())) {
+          files.push(rel);
+          if (DOCUMENT_EXTENSIONS.includes(extname(entry.name).toLowerCase())) documents++;
+        }
       }
     } catch (error) {
       errors.push({ file: frame.dir, error: error.code ?? error.message }); scan.incomplete = true; scan.queue.pop();

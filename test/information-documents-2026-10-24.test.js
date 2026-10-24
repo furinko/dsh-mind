@@ -129,3 +129,17 @@ it('进程中断后的过期批次重扫，不漏掉游标已越过的文件；�
   assert.equal((await service.load()).items[0].state, 'error');
   await assert.rejects(service.read(lead, { id: (await service.load()).items[0].id }), { code: 'DENIED' });
 }));
+
+it('文档分批限制不降低纯文本扫描吞吐；超过8份文档在后批续接，前批不误报缺失', async () => {
+  await scene(async (service, source) => {
+    for (let n = 0; n < 12; n++) await writeFile(join(source, n + '.md'), 'flute');
+    await service.scan(); assert.equal((await service.load()).items.length, 12);
+  });
+  await scene(async (service, source) => {
+    service.documentParser = async () => ({ title: 'CSV', text: 'flute', format: '.csv', coverage: 'synthetic text' });
+    for (let n = 0; n < 10; n++) await writeFile(join(source, n + '.csv'), 'flute');
+    await service.scan(); assert.equal((await service.load()).items.length, 8);
+    await service.scan(); const state = await service.load();
+    assert.equal(state.items.length, 10); assert.ok(state.items.every(i => i.state === 'active'));
+  });
+});

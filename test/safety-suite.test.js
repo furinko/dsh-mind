@@ -13,6 +13,7 @@ import { ProbeRunner, CLOSED_LIST } from '../src/probes.js';
 import { AuditLog } from '../src/audit.js';
 import { projectWorkbench, sliceForViewer } from '../src/workbench.js';
 import { InvalidBody } from '../src/kernel/errors.js';
+const PACKAGE_VERSION = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
 
 /** @type {Awaited<ReturnType<typeof makeFixture>>} */
 let f;
@@ -228,7 +229,8 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
 
   it('影响面声明说清动了哪些检测逻辑', async () => {
     const statement = await probes.impactStatement({ 机制版本: 'mech-3' });
-    assert.match(statement.机制版本, /^dsh-mind@1\.3\.0\+sha256:[0-9a-f]{64}$/);
+    assert.equal(statement.机制版本.split('+sha256:')[0], 'dsh-mind@' + PACKAGE_VERSION);
+    assert.match(statement.机制版本, /\+sha256:[0-9a-f]{64}$/);
     assert.equal(statement.状态, '不可确定', '没有不同代码版本的基线，不能说逻辑未改');
     assert.equal(typeof statement.声明, 'string');
     assert.ok(Array.isArray(statement.动了));

@@ -13,6 +13,7 @@ import { shareOrg } from '../src/runtime.js';
 import { apply } from '../components/guard/lib/index.js';
 import { atomicWrite } from '../src/kernel/fsx.js';
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
+const PACKAGE_VERSION = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
 const runner = (f) => new ProbeRunner({ ...f, 无内核装配: true });
 const rollbackRows = async (f) => (await f.audit.read({})).filter((r) => r.动作 === '自动回滚');
 async function fixture(fn) { const f = await makeFixture(); try { await fn(f); } finally { await f.cleanup(); } }
@@ -34,7 +35,8 @@ describe('探针巡检唯一自动落点', () => {
     assert.equal(green.全绿, true);
     assert.equal(green.回滚, null);
     assert.equal((await rollbackRows(f)).length, 0);
-    assert.match(green.机制版本, /^dsh-mind@1\.3\.0\+sha256:[0-9a-f]{64}$/);
+    assert.equal(green.机制版本.split('+sha256:')[0], 'dsh-mind@' + PACKAGE_VERSION);
+    assert.match(green.机制版本, /\+sha256:[0-9a-f]{64}$/);
     f.policy.state.ok = false;
     const red = await p.run({ subject: LEAD, 机制版本: 'model-forged' });
     assert.equal(red.全绿, false);
