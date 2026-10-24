@@ -15,16 +15,21 @@ const positive = n => integer(n) && n > 0;
 const fail = () => new Fault('TURN_BUFFER_INVALID', '轮级缓冲损坏或与当前会话不符；保留文件，停止使用旧资料。');
 
 /** 在异步排队前剥掉推理、工具参数、附件、RPC及原始模型流。 */
-export function projectTurnEvent(event) {
+export function projectTurnEvent(event, context) {
   if (!integer(event?.seq) || typeof event.type !== 'string') throw new InvalidBody('轮级缓冲事件需要有效序号和类型。');
   const row = { seq: event.seq, type: 'skip', time: Number.isFinite(event.time) ? event.time : null };
   const data = event.data;
   if (event.type === 'working-directory/change') return { ...row, type: 'scope-change' };
   if (event.surfaceOp && typeof event.surfaceOp === 'object' && event.surfaceOp.op === 'replace') {
     const { startSeq, endSeq } = event.surfaceOp;
-    if (!integer(startSeq) || !integer(endSeq) || endSeq < startSeq || endSeq >= event.seq) throw new InvalidBody('无效表面替换范围。');
+    if (!integer(startSeq) || !integer(endSeq) || startSeq >= event.seq || endSeq >= event.seq) throw new InvalidBody('无效表面替换范围。');
+    // Surface order is positional, not numeric. Replacements enter an earlier slot
+    // under a newer event number, so startSeq can legitimately exceed endSeq.
+    const shadowedSeqs = context?.shadowedSeqs;
+    if (!Array.isArray(shadowedSeqs) || !shadowedSeqs.length || shadowedSeqs[0] !== startSeq || shadowedSeqs.at(-1) !== endSeq
+        || shadowedSeqs.some(seq => !integer(seq) || seq >= event.seq) || new Set(shadowedSeqs).size !== shadowedSeqs.length) throw new InvalidBody('表面替换需要宿主实际覆盖的有序节点。');
     const replacement = projectTurnEvent({ ...event, surfaceOp: 'append' });
-    return { ...row, type: 'replace', startSeq, endSeq,
+    return { ...row, type: 'replace', startSeq, endSeq, shadowedSeqs: [...shadowedSeqs],
       compact: event.type === 'user/message' && data?.source?.kind === 'compact-checkpoint',
       ...(replacement.type === 'message' ? { message: replacement } : {}) };
   }
@@ -48,6 +53,21 @@ export function projectTurnEvent(event) {
   if (!text.trim()) return row;
   return { ...row, type: 'message', role: human ? 'user' : 'assistant', id: message.id, text, clipped,
     turn: assistant ? data.turn : null, interrupted: assistant && data.interrupted === true };
+}
+
+/** Fold only public surface metadata. The caller replays the immutable host prefix. */
+export function projectTurnSurfaceEvent(event, nodes) {
+  const op = event.surfaceOp;
+  if (op && typeof op === 'object' && op.op === 'replace') {
+    const start = nodes.indexOf(op.startSeq); const end = nodes.indexOf(op.endSeq);
+    if (start < 0 || end < start) throw new InvalidBody('表面替换端点不在宿主当前有序节点范围内。');
+    const row = projectTurnEvent(event, { shadowedSeqs: nodes.slice(start, end + 1) });
+    nodes.splice(start, end - start + 1, event.seq);
+    return row;
+  }
+  const row = projectTurnEvent(event);
+  if (op === 'append') nodes.push(event.seq);
+  return row;
 }
 
 /** 不复用通用 atomicWrite：私人正文以0600写入，文件sync后原子替换。 */
@@ -153,8 +173,12 @@ export class TurnBufferService {
           state.open = null; continue;
         }
         if (row.type === 'replace') {
+          if (!Array.isArray(row.shadowedSeqs) || !row.shadowedSeqs.length
+              || row.shadowedSeqs[0] !== row.startSeq || row.shadowedSeqs.at(-1) !== row.endSeq
+              || row.shadowedSeqs.some(seq => !integer(seq) || seq >= row.seq)) throw new InvalidBody('轮级缓冲替换缺少可核对的表面节点。');
+          const shadowed = new Set(row.shadowedSeqs);
           for (const round of state.rounds) round.messages = round.messages.filter(m => {
-            if (m.anchor < row.startSeq || m.anchor > row.endSeq) return true;
+            if (!shadowed.has(m.anchor)) return true;
             if (row.compact) { m.anchor = row.seq; return true; }
             state.removed++; return false;
           });

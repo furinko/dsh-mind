@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Org } from '../src/org.js';
-import { projectTurnEvent, TURN_BUFFER_LIMITS } from '../src/turn-buffer.js';
+import { projectTurnEvent, projectTurnSurfaceEvent, TURN_BUFFER_LIMITS } from '../src/turn-buffer.js';
 import { createTurnBufferHooks, injectTurnBuffer, TURN_BUFFER_SECTION } from '../components/kernel/lib/turn-buffer-hooks.js';
 import { apply } from '../components/kernel/lib/index.js';
 import { runAction, ACTIONS, READ_ONLY_ACTIONS, COMMAND_ONLY_ACTIONS } from '../lib/actions.js';
@@ -26,7 +26,11 @@ function makeSession(id = LEAD.id, header = {}, inheritedEventCount = 0) {
     append(type, data, surfaceOp) {
       const event = { seq: events.length, time: Date.now(), type, data, ...(surfaceOp ? { surfaceOp } : {}) };
       if (surfaceOp === 'append') nodes.push(event.seq);
-      else if (surfaceOp?.op === 'replace') nodes = [...nodes.filter(seq => seq < surfaceOp.startSeq || seq > surfaceOp.endSeq), event.seq];
+      else if (surfaceOp?.op === 'replace') {
+        const start = nodes.indexOf(surfaceOp.startSeq); const end = nodes.indexOf(surfaceOp.endSeq);
+        if (start < 0 || end < start) throw Error('invalid host positional surface replacement');
+        nodes.splice(start, end - start + 1, event.seq);
+      }
       events.push(event); return event;
     },
     hide() { nodes = []; },
@@ -290,6 +294,55 @@ it('用户替换原文时移除旧内容并记录实际替换文本', async () =
   await hooks.flush(); assert.deepEqual(texts(await read()), ['新约束']);
 }));
 
+for (const mode of ['window', 'observation']) it('合法逆序序号按表面位置替换，不阻断检查点：' + mode, async () => scene(async ({ org, session, read }) => {
+  const host = fakeHost(); let released = 0;
+  const query = mode === 'window' ? queryOf(session) : { async observeSession() { return { source: 'live', header: session.header, inheritedEventCount: 0,
+    cursor: session.seq - 1, events: session.events, [Symbol.dispose]() { released++; } }; } };
+  const hooks = createTurnBufferHooks({ org, projectOf: () => P, queryOf: () => query }); const dispose = hooks.attach(host.ctx);
+  const emit = (type, data, op) => { const e = session.append(type, data, op); hooks.observe(session, e); return e; };
+  try {
+    emit('turn/start', { turn: 1 });
+    const a = emit('user/message', human('旧甲', 'a'), 'append');
+    const b = emit('user/message', human('旧乙', 'b'), 'append');
+    emit('user/message', human('应保留的丙', 'c'), 'append'); await hooks.flush();
+    const newer = emit('user/message', human('替换甲', 'new-a'), { op: 'replace', startSeq: a.seq, endSeq: a.seq }); await hooks.flush();
+    assert.deepEqual(session.surface.nodes, [newer.seq, b.seq, 3]);
+    assert.ok(newer.seq > b.seq);
+    const merged = emit('user/message', human('甲乙合并后的新内容', 'new-ab'), { op: 'replace', startSeq: newer.seq, endSeq: b.seq });
+    await Promise.all(host.钩子.get('session/flush').map(fn => fn(session))); await hooks.flush();
+    assert.deepEqual(texts(await read()), ['应保留的丙', '甲乙合并后的新内容']);
+    assert.equal(hooks.health().failedWrites, 0);
+    if (mode === 'observation') assert.ok(released > 0);
+    // A cold metadata fold must recover exactly the same anchors and text.
+    const recovered = createTurnBufferHooks({ org, projectOf: () => P, queryOf: () => query });
+    session.append('user/message', human('', 'withdraw-after-restart', { kind: 'plugin' }), { op: 'replace', startSeq: merged.seq, endSeq: merged.seq });
+    await recovered.sync(session); assert.deepEqual(texts(await read()), ['应保留的丙']);
+  } finally { dispose(); }
+}));
+
+it('递增序号范围也必须按节点位置解析，不误撤回范围外的正文；连续压缩锚点可被精确撤回', async () => scene(async ({ org, session, hooks, emit, read }) => {
+  emit('turn/start', { turn: 1 });
+  const a = emit('user/message', human('撤回的甲', 'a'), 'append');
+  const b = emit('user/message', human('压缩前的乙', 'b'), 'append');
+  emit('user/message', human('范围外的丙', 'c'), 'append');
+  emit('user/message', human('范围外的丁', 'd'), 'append');
+  const compact = emit('user/message', human('乙摘要', 'summary', { kind: 'compact-checkpoint' }), { op: 'replace', startSeq: b.seq, endSeq: b.seq });
+  await hooks.flush();
+  emit('user/message', human('', 'withdraw', { kind: 'plugin' }), { op: 'replace', startSeq: a.seq, endSeq: compact.seq });
+  await hooks.flush(); assert.deepEqual(texts(await read()), ['范围外的丙', '范围外的丁']);
+  assert.doesNotMatch(await readFile(org.turnBuffer.file(P, session.id), 'utf8'), /撤回的甲|压缩前的乙/);
+}));
+
+it('拒绝缺少实际表面节点的替换和顺序错误、未来或不存在的端点，不猜测数值范围', () => {
+  const event = { seq: 10, type: 'user/message', data: human('替换'), surfaceOp: { op: 'replace', startSeq: 8, endSeq: 2 } };
+  assert.throws(() => projectTurnEvent(event), /宿主实际覆盖的有序节点/);
+  const nodes = [8, 2, 6]; const row = projectTurnSurfaceEvent(event, nodes);
+  assert.deepEqual(row.shadowedSeqs, [8, 2]); assert.deepEqual(nodes, [10, 6]);
+  assert.throws(() => projectTurnSurfaceEvent({ ...event, surfaceOp: { op: 'replace', startSeq: 2, endSeq: 8 } }, [8, 2, 6]), /有序节点范围/);
+  assert.throws(() => projectTurnSurfaceEvent({ ...event, surfaceOp: { op: 'replace', startSeq: 8, endSeq: 9 } }, [8, 2, 6]), /有序节点范围/);
+  assert.throws(() => projectTurnSurfaceEvent({ ...event, surfaceOp: { op: 'replace', startSeq: 10, endSeq: 10 } }, [10]), /无效表面替换范围/);
+});
+
 it('同会话切项目按历史目录归属补读，排队旧消息不能落到新项目', async () => scene(async ({ org, session }) => {
   session.header.cwd = '/project/a'; let currentProject = P;
   const atCwd = cwd => cwd === '/project/a' ? P : cwd === '/project/b' ? 'other-project' : null;
@@ -310,6 +363,22 @@ it('同会话切项目按历史目录归属补读，排队旧消息不能落到�
   session.append('user/message', human('B替换文本', 'b-new'), { op: 'replace', startSeq: a.seq, endSeq: a.seq });
   currentProject = P; session.append('working-directory/change', { cwd: '/project/a' }); await hooks.sync(session);
   assert.deepEqual(texts(await read(P)), []);
+}));
+
+it('跨项目的逆序替换撤回原项目压缩锚点，外项目正文不进入原项目缓冲', async () => scene(async ({ org, session, read }) => {
+  session.header.cwd = '/project/a'; let project = P;
+  const query = { async observeSession() { return { source: 'live', header: session.header, inheritedEventCount: 0,
+    cursor: session.seq - 1, events: session.events, [Symbol.dispose]() {} }; } };
+  const hooks = createTurnBufferHooks({ org, projectOf: () => project, projectAtCwd: cwd => cwd === '/project/a' ? P : 'foreign', queryOf: () => query });
+  session.append('turn/start', { turn: 1 }); const a = session.append('user/message', human('A待撤回原文', 'a'), 'append');
+  await hooks.sync(session);
+  session.append('working-directory/change', { cwd: '/project/b' }); project = 'foreign';
+  const b = session.append('user/message', human('B私人正文', 'b'), 'append');
+  const compact = session.append('user/message', human('外项目压缩摘要', 'summary', { kind: 'compact-checkpoint' }), { op: 'replace', startSeq: a.seq, endSeq: a.seq });
+  session.append('user/message', human('B新的私人正文', 'new-b'), { op: 'replace', startSeq: compact.seq, endSeq: b.seq });
+  session.append('working-directory/change', { cwd: '/project/a' }); project = P;
+  await hooks.sync(session); assert.deepEqual(texts(await read()), []);
+  assert.doesNotMatch(await readFile(org.turnBuffer.file(P, session.id), 'utf8'), /A待撤回原文|B私人正文|B新的私人正文|外项目压缩摘要/);
 }));
 
 it('较长恢复分批推进，检查点不将尚未补齐的后缀报告为已持久化', async () => scene(async ({ org, session, read }) => {

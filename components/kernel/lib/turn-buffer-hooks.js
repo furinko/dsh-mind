@@ -1,6 +1,6 @@
 /** 宿主同步通知只投递去敏后的事件；检查点和上下文装配等待本会话持久化。 */
 import { agentSubject } from '../../../src/subject.js';
-import { projectTurnEvent, TURN_BUFFER_LIMITS } from '../../../src/turn-buffer.js';
+import { projectTurnEvent, projectTurnSurfaceEvent, TURN_BUFFER_LIMITS } from '../../../src/turn-buffer.js';
 
 export const TURN_BUFFER_SECTION = 'mind:turn-buffer';
 const natural = n => Number.isSafeInteger(n) && n >= 0;
@@ -11,6 +11,7 @@ const root = session => typeof session?.id === 'string' && session.id.trim() && 
 
 export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = () => null, onPersist, logger = console, enabled = true }) {
   const queues = new Map();
+  const surfaces = new WeakMap();
   let stopped = false; let attached = false; let pending = 0;
   let failedWrites = 0; let dropped = 0; let recoveryUnavailable = 0;
   const report = error => {
@@ -44,7 +45,7 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
       if (position && current()) await org.turnBuffer.capture({ ...spec, records: [], fromSeq: cursor, throughSeq: end, active: current });
       return;
     }
-    if (hint && cursor === hint.seq) {
+    if (hint && hint.type !== 'surface-replay' && cursor === hint.seq) {
       if (current()) await org.turnBuffer.capture({ ...spec, records: [hint], fromSeq: cursor, throughSeq: end, active: current });
       return;
     }
@@ -62,17 +63,20 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
         if (!events.length || events.some((e, i) => e.seq !== cursor + i || session.isOwnSeq(e.seq) !== true)) throw new Error('宿主会话观察存在缺口。');
         // 当前目录不能给历史事件追授项目归属。按宿主实际目录变更折回每段来源。
         let historicalProject = projectAtCwd ? projectAtCwd(observation.header.cwd) : spec.project;
-        const records = [];
+        const records = []; const nodes = [];
         for (let seq = 0; seq < throughSeq; seq++) {
           const event = all[seq];
           if (event?.seq !== seq) throw new Error('宿主历史顺序不可核对。');
           if (event.type === 'working-directory/change') historicalProject = projectAtCwd ? projectAtCwd(event.data?.cwd) : spec.project;
+          // Replay the ordered prefix even when its text belongs to another project
+          // or predates this buffer. Only metadata from that prefix is retained.
+          const projected = projectTurnSurfaceEvent(historicalProject === spec.project && seq >= cursor ? event
+            : { seq, type: event.type, surfaceOp: event.surfaceOp, data: { source: { kind: event.data?.source?.kind } } }, nodes);
           if (seq < cursor) continue;
-          if (historicalProject === spec.project) records.push(projectTurnEvent(event));
+          if (historicalProject === spec.project) records.push(projected);
           else if (event.surfaceOp && typeof event.surfaceOp === 'object') {
             // 其他项目的正文不复制，但表面撤回/压缩仍须作用于本项目已缓冲的原文。
-            records.push(projectTurnEvent({ seq, type: event.type, surfaceOp: event.surfaceOp,
-              data: { source: { kind: event.data?.source?.kind } } }));
+            records.push(projected);
           } else records.push({ seq, type: event.type === 'working-directory/change' ? 'scope-change' : 'skip', time: null });
         }
         await org.turnBuffer.capture({ ...spec, records, fromSeq: cursor, throughSeq, active: current });
@@ -82,12 +86,17 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
     if (typeof query?.readEvent !== 'function' || projectAtCwd) {
       recoveryUnavailable++;
       // SDK未提供历史读面时仍采集新事件，但明确记录未核范围，不冒称完整。
+      if (hint?.type === 'surface-replay') throw Object.assign(new Error('表面替换需要宿主历史节点，当前读面不可用。'), { code: 'TURN_BUFFER_SURFACE_UNAVAILABLE' });
       if (hint && current()) await org.turnBuffer.capture({ ...spec, records: [hint], fromSeq: hint.seq, throughSeq: end, active: current });
       return;
     }
+    // Older SDKs expose only event windows. Cache their metadata fold independently
+    // of the text cursor; bounded prefix recovery resumes on the next checkpoint.
+    let surface = surfaces.get(session);
+    if (!surface || surface.nextSeq > cursor) { surface = { nextSeq: 0, nodes: [] }; surfaces.set(session, surface); }
     // 每次最多补2048个事件；长期积压分次追赶，不在装配里无界扫描。
-    for (let batch = 0; cursor < end && batch < 64; batch++) {
-      const request = { sessionId: spec.session, seq: cursor, before: 0, after: Math.min(31, end - cursor - 1) };
+    for (let batch = 0; surface.nextSeq < end && batch < 64; batch++) {
+      const request = { sessionId: spec.session, seq: surface.nextSeq, before: 0, after: Math.min(31, end - surface.nextSeq - 1) };
       let result;
       try { result = await query.readEvent(request); }
       catch (error) {
@@ -97,12 +106,21 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
       if (!current()) return;
       if (result?.session?.id !== spec.session || result.inheritedEventCount !== inherited
           || result.session.cwd !== session.header.cwd || !Array.isArray(result.events)) throw new Error('宿主历史范围不可核对。');
-      const events = result.events.filter(e => e.seq >= cursor && e.seq < end);
-      if (!events.length || events.length > 256 || events.some((e, i) => e.seq !== cursor + i || session.isOwnSeq(e.seq) !== true)) throw new Error('宿主历史缺口或继承来源不可核对。');
-      const throughSeq = cursor + events.length;
-      await org.turnBuffer.capture({ ...spec, records: events.map(projectTurnEvent), fromSeq: cursor, throughSeq, active: current });
-      cursor = throughSeq;
+      const events = result.events.filter(e => e.seq >= surface.nextSeq && e.seq < end);
+      if (!events.length || events.length > 256 || events.some((e, i) => e.seq !== surface.nextSeq + i || (e.seq >= cursor && session.isOwnSeq(e.seq) !== true))) throw new Error('宿主历史缺口或继承来源不可核对。');
+      const nodes = [...surface.nodes]; const records = [];
+      for (const event of events) {
+        const row = projectTurnSurfaceEvent(event.seq >= cursor ? event : { seq: event.seq, type: event.type, surfaceOp: event.surfaceOp, data: { source: { kind: event.data?.source?.kind } } }, nodes);
+        if (event.seq >= cursor) records.push(row);
+      }
+      const throughSeq = events.at(-1).seq + 1;
+      if (records.length) {
+        await org.turnBuffer.capture({ ...spec, records, fromSeq: cursor, throughSeq, active: current });
+        cursor = throughSeq;
+      }
+      surface.nodes = nodes; surface.nextSeq = throughSeq;
     }
+    if (cursor < end) throw Object.assign(new Error('轮级缓冲表面历史尚未补齐，下一检查点继续。'), { code: 'TURN_BUFFER_RECOVERY_PENDING' });
   }
   function enqueue(session, hint) {
     const expected = scope(session);
@@ -131,7 +149,10 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
         if (!scope(session)) return;
         const event = envelope?.type ? envelope : envelope?.event;
         if (!event || session.isOwnSeq(event.seq) !== true) return;
-        const row = projectTurnEvent(event);
+        // Replacement endpoints must be resolved against the historical surface,
+        // never against a numeric interval or the already-replaced live surface.
+        const row = event.surfaceOp && typeof event.surfaceOp === 'object'
+          ? { seq: event.seq, type: 'surface-replay' } : projectTurnEvent(event);
         if (row.type === 'skip') return;
         void enqueue(session, row).catch(() => {});
       } catch (error) { report(error); }
