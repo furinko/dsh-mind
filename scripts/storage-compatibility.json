@@ -1,11 +1,18 @@
 {
   "version": 1,
-  "informationLayouts": [1, 2],
+  "informationLayouts": [
+    1,
+    2
+  ],
   "memoryLayouts": [
     1,
     2
   ],
   "objectHistoryLayouts": [
+    1,
+    2
+  ],
+  "turnBufferLayouts": [
     1,
     2
   ]

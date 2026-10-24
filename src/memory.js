@@ -404,7 +404,7 @@ export class MemoryService {
     const 通用 = 类 === '知识' && record.scope.project === null && record.scope.relationship === null && ['auto', 'roles'].includes(record.scope.audience);
     return this.remember({ subject, 类, 标题: record.title, 内容: body, 项目: 通用 ? '通用' : record.scope.project ?? project,
       岗位: 类 === '知识' ? role : 'Lead', 标签: ['信息收录', ...(record.type === 'candidate' ? ['能力候选'] : [record.kind])],
-      来源: { 谁: subject.id, 怎么知道: `实际阅读回执与原文引文已核对；收录回执${record.id}；不认证语义正确或能力掌握` },
+      来源: { 谁: subject.id, 怎么知道: `实际阅读回执与原文引文已核对；收录回执${record.id}；${record.sourceClaim ? record.sourceClaim + '；' : ''}不认证语义正确或能力掌握` },
       依据: 'Lead从已连接来源提炼，按项目与关系边界纳入现有记忆体系',
       ...(类 === '偏好' ? { 连续性: { 类别: '人格', 主题: record.title.slice(0, 80), 依据: '自省', 范围: record.scope.project === null ? '部署' : '项目' } } : {}),
       ...(类 === '知识' && record.type === 'candidate' ? { 知识说明: { 适用条件: [record.conditions.slice(0, 512)], 已知反例: [record.limitations.slice(0, 512)] } } : {}),

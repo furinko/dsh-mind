@@ -5,6 +5,7 @@ import { join, extname } from 'node:path';
 import { canonical, digest, tokenize } from './kernel/text.js';
 import { serializeByKey, withLock, stripBom } from './kernel/fsx.js';
 import { savePrivateBufferState } from './turn-buffer.js';
+import { conversationRef, conversationText, externalConversationMessage } from './conversation-origin.js';
 import { Denied, Fault, InvalidBody } from './kernel/errors.js';
 import { INFORMATION_EXTENSIONS, DOCUMENT_EXTENSIONS, sourceRoot, readSourceFile, decodeMaterial, walkBatch, verifyRoot } from './information-files.js';
 import { informationLocations } from './information-locations.js';
@@ -394,7 +395,7 @@ export class InformationService {
         materials: items.length, pending: items.filter(i => i.state === 'active' && !processed.has(`${i.hash}:${scopeKey(i.scope)}`)).length,
         records: state.records.filter(r => this.recordVisible(state, r, spec)).length,
         sources: state.sources.filter(s => this.visible(s.scope, spec)).map(({ path: _path, identity: _identity, scan: _scan, ...s }) => s),
-        conversationMessages: buffer?.rounds.slice(-2).flatMap(r => r.messages).slice(-8).map(m => ({ id: m.id, role: m.role, seq: m.seq, clipped: m.clipped })) ?? [],
+        conversationMessages: buffer?.rounds.slice(-2).flatMap(r => r.messages).slice(-8).map(m => ({ id: m.id, role: m.role, seq: m.seq, clipped: m.clipped, ...(m.origin ? { origin: m.origin } : {}) })) ?? [],
         sourceToolReceipts: [...this.toolReceipts.values()].filter(r => r.session === spec.session && r.project === spec.project && this.clock.ms() - r.at <= 1800000).slice(-4).map(r => ({ id: r.id, tool: r.tool })),
         jobs: state.jobs.filter(j => j.project === spec.project && j.session === spec.session).slice(-10),
         lastScan: state.sources.some(s => s.id === state.lastScan?.source && this.visible(s.scope, spec)) ? state.lastScan : null,
@@ -498,9 +499,9 @@ export class InformationService {
     const messages = input.messageIds.map(id => buffer?.rounds.flatMap(r => r.messages).find(m => m.id === id));
     if (messages.some(m => !m)) throw new InvalidBody('消息不在当前已接纳会话缓冲中。');
     if (input.note !== undefined && !txt(input.note, 1000)) throw new InvalidBody('相遇说明最长1000字符。');
-    const refs = messages.map(m => ({ id: m.id, role: m.role, seq: m.seq, hash: digest(m.text), clipped: m.clipped, at: m.at ?? null }));
-    const material = { title: txt(input.title, 240) ? input.title : '会话分享', text: messages.map(m => `[${m.role} · ${m.id}]\n${m.text}`).join('\n\n'),
-      format: 'conversation', coverage: '仅所选会话消息；助手记录不等于用户表达，截断标记见来源', author: null, url: null };
+    const refs = messages.map(m => ({ ...conversationRef(m), at: m.at ?? null }));
+    const material = { title: txt(input.title, 240) ? input.title : '会话分享', text: messages.map(conversationText).join('\n\n'),
+      format: 'conversation', coverage: '仅所选会话消息；QQ参与者身份未核对，发送请求文本不等于原样送达；助手记录不是用户表达，截断标记见来源', author: null, url: null };
     if (Buffer.byteLength(material.text) > INFORMATION_LIMITS.fileBytes) throw new InvalidBody('所选消息超过单份材料上限。');
     const id = `material-${digest(canonical({ session: spec.session, project: spec.project, refs })).slice(0, 32)}`;
     const result = await this.locked(async state => {
@@ -691,7 +692,9 @@ export class InformationService {
     }
     if (state.records.length >= INFORMATION_LIMITS.records) throw new Fault('INFORMATION_RECORD_LIMIT', '成长记录达到上限，请先整理。');
     const row = { id: `${input.type === 'growth' ? 'growth' : 'candidate'}-${dedup.slice(0, 32)}`, revision: 1, type: input.type, kind: input.kind ?? null,
-      title: input.title, text: input.text, sources, scope, state: 'active', integration: 'pending', executionProject: spec.project, stage: input.type === 'candidate' ? '灵感' : null,
+      title: input.title, text: input.text, sources, scope,
+      ...(sources.some(ref => state.items.find(i => i.id === ref.item)?.context?.messages?.some(m => externalConversationMessage(m)))
+        ? { sourceClaim: 'QQ插件会话资料，参与者身份未核对；发送请求文本不证明实际字节或收件人已读' } : {}), state: 'active', integration: 'pending', executionProject: spec.project, stage: input.type === 'candidate' ? '灵感' : null,
       method: input.method ?? null, conditions: input.conditions ?? null, limitations: input.limitations ?? null, roles: input.roles ?? [],
       expiresAt: input.expiresAt ?? null, updatedAt: this.clock.iso(), author: spec.subject.id, claim: '模型整理，未认证语义有效或人格成长', dedup, history: [], trials: [] };
     row.replaces = replaced.map(r => r.id);
@@ -1055,9 +1058,14 @@ export class InformationService {
       if (state.config.paused || !state.config.autoLearn) return null;
       const usage = this.usage(state);
       if (usage.modelCalls >= state.config.dailyModelCalls || usage.readChars >= state.config.dailyReadChars) return null;
-      const checkpoint = digest(`${spec.project}\0${spec.session}`);
-      const after = state.conversations[checkpoint] ?? -1;
-      let messages = buffer?.rounds.filter(r => r.status !== 'open').flatMap(r => r.messages).filter(m => m.seq > after).slice(0, 12) ?? [];
+      const localKey = digest(`${spec.project}\0${spec.session}`);
+      const externalKey = digest(`${spec.project}\0${spec.session}\0qq-source-v1`);
+      const closed = buffer?.rounds.filter(r => r.status !== 'open').flatMap(r => r.messages) ?? [];
+      const local = closed.filter(m => !externalConversationMessage(m) && m.seq > (state.conversations[localKey] ?? -1));
+      const external = closed.filter(m => externalConversationMessage(m) && m.seq > (state.conversations[externalKey] ?? -1));
+      const useExternal = external.length > 0 && (!local.length || usage.modelCalls % 2 === 0);
+      const checkpoint = useExternal ? externalKey : localKey;
+      let messages = (useExternal ? external : local).slice(0, 12);
       // Do not move past a message omitted by the input budget. One long message is explicitly a fragment.
       let messageChars = 0;
       messages = messages.filter((m, index) => { const size = m.text.length + m.id.length + 30; messageChars += size; return index === 0 || messageChars <= 12000; });
@@ -1073,9 +1081,9 @@ export class InformationService {
       const discoveries = this.discoveryOrder(state, pending, spec);
       const preferConversation = usage.modelCalls % 2 === 0 || !pending.length;
       if (messages.length && !attempted.has(conversationKey) && preferConversation) {
-        const refs = messages.map(m => ({ id: m.id, role: m.role, seq: m.seq, hash: digest(m.text), clipped: m.clipped }));
-        const material = { title: '会话相遇', text: messages.map(m => `[${m.role} · ${m.id}]\n${m.text}`).join('\n\n'),
-          format: 'conversation', coverage: '所选已接纳消息；助手内容不是用户表达，可能截断' };
+        const refs = messages.map(conversationRef);
+        const material = { title: '会话相遇', text: messages.map(conversationText).join('\n\n'),
+          format: 'conversation', coverage: '所选已接纳消息；external角色来自QQ插件且身份未核对，发送请求可能经格式转换；助手内容不是用户表达，可能截断' };
         const fingerprint = digest(canonical(refs)); const previous = state.conversationOffsets[checkpoint];
         chosen = { key: conversationKey, material, conversation: { checkpoint, refs, fingerprint, last: messages.at(-1).seq },
           scope: baseScope(spec.project, spec.relationship), offset: previous?.fingerprint === fingerprint ? previous.offset : 0 };
@@ -1118,7 +1126,7 @@ export class InformationService {
     const { chosen } = prepared;
     if (chosen.conversation) {
       const buffer = await this.org.turnBuffer.load(spec.project, spec.session);
-      if (!chosen.conversation.refs.every(ref => buffer?.rounds.flatMap(r => r.messages).some(m => m.id === ref.id && m.seq === ref.seq && digest(m.text) === ref.hash))) throw new Fault('INFORMATION_SOURCE_CHANGED', '对话来源已清空、裁剪或改变，本次提炼未提交。');
+      if (!chosen.conversation.refs.every(ref => buffer?.rounds.flatMap(r => r.messages).some(m => m.id === ref.id && m.seq === ref.seq && digest(m.text) === ref.hash && m.role === ref.role && canonical(m.origin ?? null) === canonical(ref.origin ?? null)))) throw new Fault('INFORMATION_SOURCE_CHANGED', '对话来源已清空、裁剪或改变，本次提炼未提交。');
     }
     const result = await this.locked(async state => {
       await guard();
@@ -1192,7 +1200,7 @@ export class InformationService {
     // Alternate recent and stable hash order: leave room for discovery outside existing interests.
     const queue = this.discoveryOrder(state, pending, spec).slice(0, 4);
     const buffer = spec.subject.kind === 'Lead' && spec.session === spec.subject.id ? await this.org.turnBuffer.load(spec.project, spec.session) : null;
-    const messages = buffer?.rounds.slice(-2).flatMap(r => r.messages).slice(-8).map(m => ({ id: m.id, role: m.role, seq: m.seq, clipped: m.clipped })) ?? [];
+    const messages = buffer?.rounds.slice(-2).flatMap(r => r.messages).slice(-8).map(m => ({ id: m.id, role: m.role, seq: m.seq, clipped: m.clipped, ...(m.origin ? { origin: m.origin } : {}) })) ?? [];
     const frame = { dataRevision: state.revision, paused: state.config.paused, growth: recent.map(r => ({ id: r.id, revision: r.revision, kind: r.kind, native: r.native.map(n => ({ id: n.id, 类: n.类 })), instruction: '正文通过memory_query读取；人格连续性和专业知识沿现有召回机制提供' })),
       pending: pending.length, discoveries: queue.map(({ item: i, reason }) => ({ id: i.id, title: i.title, chars: i.chars, reason })), conversationMessages: messages,
       sourceToolReceipts: [...this.toolReceipts.values()].filter(r => r.session === spec.session && r.project === spec.project && this.clock.ms() - r.at <= 1800000).slice(-4).map(r => ({ id: r.id, tool: r.tool, preview: r.content.slice(0, 120) })),

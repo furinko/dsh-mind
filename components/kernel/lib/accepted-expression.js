@@ -1,11 +1,12 @@
 /** 只读本会话本轮已接纳的用户来源文本；不窥待接纳消息，不缓存或复制聊天账本。 */
 import { canonical, digest } from '../../../src/kernel/text.js';
+import { qqInputSource } from '../../../src/conversation-origin.js';
 
 export const EXPRESSION_EVENT_LIMIT = 256;
 export const EXPRESSION_TEXT_LIMIT = 800;
 const boundedId = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 256;
 
-export function readAcceptedExpression(session) {
+export function readAcceptedExpression(session, { allowExternal = false } = {}) {
   try {
     if (!boundedId(session?.id) || typeof session.eventAt !== 'function' || typeof session.isOwnSeq !== 'function'
         || !Number.isSafeInteger(session.seq) || session.seq < 1) return null;
@@ -17,7 +18,10 @@ export function readAcceptedExpression(session) {
       if (event.type === 'turn/end') return null;
       // 新消息已领取但尚未接纳时，不能沿用此前表达冒充本次输入。
       if (!candidate && event.type === 'agent/inbox/spliced' && event.data?.removedCount > 0 && event.data?.outcome !== 'canceled') return null;
-      if (!candidate && event.type === 'user/message' && event.data?.source?.kind === 'user') candidate = event;
+      if (!candidate && event.type === 'user/message') {
+        if (event.data?.source?.kind === 'user') candidate = event;
+        else if (qqInputSource(event.data?.source)) { if (!allowExternal) return null; candidate = event; }
+      }
       if (event.type !== 'turn/start') continue;
       const message = candidate?.data;
       if (!Number.isSafeInteger(event.data?.turn) || event.data.turn < 1 || !boundedId(message?.id) || message.role !== 'user'
@@ -35,7 +39,7 @@ export function readAcceptedExpression(session) {
       }
       query = query.trim();
       if (!query) return null;
-      const description = { 类型: '已接纳用户来源文本', 会话: session.id, 轮次: event.data.turn,
+      const description = { 类型: message.source.kind === 'user' ? '已接纳用户来源文本' : '已接纳QQ插件来源文本，参与者身份未核对', 会话: session.id, 轮次: event.data.turn,
         事件序号: candidate.seq, 消息: message.id, 截断: truncated,
         依据: '本轮已接纳文本的词面线索；来源标记不认证原话、意图或授权' };
       return { query, description, stamp: digest(canonical({ description, query })) };

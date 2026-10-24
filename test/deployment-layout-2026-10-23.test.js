@@ -180,3 +180,10 @@ it('Git状态读取失败不冒充干净：零停服、零checkout且回退引�
   assert.deepEqual(await f.readEvents(),[]); assert.equal(f.git('rev-parse','refs/dsh-local/previous'),previous);
   assert.equal(execFileSync('git',['-C',f.runtime,'rev-parse','HEAD'],{encoding:'utf8'}).trim(),f.old);
 }));
+
+it('QQ来源布局落盘后禁止旧轮缓冲读取器接管，未知标记也拒绝',async()=>fixture(async f=>{
+ const file=join(f.layout.memoryRoot(),'external-conversation-layout.json');await f.put(file,JSON.stringify({version:2}));const oldBytes=await readFile(f.ledger,'utf8');
+ await assert.rejects(f.check(f.current),/轮级缓冲来源布局2/);
+ const supported=await f.commit(JSON.stringify({version:1,memoryLayouts:[1,2],objectHistoryLayouts:[1,2],turnBufferLayouts:[1,2]}));assert.equal((await f.check(supported)).turnBufferLayout,2);assert.equal(await readFile(f.ledger,'utf8'),oldBytes);
+ await f.put(file,JSON.stringify({version:3}));await assert.rejects(f.check(supported),/布局未知/);
+}));

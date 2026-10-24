@@ -1,11 +1,12 @@
 /** 可清理的短期会话资料。宿主事件是来源，缓冲不认证意图，也不自动晋升长期记忆。 */
 import { open, rename, rm, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { ensureDir, readJsonOrNull, serializeByKey, withLock } from './kernel/fsx.js';
 import { canonical, digest } from './kernel/text.js';
 import { Denied, Fault, InvalidBody } from './kernel/errors.js';
 import { currentProfessionalScope } from './professional-context.js';
+import { qqInputSource, qqToolProjection, validConversationOrigin, externalConversationMessage } from './conversation-origin.js';
 
 export const TURN_BUFFER_LIMITS = Object.freeze({ days: 30, rounds: 128, messages: 512,
   text: 16384, bytes: 2 * 1024 * 1024, context: 6000, query: 24000 });
@@ -19,6 +20,8 @@ export function projectTurnEvent(event, context) {
   if (!integer(event?.seq) || typeof event.type !== 'string') throw new InvalidBody('轮级缓冲事件需要有效序号和类型。');
   const row = { seq: event.seq, type: 'skip', time: Number.isFinite(event.time) ? event.time : null };
   const data = event.data;
+  const sent = qqToolProjection(event, context);
+  if (sent && identifier(sent.id)) return { ...row, type: 'message', ...sent, clipped: false, turn: positive(data?.turn) ? data.turn : null, interrupted: false };
   if (event.type === 'working-directory/change') return { ...row, type: 'scope-change' };
   if (event.surfaceOp && typeof event.surfaceOp === 'object' && event.surfaceOp.op === 'replace') {
     const { startSeq, endSeq } = event.surfaceOp;
@@ -28,7 +31,7 @@ export function projectTurnEvent(event, context) {
     const shadowedSeqs = context?.shadowedSeqs;
     if (!Array.isArray(shadowedSeqs) || !shadowedSeqs.length || shadowedSeqs[0] !== startSeq || shadowedSeqs.at(-1) !== endSeq
         || shadowedSeqs.some(seq => !integer(seq) || seq >= event.seq) || new Set(shadowedSeqs).size !== shadowedSeqs.length) throw new InvalidBody('表面替换需要宿主实际覆盖的有序节点。');
-    const replacement = projectTurnEvent({ ...event, surfaceOp: 'append' });
+    const replacement = projectTurnEvent({ ...event, surfaceOp: 'append' }, context);
     return { ...row, type: 'replace', startSeq, endSeq, shadowedSeqs: [...shadowedSeqs],
       compact: event.type === 'user/message' && data?.source?.kind === 'compact-checkpoint',
       ...(replacement.type === 'message' ? { message: replacement } : {}) };
@@ -39,8 +42,9 @@ export function projectTurnEvent(event, context) {
   }
   if (event.surfaceOp !== 'append') return row;
   const human = event.type === 'user/message' && data?.role === 'user' && data.source?.kind === 'user';
+  const external = event.type === 'user/message' && data?.role === 'user' ? qqInputSource(data.source) : null;
   const assistant = event.type === 'assistant/message' && data?.message?.role === 'assistant' && positive(data.turn);
-  const message = human ? data : assistant ? data.message : null;
+  const message = human || external ? data : assistant ? data.message : null;
   if (!message || !identifier(message.id) || !Array.isArray(message.content)) return row;
   let text = ''; let clipped = message.content.length > 256;
   for (const block of message.content.slice(0, 256)) {
@@ -51,21 +55,21 @@ export function projectTurnEvent(event, context) {
     text += (separator + block.text.slice(0, Math.max(0, remaining - separator.length))).slice(0, remaining);
   }
   if (!text.trim()) return row;
-  return { ...row, type: 'message', role: human ? 'user' : 'assistant', id: message.id, text, clipped,
+  return { ...row, type: 'message', role: human ? 'user' : external ? 'external-user' : 'assistant', id: message.id, text, clipped, ...(external ? { origin: external } : {}),
     turn: assistant ? data.turn : null, interrupted: assistant && data.interrupted === true };
 }
 
 /** Fold only public surface metadata. The caller replays the immutable host prefix. */
-export function projectTurnSurfaceEvent(event, nodes) {
+export function projectTurnSurfaceEvent(event, nodes, context = {}) {
   const op = event.surfaceOp;
   if (op && typeof op === 'object' && op.op === 'replace') {
     const start = nodes.indexOf(op.startSeq); const end = nodes.indexOf(op.endSeq);
     if (start < 0 || end < start) throw new InvalidBody('表面替换端点不在宿主当前有序节点范围内。');
-    const row = projectTurnEvent(event, { shadowedSeqs: nodes.slice(start, end + 1) });
+    const row = projectTurnEvent(event, { ...context, shadowedSeqs: nodes.slice(start, end + 1) });
     nodes.splice(start, end - start + 1, event.seq);
     return row;
   }
-  const row = projectTurnEvent(event);
+  const row = projectTurnEvent(event, context);
   if (op === 'append') nodes.push(event.seq);
   return row;
 }
@@ -92,6 +96,50 @@ export async function savePrivateBufferState(file, state) {
 }
 const save = savePrivateBufferState;
 
+/** Shared fold for live capture and a one-time source-aware history projection. */
+export function foldTurnRecords(state, records, now) {
+  for (let row of records) {
+    if (row.seq < state.nextSeq) continue;
+    if (row.type === 'scope-change') {
+      if (state.rounds.at(-1)?.status === 'open') state.rounds.at(-1).status = 'unknown';
+      state.open = null; continue;
+    }
+    if (row.type === 'replace') {
+      if (!Array.isArray(row.shadowedSeqs) || !row.shadowedSeqs.length
+          || row.shadowedSeqs[0] !== row.startSeq || row.shadowedSeqs.at(-1) !== row.endSeq
+          || row.shadowedSeqs.some(seq => !integer(seq) || seq >= row.seq)) throw new InvalidBody('轮级缓冲替换缺少可核对的表面节点。');
+      const shadowed = new Set(row.shadowedSeqs);
+      for (const round of state.rounds) round.messages = round.messages.filter(m => {
+        if (!shadowed.has(m.anchor)) return true;
+        if (row.compact) { m.anchor = row.seq; return true; }
+        state.removed++; return false;
+      });
+      if (!row.message) continue;
+      row = row.message;
+    }
+    if (row.type === 'turn/start') {
+      if (state.rounds.at(-1)?.status === 'open') state.rounds.at(-1).status = 'unknown';
+      state.open = row.turn;
+      state.rounds.push({ turn: row.turn, start: row.seq, at: row.time ?? now, status: 'open', messages: [] });
+    } else if (row.type === 'turn/end') {
+      const round = state.rounds.at(-1);
+      if (round?.turn === row.turn) { round.status = 'closed'; round.reason = row.reason; }
+      state.open = null;
+    } else if (row.type === 'message') {
+      let round = state.rounds.at(-1);
+      const turn = row.turn ?? state.open;
+      if (!round || round.turn !== turn || round.status === 'closed') {
+        round = { turn, start: row.seq, at: row.time ?? now, status: turn === null ? 'unknown' : 'open', messages: [] };
+        state.rounds.push(round);
+      }
+      round.messages.push({ seq: row.seq, anchor: row.seq, role: row.role, id: row.id,
+        text: row.text, clipped: row.clipped, interrupted: row.interrupted, ...(row.origin ? { origin: structuredClone(row.origin) } : {}), at: row.time ?? now });
+      round.at = Math.max(round.at, row.time ?? now);
+    }
+  }
+  return state;
+}
+
 export class TurnBufferService {
   constructor({ layout, org, clock }) { Object.assign(this, { layout, org, clock }); }
   file(project, session) { return this.layout.turnBufferFile(project, digest(session)); }
@@ -110,10 +158,12 @@ export class TurnBufferService {
       if (info && info.size > TURN_BUFFER_LIMITS.bytes + 8192) throw fail();
       const state = await readJsonOrNull(file);
       if (!state) return null;
-      if (state.version !== 1 || state.project !== project || state.session !== session || !integer(state.nextSeq)
+      if (![1, 2].includes(state.version) || state.project !== project || state.session !== session || !integer(state.nextSeq)
           || !integer(state.floor) || state.floor > state.nextSeq || !integer(state.missing) || !integer(state.removed)
           || !Array.isArray(state.rounds) || state.rounds.length > TURN_BUFFER_LIMITS.rounds
            || !(state.open === null || positive(state.open))) throw fail();
+      if (state.sourceRecovery !== undefined && (state.sourceRecovery?.version !== 2 || !integer(state.sourceRecovery.throughSeq) || state.sourceRecovery.throughSeq > state.nextSeq || !integer(state.sourceRecovery.omitted))) throw fail();
+      if (state.sourceProjection !== undefined && state.sourceProjection !== 2) throw fail();
       if (state.owner !== undefined && (state.owner.kind !== 'Lead' || state.owner.project !== project || state.owner.session !== session)) throw fail();
       let count = 0; let last = -1;
       for (const round of state.rounds) {
@@ -121,7 +171,9 @@ export class TurnBufferService {
             || !['open', 'closed', 'unknown'].includes(round.status) || !Array.isArray(round.messages)) throw fail();
         for (const m of round.messages) {
           if (!integer(m.seq) || m.seq <= last || m.seq >= state.nextSeq || !integer(m.anchor) || m.anchor < m.seq
-              || m.anchor >= state.nextSeq || !['user', 'assistant'].includes(m.role) || !identifier(m.id)
+              || m.anchor >= state.nextSeq || !['user', 'assistant', 'external-user', 'external-assistant'].includes(m.role)
+               || externalConversationMessage(m) && (state.version !== 2 || !validConversationOrigin(m.origin, m.role))
+               || !externalConversationMessage(m) && m.origin !== undefined || !identifier(m.id)
               || typeof m.text !== 'string' || m.text.length > TURN_BUFFER_LIMITS.text || typeof m.clipped !== 'boolean'
               || typeof m.interrupted !== 'boolean' || (m.at !== undefined && !Number.isFinite(m.at))) throw fail();
           last = m.seq; count++;
@@ -144,10 +196,32 @@ export class TurnBufferService {
     }
     return state;
   }
+  async saveState(file, state) {
+    if (state.rounds.some(r => r.messages.some(externalConversationMessage))) {
+      state.version = 2;
+      // Must precede external text: older readers must never reinterpret QQ as local user input.
+      const marker = join(this.layout.memoryRoot(), 'external-conversation-layout.json');
+      const old = await readJsonOrNull(marker);
+      if (old && old.version !== 2) throw fail();
+      if (!old) await save(marker, { version: 2 });
+    }
+    await save(file, state);
+  }
+  async recoverProjection({ subject, project, session, expected, state, active = () => true }) {
+    const file = this.file(project, session);
+    return serializeByKey(file, () => withLock(file + '.lock', async () => {
+      if (!active()) return false;
+      const proof = await this.authorize(subject, project, session);
+      const current = await this.load(project, session);
+      if (!current || digest(canonical(current)) !== expected || current.floor !== state.floor || current.nextSeq !== state.nextSeq || state.project !== project || state.session !== session) throw new Fault('TURN_BUFFER_SOURCE_REPLAY_CHANGED', '历史补读期间缓冲或清空边界变化，请重新补读。');
+      if (proof !== await this.authorize(subject, project, session) || !active()) return false;
+      await this.saveState(file, this.prune(state)); return true;
+    }, { timeoutMs: 3000 }));
+  }
   async position({ subject, project, session }) {
     await this.authorize(subject, project, session);
     const state = await this.load(project, session);
-    return state ? { nextSeq: state.nextSeq, floor: state.floor } : null;
+    return state ? { nextSeq: state.nextSeq, floor: state.floor, sourceProjection: state.sourceProjection ?? 1 } : null;
   }
   async capture({ subject, project, session, records, fromSeq, throughSeq, active = () => true }) {
     if (!integer(fromSeq) || !integer(throughSeq) || throughSeq < fromSeq || !Array.isArray(records) || records.length > 2048
@@ -157,7 +231,7 @@ export class TurnBufferService {
       if (!active()) return;
       const before = await this.authorize(subject, project, session);
       const state = await this.load(project, session) ?? { version: 1, project, session,
-        nextSeq: fromSeq, floor: fromSeq, missing: 0, removed: 0, open: null, rounds: [] };
+        sourceProjection: 2, nextSeq: fromSeq, floor: fromSeq, missing: 0, removed: 0, open: null, rounds: [] };
       state.owner = { kind: 'Lead', project, session };
       if (throughSeq <= state.nextSeq) {
         // 重复事件和清空前迟到的批次都不能复活正文；顺便物理清理已到期资料。
@@ -166,50 +240,12 @@ export class TurnBufferService {
         return;
       }
       if (fromSeq > state.nextSeq) { state.missing += fromSeq - state.nextSeq; state.open = null; }
-      for (let row of records) {
-        if (row.seq < state.nextSeq) continue;
-        if (row.type === 'scope-change') {
-          if (state.rounds.at(-1)?.status === 'open') state.rounds.at(-1).status = 'unknown';
-          state.open = null; continue;
-        }
-        if (row.type === 'replace') {
-          if (!Array.isArray(row.shadowedSeqs) || !row.shadowedSeqs.length
-              || row.shadowedSeqs[0] !== row.startSeq || row.shadowedSeqs.at(-1) !== row.endSeq
-              || row.shadowedSeqs.some(seq => !integer(seq) || seq >= row.seq)) throw new InvalidBody('轮级缓冲替换缺少可核对的表面节点。');
-          const shadowed = new Set(row.shadowedSeqs);
-          for (const round of state.rounds) round.messages = round.messages.filter(m => {
-            if (!shadowed.has(m.anchor)) return true;
-            if (row.compact) { m.anchor = row.seq; return true; }
-            state.removed++; return false;
-          });
-          if (!row.message) continue;
-          row = row.message;
-        }
-        if (row.type === 'turn/start') {
-          if (state.rounds.at(-1)?.status === 'open') state.rounds.at(-1).status = 'unknown';
-          state.open = row.turn;
-          state.rounds.push({ turn: row.turn, start: row.seq, at: row.time ?? this.clock.ms(), status: 'open', messages: [] });
-        } else if (row.type === 'turn/end') {
-          const round = state.rounds.at(-1);
-          if (round?.turn === row.turn) { round.status = 'closed'; round.reason = row.reason; }
-          state.open = null;
-        } else if (row.type === 'message') {
-          let round = state.rounds.at(-1);
-          const turn = row.turn ?? state.open;
-          if (!round || round.turn !== turn || round.status === 'closed') {
-            round = { turn, start: row.seq, at: row.time ?? this.clock.ms(), status: turn === null ? 'unknown' : 'open', messages: [] };
-            state.rounds.push(round);
-          }
-          round.messages.push({ seq: row.seq, anchor: row.seq, role: row.role, id: row.id,
-            text: row.text, clipped: row.clipped, interrupted: row.interrupted, at: row.time ?? this.clock.ms() });
-          round.at = Math.max(round.at, row.time ?? this.clock.ms());
-        }
-      }
+      foldTurnRecords(state, records, this.clock.ms());
       state.nextSeq = throughSeq;
       this.prune(state);
       if (before !== await this.authorize(subject, project, session)) throw new Denied('轮级缓冲 · 身份变化', '身份变化，丢弃本次缓冲写入。');
       if (!active()) return;
-      await save(file, state);
+      await this.saveState(file, state);
     }, { timeoutMs: 3000 }));
   }
   async read({ subject, project, session, limit = 16, offset = 0, id, dataVersion, budget = TURN_BUFFER_LIMITS.query, visible = [] }) {
@@ -222,6 +258,7 @@ export class TurnBufferService {
     const version = digest(canonical(state ? { rounds: state.rounds, floor: state.floor, missing: state.missing, removed: state.removed } : null));
     if (dataVersion !== undefined && dataVersion !== version) throw new Fault('TURN_BUFFER_VERSION_CHANGED', '缓冲内容已变化，请从首页重新读取。');
     const frame = { 版本: 1, 项目: project, 会话: session, 数据版本: version,
+      来源投影版本: state?.sourceProjection ?? 1, 历史来源补读: state?.sourceRecovery ?? null,
       起始事件序号: state?.floor ?? null, 下次事件序号: state?.nextSeq ?? null, 未核事件数: state?.missing ?? 0, 已清理消息数: state?.removed ?? 0,
       保留天数: TURN_BUFFER_LIMITS.days, 下一偏移: null, 截断: false, 轮次: [] };
     // 从新到旧分配预算，再恢复时间顺序。可见正文不重复注入，压缩后的原文仍可作为历史资料。
@@ -238,7 +275,7 @@ export class TurnBufferService {
         frame.轮次.unshift(group);
       }
       group.消息.unshift({ 事件序号: m.seq, 消息: m.id, 角色: m.role, 文本: text,
-        截断: m.clipped || text.length < m.text.length, 中断: m.interrupted });
+        截断: m.clipped || text.length < m.text.length, 中断: m.interrupted, ...(m.origin ? { 来源: m.origin } : {}) });
       frame.截断 ||= m.clipped || text.length < m.text.length;
     }
     frame.下一偏移 = offset + consumed < items.length ? offset + consumed : null;

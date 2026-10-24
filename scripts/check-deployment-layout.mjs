@@ -29,7 +29,9 @@ export function supportedMemoryLayouts({ manifest, paths, reader }) {
       || new Set(parsed.objectHistoryLayouts).size !== parsed.objectHistoryLayouts.length) fail('目标提交的对象历史兼容清单无效，拒绝部署。');
     if (parsed.informationLayouts !== undefined && (!Array.isArray(parsed.informationLayouts) || !parsed.informationLayouts.length
       || parsed.informationLayouts.some(v => ![1, 2].includes(v)) || new Set(parsed.informationLayouts).size !== parsed.informationLayouts.length)) fail('目标提交的信息收录兼容清单无效，拒绝部署。');
+    if (parsed.turnBufferLayouts !== undefined && (!Array.isArray(parsed.turnBufferLayouts) || !parsed.turnBufferLayouts.length || parsed.turnBufferLayouts.some(v => ![1, 2].includes(v)) || new Set(parsed.turnBufferLayouts).size !== parsed.turnBufferLayouts.length)) fail('目标提交的轮级缓冲兼容清单无效，拒绝部署。');
     return { memoryLayouts: parsed.memoryLayouts, objectHistoryLayouts: parsed.objectHistoryLayouts,
+      ...(parsed.turnBufferLayouts ? { turnBufferLayouts: parsed.turnBufferLayouts } : {}),
       ...(parsed.informationLayouts ? { informationLayouts: parsed.informationLayouts } : {}) };
   }
   const start = paths?.indexOf('  memoryDir(scope) {') ?? -1;
@@ -93,6 +95,16 @@ export async function informationLayoutVersion(privateRoot) {
   } catch (error) { if (error.code === 'ENOENT') return 1; throw error; }
 }
 
+export async function turnBufferLayoutVersion(privateRoot) {
+  const file = join(privateRoot, DIR.基础设施, DIR.记忆服务, 'external-conversation-layout.json');
+  try {
+    const info = await lstat(file);
+    if (!info.isFile() || info.isSymbolicLink() || info.size > 1024) fail('轮级缓冲布局标记不可核对，拒绝部署。');
+    let marker; try { marker = JSON.parse(await readFile(file, 'utf8')); } catch { fail('轮级缓冲布局标记无效，拒绝部署。'); }
+    if (marker?.version !== 2) fail('轮级缓冲布局未知，拒绝部署。'); return 2;
+  } catch (error) { if (error.code === 'ENOENT') return 1; throw error; }
+}
+
 export async function checkDeploymentLayout({ repository, git = 'git', target, privateRoot }) {
   const root = join(privateRoot, DIR.基础设施, DIR.记忆服务);
   if (!(await stat(root)).isDirectory()) fail('记忆目录不存在，不能将未知数据根视为布局1。');
@@ -100,6 +112,7 @@ export async function checkDeploymentLayout({ repository, git = 'git', target, p
   const historyVersion = async () => { try { await lstat(join(privateRoot, DIR.版本历史, '.objects-v2')); return 2; } catch (error) { if (error.code === 'ENOENT') return 1; throw error; } };
   const objectHistoryLayout = await historyVersion();
   const informationLayout = await informationLayoutVersion(privateRoot);
+  const turnBufferLayout = await turnBufferLayoutVersion(privateRoot);
   const source = commitReader(repository, git, target);
   const manifest = source.read('scripts/storage-compatibility.json');
   const supported = supportedMemoryLayouts({ manifest,
@@ -108,10 +121,12 @@ export async function checkDeploymentLayout({ repository, git = 'git', target, p
   if (!supported.memoryLayouts.includes(version)) fail('目标提交不支持当前记忆布局' + version + '，拒绝切换或回退；数据保持原状。');
   if (!supported.objectHistoryLayouts.includes(objectHistoryLayout)) fail('目标提交不支持当前对象历史布局' + objectHistoryLayout + '，拒绝切换或回退；数据保持原状。');
   if (!(supported.informationLayouts ?? [1]).includes(informationLayout)) fail('目标提交不支持当前信息收录布局' + informationLayout + '，拒绝切换或回退；解析资料保持原状。');
+  if (!(supported.turnBufferLayouts ?? [1]).includes(turnBufferLayout)) fail('目标提交不支持当前轮级缓冲来源布局' + turnBufferLayout + '，拒绝切换或回退；不让QQ参与者被旧读取器当成本地用户。');
+  if (await turnBufferLayoutVersion(privateRoot) !== turnBufferLayout) fail('检查期间轮级缓冲来源布局发生变化，拒绝部署。');
   if (await historyVersion() !== objectHistoryLayout) fail('检查期间对象历史布局发生变化，拒绝部署。');
   if (memoryLayoutVersion(root) !== version) fail('检查期间记忆布局发生变化，拒绝部署。');
   if (await informationLayoutVersion(privateRoot) !== informationLayout) fail('检查期间信息收录布局发生变化，拒绝部署。');
-  return { commit: source.commit, memoryLayout: version, objectHistoryLayout, informationLayout };
+  return { commit: source.commit, memoryLayout: version, objectHistoryLayout, informationLayout, turnBufferLayout };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

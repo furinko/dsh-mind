@@ -18,7 +18,7 @@ export async function injectProfessionalContext(assembly, { agent, org, projectO
   try {
     const project = projectOf({ agent });
     let proof;
-    const frame = await recallProfessionalContext({ org, subject, project, readExpression: () => readAcceptedExpression(agent.session), onAssembled: value => { proof = value; } });
+    const frame = await recallProfessionalContext({ org, subject, project, readExpression: () => readAcceptedExpression(agent.session, { allowExternal: true }), onAssembled: value => { proof = value; } });
     const current = agentSubject({ agent });
     if (!active() || current.id !== subject.id || current.kind !== subject.kind || projectOf({ agent }) !== project) return clean;
     // 未执行查询不能渲染成“查询后为空”；旧段已移除，也不为保持历史而续用过期读域。

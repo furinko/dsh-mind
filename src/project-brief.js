@@ -42,7 +42,7 @@ const laterThan = (candidate, previous, buffers) => candidate.session === previo
 function pendingMessages(state, buffers, currentSession, closedOnly = false, relationForgetAt = 0) {
   const queues = state.sessions.map(s => (buffers.get(s.id)?.rounds ?? [])
     .filter(r => !closedOnly || s.id !== currentSession || r.status !== 'open')
-     .flatMap(round => round.messages.filter(m => m.seq >= s.processed && (!Math.max(s.forgetAt ?? 0, state.forgetAt ?? 0, relationForgetAt)
+     .flatMap(round => round.messages.filter(m => ['user', 'assistant'].includes(m.role) && m.seq >= s.processed && (!Math.max(s.forgetAt ?? 0, state.forgetAt ?? 0, relationForgetAt)
        || (m.at ?? 0) > Math.max(s.forgetAt ?? 0, state.forgetAt ?? 0, relationForgetAt)))
       .map(message => ({ session: s.id, message, at: message.at ?? null }))));
   const result = [];
