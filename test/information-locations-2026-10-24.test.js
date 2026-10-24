@@ -12,6 +12,8 @@ it('Linux挂载位置识别USB、硬盘和手动挂载目录，正确解码空�
     '15 1 8:4 / /mnt rw - ext4 /dev/sdd1 rw',
     '16 1 8:5 / /mnt/archive rw - ext4 /dev/sde1 rw',
     '17 1 0:1 / /proc rw - proc proc rw',
+    '18 1 8:1 /media /media rw - ext4 /dev/sda1 rw',
+    '19 1 8:1 /mnt /mnt/system-alias rw - ext4 /dev/sda1 rw',
   ].join('\n');
   const disks = linuxInformationVolumes(text);
   assert.deepEqual(disks.map(d => d.path), ['/run/media/user/我的 U盘', '/run/media/user/Backup', '/mnt', '/mnt/archive']);

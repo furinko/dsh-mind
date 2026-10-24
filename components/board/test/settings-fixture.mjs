@@ -52,7 +52,7 @@ export async function settingsScene(options={}) {
    if(options.informationOnly){const child=collect(r.tree).elements.find(e=>typeof e.type==='function'&&e.type.name==='信息成长设置');if(!child)throw Error('Information settings child missing');r.unmount();r=createRenderer(child.type,child.props);r.flush();await settle(10);r.flush();if(!options.informationClosed){collect(r.tree).elements.find(e=>e.type==='button'&&textOf(e)==='管理信息来源').props.onClick();r.flush();await settle(10);r.flush();}}
   const elements=()=>collect(r.tree,{skipStyle:true}).elements;
   const field=label=>elements().find(x=>x.props['aria-label']===label);
-  const button=label=>elements().find(x=>x.type==='button'&&textOf(x)===label);
+  const button=label=>elements().find(x=>x.type==='button'&&(textOf(x)===label||x.props['aria-label']===label));
   async function flush(){await settle(10);r.flush();}
   return {state,calls,loaded,r,doc,elements,field,button,flush,text:()=>textOf(r.tree),change(label,value){field(label).props.onChange({target:{value}});r.flush();},async click(label){const b=button(label);if(!b||b.props.disabled)throw Error('Unavailable button: '+label);b.props.onClick();r.flush();await flush();},async poll(){loaded.timers.intervals[0].fn();await flush();},close(){r.unmount();dispose();}};
 }

@@ -5008,7 +5008,7 @@ window.__ModuleLoader__.load({
                     h('label', null, [h('input', { type: 'checkbox', 'aria-label': '显示隐藏目录', checked: directory.hidden, onChange: function () { setDirectory(function (old) { return Object.assign({}, old, { hidden: !old.hidden }); }); } }), '显示隐藏目录'])]),
                   h('div', { role: 'group', 'aria-label': '可选文件夹', className: 'dshmind-directory-entries' }, [listing.entries.filter(function (entry) { return directory.hidden || !entry.hidden; }).map(function (entry) {
                     var connected = data.sources.some(function (s) { return s.path === entry.path; });
-                    return h('div', { key: entry.path, className: 'dshmind-directory-row' }, [h('label', { title: entry.path }, [h('input', { type: 'checkbox', 'aria-label': '选择目录 ' + entry.path, checked: connected || directory.selected.indexOf(entry.path) >= 0, disabled: busy || directory.loading || connected, onChange: function () { toggleDirectory(entry.path); } }), directoryIcon('folder'), h('span', { className: 'dshmind-directory-name' }, entry.name), connected ? h('span', { className: 'dshmind-set__hint' }, '已连接') : null]), button('进入 ' + entry.name, function () { browseDirectory(entry.path); }, directory.loading)]);
+                    return h('div', { key: entry.path, className: 'dshmind-directory-row' }, [h('label', { title: entry.path }, [h('input', { type: 'checkbox', 'aria-label': '选择目录 ' + entry.path, checked: connected || directory.selected.indexOf(entry.path) >= 0, disabled: busy || directory.loading || connected, onChange: function () { toggleDirectory(entry.path); } }), directoryIcon('folder'), h('span', { className: 'dshmind-directory-name' }, entry.name), connected ? h('span', { className: 'dshmind-set__hint' }, '已连接') : null]), h('button', { type: 'button', className: 'dshmind-set__btn', 'aria-label': '进入 ' + entry.name, title: entry.path, disabled: busy || directory.loading, onClick: function () { browseDirectory(entry.path); } }, '打开')]);
                   }), !listing.entries.some(function (entry) { return directory.hidden || !entry.hidden; }) ? h('p', { className: 'dshmind-directory-empty' }, '此处没有可显示的子文件夹，可选择当前目录。') : null]),
                   listing.truncated ? h('p', { className: 'dshmind-directory-message', role: 'status' }, '文件夹较多，仅显示开头部分；可输入完整路径继续浏览。') : null,
                 ] : null,
@@ -5053,7 +5053,7 @@ window.__ModuleLoader__.load({
           ]),
           ]),
           h('div', { hidden: panel !== 'sources' }, [
-          h('button', { type: 'button', className: 'dshmind-set__btn', disabled: busy || data.sources.length >= data.limits.sources, onClick: chooseDirectories, ref: function (node) { if (node && directoryControl.returning) { directoryControl.returning = false; node.focus(); } } }, '选择信息来源目录'),
+          h('button', { type: 'button', className: 'dshmind-set__btn', disabled: busy || data.sources.length >= data.limits.sources, onClick: chooseDirectories, ref: function (node) { if (node && directoryControl.returning) { directoryControl.returning = false; Promise.resolve().then(function () { if (node.isConnected && directoryControl.closed) node.focus(); }); } } }, '选择信息来源目录'),
           h('p', { className: 'dshmind-set__hint' }, '像选择工作区一样浏览文件夹，可勾选多个目录一起连接，也可随时继续添加。'),
           data.sources.length ? data.sources.map(function (s) { return h('article', { key: s.id, style: { padding: '12px 0', borderBottom: '1px solid var(--dsw-alias-border-l2,#444)' } }, [
             h('strong', null, s.name), h('p', { className: 'dshmind-set__mono' }, s.path),

@@ -7,10 +7,13 @@ import { basename, join, parse } from 'node:path';
 const unescapeMount = value => value.replace(/\\(040|011|012|134)/g, (_, code) => String.fromCharCode(parseInt(code, 8)));
 export function linuxInformationVolumes(text) {
   const devices = new Set(); const result = [];
+  const rootDevices = new Set(text.split('\n').map(line => line.split(' - ')[0].split(' ')).filter(fields => fields[4] === '/').map(fields => fields[2]));
   for (const line of text.split('\n')) {
     const [head, tail] = line.split(' - '); if (!tail) continue;
     const fields = head.split(' '); const path = unescapeMount(fields[4] ?? '');
     if (!/^\/(?:run\/media|media|mnt)(?:\/|$)/.test(path)) continue;
+    // Containers may bind the empty /media and /mnt directories from the system disk.
+    if (rootDevices.has(fields[2])) continue;
     const identity = `${fields[2]}:${fields[3]}`;
     if (devices.has(identity)) continue;
     const filesystem = tail.split(' ')[0];
