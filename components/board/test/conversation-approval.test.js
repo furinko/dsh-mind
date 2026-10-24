@@ -59,7 +59,9 @@ test('实时待办显式打开独立页；完整字段和执行步骤不截断�
   for(const field of ['plugins',A,'r1','card-v1','task1','NEVER-TRUNCATE','STEP-END','preview-r1','操作参数','执行计划'])assert.ok(textOf(r.tree).includes(field),field);
   assert.equal(e.calls.filter(x=>x.method==='POST').length,0);
   const sr=createRenderer(e.registrations.register.find(x=>x.options.name==='settings.section').Component,{});sr.flush();await flush(sr);
-  assert.ok(!button(sr,'批准')&&!button(sr,'拒绝'));assert.match(textOf(sr.tree),/待你决定/);sr.unmount();r.unmount();e.dispose();
+  assert.ok(!button(sr,'批准')&&!button(sr,'拒绝'));
+  button(sr,'运行与审批').props.onClick();sr.flush();
+  assert.match(textOf(sr.tree),/待你决定/);sr.unmount();r.unmount();e.dispose();
 });
 
 test('私有计划只按显式会话取数，拒绝猜测全局末条会话；同会话其他请求不混入审阅',async()=>{
