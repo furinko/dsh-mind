@@ -292,16 +292,29 @@ window.__ModuleLoader__.load({
       var box = obj(item);
       return box ? line(firstOf(box, ['探针', '名', '名称', 'name', 'id'])) : '';
     }
-    /** `2026-10-07T09:15:30.123Z` → `10-07 09:15:30`；非 ISO 原样返回（不依赖 locale）。 */
-    function shortTime(value) {
-      var m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/.exec(String(value || ''));
-      return m ? m[2] + '-' + m[3] + ' ' + m[4] + ':' + m[5] + ':' + m[6] : String(value || '');
+    /** The ledger keeps UTC; presentation uses the browser's zone and never changes the source value. */
+    var 本地时间格式器 = null;
+    try { 本地时间格式器 = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZoneName: 'longOffset' }); } catch (error) { /* Keep the explicit original zone when formatting is unavailable. */ }
+    function 显示时区() { return 本地时间格式器 ? 本地时间格式器.resolvedOptions().timeZone : '保留原始时区'; }
+    function 时间信息(value) {
+      var raw = typeof value === 'string' ? value : '';
+      var fallback = { short: raw, full: raw ? '原始时间（未转换；格式或时区无法核对）：' + raw : '时间未提供' };
+      if (!本地时间格式器 || !/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(raw)) return fallback;
+      var date = new Date(raw); var wall = new Date(raw.slice(0, 19).replace(' ', 'T') + 'Z');
+      if (!isFinite(date.getTime()) || !isFinite(wall.getTime()) || wall.toISOString().slice(0, 19) !== raw.slice(0, 19).replace(' ', 'T')) return fallback;
+      var parts = {}; 本地时间格式器.formatToParts(date).forEach(function (part) { parts[part.type] = part.value; });
+      var day = parts.year + '-' + parts.month + '-' + parts.day;
+      var clock = parts.hour + ':' + parts.minute + ':' + parts.second;
+      return { short: parts.month + '-' + parts.day + ' ' + clock,
+        full: day + ' ' + clock + ' · ' + 显示时区() + ' · ' + String(parts.timeZoneName || '').replace('GMT', 'UTC') + '\n原始时间：' + raw };
     }
-    /**
-     * 时刻 → **分钟级**（`MM-DD HH:MM`）：时间线与节律条是「一行一条」的扫读面，秒是噪声。
-     * 只对 ISO 形状裁剪（与 `shortTime` 同款纪律：不依赖 locale、非 ISO 原样返回）。
-     * 审计页仍用 `shortTime` 给全精度 —— 两处精度不同是**有意的**，不是漏改。
-     */
+    function 审计时刻(row) {
+      return row && Object.prototype.hasOwnProperty.call(row, '时间') ? row.时间 : firstOf(row, ['at', 'time']);
+    }
+    function shortTime(value) { return 时间信息(value).short; }
+    function 完整时间(value) { return 时间信息(value).full; }
+    /** Compact timeline labels share the same local-zone conversion as the audit rows. */
     function 短时刻(value) {
       var s = shortTime(value);
       return /^\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s) ? s.slice(0, 11) : s;
@@ -2187,7 +2200,7 @@ window.__ModuleLoader__.load({
         if (失败) 计数.失败 += 1; else if (拦截) 计数.拦截 += 1; else if (r.动作 === '状态变更') 计数.状态变更 += 1; else 计数.其他 += 1;
         return h('i', {
           key: 'b' + i, style: { background: 色 },
-          title: shortTime(r.时间) + ' · ' + (r.动作 || '') + ' · ' + (源主体短(r.主体)) + ' · ' + (r.结果 || ''),
+          title: 完整时间(审计时刻(r)) + ' · ' + (r.动作 || '') + ' · ' + (源主体短(r.主体)) + ' · ' + (r.结果 || ''),
         });
       });
       // 与上方统计砖、构成图之间的缝**交给 `.dshmind-viz` 的容器 gap（14px）**：
@@ -2224,7 +2237,7 @@ window.__ModuleLoader__.load({
           key: 'r' + i,
           className: 'dshmind-tlRow' + (失败 ? ' dshmind-tlBad' : 拦截 ? ' dshmind-tlWarn' : ''),
         }, [
-          h('span', { key: 't', className: 'dshmind-tlTime dshmind-mono' }, 短时刻(r.时间) || '—'),
+          h('span', { key: 't', className: 'dshmind-tlTime dshmind-mono', title: 完整时间(审计时刻(r)) }, 短时刻(审计时刻(r)) || '—'),
           h('span', { key: 'i', className: 'dshmind-tlIcon' }, 失败 ? '✗' : 拦截 ? '⛔' : r.动作 === '状态变更' ? '·' : '•'),
           h('span', { key: 'b' }, (r.动作 || '记录') + '　' + (源主体短(r.主体) || '') + (r.结果 ? '　' + r.结果 : '')),
         ]);
@@ -4545,7 +4558,7 @@ window.__ModuleLoader__.load({
         // 框内再套一个 `overflow-y:auto` 是双层滚动（滚轮在框里框外还不一样），
         // 而且内容被压在一个小盒子里看不见。现在行**直接进页面流**，铺开靠「展开全部」钮
         // （纯显示、零请求，同折叠钮）。
-        section(4, '审计流', '只增的事实记录 · 写入无条件 · 页面滚动',
+        section(4, '审计流', '只增的事实记录 · 本地时间（' + 显示时区() + '）',
           audit.length ? '已列 ' + audit.length + (审计总条数 > audit.length ? ' / 共 ' + 审计总条数 : '') : '',
           audit.length
             ? [
@@ -4553,8 +4566,8 @@ window.__ModuleLoader__.load({
                   var grade = auditGrade(row);
                   var alarm = boolOf(firstOf(row, ['告警', 'alarm'])) === true;
                   return h('div', { key: 'a' + index, className: 'dshmind-auditRow ' + auditClass(row) }, [
-                    h('span', { key: 't', className: 'dshmind-mono', style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary,#81858c)' } },
-                      shortTime(firstOf(row, ['时间', 'at', 'time'])) || '—'),
+                    h('span', { key: 't', className: 'dshmind-mono', title: 完整时间(审计时刻(row)), style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary,#81858c)' } },
+                      shortTime(审计时刻(row)) || '—'),
                     h('span', { key: 'g', style: { fontSize: 11 } }, grade),
                     h('span', { key: 'a', className: 'dshmind-auditAction' }, [
                       alarm ? h('span', { key: 'x', style: { color: RED, marginRight: 4 } }, '⚑') : null,

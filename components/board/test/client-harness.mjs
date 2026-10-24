@@ -472,6 +472,9 @@ export function loadClient(options = {}) {
       log() {},
     },
   };
+  // A deterministic browser zone, independent of the machine running the suite.
+  sandbox.Intl = Object.create(Intl);
+  sandbox.Intl.DateTimeFormat = function (locale, config) { return new Intl.DateTimeFormat(locale, { ...config, timeZone: config?.timeZone ?? options.timeZone ?? 'Asia/Shanghai' }); };
   if (options.document) sandbox.document = options.document;
   // 假 `fetch` 装成**全局**（组件取的是裸 `fetch` / `globalThis.fetch`）——
   // 不传就真的没有 fetch，用来守「拿不到 fetch 要响亮降级」那条。
@@ -776,7 +779,7 @@ function boot(options = {}) {
     || (options.services && options.services.remote && options.services.remote.__fetch)
     || null;
   const loaded = loadClient({ store: options.store, sessionId: options.sessionId, document: doc,
-    fetch: fetchImpl, noTimers: options.noTimers });
+    fetch: fetchImpl, noTimers: options.noTimers, timeZone: options.timeZone });
   check(loaded.loaderCalls === 1, 'loader 被调用一次', '实际 ' + loaded.loaderCalls + ' 次');
   const def = loaded.definition;
   check(!!def && def.id === PACKAGE_NAME, '工厂 id 是包名 ' + PACKAGE_NAME, String(def && def.id));
@@ -864,7 +867,7 @@ async function textAfterLoad(renderer) {
  */
 export async function renderView(view, options = {}) {
   const spy = makeRemote(() => okReply(view));
-  const booted = boot({ store: options.store, services: Object.assign(session(), { remote: spy.remote }) });
+  const booted = boot({ store: options.store, timeZone: options.timeZone, services: Object.assign(session(), { remote: spy.remote }) });
   const renderer = mountDashboard(booted);
   renderer.flush();
   await settle();
