@@ -5053,7 +5053,7 @@ window.__ModuleLoader__.load({
           ]),
           ]),
           h('div', { hidden: panel !== 'sources' }, [
-          h('button', { type: 'button', className: 'dshmind-set__btn', disabled: busy || data.sources.length >= data.limits.sources, onClick: chooseDirectories, ref: function (node) { if (node && directoryControl.returning) { directoryControl.returning = false; Promise.resolve().then(function () { if (node.isConnected && directoryControl.closed) node.focus(); }); } } }, '选择信息来源目录'),
+          h('button', { key: 'information-folder-trigger', type: 'button', className: 'dshmind-set__btn', disabled: busy || data.sources.length >= data.limits.sources, onClick: chooseDirectories, ref: function (node) { if (node && directoryControl.returning) { directoryControl.returning = false; Promise.resolve().then(function () { if (node.isConnected && directoryControl.closed) node.focus(); }); } } }, '选择信息来源目录'),
           h('p', { className: 'dshmind-set__hint' }, '像选择工作区一样浏览文件夹，可勾选多个目录一起连接，也可随时继续添加。'),
           data.sources.length ? data.sources.map(function (s) { return h('article', { key: s.id, style: { padding: '12px 0', borderBottom: '1px solid var(--dsw-alias-border-l2,#444)' } }, [
             h('strong', null, s.name), h('p', { className: 'dshmind-set__mono' }, s.path),
