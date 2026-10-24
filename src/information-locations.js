@@ -14,6 +14,7 @@ export function linuxInformationVolumes(text) {
     if (!/^\/(?:run\/media|media|mnt)(?:\/|$)/.test(path)) continue;
     // Containers may bind the empty /media and /mnt directories from the system disk.
     if (rootDevices.has(fields[2])) continue;
+    if (['/media', '/mnt', '/run/media'].includes(path) && unescapeMount(fields[3]) === path) continue;
     const identity = `${fields[2]}:${fields[3]}`;
     if (devices.has(identity)) continue;
     const filesystem = tail.split(' ')[0];
