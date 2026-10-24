@@ -5046,6 +5046,7 @@ window.__ModuleLoader__.load({
             h('summary', null, '阅读节奏与预算'),
             [['autoScan', '自动收录目录更新'], ['autoLearn', '自动整理收获'], ['autoExplore', '通过已安装的 B 站插件自主探索']].map(function (entry) { var name = entry[0], label = entry[1]; return 设置行('information-' + name, label, name === 'autoExplore' ? '由 Lead 在少量公开候选中按兴趣选择；未安装来源插件时等待连接。与辅助阅读共用预算。' : '', h('input', { type: 'checkbox', 'aria-label': label, checked: config[name], disabled: busy, onChange: function (event) { patchConfig(name, event.target.checked); } })); }),
             [['dailyReadChars', '每日阅读字符上限', 1000000], ['dailyModelCalls', '每日模型调用上限（含选题）', 100], ['dailySourceReads', '每日自主探索上限', 10]].map(function (entry) { var name = entry[0], label = entry[1]; return 设置行('information-' + name, label, '', h('input', { type: 'number', min: 0, max: entry[2], className: 'dshmind-set__input', 'aria-label': label, value: config[name], disabled: busy, onChange: function (event) { patchConfig(name, Number(event.target.value)); } })); }),
+            设置行('information-file-limit', '文本文件上限（MiB）', '文档原件单独限制为50MiB；每份解析正文最多200万字符，按片段阅读。', h('input', { type: 'number', min: 0.001, max: 50, step: 1, className: 'dshmind-set__input', 'aria-label': '文本文件上限（MiB）', value: config.maxFileBytes / 1048576, disabled: busy, onChange: function (event) { patchConfig('maxFileBytes', Math.round(Number(event.target.value) * 1048576)); } })),
             h('p', { className: 'dshmind-set__hint' }, '预算按 UTC 日计算，次数含失败尝试。自动整理使用当前 Lead 的模型，在轮末运行；没有可用模型时资料保持待阅读。这些读数不等于 token 或费用。'),
             draft && draftRevision !== data.configRevision ? h('p', { role: 'status' }, '阅读设置已在别处更新，草稿保留；放弃草稿并核对当前设置后再修改。') : null,
             button('保存阅读设置', function () { send({ op: 'configure', expectedRevision: draftRevision, config: config }, function () { setDraft(null); }); }, !draft || draftRevision !== data.configRevision),
@@ -5053,6 +5054,11 @@ window.__ModuleLoader__.load({
           ]),
           ]),
           h('div', { hidden: panel !== 'sources' }, [
+          h('details', { className: 'dshmind-set__details' }, [h('summary', null, '文件格式与本地解析'),
+            h('p', { className: 'dshmind-set__hint' }, data.parser && data.parser.available ? '本地文档解析环境可用，各格式就绪情况见下方。扫描件与图片需 OCR，音视频需字幕或转录。' : '文本收录可用；文档解析组件尚未就绪，PDF、Office 和电子书会保留待处理状态。'),
+            h('p', { className: 'dshmind-set__hint' }, '来源目录始终只读。转换结果和临时文件保存在 Mind 私有目录，原文件不变；解析完成不代表 Lead 已经读完。'),
+            data.parser && data.parser.formats ? h('p', { className: 'dshmind-set__mono' }, Object.keys(data.parser.formats).map(function (ext) { return ext + (data.parser.formats[ext] ? ' 可用' : ' 缺少组件'); }).join(' · ')) : null,
+          ]),
           h('button', { key: 'information-folder-trigger', type: 'button', className: 'dshmind-set__btn', disabled: busy || data.sources.length >= data.limits.sources, onClick: chooseDirectories, ref: function (node) { if (node && directoryControl.returning) { directoryControl.returning = false; Promise.resolve().then(function () { if (node.isConnected && directoryControl.closed) node.focus(); }); } } }, '选择信息来源目录'),
           h('p', { className: 'dshmind-set__hint' }, '像选择工作区一样浏览文件夹，可勾选多个目录一起连接，也可随时继续添加。'),
           data.sources.length ? data.sources.map(function (s) { return h('article', { key: s.id, style: { padding: '12px 0', borderBottom: '1px solid var(--dsw-alias-border-l2,#444)' } }, [
@@ -5068,10 +5074,17 @@ window.__ModuleLoader__.load({
             sourceInput('所属项目（留空跨项目）', 'project'),
             设置行('information-private', '私密来源', '普通来源由 Lead 自主判断知识给谁使用；私密来源仅供 Lead。', h('input', { type: 'checkbox', 'aria-label': '私密来源（仅 Lead）', checked: source.audience === 'lead', disabled: busy, onChange: function (e) { patchSource('audience', e.target.checked ? 'lead' : 'auto'); } })),
             设置行('information-recursive', '包含子目录', '', h('input', { type: 'checkbox', 'aria-label': '包含子目录', checked: source.recursive, disabled: busy, onChange: function (e) { patchSource('recursive', e.target.checked); } })),
-            h('p', { className: 'dshmind-set__hint' }, '原目录只读，默认收录文字、JSON、网页导出和字幕。隐藏文件、链接及 Mind 自身数据跳过；其他格式不会被当成已阅读。'),
+            h('p', { className: 'dshmind-set__hint' }, '原目录只读，支持文本、字幕及本地解析的常用文档。隐藏文件、链接及 Mind 自身数据跳过；缺少解析器或没有正文不会算作已阅读。'),
             button(source.id ? '保存信息来源' : '连接信息来源', saveSource, !source.name.trim() || !source.path.trim() || (source.audience === 'roles' && !source.roles.trim())),
           ]),
           button('现在收录一批', function () { send({ op: 'scan' }); }),
+          data.documents && data.documents.length ? h('details', { className: 'dshmind-set__details' }, [h('summary', null, '文件处理进度（最近100份）'),
+            data.documents.map(function (doc) { var labels = { pending: '待解析', parsing: '正在解析', complete: '文字解析完成', partial: '部分解析', 'needs-component': '缺少解析组件', failed: '解析失败', missing: '原件缺失', withdrawn: '已撤回' }; return h('article', { key: doc.id, style: { padding: '10px 0', borderBottom: '1px solid var(--dsw-alias-border-l2,#444)' } }, [
+              h('strong', { style: { overflowWrap: 'anywhere' } }, doc.name), h('p', { className: 'dshmind-set__hint' }, (labels[doc.status] || doc.status) + (doc.chars ? ' · ' + doc.chars + ' 字符' : '') + (doc.error ? ' · ' + doc.error : '')),
+              doc.warnings && doc.warnings.length ? h('p', { className: 'dshmind-set__hint' }, doc.warnings.join('；')) : null,
+              ['failed', 'needs-component', 'partial'].indexOf(doc.status) >= 0 ? button('重试解析 ' + doc.name, function () { send({ op: 'parse_retry', id: doc.id, expectedRevision: data.configRevision }); }) : null,
+            ]); }),
+          ]) : null,
           ]),
           h('div', { hidden: panel !== 'records' }, [
           h('p', { className: 'dshmind-set__hint' }, '这里是来源和处理回执。知识、经历、人格连续性存入原记忆服务，正文与更正以正式记忆为准。'),
@@ -5080,6 +5093,7 @@ window.__ModuleLoader__.load({
           page ? h('p', { className: 'dshmind-set__hint' }, page.countMode ? '资料共 ' + page.total + ' 条，本批检查 ' + page.examined + ' 条，命中 ' + page.matched + ' 条' : '共 ' + page.total + ' 条，当前从第 ' + (page.total ? page.offset + 1 : 0) + ' 条开始') : null,
           page && page.entries.map(function (r) { return h('article', { key: r.id, style: { padding: '14px 0', borderBottom: '1px solid var(--dsw-alias-border-l2,#444)' } }, [
             h('strong', null, r.title), h('p', { className: 'dshmind-set__hint' }, (stateLabels[r.state] || r.state) + ' · 第 ' + r.revision + ' 版' + (r.stage ? ' · ' + r.stage : '') + (r.processing ? ' · ' + r.processing : '') + (r.sourceStatus === 'disconnected' ? ' · 来源已断开，保留快照' : r.sourceStatus === 'disabled' ? ' · 来源已停用' : '') + (r.usable === false ? ' · 暂不自动使用' : '')),
+            r.extraction ? h('p', { className: 'dshmind-set__hint' }, (r.extraction.status === 'partial' ? '部分解析' : '文字解析完成') + ' · ' + (r.extraction.warnings || []).join('；')) : null,
             r.native ? h('p', { className: 'dshmind-set__mono' }, r.native.map(function (n) { return n.类 + ' · ' + n.id + (n.岗位 ? ' · ' + n.岗位 : ''); }).join('\n')) : null,
             r.text ? h('p', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, r.text) : null,
             r.method ? h('details', null, [h('summary', null, '方法、条件与试用'), h('p', null, r.method), h('p', null, r.conditions), h('p', null, r.limitations), h('pre', { style: { whiteSpace: 'pre-wrap' } }, JSON.stringify(r.trials, null, 2))]) : null,
@@ -5098,6 +5112,7 @@ window.__ModuleLoader__.load({
           page && !page.total ? h('p', null, '这里还没有记录。没有收获时可以不写，记录数不代表成长。') : null,
           h('div', { className: 'dshmind-set__actions' }, [button('上一批收录记录', function () { 信息参数.offset = pages[pages.length - 1]; setPages(pages.slice(0, -1)); refresh(); }, !pages.length), button('下一批收录记录', function () { setPages(pages.concat([信息参数.offset])); 信息参数.offset = page.nextOffset; refresh(); }, !page || page.nextOffset === null)]),
           preview ? h('details', { open: true, className: 'dshmind-set__details' }, [h('summary', null, '原文预览 · ' + preview.title + ' · 第 ' + preview.revision + ' 版'),
+            preview.locations && preview.locations.length ? h('p', { className: 'dshmind-set__hint' }, '原件位置：' + preview.locations.map(function (l) { return l.label; }).join(' · ')) : null,
             h('pre', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '360px', overflowY: 'auto' } }, preview.text),
             h('p', { className: 'dshmind-set__hint' }, preview.coverage), button('继续预览原文', function () { openMaterial(preview, preview.nextOffset, preview.hash, preview.format === 'growth-history' ? null : preview.revision); }, preview.nextOffset === null), button('关闭原文预览', function () { setPreview(null); })]) : null,
           edit ? h('div', { className: 'dshmind-set__rows' }, [

@@ -109,6 +109,16 @@ it('未知、损坏的目标兼容清单与不存在提交一律拒绝', () => f
   }
   await assert.rejects(f.check('missing-target'),/无法核对目标提交/);
 }));
+it('新格式收录落盘后阻止旧读取器回退，仅读取无正文布局标记', () => fixture(async f => {
+  await f.put(join(f.privateRoot, '信息收录', 'parser-layout.json'), '{"version":2}');
+  await f.put(join(f.privateRoot, '信息收录', 'state.json'), 'must-not-read-private-state');
+  await assert.rejects(f.check(f.current), /不支持当前信息收录布局2/);
+  const target = await f.commit(JSON.stringify({ version: 1, memoryLayouts: [1, 2], objectHistoryLayouts: [1, 2], informationLayouts: [1, 2] }));
+  assert.equal((await f.check(target)).informationLayout, 2);
+  await f.put(join(f.privateRoot, '信息收录', 'parser-layout.json'), '{broken');
+  await assert.rejects(f.check(target), /信息收录布局标记无效/);
+  assert.equal(await readFile(join(f.privateRoot, '信息收录', 'state.json'), 'utf8'), 'must-not-read-private-state');
+}));
 it('没有清单的已审查布局2读取器可识别，无关路径调整不改变识别', async () => {
   const paths=await readFile(join(source,'src/paths.js'),'utf8'); const reader=await readFile(join(source,'src/memory-layout.js'),'utf8');
   assert.deepEqual(supportedMemoryLayouts({manifest:null,paths,reader}),{memoryLayouts:[1,2],objectHistoryLayouts:[1]});

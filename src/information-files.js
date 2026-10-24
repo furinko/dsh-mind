@@ -5,7 +5,9 @@ import { isAbsolute, join, relative, resolve, sep, extname } from 'node:path';
 import { digest } from './kernel/text.js';
 import { Fault, InvalidBody } from './kernel/errors.js';
 
-export const INFORMATION_EXTENSIONS = Object.freeze(['.md', '.txt', '.json', '.jsonl', '.html', '.htm', '.vtt', '.srt']);
+export const TEXT_EXTENSIONS = Object.freeze(['.md', '.txt', '.json', '.jsonl', '.html', '.htm', '.vtt', '.srt', '.xml', '.yaml', '.yml', '.rst']);
+export const DOCUMENT_EXTENSIONS = Object.freeze(['.pdf', '.docx', '.pptx', '.xlsx', '.csv', '.tsv', '.epub']);
+export const INFORMATION_EXTENSIONS = Object.freeze([...TEXT_EXTENSIONS, ...DOCUMENT_EXTENSIONS]);
 export const inside = (root, file) => { const p = relative(root, file); return p === '' || (!isAbsolute(p) && p !== '..' && !p.startsWith(`..${sep}`)); };
 const signature = s => `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`;
 
@@ -27,7 +29,7 @@ export async function verifyRoot(source) {
 }
 
 /** Check every directory component as well as the opened descriptor; never follow file links. */
-export async function readSourceFile(source, name, maxBytes) {
+export async function readSourceFile(source, name, maxBytes, { binary = false } = {}) {
   if (typeof name !== 'string' || !name || name.includes('\0') || isAbsolute(name)
       || name.split(/[\\/]/).some(p => p === '..' || !p)) throw new InvalidBody('来源文件必须是目录内的相对路径。');
   await verifyRoot(source);
@@ -56,6 +58,7 @@ export async function readSourceFile(source, name, maxBytes) {
     if (length > maxBytes || length !== before.size || signature(await handle.stat()) !== signature(before)
         || signature(await lstat(file)) !== signature(before) || resolve(await realpath(file)) !== file) throw new Fault('INFORMATION_FILE_CHANGED', '读取期间文件变化，未提交该版本。');
     await verifyRoot(source);
+    if (binary) return { buffer: buffer.subarray(0, length), hash: digest(buffer.subarray(0, length)), bytes: length };
     const raw = new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, length)).replace(/^\uFEFF/, '');
     if (raw.includes('\0')) throw new InvalidBody('包含二进制内容，未按文本收录。');
     return { raw, hash: digest(raw), bytes: length };
@@ -86,10 +89,10 @@ export function decodeMaterial(raw, name) {
 }
 
 /** Resumable sorted depth-first walk. A bounded batch never treats unseen files as deleted. */
-export async function walkBatch(source, scan, limit) {
+export async function walkBatch(source, scan, limit, fileLimit = limit) {
   await verifyRoot(source);
   const files = []; const errors = []; let visited = 0;
-  while (scan.queue.length && visited < limit) {
+  while (scan.queue.length && visited < limit && files.length < fileLimit) {
     const frame = scan.queue.at(-1);
     const directory = join(source.path, frame.dir);
     try {
@@ -100,7 +103,7 @@ export async function walkBatch(source, scan, limit) {
       const remaining = entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0).filter(e => e.name > frame.after);
       if (!remaining.length) { scan.queue.pop(); continue; }
       for (const entry of remaining) {
-        if (visited >= limit) break;
+        if (visited >= limit || files.length >= fileLimit) break;
         visited++; frame.after = entry.name;
         if (entry.name.startsWith('.') || ['node_modules', '__pycache__'].includes(entry.name)) continue;
         const rel = frame.dir ? `${frame.dir}/${entry.name}` : entry.name;

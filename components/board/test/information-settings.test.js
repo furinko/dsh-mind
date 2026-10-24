@@ -1,6 +1,6 @@
 import { it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { settingsScene } from './settings-fixture.mjs';
 import { jsonResponse } from './client-harness.mjs';
@@ -142,3 +142,15 @@ it('目录窗口独立显示，磁盘入口能跨卷多选并一次连接，关�
       path.endsWith('磁盘甲') ? [join(path, '知识库')] : path.endsWith('磁盘乙') ? [join(path, '字幕')] : [], f.home); } }),
   });
 });
+
+it('文件解析失败有独立状态与人侧重试，来源目录只读提示和阅读预算分开呈现', async () => scene(async (s, org, f, calls) => {
+  const dir = join(f.home, '解析来源'); await mkdir(dir); await writeFile(join(dir, 'sample.pdf'), '%PDF-synthetic');
+  s.change('来源名称', '解析来源'); s.change('本地目录绝对路径', dir); await s.click('连接信息来源');
+  org.information.documentParser = async () => { throw Object.assign(Error('fixture'), { code: 'INFORMATION_PARSER_MISSING' }); };
+  await s.click('现在收录一批');
+  assert.match(s.text(), /缺少解析组件/); assert.match(s.text(), /来源目录始终只读/);
+  await s.click('重试解析 sample.pdf');
+  assert.equal(Object.values((await org.information.load()).documents)[0].status, 'pending');
+  assert.ok(calls.some(c => c.body?.op === 'parse_retry'));
+  assert.equal(await readFile(join(dir, 'sample.pdf'), 'utf8'), '%PDF-synthetic');
+}));

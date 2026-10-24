@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "informationLayouts": [1, 2],
   "memoryLayouts": [
     1,
     2
