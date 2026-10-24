@@ -34,22 +34,23 @@ const base = () => ({ sections: [{ name: 'host:rules', text: '宿主规则' }], 
 const agent = (id, child = false) => ({ session: { id, header: { cwd: process.cwd(), ...(child ? { origin: 'subagent', delegationDepth: 1 } : {}) } } });
 const readFrame = result => JSON.parse(result.sections.find(s => s.name === PROFESSIONAL_SECTION).text.split('\n').at(-1));
 
-it('两种真实专业各自召回；大量更近的异岗和无标签知识不挤掉本岗，Lead保留协调知识', async () => fixture(async org => {
+it('两种真实专业保留本岗并召回相关未标岗旧知识，排除异岗和无关共享项', async () => fixture(async org => {
   await task(org, '插件工程', 'engineer');
   await task(org, '文档整理', 'writer');
   const engineering = await knowledge(org, '插件工程', 'nebula 工程正确做法');
   const writing = await knowledge(org, '文档整理', 'nebula 写作正确做法');
   const lead = await knowledge(org, 'Lead', '需求理解与协调');
   for (let i = 0; i < 24; i++) await knowledge(org, `其他专业${i}`, 'nebula unrelated-domain');
-  await knowledge(org, undefined, 'nebula unclassified');
+  const shared = await knowledge(org, undefined, 'nebula unclassified');
+  await knowledge(org, undefined, 'ocean unrelated-shared');
   await org.memory.remember({ subject: LEAD, 类: '偏好', 内容: 'private-user-preference', 来源: '夹具用户' });
   await knowledge(org, '插件工程', 'nebula other-project', { 项目: 'another-project' });
   for (const [id, role, expected] of [['engineer', '插件工程', engineering.id], ['writer', '文档整理', writing.id]]) {
     const frame = await recallProfessionalContext({ org, subject: { id, kind: '成员' }, project: P });
     assert.equal(frame.岗位, role);
-    assert.deepEqual(frame.知识.map(item => item.id), [expected]);
-    assert.equal(frame.候选数, 1);
-    assert.doesNotMatch(JSON.stringify(frame), /unrelated-domain|unclassified|private-user-preference|other-project/);
+    assert.deepEqual(new Set(frame.知识.map(item => item.id)), new Set([expected, shared.id]));
+    assert.equal(frame.候选数, 3);
+    assert.doesNotMatch(JSON.stringify(frame), /unrelated-domain|unrelated-shared|private-user-preference|other-project/);
   }
   assert.deepEqual((await recallProfessionalContext({ org, subject: LEAD, project: P })).知识.map(item => item.id), [lead.id]);
 }));

@@ -34,10 +34,10 @@ it('无活动绑定不查知识、不发送假空结果，同时移除旧专业�
 
 it('有真实活动绑定且查询零命中仍发送真实空结果，不与未查询混淆', async () => fixture(async ({ org, context, task }) => {
   await task();
-  const original = org.memory.query.bind(org.memory); let queried = 0;
-  org.memory.query = async spec => { queried++; return original(spec); };
+  const original = org.memory.query.bind(org.memory); const queries = [];
+  org.memory.query = async spec => { queries.push({ kind: spec.类, recheck: Boolean(spec.数据版本) }); return original(spec); };
   const result = await injectProfessionalContext(base(), context);
-  assert.equal(queried, 1);
+  assert.deepEqual(queries, [{ kind: '知识', recheck: false }, { kind: '经历', recheck: false }, { kind: '知识', recheck: true }, { kind: '经历', recheck: true }]);
   assert.equal(frameOf(result).状态, '已装配');
   assert.deepEqual(frameOf(result).知识, []);
 }));

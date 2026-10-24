@@ -24,6 +24,7 @@ import { normalizeFeedbackReference, resolveKnowledgeFeedback, validateFeedbackD
 import { normalizeContinuity, applicableContinuity, continuityBlockedSources, LEAD_MEMORY_KINDS } from './lead-continuity.js';
 import { normalizeCollaborationFeedback, checkCollaborationReferences } from './collaboration-feedback.js';
 import { lessonSearchText } from './lead-focus.js';
+import { memoryRecallText } from './memory-recall.js';
 import { DIR, MEMORY_KINDS } from './paths.js';
 import { 记忆条目在读域, 取复核读域 } from './review-scope.js';
 // 「已被合法采纳」的唯一判据住在任务图（补修K 字段合同），晋升面直接复用、不另抄状态判断。
@@ -374,6 +375,7 @@ export class MemoryService {
   async rememberPersonal(input) {
     const ownership = this.information?.org.dataOwnership;
     if (input.subject?.kind !== 'Lead' || !ownership) return this.remember(input);
+    if (input.类 === '知识' && input.岗位 === undefined) input = { ...input, 岗位: 'Lead' };
     const stamp = await ownership.stamp(input.subject.id);
     const self = input.连续性?.类别 === '人格' && input.连续性?.依据 === '自省';
     const scope = { project: input.连续性?.范围 === '部署' ? null : input.项目 ?? null, audience: 'lead', roles: [],
@@ -973,6 +975,8 @@ export class MemoryService {
     return guard.unavailable ? { ...result, 来源警示: '收录来源状态不可用，相关派生记忆未提供；原有其他记忆照常读取' } : result;
   }
   async #query(query = {}, intakeGuard = {}) {
+    if (query.上下文经历 !== undefined && (query.上下文经历 !== true || query.类 !== '经历' || !query.项目)) throw new InvalidBody('上下文经历仅用于指定项目的经历召回。');
+    if (query.场景检索 !== undefined && typeof query.场景检索 !== 'boolean') throw new InvalidBody('场景检索必须为布尔值。');
     if (query.个人经历 !== undefined && (query.个人经历 !== true || query.类 !== '经历' || !['Lead', '主权者'].includes(query.subject?.kind))) throw new InvalidBody('个人经历筛选仅供Lead或主权者读取经历。');
     if (query.连续性类别 !== undefined && (!LEAD_MEMORY_KINDS.includes(query.连续性类别) || !['Lead', '主权者'].includes(query.subject?.kind))) throw new InvalidBody('连续性类别仅供Lead或主权者按三类连续性读取。');
     if (query.精确岗位 !== undefined && (typeof query.精确岗位 !== 'boolean' || (query.精确岗位 && (typeof query.岗位 !== 'string' || !query.岗位.trim())))) {
@@ -1027,6 +1031,7 @@ export class MemoryService {
     }
     const visible = [];
     for (const entry of entries) {
+      if (query.上下文经历 && entry.项目 !== query.项目) continue;
       if (query.个人经历 && entry.数据归属?.主体 !== 'Lead') continue;
       if (intakeGuard.unavailable && entry.数据归属) continue;
       // 归档作答的可读性矩阵（§7 · 2026-10-13 审查 P1-9 修复）：默认不召回；显式要看时
@@ -1061,7 +1066,7 @@ export class MemoryService {
     const 可召回 = query.含待复验 === true ? 状态可召回 : 状态可召回.filter((entry) => !需复验(entry));
     // 页码不对正在变化的账本承诺无漏重；变化即要求重启，不能拼接两个不同事实快照。
     const 复验指纹 = visible.map((entry) => [entry.id, entry.复验状态 ?? null]);
-    const 数据版本 = digest(JSON.stringify({ 类: wanted, 项目: query.项目 ?? null, 岗位: query.岗位 ?? null, ...(query.连续性类别 === undefined ? {} : { 连续性类别: query.连续性类别 }), ...(query.精确岗位 === true ? { 精确岗位: true } : {}), 文本: query.文本 ?? '', id: query.id ?? null, 含待复验: query.含待复验 === true, 复验指纹, 条目: 可召回 }));
+    const 数据版本 = digest(JSON.stringify({ 类: wanted, 项目: query.项目 ?? null, 岗位: query.岗位 ?? null, ...(query.连续性类别 === undefined ? {} : { 连续性类别: query.连续性类别 }), ...(query.精确岗位 === true ? { 精确岗位: true } : {}), 文本: query.文本 ?? '', id: query.id ?? null, 场景检索: query.场景检索 === true, 上下文经历: query.上下文经历 === true, 含待复验: query.含待复验 === true, 复验指纹, 条目: 可召回 }));
     if (query.数据版本 && query.数据版本 !== 数据版本) {
       throw new InvalidBody('记忆数据或查询口径已变化，不能继续旧分页；请清除 数据版本，并从偏移0/正文偏移0重新读取。', { detail: { 原因: 'MEMORY_QUERY_SNAPSHOT_CHANGED' } });
     }
@@ -1126,14 +1131,14 @@ export class MemoryService {
     // 索引缓存键必须带**读域指纹**：复核员与普通成员即便 读者.kind 相同，可见集也不同；
     // 漏掉这一维会让先到的读者把索引借给后到的读者（遮罩被缓存旁路）。
     const 读域指纹 = query.读域?.限定 === true ? `复核:${[...query.读域.集合].sort().join(',')}` : '无';
-    const 索引键 = `${await this.#签名们(账本文件)}|${JSON.stringify([wanted, query.项目 ?? null, query.岗位 ?? null, query.精确岗位 === true, query.连续性类别 ?? null, query.含失效 === true, query.含待复验 === true, query.显式 === true, query.读者?.kind ?? null, 读域指纹, 复验指纹, 可召回.map((entry) => entry.id)])}`;
+    const 索引键 = `${await this.#签名们(账本文件)}|${JSON.stringify([wanted, query.项目 ?? null, query.岗位 ?? null, query.精确岗位 === true, query.场景检索 === true, query.上下文经历 === true, query.连续性类别 ?? null, query.含失效 === true, query.含待复验 === true, query.显式 === true, query.读者?.kind ?? null, 读域指纹, 复验指纹, 可召回.map((entry) => entry.id)])}`;
     let index = this.#indexCache.get(索引键);
     if (!index) {
       // 用户标签进检索索引（2026-10-14 审查 P2-19）：修前 标签 只塞 [类, 岗位]——
       // 写入时收的 标签（用户打的检索词）不进索引，按标签搜永远搜不到（静默落空）。
       index = buildIndex(可召回.map((entry) => ({
         id: entry.id,
-        正文: query.连续性类别 === '协作教训' ? lessonSearchText(entry) : entry.内容,
+        正文: query.连续性类别 === '协作教训' ? lessonSearchText(entry) : query.场景检索 ? memoryRecallText(entry) : entry.内容,
         标签: [entry.类, entry.岗位 ?? '', ...(Array.isArray(entry.标签) ? entry.标签 : [])],
         来源: entry.归属,
       })));

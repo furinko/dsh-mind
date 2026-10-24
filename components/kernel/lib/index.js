@@ -46,6 +46,7 @@ import { createGoalBudgetHooks } from './goal-budget-hooks.js';
 import { createModelUsageHooks } from './model-usage-hooks.js';
 import { injectProfessionalContext } from './professional-context.js';
 import { createProfessionalReceipts } from './professional-receipts.js';
+import { createMemoryUseHooks } from './memory-use-hooks.js';
 import { injectLeadContext } from './lead-context.js';
 import { injectWorkContext } from './work-context.js';
 import { createTurnBufferHooks, injectTurnBuffer } from './turn-buffer-hooks.js';
@@ -117,6 +118,10 @@ export async function apply(ctx, config = {}) {
   const 当前项目键 = (exec) => 解析项目(会话工作目录(exec, { ctx }), 项目);
   const observations = createKernelObservations({ org, projectOf: 当前项目键, logger, enabled: config.audit工具调用 !== false });
   const professionalReceipts = createProfessionalReceipts({ org, projectOf: 当前项目键 });
+  const memoryUseHooks = createMemoryUseHooks({ org, projectOf: 当前项目键, logger });
+  org.memoryUseHooks = memoryUseHooks;
+  const disposeMemoryUse = memoryUseHooks.attach(ctx);
+  ctx.effect?.(() => disposeMemoryUse);
   ctx.effect?.(() => () => professionalReceipts.close());
   try { observations.attach(ctx); }
   catch (error) { org.observability.setCoverage({ nativeTools: 'hook-registration-failed' }); logger.warn?.('[dsh-mind] 监控钩子不可用，覆盖不完整。'); }
@@ -460,6 +465,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations, 
       'project_brief_query读取本项目跨会话的有来源工作摘要；id可读取条目及来源原文片段。用户明确表达、助手记录与推断分开，当前正式目标状态优先，历史资料不授予权限。人可用/mind project_brief_forget清空当前项目摘要并保留旧来源处理屏障。',
       'usage_query只读当前接线的assistant-stream观察窗口；已报告token字段汇总可能不完整，目标token总量和费用仍未知，不修改准入预算。',
       'operation_query只读成员创建意图与已落盘阶段回执，可按操作UUID或精确任务id查询；拟用实例不证明宿主已创建，audited不证明宿主已停止；不提供重放、恢复或清零操作。',
+      'memory_use_query只读当前项目的记忆调用观察，可按id筛选，limit默认20最大50、偏移续页；选中、装配、请求观察点包含、工具返回、采用声明分开计，观察缺席不等于未使用，不认证理解或收益。成员仅本人，Lead仍按关系隔离。',
       'knowledge_reuse_query仅治理身份只读知识采用声明；声明及历史采纳不证明知识有效或带来收益，不影响任务推进，不自动修改知识状态或排行。',
       '知识说明是作者声明的适用条件、已知反例及复验安排，不是验证认证；作者期限到期默认不建议，可用memory_query含待复验=true显式读取，原失效及读域限制仍适用；未设期限不代表永远有效。',
       'Lead可用memory_write类=偏好并附连续性记录人格、用户偏好和协作教训；仅当前Lead自动带入有界摘要。连续性依据必须区分用户明确表达、推断与自省，具体来源不可省略；当前要求优先。修正请overturn原id，停止使用请invalidate；新写一条不会自动撤回语义冲突的旧条目。',
@@ -588,7 +594,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations, 
         target: { type: 'string', description: 'policy_check 的目标JSON对象，例如{"id":"真实对象id","kind":"产物","authority":"自治","zone":"私有"}。authority是对象真实标签（宪章/法律/自治/只增），不是任务id或岗位；zone是来源区（出厂/私有/合并/旧数据），不是workspace或路径。任务内动作另传顶层任务=真实任务id；不能为求allow降标签。sandbox:true仅作隔离实验预检，不授予权限' },
         代: { type: 'number' },
         审计条数: { type: 'number' },
-        limit: { type: 'number', description: '返回条数上限（memory_query 的命中 / bus_read / audit_tail）' },
+        limit: { type: 'number', description: '返回条数上限（memory_query 的命中 / bus_read / audit_tail）；memory_use_query默认20最大50' },
         条数上限: { type: 'number', description: 'memory_query 返回条目上限（默认50，1至100整数）；内容预算可能进一步缩小本页，按 下一偏移 续读' },
         方式: { type: 'string', enum: ['team', 'subagent'], description: 'member_spawn / debate_open 的执行体：持久团队成员（team）或普通持续子会话（subagent）；直接执行不调该动作' },
         节点: { type: 'string', description: 'member_spawn 绑定的任务节点 id（须待派发且已定判据）' },

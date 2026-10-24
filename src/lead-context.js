@@ -5,7 +5,7 @@ import { Denied, InvalidBody } from './kernel/errors.js';
 import { readLeadFocus } from './lead-focus.js';
 
 export const LEAD_CONTEXT_BUDGET = 6500;
-export async function recallLeadContext({ org, subject, project, readExpression = () => null }) {
+export async function recallLeadContext({ org, subject, project, readExpression = () => null, onAssembled }) {
   if (subject?.kind !== 'Lead') throw new Denied('Lead连续性 · 当前身份', '只有当前Lead装配人格、用户偏好与协作教训。');
   if (typeof project !== 'string' || !project.trim() || project.length > 256) throw new InvalidBody('Lead连续性需要当前项目键。');
   const before = await currentProfessionalScope(org, subject, project);
@@ -51,5 +51,6 @@ export async function recallLeadContext({ org, subject, project, readExpression 
   if (before.stamp !== after.stamp) throw new Denied('Lead连续性 · 身份已变化', '身份或凭证变化，丢弃本次连续性装配。');
   await org.policy.check({ subject: after.actor, action: 'read', target: { id: `记忆/检索/${project}`, kind: '记忆', authority: '自治', zone: '私有', domain: '集体', project }, context: { 类: '偏好' } });
   if ((expression?.stamp ?? null) !== (readExpression()?.stamp ?? null)) throw new Denied('Lead连续性 · 用户文本线索已变化', '本轮接纳文本或轮次变化，丢弃旧教训召回。');
+  onAssembled?.({ stamp: after.stamp, credentialStamp: after.credentialStamp });
   return frame;
 }

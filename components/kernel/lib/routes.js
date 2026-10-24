@@ -45,6 +45,7 @@ export const 端点表 = Object.freeze({
   informationMaterial: `${路由前缀}/information-material`,
   informationDeposit: `${路由前缀}/information-deposit`,
   leadSpace: `${路由前缀}/lead-space`,
+  memoryUse: `${路由前缀}/memory-use`,
   // v2 条目14/17（2026-10-18 补修F）：介入度待决清单与主权者逐请求决议。
   // 与调度授权同一档：读/写都要求宿主 Connection 认证，不退回无头本机通道。
   intervention: `${路由前缀}/intervention`,
@@ -689,6 +690,24 @@ export function leadSpace路由({ ctx, org, 项目 }) {
   };
 }
 
+/** Authenticated human inspection only; no observation write/reset endpoint. */
+export function memoryUse路由({ ctx, org, 项目 }) {
+  return async function memoryUse端点(req, res) {
+    const method = String(req?.method ?? 'GET').toUpperCase();
+    if (method !== 'GET') return 回方法不对(res, method, 'GET');
+    try {
+      const connection = ctx?.get?.('connection');
+      if (typeof connection?.requestRejection !== 'function') return 回JSON(res, 503, { 成功: false, 理由: '记忆观察需要宿主Connection认证。' });
+      const rejection = connection.requestRejection(req);
+      if (rejection !== undefined) return 回JSON(res, rejection === 401 ? 401 : 403, { 成功: false, 理由: '需要已认证的同源人侧入口。' });
+      if (!读栅栏(req).ok) return 回JSON(res, 403, { 成功: false, 理由: '记忆观察同源请求被拒绝。' });
+      const params = new URL(req.url, 'http://localhost').searchParams;
+      return 回JSON(res, 200, { 成功: true, 数据: await org.memoryUse.query({ subject: { id: '记忆观察页', kind: '主权者' }, project: 取项目(req, 项目),
+        ...(params.has('id') ? { id: params.get('id') } : {}), ...(params.has('offset') ? { offset: Number(params.get('offset')) } : {}), ...(params.has('limit') ? { limit: Number(params.get('limit')) } : {}) }) });
+    } catch (error) { return 回JSON(res, error.code === 'INVALID_BODY' ? 400 : ['DENIED', 'NEEDS_APPROVAL'].includes(error.code) ? 403 : 503, { 成功: false, ...describeFailure(error) }); }
+  };
+}
+
 /** 取 webServer 服务：先 `ctx.get`，再退回 `ctx.webServer`（两种宿主形状都认）。 */
 function 取webServer(ctx) {
   let ws = null;
@@ -751,6 +770,7 @@ export function 挂同源路由(spec) {
         新挂.push(ws.register({ kind: 'exact', path: 端点表.informationMaterial, handler: information路由({ ctx, org, 项目, mode: 'preview' }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.informationDeposit, handler: information路由({ ctx, org, 项目, mode: 'deposit' }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.leadSpace, handler: leadSpace路由({ ctx, org, 项目 }) }));
+        新挂.push(ws.register({ kind: 'exact', path: 端点表.memoryUse, handler: memoryUse路由({ ctx, org, 项目 }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.intervention, handler: intervention路由({ org, 项目, ctx }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.monitor, handler: monitor路由({ org, ctx }) }));
       } catch (error) {

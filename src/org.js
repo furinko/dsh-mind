@@ -41,6 +41,7 @@ import { ContinuityCaptureService } from './continuity-capture.js';
 import { PersonaCoreService } from './persona-core.js';
 import { InformationService } from './information.js';
 import { LeadSpaceService } from './lead-space.js';
+import { MemoryUseService } from './memory-use.js';
 
 /** 默认项目键。名字即目录名（§14.4-5）。 */
 export const DEFAULT_PROJECT = 'default';
@@ -154,6 +155,7 @@ export class Org {
     org.leadSpace = new LeadSpaceService({ org, clock });
     const { DataOwnershipService } = await import('./data-ownership.js');
     org.dataOwnership = new DataOwnershipService(org);
+    org.memoryUse = new MemoryUseService({ org, layout, clock });
     memory.information = org.information;
     capability.information = org.information;
     await org.bootstrap({ 代次: spec.代次 });

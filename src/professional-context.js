@@ -3,9 +3,11 @@ import { canonical, digest } from './kernel/text.js';
 import { Denied, InvalidBody } from './kernel/errors.js';
 import { 取复核读域 } from './review-scope.js';
 import { matchingBinding } from './tool-file-scope.js';
+import { expandRecallQuery, rankCapabilities, recallSnippet } from './memory-recall.js';
+import { readLeadFocus } from './lead-focus.js';
 
 export const PROFESSIONAL_CONTEXT_LIMIT = 4;
-export const PROFESSIONAL_CONTEXT_BUDGET = 6000;
+export const PROFESSIONAL_CONTEXT_BUDGET = 12000;
 
 async function currentScope(org, subject, project) {
   const member = (await org.registry.identity()).members?.[subject?.id];
@@ -36,38 +38,78 @@ async function currentScope(org, subject, project) {
 
 export { currentScope as currentProfessionalScope };
 
-export async function recallProfessionalContext({ org, subject, project, onAssembled }) {
+export async function recallProfessionalContext({ org, subject, project, onAssembled, readExpression = () => null }) {
   if (typeof project !== 'string' || !project.trim() || project.length > 256) throw new InvalidBody('专业上下文需要长度不超过256的当前项目键。');
   const before = await currentScope(org, subject, project);
-  const base = { 版本: 1, 项目: project, 岗位: before.role, 类型: '知识', 条数上限: PROFESSIONAL_CONTEXT_LIMIT,
-    任务: before.nodes.slice(0, 4).map(node => node.id).filter(id => typeof id === 'string' && id.length <= 256), 任务截断: before.nodes.length > 4 || before.nodes.some(node => typeof node.id !== 'string' || node.id.length > 256) };
-  // 会审有独立资料域；普通成员未绑定活动任务时不猜工作内容，也不读专业账本。
-  if (subject.kind === '成员' && (before.council || !before.nodes.length)) {
-    return { ...base, 状态: before.council ? '会审资料另行提供' : '无当前有效活动绑定', 知识: [] };
+  const base = { 版本: 2, 项目: project, 岗位: before.role, 类型: '知识', 条数上限: PROFESSIONAL_CONTEXT_LIMIT,
+    任务: before.nodes.slice(0, 4).map(node => node.id).filter(id => typeof id === 'string' && id.length <= 256), 任务截断: before.nodes.length > 4,
+    阶段: before.nodes.slice(0, 4).map(n => ({ id: n.id, 状态: n.状态 })), 经历: [], 能力: [] };
+  if (subject.kind === '成员' && (before.council || !before.nodes.length)) return { ...base, 状态: before.council ? '会审资料另行提供' : '无当前有效活动绑定', 知识: [] };
+  const expression = readExpression();
+  const focus = subject.kind === 'Lead' && !expression?.query ? await readLeadFocus(org, before.actor, project) : null;
+  const tasks = before.nodes.slice(0, 4).map(n => [String(n.描述 ?? '').slice(0, 400), ...(n.判据 ?? []).slice(0, 4).map(v => String(v).slice(0, 100))].join(' '));
+  const rawQueries = [...new Set([expression?.query, ...tasks, focus?.query].filter(v => v?.trim()))].slice(0, 3);
+  const queries = rawQueries.length ? rawQueries.map(expandRecallQuery) : [''];
+  const observations = []; const details = []; let clipped = rawQueries.length < new Set([expression?.query, ...tasks, focus?.query].filter(Boolean)).size;
+  const collect = async (kind, max) => {
+    const merged = new Map();
+    for (const [index, query] of queries.entries()) {
+      if (kind === '经历' && !query) continue;
+      const spec = { subject: before.actor, 读者: before.actor, 项目: project, 类: kind, 读域: before.domain, 文本: query, 场景检索: true,
+        ...(kind === '知识' ? { 岗位: before.role, 精确岗位: !query } : { 上下文经历: true }),
+        返回模式: '摘要', limit: max, 条数上限: max, 内容预算: 4000 };
+      const result = await org.memory.query(spec); clipped ||= result.内容截断 === true || result.条目截断 === true; observations.push({ spec, version: result.数据版本, count: result.口径?.文档数 ?? 0, kind });
+      for (const [rank, entry] of (result.条目 ?? []).entries()) {
+        const previous = merged.get(entry.id); const score = (index === 0 ? 2 : 1) / (60 + rank);
+        merged.set(entry.id, { entry, score: (previous?.score ?? 0) + score, spec });
+      }
+    }
+    const selected = [...merged.values()].sort((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id)).slice(0, max);
+    const out = [];
+    for (const row of selected) {
+      const { 文本: _query, limit: _limit, 条数上限: _rows, ...rest } = row.spec;
+      const spec = { ...rest, id: row.entry.id, 返回模式: '全文', 内容预算: 5000 };
+      const full = await org.memory.query(spec); const entry = full.条目?.[0];
+      if (!entry) continue;
+      details.push({ spec, version: full.数据版本 });
+      const snippet = recallSnippet(entry); clipped ||= snippet.需继续读取;
+      out.push({ id: entry.id, 类: kind, 摘要: String(row.entry.摘要 ?? '').slice(0, 160), 岗位: entry.岗位 ?? null, 项目: entry.项目 ?? null, 归属: entry.归属 ?? null,
+        ...snippet, 来源说明: String(entry.来源?.怎么知道 ?? '').slice(0, 180), 复验状态: entry.复验状态 ?? null,
+        继续读取: { action: 'memory_query', id: entry.id, 类: kind, 返回模式: '全文' }, 版本摘要: digest(canonical({ 内容: entry.内容, 来源: entry.来源, 知识说明: entry.知识说明 ?? null })) });
+    }
+    return out;
+  };
+  const knowledge = await collect('知识', PROFESSIONAL_CONTEXT_LIMIT);
+  const experiences = await collect('经历', 2);
+  const capabilityProof = [];
+  // Reviewers retain their object-limited knowledge/experience domain; capability cards are read-only procedures, never other answers.
+  await org.policy.check({ subject: before.actor, action: 'read', target: { id: '能力/召回', kind: '能力', authority: '自治', zone: '私有', domain: '集体', project } });
+  const capabilities = await org.capability.list({ subject: before.actor, 岗位: before.role });
+  const candidateCaps = new Map();
+  for (const query of queries) for (const cap of rankCapabilities(capabilities, query, 2)) if (!candidateCaps.has(cap.id) || cap.来源 === '自治') candidateCaps.set(cap.id, cap);
+  const selectedCaps = [...candidateCaps.values()].slice(0, 2); const caps = [];
+  for (const cap of selectedCaps) {
+    const full = await org.capability.read({ subject: before.actor, id: cap.id, 来源: cap.来源 }); if (!full || !full.适用岗位.includes(before.role)) continue;
+    const hash = digest(full.正文); capabilityProof.push({ id: full.id, source: full.来源, hash });
+    caps.push({ id: full.id, 来源: full.来源, 类: '能力', 名: cap.名, ...recallSnippet(full, 1000), 版本摘要: hash,
+      继续读取: { action: 'capability_read', id: full.id, 来源: full.来源 } });
   }
-  const query = before.nodes.slice(0, 4).map(node => `${String(node.描述 ?? '').slice(0, 240)} ${
-    (Array.isArray(node.判据) ? node.判据 : []).slice(0, 4).map(value => String(value).slice(0, 120)).join(' ')}`).join(' ').slice(0, 1000);
-  const result = await org.memory.query({ subject: before.actor, 读者: before.actor, 项目: project, 类: '知识',
-    岗位: before.role, 精确岗位: true, 读域: before.domain, 文本: query, 返回模式: '摘要',
-    limit: PROFESSIONAL_CONTEXT_LIMIT, 条数上限: PROFESSIONAL_CONTEXT_LIMIT, 内容预算: 3000 });
-  // 同次装配不把旧身份、旧绑定或旧复核读域带到最后；失败由调用方移除旧段。
   const after = await currentScope(org, subject, project);
-  if (before.stamp !== after.stamp) throw new Denied('专业上下文 · 读域已变化', '身份、凭证或任务范围变化，丢弃本次召回。');
-  await org.policy.check({ subject: after.actor, action: 'read',
-    target: { id: `记忆/检索/${project}`, kind: '记忆', authority: '自治', zone: '私有', domain: '集体', project }, context: { 类: '知识' } });
-  const knowledge = [];
-  let clipped = result.内容截断 === true || result.条目截断 === true;
-  const frame = { ...base, 状态: '已装配', 依据: query ? '本岗位与当前活动任务检索' : 'Lead本岗位最近有效知识',
-    数据版本: result.数据版本, 候选数: result.口径?.文档数 ?? null, 知识: knowledge, 截断: clipped };
-  for (const entry of result.条目 ?? []) {
-    if (typeof entry.id !== 'string' || entry.id.length > 256) { clipped = true; continue; }
-    const item = { id: entry.id, 摘要: String(entry.摘要 ?? '').slice(0, 160), 岗位: entry.岗位,
-      项目: entry.项目 ?? null, 归属: entry.归属 ?? null };
-    knowledge.push(item);
-    if (JSON.stringify(frame).length > PROFESSIONAL_CONTEXT_BUDGET - 64) { knowledge.pop(); clipped = true; break; }
+  if (before.stamp !== after.stamp || (expression?.stamp ?? null) !== (readExpression()?.stamp ?? null)) throw new Denied('专业上下文 · 读域已变化', '身份、凭证、任务或当前表达变化，丢弃本次召回。');
+  if (focus && (await readLeadFocus(org, before.actor, project)).stamp !== focus.stamp) throw new Denied('专业上下文 · 目标变化', '目标变化，丢弃旧资料。');
+  for (const row of [...observations, ...details]) await org.memory.query({ ...row.spec, 数据版本: row.version });
+  for (const cap of capabilityProof) { const fresh = await org.capability.read({ subject: before.actor, id: cap.id, 来源: cap.source }); if (!fresh || digest(fresh.正文) !== cap.hash) throw new Denied('能力召回来源变化', '能力更新或撤回，丢弃旧片段。'); }
+  const finalScope = await currentScope(org, subject, project);
+  if (before.stamp !== finalScope.stamp || (expression?.stamp ?? null) !== (readExpression()?.stamp ?? null)) throw new Denied('专业上下文 · 最终读域变化', '校验期间身份、任务或表达变化，丢弃旧资料。');
+  if (focus && (await readLeadFocus(org, before.actor, project)).stamp !== focus.stamp) throw new Denied('专业上下文 · 目标变化', '目标变化，丢弃旧资料。');
+  clipped ||= caps.some(cap => cap.需继续读取);
+  const frame = { ...base, 状态: '已装配', 依据: expression?.query ? '当前已接纳问题与活动任务检索' : rawQueries.length ? '本岗位与当前活动任务检索' : 'Lead本岗位最近有效知识',
+    检索方式: 'BM25词面、标题与适用说明，有限术语扩展；不是通用语义检索，零命中不补无关近期项',
+    数据版本: observations.find(o => o.kind === '知识')?.version ?? null, 候选数: Math.max(0, ...observations.filter(o => o.kind === '知识').map(o => o.count)),
+    知识: knowledge, 经历: experiences, 能力: caps, 截断: clipped };
+  while (JSON.stringify(frame).length > PROFESSIONAL_CONTEXT_BUDGET && (frame.能力.length || frame.经历.length || frame.知识.length)) {
+    if (frame.能力.length) frame.能力.pop(); else if (frame.经历.length) frame.经历.pop(); else frame.知识.pop(); clipped = true;
   }
   frame.截断 = clipped;
-  // 只给内核的进程内观察者；凭证及读域戳不进入模型帧或记忆账本。
-  onAssembled?.({ stamp: after.stamp, credentialStamp: after.credentialStamp });
-  return frame;
+  onAssembled?.({ stamp: after.stamp, credentialStamp: after.credentialStamp }); return frame;
 }

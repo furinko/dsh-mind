@@ -29,7 +29,7 @@ const 部署偏好 = '集体L2-共享基础设施/defaults/部署.json';
 const 前缀 = '/plugins/dsh-mind';
 const 端点 = { presence: `${前缀}/presence`, workbench: `${前缀}/workbench`, ping: `${前缀}/ping`, delegation: `${前缀}/delegation`, personaCore: `${前缀}/persona-core`, intervention: `${前缀}/intervention` };
 /** 只允许明确端点，新增调度设置仍不能打开通用 action 代理。 */
-const 应有端点 = [端点.presence, 端点.workbench, 端点.ping, 端点.delegation, 端点.personaCore, 端点.intervention, `${前缀}/monitor`, `${前缀}/information`, `${前缀}/information-material`, `${前缀}/information-deposit`, `${前缀}/lead-space`];
+const 应有端点 = [端点.presence, 端点.workbench, 端点.ping, 端点.delegation, 端点.personaCore, 端点.intervention, `${前缀}/monitor`, `${前缀}/information`, `${前缀}/information-material`, `${前缀}/information-deposit`, `${前缀}/lead-space`, `${前缀}/memory-use`];
 
 const 睡 = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
