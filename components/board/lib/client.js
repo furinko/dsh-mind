@@ -1656,8 +1656,9 @@ window.__ModuleLoader__.load({
       '.dshmind-set__toast--ok{border:1px solid var(--dsw-alias-state-success-primary,#2f9e44);color:var(--dsw-alias-state-success-primary,#2f9e44);background:var(--dsw-alias-state-success-tertiary,#eaf7ec)}',
       '.dshmind-set__details{margin-top:16px;color:var(--dsw-alias-label-secondary,#61666b);font-size:12px}.dshmind-set__details>summary{cursor:pointer;padding:4px 0;max-width:100%}.dshmind-set__details[open]>summary{margin-bottom:8px}.dshmind-set__details p{margin:7px 0}',
       '.dshmind-set__details .dshmind-set__row{align-items:flex-start;padding:9px 0}.dshmind-set__details .dshmind-set__control{flex:1 1 55%;overflow-wrap:anywhere}.dshmind-set__details .dshmind-set__label{font-size:12px}',
-      '.dshmind-directory-overlay{position:fixed;inset:0;z-index:10000;background:#0006;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}.dshmind-directory-dialog{display:flex;flex-direction:column;width:680px;max-width:100%;max-height:88vh;overflow:hidden;box-sizing:border-box;padding:24px;border-radius:12px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#202225);box-shadow:0 16px 64px #0004;font-size:14px;line-height:1.6}.dshmind-directory-dialog>h3,.dshmind-directory-dialog>p{flex-shrink:0;margin:0 0 12px}.dshmind-directory-body{overflow:auto;min-height:0;padding:2px}.dshmind-directory-footer{padding-top:16px;flex-shrink:0}.dshmind-directory-dialog .dshmind-set__actions{flex-wrap:wrap}.dshmind-directory-dialog .dshmind-set__actions>input{min-width:0;width:auto;flex:1 1 240px}.dshmind-directory-dialog nav{max-height:72px;overflow:auto;margin-top:12px}.dshmind-directory-entries{height:160px;overflow:auto;border:1px solid var(--dsw-alias-border-l2,#ddd);border-radius:8px;margin:12px 0}',
-      '.dshmind-directory-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 10px}.dshmind-directory-row>label{display:flex;align-items:center;gap:8px;min-width:0;overflow-wrap:anywhere;flex:1}.dshmind-directory-row .dshmind-set__mono{overflow-wrap:anywhere;min-width:0;flex:1}.dshmind-directory-row .dshmind-set__btn{flex-shrink:0}.dshmind-directory-selected{max-height:150px;overflow:auto}.dshmind-directory-dialog button:focus-visible,.dshmind-directory-dialog input:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#3076ee);outline-offset:2px}',
+      '.dshmind-directory-overlay{position:fixed;inset:0;z-index:10000;background:#0006;display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box}.dshmind-directory-dialog{display:flex;flex-direction:column;width:940px;max-width:100%;height:650px;max-height:90vh;overflow:hidden;box-sizing:border-box;border-radius:16px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#202225);box-shadow:0 20px 80px #0004;font-size:14px;line-height:1.6}.dshmind-directory-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:22px 24px 16px;flex-shrink:0}.dshmind-directory-header h3{margin:0 0 5px;font-size:18px}.dshmind-directory-header p{margin:0;color:var(--dsw-alias-label-secondary,#737880);font-size:12px}.dshmind-directory-address{display:flex;align-items:center;gap:8px;padding:0 24px 18px;flex-shrink:0}.dshmind-directory-address input{flex:1;min-width:0;width:auto}.dshmind-directory-layout{display:grid;grid-template-columns:190px minmax(0,1fr);min-height:0;flex:1;border-top:1px solid var(--dsw-alias-border-l2,#e5e7eb);border-bottom:1px solid var(--dsw-alias-border-l2,#e5e7eb)}.dshmind-directory-places{overflow:auto;min-height:0;padding:16px 10px;background:var(--dsw-alias-bg-layer-2,#f6f7f9);border-right:1px solid var(--dsw-alias-border-l2,#e5e7eb)}.dshmind-directory-places h4{margin:2px 10px 8px;font-size:11px;font-weight:600;color:var(--dsw-alias-label-secondary,#737880)}.dshmind-directory-place{display:flex;align-items:center;gap:9px;width:100%;min-width:0;text-align:left;border:0;background:transparent;color:inherit;padding:9px 10px;border-radius:7px;cursor:pointer;box-sizing:border-box}.dshmind-directory-place:hover,.dshmind-directory-place[aria-current="location"]{background:var(--dsw-alias-state-business-primary-soft,#e8effe)}.dshmind-directory-place:disabled{opacity:.5;cursor:default}.dshmind-directory-place span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dshmind-directory-place small{display:block;font-size:10px;color:var(--dsw-alias-label-secondary,#737880)}.dshmind-directory-icon{width:20px;height:20px;flex-shrink:0;color:var(--dsw-alias-label-secondary,#747e90)}.dshmind-directory-places p{padding:0 10px;font-size:11px;color:var(--dsw-alias-label-secondary,#737880);overflow-wrap:anywhere}',
+      '.dshmind-directory-body{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;padding:14px 18px}.dshmind-directory-crumbs{display:flex;align-items:center;gap:3px;overflow:auto;white-space:nowrap;flex-shrink:0;margin-bottom:12px}.dshmind-directory-crumbs button{border:0;background:transparent;color:inherit;padding:4px 6px;border-radius:4px;cursor:pointer;max-width:190px;text-overflow:ellipsis;overflow:hidden;white-space:nowrap;flex-shrink:0}.dshmind-directory-crumbs button:hover{background:var(--dsw-alias-bg-layer-2,#f3f5f8)}.dshmind-directory-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-bottom:12px;flex-shrink:0}.dshmind-directory-toolbar label{font-size:12px;display:flex;align-items:center;gap:5px;white-space:nowrap}.dshmind-directory-entries{min-height:80px;flex:1;overflow:auto;border:1px solid var(--dsw-alias-border-l2,#e5e7eb);border-radius:9px}.dshmind-directory-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;min-width:0}.dshmind-directory-entries .dshmind-directory-row:nth-child(even){background:var(--dsw-alias-bg-layer-2,#f8f9fb)}.dshmind-directory-row>label{display:flex;align-items:center;gap:9px;min-width:0;overflow-wrap:anywhere;flex:1}.dshmind-directory-row .dshmind-set__mono{overflow-wrap:anywhere;min-width:0;flex:1}.dshmind-directory-row .dshmind-set__btn{flex-shrink:0}.dshmind-directory-row input{flex-shrink:0}.dshmind-directory-row .dshmind-directory-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.dshmind-directory-empty{padding:28px 16px;text-align:center;color:var(--dsw-alias-label-secondary,#737880)}.dshmind-directory-message{padding:8px 12px;font-size:12px;overflow-wrap:anywhere;flex-shrink:0}.dshmind-directory-error{color:var(--dsw-alias-state-danger-primary,#bb3940);background:var(--dsw-alias-state-danger-soft,#fff0f0);border-radius:6px;margin:8px 0 0}.dshmind-directory-selection{flex-shrink:0;max-height:120px;overflow:auto;padding:10px 24px 0}.dshmind-directory-selection summary{font-size:12px;cursor:pointer;color:var(--dsw-alias-label-secondary,#737880)}.dshmind-directory-selected{max-height:80px;overflow:auto}.dshmind-directory-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 24px;flex-shrink:0}.dshmind-directory-footer p{margin:0;font-size:12px;color:var(--dsw-alias-label-secondary,#737880)}.dshmind-directory-footer .dshmind-set__actions{display:flex;gap:8px;flex-wrap:wrap}.dshmind-directory-dialog button:focus-visible,.dshmind-directory-dialog input:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#3076ee);outline-offset:2px}',
+      '@media(max-width:640px){.dshmind-directory-overlay{padding:10px}.dshmind-directory-dialog{max-height:94vh}.dshmind-directory-header{padding:16px}.dshmind-directory-address{padding:0 16px 12px}.dshmind-directory-layout{grid-template-columns:136px minmax(0,1fr)}.dshmind-directory-body{padding:12px 10px}.dshmind-directory-row{padding:8px;gap:6px}.dshmind-directory-row .dshmind-directory-icon{display:none}.dshmind-directory-toolbar{align-items:flex-start;flex-direction:column;gap:6px}.dshmind-directory-selection{padding:8px 16px 0}.dshmind-directory-footer{padding:12px 16px;align-items:flex-start;flex-direction:column}.dshmind-directory-footer .dshmind-set__actions{width:100%;justify-content:flex-end}}',
       '.dshmind-growth-overlay{position:fixed;inset:0;z-index:9000;background:#0005;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}.dshmind-growth-dialog{display:flex;flex-direction:column;width:740px;max-width:100%;height:620px;max-height:85vh;border-radius:14px;overflow:hidden;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#202225);box-shadow:0 16px 64px #0004;font-size:14px;line-height:1.6}.dshmind-growth-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:20px 24px 12px}.dshmind-growth-header p{margin:6px 0 0}.dshmind-growth-tabs{display:flex;gap:8px;padding:0 24px 14px;border-bottom:1px solid var(--dsw-alias-border-l2,#ddd)}.dshmind-growth-tabs button[aria-pressed=true]{background:var(--dsw-alias-interactive-bg-active,#eaf2ff);font-weight:600}.dshmind-growth-body{overflow:auto;min-height:0;flex:1;padding:18px 24px 24px}.dshmind-growth-body>.dshmind-set__btn{margin-bottom:12px}.dshmind-growth-body article p{margin:7px 0}.dshmind-growth-body article{overflow-wrap:anywhere}.dshmind-growth-dialog .dshmind-set__actions{flex-wrap:wrap}.dshmind-growth-dialog .dshmind-set__mono{overflow-wrap:anywhere}.dshmind-growth-body [hidden]{display:none!important}.dshmind-growth-header .dshmind-set__btn{flex-shrink:0}@media(max-width:560px){.dshmind-growth-header{padding:16px}.dshmind-growth-tabs{padding:0 16px 12px;gap:6px;flex-wrap:wrap}.dshmind-growth-body{padding:16px}}',
       '.dshmind-set__status{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:400;color:var(--dsw-alias-label-secondary,#61666b)}.dshmind-set__dot{display:inline-block;width:7px;height:7px;border-radius:50%;flex:0 0 auto}',
       '.dshmind-set__foot{display:flex;align-items:center;gap:12px;justify-content:space-between;padding-top:16px;border-top:1px solid var(--dsw-alias-border-l2,#d3dcea)}.dshmind-set__foot p{margin:0}.dshmind-set__mono{font-family:var(--ds-font-family-code,ui-monospace,monospace);overflow-wrap:anywhere}',
@@ -4889,7 +4890,7 @@ window.__ModuleLoader__.load({
       }
       function closeDirectories() {
         if (lock.saving) return;
-        directoryControl.closed = true; directoryControl.seq++;
+        directoryControl.closed = true; directoryControl.returning = true; directoryControl.seq++;
         if (directoryControl.controller) directoryControl.controller.abort();
         setDirectory(null);
         if (directoryControl.trigger && typeof directoryControl.trigger.focus === 'function') directoryControl.trigger.focus();
@@ -4949,7 +4950,7 @@ window.__ModuleLoader__.load({
           enabled: true, recursive: true, purpose: '两者', extensions: ['.md', '.txt', '.json', '.jsonl', '.html', '.htm', '.vtt', '.srt'],
           scope: { project: null, audience: 'auto', roles: [], relationship: null } }; });
         send({ op: 'sources_add', sources: values, expectedRevision: directory.expectedRevision }, function () {
-          directoryControl.closed = true; directoryControl.seq++; setDirectory(null);
+          directoryControl.closed = true; directoryControl.returning = true; directoryControl.seq++; setDirectory(null);
           if (directoryControl.trigger && typeof directoryControl.trigger.focus === 'function') directoryControl.trigger.focus();
         });
       }
@@ -4971,6 +4972,57 @@ window.__ModuleLoader__.load({
           if (first && (event.shiftKey && document.activeElement === first || !event.shiftKey && document.activeElement === last)) { event.preventDefault(); (event.shiftKey ? last : first).focus(); }
         }
       }
+      function directoryIcon(kind) {
+        return h('svg', { className: 'dshmind-directory-icon', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, 'aria-hidden': true },
+          h('path', { d: kind === 'volume' ? 'M4 4h16v16H4z M7 15h10 M8 18h.01 M16 8h.01' : kind === 'home' ? 'M3 11l9-8 9 8 M5 9v12h14V9 M9 21v-8h6v8' : 'M3 7V5h7l2 2h9v13H3z' }));
+      }
+      function renderDirectoryPicker() {
+        if (!directory || !data) return null;
+        var listing = directory.listing;
+        var locationData = data.locations || {};
+        var places = Array.isArray(locationData.locations) ? locationData.locations : [];
+        if (!places.length && listing) places = [{ name: '主目录', path: listing.home, kind: 'home' }, { name: '文件系统', path: listing.crumbs[0] && listing.crumbs[0].path, kind: 'root' }].filter(function (p) { return p.path; });
+        var currentPlace = places.filter(function (p) { return listing && (listing.path === p.path || listing.path.indexOf(p.path.replace(/[\\/]+$/, '') + '/') === 0); }).sort(function (a, b) { return b.path.length - a.path.length; })[0];
+        function placeRow(p) {
+          return h('button', { key: p.path, type: 'button', className: 'dshmind-directory-place', title: p.path + (p.reason ? ' · ' + p.reason : ''),
+            'aria-label': (p.kind === 'volume' ? '浏览磁盘 ' : '浏览位置 ') + p.name, 'aria-current': currentPlace === p ? 'location' : undefined,
+            disabled: busy || directory.loading || p.available === false, onClick: function () { browseDirectory(p.path); } }, [directoryIcon(p.kind), h('span', null, [p.name, p.filesystem || p.reason ? h('small', null, p.reason || p.filesystem) : null])]);
+        }
+        return h('div', { className: 'dshmind-directory-overlay', onClick: function (event) { event.stopPropagation(); } }, h('section', {
+          role: 'dialog', 'aria-modal': true, 'aria-label': '选择信息来源目录', className: 'dshmind-directory-dialog', onKeyDown: directoryKey,
+        }, [
+          h('header', { className: 'dshmind-directory-header' }, [h('div', null, [h('h3', null, '选择信息来源目录'), h('p', null, '选择一个或多个文件夹，连接后由 Lead 自主吸收与整理。')]), h('button', { type: 'button', className: 'dshmind-set__btn', 'aria-label': '关闭目录选择', disabled: busy, onClick: closeDirectories }, '关闭')]),
+          directory.mode === 'browse' ? h('div', { className: 'dshmind-directory-address' }, [h('input', { autoFocus: true, className: 'dshmind-set__input', 'aria-label': '浏览目录路径', placeholder: '输入文件夹完整路径', value: directory.path, disabled: busy,
+            onChange: function (event) { var value = event.target.value; setDirectory(function (old) { return Object.assign({}, old, { path: value }); }); },
+            onKeyDown: function (event) { if (event.key === 'Enter' && !event.nativeEvent?.isComposing) { event.preventDefault(); browseDirectory(directory.path); } } }), button('前往目录', function () { browseDirectory(directory.path); }, directory.loading)]) : null,
+          h('div', { className: 'dshmind-directory-layout' }, [
+            h('aside', { className: 'dshmind-directory-places', 'aria-label': '设备与位置' }, [h('h4', null, '常用位置'), places.filter(function (p) { return p.kind !== 'volume'; }).map(placeRow),
+              h('h4', { style: { marginTop: 22 } }, '硬盘与 U 盘'), places.filter(function (p) { return p.kind === 'volume'; }).map(placeRow),
+              !places.some(function (p) { return p.kind === 'volume'; }) ? h('p', null, '暂未发现已挂载磁盘') : null,
+              h('button', { type: 'button', className: 'dshmind-directory-place', disabled: busy || directory.loading, onClick: refresh }, '刷新磁盘列表'),
+              h('p', null, locationData.warning || '外接盘需先在系统文件管理器中挂载。显示的是 DSH 所在设备的位置。')]),
+            h('div', { className: 'dshmind-directory-body' }, [
+              directory.mode === 'browse' ? [
+                listing ? [h('nav', { 'aria-label': '目录层级', className: 'dshmind-directory-crumbs' }, listing.crumbs.map(function (crumb, i) { return [i ? h('span', { 'aria-hidden': true }, '›') : null, h('button', { type: 'button', title: crumb.path, disabled: busy || directory.loading, onClick: function () { browseDirectory(crumb.path); } }, crumb.name || crumb.path)]; })),
+                  h('div', { className: 'dshmind-directory-toolbar' }, [button(directory.selected.indexOf(listing.path) >= 0 ? '取消选择当前目录' : '选择当前目录', function () { toggleDirectory(listing.path); }, directory.loading || data.sources.some(function (s) { return s.path === listing.path; })),
+                    h('label', null, [h('input', { type: 'checkbox', 'aria-label': '显示隐藏目录', checked: directory.hidden, onChange: function () { setDirectory(function (old) { return Object.assign({}, old, { hidden: !old.hidden }); }); } }), '显示隐藏目录'])]),
+                  h('div', { role: 'group', 'aria-label': '可选文件夹', className: 'dshmind-directory-entries' }, [listing.entries.filter(function (entry) { return directory.hidden || !entry.hidden; }).map(function (entry) {
+                    var connected = data.sources.some(function (s) { return s.path === entry.path; });
+                    return h('div', { key: entry.path, className: 'dshmind-directory-row' }, [h('label', { title: entry.path }, [h('input', { type: 'checkbox', 'aria-label': '选择目录 ' + entry.path, checked: connected || directory.selected.indexOf(entry.path) >= 0, disabled: busy || directory.loading || connected, onChange: function () { toggleDirectory(entry.path); } }), directoryIcon('folder'), h('span', { className: 'dshmind-directory-name' }, entry.name), connected ? h('span', { className: 'dshmind-set__hint' }, '已连接') : null]), button('进入 ' + entry.name, function () { browseDirectory(entry.path); }, directory.loading)]);
+                  }), !listing.entries.some(function (entry) { return directory.hidden || !entry.hidden; }) ? h('p', { className: 'dshmind-directory-empty' }, '此处没有可显示的子文件夹，可选择当前目录。') : null]),
+                  listing.truncated ? h('p', { className: 'dshmind-directory-message', role: 'status' }, '文件夹较多，仅显示开头部分；可输入完整路径继续浏览。') : null,
+                ] : null,
+              ] : button('继续选择文件夹', nativeDirectory, directory.loading),
+              directory.loading ? h('p', { role: 'status', className: 'dshmind-directory-message' }, directory.mode === 'native' ? '等待文件夹选择…' : '正在读取目录…') : null,
+              directory.error ? h('p', { role: 'alert', className: 'dshmind-directory-message dshmind-directory-error' }, directory.error) : null,
+              directory.expectedRevision !== data.configRevision ? [h('p', { role: 'status', className: 'dshmind-directory-message' }, '来源设置已变化，所选目录保留；请先核对，再按当前设置连接。'), button('按当前设置核对所选目录', function () { setDirectory(function (old) { return Object.assign({}, old, { selected: old.selected.filter(function (p) { return !data.sources.some(function (s) { return s.path === p; }); }), expectedRevision: data.configRevision }); }); })] : null,
+              notice ? h('p', { role: 'status', className: 'dshmind-directory-message' }, notice) : null,
+            ]),
+          ]),
+          h('details', { className: 'dshmind-directory-selection' }, [h('summary', null, '已选择 ' + directory.selected.length + ' 个目录 · 查看路径'), h('div', { className: 'dshmind-directory-selected' }, directory.selected.map(function (p) { return h('div', { key: p, className: 'dshmind-directory-row' }, [h('span', { className: 'dshmind-set__mono' }, p), h('button', { type: 'button', className: 'dshmind-set__btn', 'aria-label': '移除选择 ' + p, disabled: busy, onClick: function () { toggleDirectory(p); } }, '移除')]); }))]),
+          h('footer', { className: 'dshmind-directory-footer' }, [h('p', null, '默认包含子目录 · 私密范围可在连接后调整'), h('div', { className: 'dshmind-set__actions' }, [button('取消选择目录', closeDirectories), button('连接选中目录（' + directory.selected.length + '）', connectDirectories, !directory.selected.length || directory.loading || directory.expectedRevision !== data.configRevision)])]),
+        ]));
+      }
       var config = draft || (data && data.config);
       var page = data && data[tab];
       var stateLabels = { active: '使用中', dormant: '暂时淡去', withdrawn: '已撤回', 'needs-review': '待重新理解', missing: '来源不可用', error: '读取失败' };
@@ -4979,7 +5031,7 @@ window.__ModuleLoader__.load({
         h('p', { className: 'dshmind-set__hint' }, '在会话中分享即可。你连接来源，Lead 自主吸收并纳入 Mind 原有记忆和能力体系。'),
         data ? h('p', { className: 'dshmind-set__hint' }, '已连接 ' + data.sources.length + ' 个目录 · ' + (data.config.paused ? '阅读已暂停' : '阅读已开启')) : null,
         button('管理信息来源', function (event) { lock.managerTrigger = event && event.currentTarget; setManagerOpen(true); refresh(); }),
-        managerOpen ? h('div', { className: 'dshmind-growth-overlay', onClick: function (event) { event.stopPropagation(); } }, h('section', { role: 'dialog', 'aria-modal': true, 'aria-label': '信息来源与沉淀管理', className: 'dshmind-growth-dialog', onKeyDown: managerKey }, [
+        managerOpen && !directory ? h('div', { className: 'dshmind-growth-overlay', onClick: function (event) { event.stopPropagation(); } }, h('section', { role: 'dialog', 'aria-modal': true, 'aria-label': '信息来源与沉淀管理', className: 'dshmind-growth-dialog', onKeyDown: managerKey }, [
         h('header', { className: 'dshmind-growth-header' }, [h('div', null, [h('h3', { className: 'dshmind-set__subtitle' }, '信息来源'), h('p', { className: 'dshmind-set__hint' }, '整理、归类与知识分配交给 Lead；正式内容沿用 Mind 记忆服务。')]), h('button', { type: 'button', autoFocus: true, className: 'dshmind-set__btn', disabled: busy || !!directory, onClick: closeManager, 'aria-label': '关闭信息来源管理' }, '关闭')]),
         h('nav', { className: 'dshmind-growth-tabs', 'aria-label': '来源管理分类' }, [['sources', '连接目录'], ['records', '收录与沉淀'], ['settings', '阅读设置']].map(function (entry) { return h('button', { type: 'button', className: 'dshmind-set__btn', 'aria-pressed': panel === entry[0], onClick: function () { setPanel(entry[0]); } }, entry[1]); })),
         h('div', { className: 'dshmind-growth-body' }, [
@@ -5001,7 +5053,7 @@ window.__ModuleLoader__.load({
           ]),
           ]),
           h('div', { hidden: panel !== 'sources' }, [
-          button('选择信息来源目录', chooseDirectories, data.sources.length >= data.limits.sources),
+          h('button', { type: 'button', className: 'dshmind-set__btn', disabled: busy || data.sources.length >= data.limits.sources, onClick: chooseDirectories, ref: function (node) { if (node && directoryControl.returning) { directoryControl.returning = false; node.focus(); } } }, '选择信息来源目录'),
           h('p', { className: 'dshmind-set__hint' }, '像选择工作区一样浏览文件夹，可勾选多个目录一起连接，也可随时继续添加。'),
           data.sources.length ? data.sources.map(function (s) { return h('article', { key: s.id, style: { padding: '12px 0', borderBottom: '1px solid var(--dsw-alias-border-l2,#444)' } }, [
             h('strong', null, s.name), h('p', { className: 'dshmind-set__mono' }, s.path),
@@ -5068,46 +5120,11 @@ window.__ModuleLoader__.load({
             data.runtime && data.runtime.waitingForLead ? h('p', { className: 'dshmind-set__hint' }, '部分恢复的会话等待 Lead 身份接续；正常进入会话后再安排辅助阅读。') : null,
             data.jobs.map(function (j) { return h('p', { key: j.id }, j.at + ' · ' + ({ running: '阅读中', integrating: '待纳入正式记忆', completed: '已处理', failed: '未完成' }[j.state] || j.state) + (j.partial ? ' · 部分材料' : '') + (j.error ? ' · ' + j.error : '') + (j.records ? ' · 关联 ' + j.records.length + ' 条回执（含复用）' : '')); })])]),
         ]) : null,
-        directory && data ? h('div', { className: 'dshmind-directory-overlay', onClick: function (event) { event.stopPropagation(); } }, h('section', {
-          role: 'dialog', 'aria-modal': true, 'aria-label': '选择信息来源目录', className: 'dshmind-directory-dialog', onKeyDown: directoryKey,
-        }, [
-          h('h3', { className: 'dshmind-set__subtitle' }, '选择信息来源目录'),
-          h('p', { className: 'dshmind-set__hint' }, '可选择多个文件夹。默认包含子目录，由 Lead 自主吸收和分配知识；私密范围可在来源设置中调整。'),
-          h('div', { className: 'dshmind-directory-body' }, [
-          directory.mode === 'browse' ? [
-            h('div', { className: 'dshmind-set__actions' }, [h('input', { autoFocus: true, className: 'dshmind-set__input', 'aria-label': '浏览目录路径', value: directory.path, disabled: busy,
-              onChange: function (event) { var value = event.target.value; setDirectory(function (old) { return Object.assign({}, old, { path: value }); }); },
-              onKeyDown: function (event) { if (event.key === 'Enter' && !event.nativeEvent?.isComposing) { event.preventDefault(); browseDirectory(directory.path); } } }), button('前往目录', function () { browseDirectory(directory.path); }, directory.loading), button('主目录', function () { browseDirectory(); }, directory.loading)]),
-            directory.listing ? [
-              h('nav', { 'aria-label': '目录层级', className: 'dshmind-set__actions' }, directory.listing.crumbs.map(function (c) { return button(c.name || c.path, function () { browseDirectory(c.path); }, directory.loading); })),
-              h('p', { className: 'dshmind-set__mono' }, directory.listing.path),
-              button(directory.selected.indexOf(directory.listing.path) >= 0 ? '取消选择当前目录' : '选择当前目录', function () { toggleDirectory(directory.listing.path); }, directory.loading || data.sources.some(function (s) { return s.path === directory.listing.path; })),
-              h('div', { role: 'group', 'aria-label': '可选文件夹', className: 'dshmind-directory-entries' }, directory.listing.entries.filter(function (entry) { return directory.hidden || !entry.hidden; }).map(function (entry) {
-                var connected = data.sources.some(function (s) { return s.path === entry.path; });
-                return h('div', { key: entry.path, className: 'dshmind-directory-row' }, [h('label', null, [h('input', { type: 'checkbox', 'aria-label': '选择目录 ' + entry.path,
-                  checked: connected || directory.selected.indexOf(entry.path) >= 0, disabled: busy || directory.loading || connected,
-                  onChange: function () { toggleDirectory(entry.path); } }), h('span', null, entry.name), connected ? h('span', { className: 'dshmind-set__hint' }, '已连接') : null]),
-                  button('进入 ' + entry.name, function () { browseDirectory(entry.path); }, directory.loading)]);
-              })),
-              !directory.listing.entries.some(function (entry) { return directory.hidden || !entry.hidden; }) ? h('p', { className: 'dshmind-set__hint' }, '没有可显示的子目录，可选择当前目录或返回上一级。') : null,
-              directory.listing.truncated ? h('p', { role: 'status' }, '文件夹较多，仅显示开头部分；可输入目标路径继续浏览。') : null,
-              h('label', null, [h('input', { type: 'checkbox', 'aria-label': '显示隐藏目录', checked: directory.hidden, onChange: function () { setDirectory(function (old) { return Object.assign({}, old, { hidden: !old.hidden }); }); } }), '显示隐藏目录']),
-            ] : null,
-          ] : button('继续选择文件夹', nativeDirectory, directory.loading),
-          directory.loading ? h('p', { role: 'status' }, directory.mode === 'native' ? '等待文件夹选择…' : '正在读取目录…') : null,
-          directory.error ? h('p', { role: 'alert' }, directory.error) : null,
-          h('details', { className: 'dshmind-set__details' }, [h('summary', null, '已选择 ' + directory.selected.length + ' 个目录 · 查看路径'),
-            h('div', { className: 'dshmind-directory-selected' }, directory.selected.map(function (p) { return h('div', { key: p, className: 'dshmind-directory-row' }, [h('span', { className: 'dshmind-set__mono' }, p), h('button', { type: 'button', className: 'dshmind-set__btn', 'aria-label': '移除选择 ' + p, disabled: busy, onClick: function () { toggleDirectory(p); } }, '移除')]); }))]),
-          directory.expectedRevision !== data.configRevision ? h('p', { role: 'status' }, '来源设置已变化，所选目录保留；请先核对，再按当前设置连接。') : null,
-          directory.expectedRevision !== data.configRevision ? button('按当前设置核对所选目录', function () { setDirectory(function (old) { return Object.assign({}, old, { selected: old.selected.filter(function (p) { return !data.sources.some(function (s) { return s.path === p; }); }), expectedRevision: data.configRevision }); }); }) : null,
-          notice ? h('p', { role: 'status' }, notice) : null,
-          ]),
-          h('div', { className: 'dshmind-set__actions dshmind-directory-footer' }, [button('取消选择目录', closeDirectories), button('连接选中目录（' + directory.selected.length + '）', connectDirectories, !directory.selected.length || directory.loading || directory.expectedRevision !== data.configRevision)]),
-        ])) : null,
         confirmation ? h('div', { role: 'alert', className: 'dshmind-set__notice' }, [h('p', null, confirmation.label), button('确认这次操作', function () { send(confirmation.body, function () { setConfirmation(null); }); }), button('取消这次操作', function () { setConfirmation(null); })]) : null,
         notice ? h('p', { role: 'status', className: 'dshmind-set__hint' }, notice) : null,
         ]),
         ])) : null,
+        renderDirectoryPicker(),
       ]);
     }
 

@@ -7,6 +7,7 @@ import { serializeByKey, withLock, stripBom } from './kernel/fsx.js';
 import { savePrivateBufferState } from './turn-buffer.js';
 import { Denied, Fault, InvalidBody } from './kernel/errors.js';
 import { INFORMATION_EXTENSIONS, sourceRoot, readSourceFile, decodeMaterial, walkBatch } from './information-files.js';
+import { informationLocations } from './information-locations.js';
 
 export const INFORMATION_LIMITS = Object.freeze({ sources: 64, items: 10000, records: 2000, readings: 2000,
   stateBytes: 16 * 1024 * 1024, fileBytes: 1024 * 1024, readChars: 12000, contextChars: 7000 });
@@ -847,6 +848,7 @@ export class InformationService {
     if (spec.subject.kind !== '主权者') throw new Denied('信息设置读面', '仅已认证人侧读取完整目录设置。');
     const state = await this.load();
     return { configRevision: state.configRevision, config: state.config, sources: state.sources.map(({ scan, ...s }) => ({ ...s, scanPending: !!scan })),
+      locations: await informationLocations(),
       usage: state.usage[dayOf(this.clock)] ?? { readChars: 0, modelCalls: 0 }, limits: INFORMATION_LIMITS, extensions: INFORMATION_EXTENSIONS,
       bindings: state.bindings, materials: await this.query(spec, { ...input, collection: 'materials' }),
       growth: await this.query(spec, { ...input, collection: 'growth' }), candidates: await this.query(spec, { ...input, collection: 'candidates' }), jobs: state.jobs.slice(-10) };

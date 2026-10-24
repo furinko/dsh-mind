@@ -23,6 +23,7 @@ async function scene(run, options = {}) {
       async *[Symbol.asyncIterator]() { if (init.body) yield Buffer.from(init.body); } };
     const res = { writeHead(status) { this.status = status; }, end(body) { this.body = JSON.parse(body); } };
     await handlers[url.startsWith('/plugins/dsh-mind/information-material') ? 'preview' : 'settings'](req, res);
+    if (options.locations && res.body?.数据?.config) res.body.数据.locations = { locations: options.locations(f) };
     return jsonResponse(res.body, res.status);
     } finally { pending--; }
   } });
@@ -107,9 +108,37 @@ it('原生目录选择宿主允许连续添加，取消不丢所选目录，保�
     await s.click('继续选择文件夹'); assert.match(s.text(), /已选择 1 个目录/);
     const state = await org.information.load();
     await org.information.admin({ subject: SOVEREIGN, project }, { op: 'configure', expectedRevision: state.configRevision, config: { ...state.config, paused: true } });
-    await s.click('刷新见闻与成长'); assert.equal(s.button('连接选中目录（1）').props.disabled, true);
+    await s.click('刷新磁盘列表'); assert.equal(s.button('连接选中目录（1）').props.disabled, true);
     await s.click('按当前设置核对所选目录'); await s.click('连接选中目录（1）');
     assert.equal((await org.information.load()).sources[0].path, dir);
     assert.equal((await org.information.load()).config.paused, true);
   }, { uiWorkspace: f => { home = f.home; return { async listDirectory() { throw Object.assign(Error('native only'), { rpcError: { code: 'directory-picker/unavailable' } }); }, async pickDirectory() { return picks++ === 0 ? join(home, '原生选择') : null; } }; } });
+});
+
+it('目录窗口独立显示，磁盘入口能跨卷多选并一次连接，关闭返回来源管理', async () => {
+  const visited = [];
+  await scene(async (s, org, f) => {
+    const one = join(f.home, '磁盘甲', '知识库'); const two = join(f.home, '磁盘乙', '字幕');
+    await mkdir(one, { recursive: true }); await mkdir(two, { recursive: true });
+    await s.click('选择信息来源目录');
+    assert.equal(s.elements().filter(e => e.props.role === 'dialog').length, 1);
+    assert.equal(s.field('关闭信息来源管理'), undefined, '来源管理不与目录选择叠成两个弹窗');
+    s.field('浏览磁盘 磁盘甲').props.onClick(); await s.flush();
+    s.change('选择目录 ' + one, true);
+    s.field('浏览磁盘 磁盘乙').props.onClick(); await s.flush();
+    s.change('选择目录 ' + two, true);
+    assert.ok(visited.includes(join(f.home, '磁盘甲')) && visited.includes(join(f.home, '磁盘乙')));
+    assert.match(s.text(), /已选择 2 个目录/);
+    await s.click('连接选中目录（2）');
+    assert.deepEqual((await org.information.load()).sources.map(s => s.path).sort(), [one, two].sort());
+    assert.ok(s.field('关闭信息来源管理'));
+    await s.click('选择信息来源目录');
+    s.field('关闭目录选择').props.onClick(); await s.flush();
+    assert.ok(s.field('关闭信息来源管理'));
+    assert.equal((await org.information.load()).sources.length, 2);
+  }, {
+    locations: f => ['磁盘甲', '磁盘乙'].map(name => ({ name, path: join(f.home, name), kind: 'volume', filesystem: 'exfat', available: true })),
+    uiWorkspace: f => ({ async listDirectory(path = f.home) { visited.push(path); return listing(path,
+      path.endsWith('磁盘甲') ? [join(path, '知识库')] : path.endsWith('磁盘乙') ? [join(path, '字幕')] : [], f.home); } }),
+  });
 });
