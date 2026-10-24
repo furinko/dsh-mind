@@ -35,29 +35,5 @@ async function env({ confirm = true, postFails = false } = {}) {
   return { renderer, requests, flush, elements, click, fill, button, text: () => textOf(renderer.tree), dispose() { renderer.unmount(); dispose?.(); } };
 }
 
-test('看板监控页展示覆盖/真实分母，反馈必须有理由与来源；POST后独立GET确认', async () => {
-  const e = await env(); try {
-    assert.match(e.text(), /阻塞与原因反馈/); assert.match(e.text(), /漏记数量未知/); assert.match(e.text(), /缺少有效分母/);
-    e.click('记录原因反馈'); assert.equal(e.button('提交反馈').props.disabled, true);
-    e.fill('textarea', '人工核验'); e.fill('input', 'review-1'); e.fill('select', '规则缺陷疑似', 0); e.fill('select', 'false_positive', 1);
-    const form = e.elements().find(x => x.type === 'form'); form.props.onSubmit({ preventDefault() {} }); await e.flush();
-    assert.deepEqual(e.requests.map(r => r.method), ['POST', 'GET']);
-    assert.equal(e.requests[0].url, '/plugins/dsh-mind/monitor?sessionId=owner-exact');
-    assert.deepEqual(e.requests[0].body, { 阻塞引用: 'at-real-attempt', 原因分类: '规则缺陷疑似', 判定: 'false_positive', 原因: '人工核验', 来源引用: 'review-1' });
-    assert.match(e.text(), /已回读确认反馈；权限与审批未改变/);
-  } finally { e.dispose(); }
-});
-test('反馈POST成功但回读缺少本条事实，不宣称确认成功', async () => {
-  const e = await env({ confirm: false }); try {
-    e.click('记录原因反馈'); e.fill('textarea', 'reason'); e.fill('input', 'ref');
-    e.elements().find(x => x.type === 'form').props.onSubmit({ preventDefault() {} }); await e.flush();
-    assert.match(e.text(), /独立回读未确认/); assert.doesNotMatch(e.text(), /已回读确认反馈/);
-  } finally { e.dispose(); }
-});
-test('认证/写入失败明确显示未确认，不伪造反馈或权限恢复', async () => {
-  const e = await env({ postFails: true }); try {
-    e.click('记录原因反馈'); e.fill('textarea', 'reason'); e.fill('input', 'ref');
-    e.elements().find(x => x.type === 'form').props.onSubmit({ preventDefault() {} }); await e.flush();
-    assert.match(e.text(), /反馈未确认/); assert.doesNotMatch(e.text(), /已回读确认反馈/); assert.equal(e.requests.length, 1);
-  } finally { e.dispose(); }
-});
+test('阻塞反馈不再占用导航与页面，不要求用户填写诊断表',async()=>{const e=await env();try{assert.ok(!e.elements().some(x=>x.props['data-page']==='monitor'));assert.ok(!e.button('记录原因反馈'));assert.ok(!e.button('提交反馈'));assert.doesNotMatch(e.text(),/阻塞与原因反馈|原因分类|确认误拦截/);assert.equal(e.requests.length,0);}finally{e.dispose();}});
+test('后台有阻塞记录时面板仍不发起反馈写入，也不伪造人侧确认',async()=>{const e=await env({confirm:false});try{await e.flush();assert.equal(e.requests.length,0);assert.doesNotMatch(e.text(),/已回读确认反馈|权限.*恢复/);}finally{e.dispose();}});

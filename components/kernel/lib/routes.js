@@ -46,6 +46,8 @@ export const 端点表 = Object.freeze({
   informationDeposit: `${路由前缀}/information-deposit`,
   leadSpace: `${路由前缀}/lead-space`,
   memoryUse: `${路由前缀}/memory-use`,
+  memory: `${路由前缀}/memory`,
+  audit: `${路由前缀}/audit`,
   // v2 条目14/17（2026-10-18 补修F）：介入度待决清单与主权者逐请求决议。
   // 与调度授权同一档：读/写都要求宿主 Connection 认证，不退回无头本机通道。
   intervention: `${路由前缀}/intervention`,
@@ -708,6 +710,34 @@ export function memoryUse路由({ ctx, org, 项目 }) {
   };
 }
 
+/** Private browser inspection uses the same native services; never a generic action proxy. */
+export function history路由({ctx,org,项目,mode}) {
+ return async function history端点(req,res) {
+  if(String(req?.method??'GET').toUpperCase()!=='GET')return 回方法不对(res,req.method,'GET');
+  try {
+   const connection=ctx?.get?.('connection');if(typeof connection?.requestRejection!=='function')return 回JSON(res,503,{成功:false,理由:'浏览记录需要宿主Connection认证。'});
+   const rejection=connection.requestRejection(req);if(rejection!==undefined)return 回JSON(res,rejection===401?401:403,{成功:false,理由:'需要已认证的同源人侧入口。'});
+   if(!读栅栏(req).ok)return 回JSON(res,403,{成功:false,理由:'同源请求被拒绝。'});
+   const params=new URL(req.url,'http://localhost').searchParams;
+   const allowed=mode==='audit'?['project','action','from','to','cursor','limit']:['project','kind','q','role','id','offset','bodyOffset','dataVersion','includeInactive','limit'];
+   if([...params.keys()].some(k=>!allowed.includes(k))||new Set(params.keys()).size!==[...params.keys()].length)throw new InvalidBody('浏览参数包含未知或重复字段。');
+   const project=取项目(req,项目);if(typeof project!=='string'||!project.trim()||project.length>256)throw new InvalidBody('需要明确项目。');
+   let data;
+   if(mode==='audit')data=await org.audit.page({project,...Object.fromEntries(['action','from','to','cursor'].filter(k=>params.has(k)).map(k=>[k,params.get(k)])),...(params.has('limit')?{limit:Number(params.get('limit'))}:{})});
+   else {
+    const subject={id:'记忆浏览页',kind:'主权者'};const kind=params.get('kind');if(kind&&!['知识','经历','偏好'].includes(kind))throw new InvalidBody('记忆类别不支持。');
+    const inactive=params.get('includeInactive');if(inactive!==null&&!['true','false'].includes(inactive))throw new InvalidBody('状态筛选无效。');
+    const limit=params.has('limit')?Number(params.get('limit')):15;if(!Number.isSafeInteger(limit)||limit<1||limit>30)throw new InvalidBody('每页记忆需为1至30条。');
+    data=await org.memory.query({subject,读者:subject,项目:project,类:kind||['知识','经历','偏好'],浏览项目:true,含失效:inactive==='true',含待复验:true,返回模式:params.has('id')?'全文':'摘要',内容预算:params.has('id')?16000:12000,limit,条数上限:limit,
+     ...Object.fromEntries([['q','文本'],['role','岗位'],['id','id'],['dataVersion','数据版本']].filter(([k])=>params.has(k)).map(([k,v])=>[v,params.get(k)])),
+     ...(params.has('offset')?{偏移:Number(params.get('offset'))}:{}),...(params.has('bodyOffset')?{正文偏移:Number(params.get('bodyOffset'))}:{})});
+    data={...data,项目:project};
+   }
+   return 回JSON(res,200,{成功:true,数据:data});
+  }catch(error){return 回JSON(res,error.code==='AUDIT_PAGE_CHANGED'?409:error.code==='INVALID_BODY'?400:['DENIED','NEEDS_APPROVAL'].includes(error.code)?403:503,{成功:false,...describeFailure(error)});}
+ };
+}
+
 /** 取 webServer 服务：先 `ctx.get`，再退回 `ctx.webServer`（两种宿主形状都认）。 */
 function 取webServer(ctx) {
   let ws = null;
@@ -771,6 +801,8 @@ export function 挂同源路由(spec) {
         新挂.push(ws.register({ kind: 'exact', path: 端点表.informationDeposit, handler: information路由({ ctx, org, 项目, mode: 'deposit' }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.leadSpace, handler: leadSpace路由({ ctx, org, 项目 }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.memoryUse, handler: memoryUse路由({ ctx, org, 项目 }) }));
+        新挂.push(ws.register({ kind: 'exact', path: 端点表.memory, handler: history路由({ ctx, org, 项目, mode: 'memory' }) }));
+        新挂.push(ws.register({ kind: 'exact', path: 端点表.audit, handler: history路由({ ctx, org, 项目, mode: 'audit' }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.intervention, handler: intervention路由({ org, 项目, ctx }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.monitor, handler: monitor路由({ org, ctx }) }));
       } catch (error) {

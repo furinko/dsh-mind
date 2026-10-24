@@ -1065,7 +1065,9 @@ await runAction({ org, 项目, subject, 主体, args: { action, ...args }, 面: 
 | `/plugins/dsh-mind/delegation` | 已认证GET/POST调度设置，正式ConfigEditor保存；认证缺失即不可用 |
 | `/plugins/dsh-mind/persona-core` | 已认证同源GET读取当前部署核心卡；POST只收text与expectedFingerprint，独立人侧服务锁内核对版本、原子保存并仅审计指纹；不开放模型改卡动作 |
 | `/plugins/dsh-mind/intervention` | 已认证同源、精确sessionId范围读待审批，POST/PUT接请求id/决定/理由/审阅指纹；只落人侧决议，不执行原写；模型不能调用成主权者 |
-| `/plugins/dsh-mind/monitor` | 已认证同源 GET 查询指定 `sessionId` 的监控投影，可带 `limit/offset`；POST 仅收阻塞引用/原因分类/判定/原因/来源引用，追加人侧确认，不改权限或任务 |
+| `/plugins/dsh-mind/memory` | 已认证同源GET：project、kind（知识/经历/偏好）、q、role、includeInactive、limit（默认15/最大30）；offset/dataVersion续列表，id/bodyOffset/dataVersion续正文。复用原MemoryService可见性与版本，按选定项目隔离私人记忆，保留部署级可见内容；不含归档作答，无写操作 |
+| `/plugins/dsh-mind/audit` | 已认证同源GET：project、action、from/to（含时区）、limit（默认20/最大50）、cursor。从原审计账本按月份及序号倒序读取，游标固定首屏上界及筛选；追加新记录需刷新，旧前缀变化返回409，不拼接不同快照。仅返回有界元数据及依据，不返回工具参数；分页不是哈希链校验结论 |
+| `/plugins/dsh-mind/monitor` | 已认证同源 GET 查询指定 `sessionId` 的监控投影，可带 `limit/offset`；POST 仅收阻塞引用/原因分类/判定/原因/来源引用，追加人侧确认，不改权限或任务；看板反馈表单已退役，保留内部诊断兼容入口 |
 
 介入挂起冻结原主体、项目、动作参数与底层步骤。批准不替申请人执行：原申请者带 `审批引用` 重放同一请求；参数/计划漂移、被占用或已执行均拒。会审失败条件seal必须出现在冻结预览，并严格绑定本请求实际首登与对应创建步，不是全局豁免。
 

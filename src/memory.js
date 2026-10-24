@@ -975,6 +975,7 @@ export class MemoryService {
     return guard.unavailable ? { ...result, 来源警示: '收录来源状态不可用，相关派生记忆未提供；原有其他记忆照常读取' } : result;
   }
   async #query(query = {}, intakeGuard = {}) {
+    if (query.浏览项目 !== undefined && (query.浏览项目 !== true || query.subject?.kind !== '主权者' || !query.项目)) throw new InvalidBody('项目浏览仅供已认证的人侧按明确项目查看。');
     if (query.上下文经历 !== undefined && (query.上下文经历 !== true || query.类 !== '经历' || !query.项目)) throw new InvalidBody('上下文经历仅用于指定项目的经历召回。');
     if (query.场景检索 !== undefined && typeof query.场景检索 !== 'boolean') throw new InvalidBody('场景检索必须为布尔值。');
     if (query.个人经历 !== undefined && (query.个人经历 !== true || query.类 !== '经历' || !['Lead', '主权者'].includes(query.subject?.kind))) throw new InvalidBody('个人经历筛选仅供Lead或主权者读取经历。');
@@ -1031,6 +1032,11 @@ export class MemoryService {
     }
     const visible = [];
     for (const entry of entries) {
+      if (query.浏览项目) {
+        const scoped = entry.数据归属?.范围?.project;
+        if (scoped && scoped !== query.项目 || entry.类 === '经历' && entry.项目 && !['通用', '跨项目', query.项目].includes(entry.项目)
+          || entry.连续性?.范围 === '项目' && entry.项目 !== query.项目) continue;
+      }
       if (query.上下文经历 && entry.项目 !== query.项目) continue;
       if (query.个人经历 && entry.数据归属?.主体 !== 'Lead') continue;
       if (intakeGuard.unavailable && entry.数据归属) continue;

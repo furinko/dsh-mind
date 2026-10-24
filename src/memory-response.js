@@ -212,7 +212,7 @@ function fitSerializedResponse(result, serialize) {
 
 /** 摘要不携带完整历史；所有动态元数据仍由总预算兜底。 */
 function compactEntry(entry) {
-  return { ...Object.fromEntries(['id', '类', '状态', '项目', '岗位', '归属', '记于', '来源', '来源引用', '派生自', '归档', '连续性', '知识说明', '复验状态', '复验警示'].filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]])),
+  return { ...Object.fromEntries(['id', '类', '标题', '状态', '项目', '岗位', '归属', '记于', '来源', '来源引用', '派生自', '归档', '连续性', '知识说明', '复验状态', '复验警示'].filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]])),
     ...(Object.hasOwn(entry, '协作反馈') ? { 协作反馈摘要: collaborationFeedbackSummary(entry.协作反馈) } : {}) };
 }
 function reviewWarnings(entry) { return Object.fromEntries(['复验状态', '复验警示'].filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]])); }

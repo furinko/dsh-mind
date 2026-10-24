@@ -995,7 +995,7 @@ export async function runHarness() {
   const c0 = collect(r0.tree, { skipStyle: true });
   passed.push(check(c0.elements.length > 60, '首帧元素数 > 60（数据全空也是完整骨架）', String(c0.elements.length)));
   passed.push(check(c0.text.includes(ENTRY_LABEL), '首帧含标题「' + ENTRY_LABEL + '」'));
-  for (const section of ['待你决定', '会审', '任务图', '审计流', '消息总线']) {
+  for (const section of ['待你决定', '会审', '任务图', '审计预览', '消息总线']) {
     passed.push(check(c0.text.includes(section), '首帧含分区「' + section + '」'));
   }
   // 空态必须是**明说的话**：没有数据时最坏的结果是「信息少」，不是「猜」。
@@ -2745,47 +2745,16 @@ export async function runHarness() {
     passed.push(check(/\.dshmind-root\{[^}]*overflow:\s*auto/.test(面板源码),
       '④ 唯一的滚动容器是根容器（页面级滚动）'));
 
-    // ⑤ **渲染出的审计行数 === 该列出的行数**（不许静默裁掉），且**能铺开全部**。
+    // Metadata previews are not a fake history pager. The active page reads native history separately.
     {
-      const 多行 = sampleView();
-      // 造一份"条数明显超上限"的投影（40 条，超过 AUDIT_LIMIT=20 ⇒ 也要如实说明）。
-      const 基 = 多行.审计尾[0];
-      多行.审计尾 = Array.from({ length: 40 }, (_, i) => Object.assign({}, 基, { seq: i + 1 }));
-      const r = await 状态render(多行);
-      const 行 = findAllByClass(r.tree, 'dshmind-auditRow');
-      const 应渲染 = Math.min(40, 20); // AUDIT_LIMIT
-      passed.push(check(行.length === 应渲染,
-        '⑤ 审计行**渲染数 === 该列出的行数**（' + 应渲染 + ' 条，不静默裁掉）', String(行.length)));
-      const 文本 = collect(r.tree, { skipStyle: true }).text;
-      passed.push(check(文本.indexOf('投影共 40 条') >= 0 && 文本.indexOf('已列 20 条') >= 0,
-        '⑤ 尾部如实说清「投影共 40 条 · 已列 20 条」（不是静默截断）', 文本.slice(-160)));
-      // 铺开：点「展开全部」⇒ 40 行全在页面流里，且**零请求**（纯显示动作）
-      const 展开钮 = collect(r.tree, { skipStyle: true }).elements
-        .find((el) => el.type === 'button' && String(el.props.className || '').indexOf('dshmind-toggle') >= 0
-          && collect(el, { skipStyle: true }).text.indexOf('展开全部') >= 0);
-      passed.push(check(!!展开钮, '⑤ 超上限时给「展开全部」钮（而不是让人去滚一个小框）'));
-      if (展开钮) {
-        const 请求前 = r.spy ? r.spy.calls.length : null;
-        展开钮.props.onClick();
-        await settle();
-        r.flush();
-        const 全行 = findAllByClass(r.tree, 'dshmind-auditRow');
-        passed.push(check(全行.length === 40, '⑤ 展开后 40 行全在页面流里（不再被框裁）', String(全行.length)));
-        if (请求前 !== null) {
-          passed.push(check(r.spy.calls.length === 请求前,
-            '⑤ 展开是纯显示动作（零请求）', String(r.spy.calls.length - 请求前)));
-        }
-      }
+      const v=sampleView();const base=v.审计尾[0];v.审计尾=Array.from({length:40},(_,i)=>Object.assign({},base,{seq:i+1}));
+      const r=await 状态render(v);const elements=collect(r.tree,{skipStyle:true}).elements;
+      passed.push(check(findAllByClass(r.tree,'dshmind-auditRow').length===40,'⑤ 审计快照预览如实保留40条，正文历史另按需读取'));
+      passed.push(check(!elements.some(e=>e.type==='button'&&textOf(e).includes('展开全部（共')),'⑤ 审计没有20变40的伪展开控件'));
+      passed.push(check(collect(r.tree,{skipStyle:true}).text.includes('打开审计页可筛选并加载更早记录'),'⑤ 预览说明真实历史入口，不称为全量历史'));
       r.unmount();
     }
-    // 行数没超上限时：如实说"已全部列出"。
-    {
-      const r = await 状态render(sampleView());
-      const 文本 = collect(r.tree, { skipStyle: true }).text;
-      passed.push(check(文本.indexOf('投影共 4 条，已全部列出') >= 0,
-        '⑤ 不超上限时明说「已全部列出」', 文本.slice(-160)));
-      r.unmount();
-    }
+
   }
 
   //
@@ -3553,14 +3522,14 @@ export async function runHarness() {
       const r11 = await 挂(接线视图());
       const 页容器 = findAllByClass(r11.tree, 'dshmind-pageBox');
       const 页序 = 页容器.map((el) => el.props['data-dshmind-page']);
-      passed.push(check(页序.join(',') === 'overview,graph,tasks,reviews,bus,audit,monitor,memory',
-        '⑪a 八个页容器按注意力顺序在树里（总览→图谱→任务→会审→总线→审计→阻塞反馈→记忆）', 页序.join(',')));
+      passed.push(check(页序.join(',') === 'overview,graph,tasks,reviews,bus,audit,memory',
+        '⑪a 七个页容器按注意力顺序在树里（总览→图谱→任务→会审→总线→审计→记忆）', 页序.join(',')));
       const 显示中 = 页容器.filter((el) => !(el.props.style && el.props.style.display === 'none'));
       passed.push(check(显示中.length === 1 && 显示中[0].props['data-dshmind-page'] === 'overview',
         '⑪a 默认只显示总览，其余六页 display:none（节点仍在树里 ⇒ 内容口径断言不受页影响）',
         显示中.map((el) => el.props['data-dshmind-page']).join(',')));
       const 导航钮 = findAllByClass(r11.tree, 'dshmind-navBtn');
-      passed.push(check(导航钮.length === 8, '⑪a 导航八个钮（一页一个）', String(导航钮.length)));
+      passed.push(check(导航钮.length === 7, '⑪a 导航七个钮（一页一个）', String(导航钮.length)));
       passed.push(check(findAllByClass(r11.tree, 'dshmind-navBtnOn').length === 1
         && textOf(findAllByClass(r11.tree, 'dshmind-navBtnOn')[0]).indexOf('总览') >= 0,
         '⑪a 当前页那一个带 On（且是总览）'));
@@ -3576,7 +3545,7 @@ export async function runHarness() {
       passed.push(check(显示中2.length === 1 && 显示中2[0].props['data-dshmind-page'] === 'graph',
         '⑪a 点了「图谱」⇒ 只有图谱页可见（总览收起）',
         显示中2.map((el) => el.props['data-dshmind-page']).join(',')));
-      passed.push(check(findAllByClass(r11.tree, 'dshmind-navBtn').length === 8, '⑪a 切页后导航仍在（渲染没崩）'));
+      passed.push(check(findAllByClass(r11.tree, 'dshmind-navBtn').length === 7, '⑪a 切页后导航仍在（渲染没崩）'));
 
       // ── ⑪b 可视化：甜甜圈与统计砖 ──
       const 图 = findAllByClass(r11.tree, 'dshmind-donut');
@@ -3637,16 +3606,11 @@ export async function runHarness() {
         '⑪c 全部接线时没有一条红线（data-wired 全 1）', String(全接边.filter((el) => el.props['data-wired'] === '0').length)));
       passed.push(check(全接.text.indexOf('无接线缺口') >= 0, '⑪c 无缺口时明说「无接线缺口」（不给空表）'));
 
-      // ── ⑪d 记忆页：读数与构成，正文不上面板 ──
-      passed.push(check(文本11.indexOf('对话管「内容与意图」') >= 0,
-        '⑪d 记忆页写明口径：正文出口是对话（面板只做读数与结构）'));
-      passed.push(check(文本11.indexOf('记忆构成') >= 0 && 文本11.indexOf('经历') >= 0,
-        '⑪d 记忆按类构成画出来'));
-      const 无记忆 = sampleView();
-      无记忆.记忆 = null;
-      const 无记忆页 = await renderView(无记忆);
-      passed.push(check(无记忆页.text.indexOf('没带记忆读数') >= 0,
-        '⑪d 宿主没给记忆 ⇒ 明说「没带」而不是画 0（不装懂）'));
+      // Memory inspection is independent of dashboard counters and has no body in the cached preview.
+      passed.push(check(文本11.includes('打开记忆页，浏览已保存的内容与来源。'),'⑪d 记忆页提供原生内容浏览入口'));
+      passed.push(check(!文本11.includes('为什么这里没有条目列表'),'⑪d 不再用说明替代记忆内容'));
+      const noCounters=sampleView();noCounters.记忆=null;const noCounterPage=await renderView(noCounters);
+      passed.push(check(noCounterPage.text.includes('打开记忆页，浏览已保存的内容与来源。'),'⑪d 缺少统计不阻碍独立内容浏览入口'));
       // ── ⑪e 图谱交互：点节点开详情（纯显示、零请求）──
       {
         passed.push(check(findAllByClass(r11.tree, 'dshmind-gDrawer').length === 0,

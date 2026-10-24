@@ -382,7 +382,6 @@ window.__ModuleLoader__.load({
      */
     var MAX_RESPONSE_DEADLINE_HOURS = 876000;
     var TASK_LIMIT = 8;
-    var AUDIT_LIMIT = 20;
     /**
      * ⑦（2026-10-12，主权者指令「也默认收起呗」）：总线改为**折叠**而不是**截断**。
      *
@@ -1643,6 +1642,8 @@ window.__ModuleLoader__.load({
      * 已在官方客户端跑通）——它也是 `document.createElement('style')` + `document.head.appendChild`，
      * 并按 `style[data-plugin='<id>']` 判重，所以热重载不会叠出第二份。
      */
+    var HISTORY_CSS = ".dshmind-history{box-sizing:border-box;width:100%;min-width:0;max-width:1200px;margin:0 auto;padding:8px 0}.dshmind-history>h2{margin:0 0 6px;font-size:22px}.dshmind-historyToolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:16px 0}.dshmind-historyToolbar>input{flex:1;min-width:180px}.dshmind-historyToolbar label{display:flex;align-items:center;gap:5px;font-size:12px}.dshmind-historyToolbar input[type=datetime-local]{padding:7px;border:1px solid var(--dsw-alias-border-l2,#ddd);border-radius:6px;background:var(--dsw-alias-bg-layer-1,#fff);color:inherit}.dshmind-historyItem{padding:15px 0;border-bottom:1px solid var(--dsw-alias-border-l2,#ddd)}.dshmind-historyItem h3{font-size:15px;line-height:1.5;margin:0 0 6px;overflow-wrap:anywhere}.dshmind-historyItem p{margin:7px 0}.dshmind-historyBody{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.7}.dshmind-history details{margin-top:10px;font-size:12px}.dshmind-history summary{cursor:pointer;color:var(--dsw-alias-label-secondary,#737880);padding:5px 0}.dshmind-memoryLayout{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:24px;align-items:start}.dshmind-memoryDetail{padding:20px;border:1px solid var(--dsw-alias-border-l2,#ddd);border-radius:12px;background:var(--dsw-alias-bg-layer-2,#f8f9fb);min-width:0}.dshmind-memoryDetail .dshmind-historyToolbar{margin-top:0;justify-content:space-between}.dshmind-memoryDetail h3{margin:0;font-size:16px;overflow-wrap:anywhere}.dshmind-history [role=alert]{color:var(--dsw-alias-state-danger-primary,#b23a3a)}.dshmind-history summary:focus-visible,.dshmind-history input:focus-visible,.dshmind-history select:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#3076ee);outline-offset:2px}@media(max-width:560px){.dshmind-history .dshmind-auditRow{grid-template-columns:max-content minmax(0,1fr)}.dshmind-history .dshmind-auditWho{grid-column:1 / -1}.dshmind-historyToolbar>label{flex-wrap:wrap}.dshmind-memoryDetail{padding:15px}}.dshmind-history .dshmind-set__hint{font-size:12px;line-height:1.65;color:var(--dsw-alias-label-secondary,#61666b);overflow-wrap:anywhere}.dshmind-history .dshmind-set__select,.dshmind-history .dshmind-set__number,.dshmind-history .dshmind-set__input{box-sizing:border-box;min-height:36px;max-width:100%;padding:6px 11px;font:inherit;border-radius:8px;border:1px solid var(--dsw-alias-border-l2,#d3dcea);background:var(--dsw-alias-bg-layer-2,#fff);color:inherit}.dshmind-history .dshmind-set__input{width:220px;min-width:0}.dshmind-history .dshmind-set__row:last-child{border-bottom:0}.dshmind-history .dshmind-set__ input[type=checkbox],.dshmind-history .dshmind-growth-dialog input[type=checkbox]{width:16px;height:16px;accent-color:var(--dsw-alias-brand-primary,#4d6bfe)}.dshmind-history .dshmind-set__btn{min-height:34px;padding:6px 13px;font:inherit;font-size:12px;line-height:20px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2,#d3dcea);background:var(--dsw-alias-bg-layer-2,#fff);color:inherit;cursor:pointer;transition:background-color .15s,border-color .15s}.dshmind-history .dshmind-set__btn:hover{background:var(--dsw-alias-interactive-bg-hover,#eff1f5)}.dshmind-history .dshmind-set__btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4d6bfe);outline-offset:2px}.dshmind-history .dshmind-set__btn:disabled{opacity:.45;cursor:default}";
+
     var SETTINGS_CSS = [
       '.dshmind-set__{box-sizing:border-box;width:100%;min-width:0;max-width:760px;padding:4px 0 12px;color:var(--dsw-alias-label-primary,#1a2233);font:13px/1.65 var(--ds-font-family-sans,system-ui,sans-serif);container-type:inline-size}',
       '.dshmind-set__ *{box-sizing:border-box}.dshmind-set__ [hidden]{display:none!important}.dshmind-set__header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:24px}.dshmind-set__header>div{min-width:0;flex:1}.dshmind-set__header>button{flex:0 0 auto}',
@@ -1873,8 +1874,7 @@ window.__ModuleLoader__.load({
         { id: 'reviews', 名: '会审', 计数: ctx.会审 ? ctx.会审.length : null },
         { id: 'bus', 名: '总线', 计数: ctx.总线 ? ctx.总线.length : null },
         { id: 'audit', 名: '审计' },
-        { id: 'monitor', 名: '阻塞反馈' },
-        { id: 'memory', 名: '记忆', 计数: ctx.记忆 ? ctx.记忆.存量 : null },
+        { id: 'memory', 名: '记忆' },
       ];
     }
 
@@ -2030,8 +2030,7 @@ window.__ModuleLoader__.load({
         tasks: [段[2] || null],
         reviews: [段[1] || null],
         bus: [段[4] || null],
-        audit: [段[3] || null],
-        monitor: [h(监控反馈页, { monitor: ctx.view && ctx.view.监控 })],
+        audit: 现在 === 'audit' ? [h(审计浏览页, { key: 'audit:' + (ctx.view && ctx.view.项目 || ''), project: ctx.view && ctx.view.项目 || '' })] : [段[3] || null],
         memory: 记忆页(ctx),
       };
       var 页节点 = 页清单(ctx).map(function (p) {
@@ -2127,7 +2126,7 @@ window.__ModuleLoader__.load({
       var 记忆 = ctx.记忆;
       var 任务总 = 任务袋 && typeof 任务袋.总数 === 'number' ? 任务袋.总数 : null;
       var 砖 = [
-        ctx.审计总条数 ? { k: '审计条目（只增）', v: ctx.审计总条数, d: '近 ' + (ctx.audit ? ctx.audit.length : 0) + ' 条在「审计」页' } : null,
+        ctx.审计总条数 ? { k: '近期审计预览', v: ctx.审计总条数, d: '工作台快照；完整历史可在审计页读取' } : null,
         记忆 ? { k: '记忆存量', v: 记忆.存量, d: 记忆.新增 === null ? '' : '近 ' + (记忆.窗口天 || 7) + ' 天 +' + 记忆.新增 } : null,
         任务总 === null ? null : { k: '任务节点', v: 任务总, d: 计数 ? '进行中 ' + (计数.进行中 || 0) + ' · 已交卷 ' + (计数.已交卷 || 0) : '' },
         接线 ? { k: '能力卡', v: ctx.能力.length, d: '岗位接线 ' + 接线.接线.length + '/' + 接线.适用边 + '（' + 接线.接线率 + '%）' + (接线.缺口.length ? ' ⚠ 有缺口' : ' ✓') } : null,
@@ -2206,7 +2205,7 @@ window.__ModuleLoader__.load({
       // 与上方统计砖、构成图之间的缝**交给 `.dshmind-viz` 的容器 gap（14px）**：
       // 这里不再自带 `marginTop` —— 一半写在容器、一半写在自己身上，迟早对不上。
       return h('div', { key: 'act', className: 'dshmind-actCard' }, [
-        h('div', { key: 'h', className: 'dshmind-tileK' }, '审计节律（一格一条，共 ' + 行.length + ' 条；全量 ' + ctx.审计总条数 + ' 条）'),
+        h('div', { key: 'h', className: 'dshmind-tileK' }, '审计节律（一格一条，最近投影 ' + 行.length + ' 条）'),
         h('div', { key: 'bar', className: 'dshmind-actbar' }, 格),
         // 起止时刻：给这条色带一个**坐标系**。没有它，读者无法把某个红块对到某个时间——
         // 那一排方块就只是装饰（2026-10-14 收口；数据取自同一批审计行，不新取数）。
@@ -2576,61 +2575,11 @@ window.__ModuleLoader__.load({
       };
     }
 
-    /** 记忆页：读数与构成 + 「正文不在这里」的口径说明（内容出口是对话）。 */
+    /** Body is fetched only while this page is open, never from the dashboard cache. */
     function 记忆页(ctx) {
-      var 记忆 = ctx.记忆;
-      if (!记忆) {
-        return [h('div', { key: 'nomem', className: 'dshmind-empty' }, '这次投影没带记忆读数（宿主没给 ⇒ 不装懂）。')];
-      }
-      var 卡 = [];
-      if (记忆.按类) {
-        卡.push(可视化卡('按类构成', 记忆.存量 === null ? '' : '共 ' + 记忆.存量 + ' 条', [
-          { 名: '经历', 值: 记忆.按类.经历, 色: '#4bb8c8' },
-          { 名: '知识', 值: 记忆.按类.知识, 色: '#a97bea' },
-          { 名: '偏好', 值: 记忆.按类.偏好, 色: '#d4a053' },
-        ]));
-      }
-      return [
-        // ① 四个读数砖铺满一行（原来只有三个、每个又宽又空；第四格放"按类"的实际数字）
-        h('div', { key: 'tiles', className: 'dshmind-tiles' }, [
-          h('div', { key: 'a', className: 'dshmind-tile' }, [
-            h('div', { key: 'k', className: 'dshmind-tileK' }, '存量'),
-            h('div', { key: 'v', className: 'dshmind-tileV dshmind-mono' }, 记忆.存量 === null ? '—' : String(记忆.存量)),
-            h('div', { key: 'd', className: 'dshmind-tileD' }, '四类账目合计（知识 / 经历 / 偏好 / 作答）'),
-          ]),
-          h('div', { key: 'b', className: 'dshmind-tile' }, [
-            h('div', { key: 'k', className: 'dshmind-tileK' }, '近 ' + (记忆.窗口天 || 7) + ' 天新增'),
-            h('div', { key: 'v', className: 'dshmind-tileV dshmind-mono' }, 记忆.新增 === null ? '—' : String(记忆.新增)),
-            h('div', { key: 'd', className: 'dshmind-tileD' }, '窗口外的旧条目不进这一格'),
-          ]),
-          h('div', { key: 'c', className: 'dshmind-tile' }, [
-            h('div', { key: 'k', className: 'dshmind-tileK' }, '近段晋升'),
-            h('div', { key: 'v', className: 'dshmind-tileV dshmind-mono' }, 记忆.晋升 === null ? '—' : String(记忆.晋升)),
-            h('div', { key: 'd', className: 'dshmind-tileD' }, '跨项目共享的条目'),
-          ]),
-          记忆.按类
-            ? h('div', { key: 'd', className: 'dshmind-tile' }, [
-                h('div', { key: 'k', className: 'dshmind-tileK' }, '按类'),
-                h('div', { key: 'v', className: 'dshmind-tileV dshmind-mono' },
-                  '经历 ' + (记忆.按类.经历 === null ? '—' : 记忆.按类.经历)
-                  + ' · 知识 ' + (记忆.按类.知识 === null ? '—' : 记忆.按类.知识)
-                  + ' · 偏好 ' + (记忆.按类.偏好 === null ? '—' : 记忆.按类.偏好)),
-                h('div', { key: 'd', className: 'dshmind-tileD' }, '作答按实例归档，不计入常驻三类'),
-              ])
-            : null,
-        ].filter(Boolean)),
-        // ② 构成图与「为什么不列条目」并排 —— 两块各占一半，不再是一块挤在左、右半边空着
-        h('div', {
-          key: 'grid',
-          style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(380px,1fr))', gap: '10px', alignItems: 'start' },
-        }, [
-          卡.length ? 卡[0] : null,
-          h('div', { key: 'why', className: 'dshmind-graphNote', style: { maxWidth: 'none', paddingTop: 2 } },
-            '为什么这里没有条目列表：记忆正文可能含敏感上下文，面板只做**读数与结构**（存量／新增／晋升／按类），'
-            + '不做全文陈列。要查内容，在对话里说一句「memory_query ×××」——命中的条目与来源会一起给你。'
-            + '**面板管「状态与账」，对话管「内容与意图」。**'),
-        ].filter(Boolean)),
-      ];
+      return 当前页() === 'memory'
+        ? [h(记忆浏览页, { key: 'memory:' + (ctx.view && ctx.view.项目 || ''), project: ctx.view && ctx.view.项目 || '' })]
+        : [h('p', { className: 'dshmind-empty' }, '打开记忆页，浏览已保存的内容与来源。')];
     }
     /**
      * 一格读数：**键在上、值在下**。
@@ -3171,7 +3120,7 @@ window.__ModuleLoader__.load({
      * **不挂 useEffect**（设计债⑩：这个宿主给插件的 effect 可能是空实现，取数如此，UI 状态也如此）。
      * `折叠会审` 是覆盖表（id → 折不折）；没点过的场次走默认（首场展开、其余折叠）。
      */
-    var 界面store = { 快照: { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null, 当前页: null, 图谱选中: null, 图谱视图: null, 审计展开: null }, 订阅者: [] };
+    var 界面store = { 快照: { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null, 当前页: null, 图谱选中: null, 图谱视图: null }, 订阅者: [] };
     /** 轮询间隔：2~5 秒量级（人看的板子，又不至于把宿主问烦）。 */
     var POLL_MS = 3000;
     /** 轮询把手：`apply` 起、disposer 清（**不许留定时器**）。 */
@@ -3256,7 +3205,7 @@ window.__ModuleLoader__.load({
       自由store.快照 = { phase: 'reading', data: null, runtime: null, error: '' };
       投影store.快照 = EMPTY;
       设置store.快照 = { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' };
-      界面store.快照 = { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null, 当前页: null, 图谱选中: null, 图谱视图: null, 审计展开: null };
+      界面store.快照 = { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null, 当前页: null, 图谱选中: null, 图谱视图: null };
     }
 
     /**
@@ -3291,7 +3240,7 @@ window.__ModuleLoader__.load({
      * 七页的 id 与标签（**顺序＝注意力顺序**，与 {@link 页清单} 同源：这里只判合法值）。
      * 这个数组只服务「值合法吗」，标签与计数由 `页清单(ctx)` 给。
      */
-    var 合法页 = { overview: 1, graph: 1, tasks: 1, reviews: 1, bus: 1, audit: 1, monitor: 1, memory: 1 };
+    var 合法页 = { overview: 1, graph: 1, tasks: 1, reviews: 1, bus: 1, audit: 1, memory: 1 };
 
     /** 当前页：**非法值一律落回总览**——切页状态坏掉不许把整块面板画没。 */
     function 当前页() {
@@ -3319,7 +3268,7 @@ window.__ModuleLoader__.load({
     function 当前页名() {
       var 表 = {
         overview: '总览', graph: '图谱', tasks: '任务', reviews: '会审',
-        bus: '总线', audit: '审计', monitor: '阻塞反馈', memory: '记忆',
+        bus: '总线', audit: '审计', memory: '记忆',
       };
       return 表[当前页()] || '总览';
     }
@@ -3337,24 +3286,6 @@ window.__ModuleLoader__.load({
     function 图谱选中() {
       var 值 = 界面store.快照.图谱选中;
       return typeof 值 === 'string' && 值 !== '' ? 值 : null;
-    }
-
-    /**
-     * 审计流是否**展开全部**（2026-10-13 晚）。
-     *
-     * 背景：审计流此前靠**卡内滚动框**（`max-height + overflow-y:auto`）把二十行装进一个小盒子里。
-     * 那是"五个分区堆一页"时代的产物；现在审计**自成一页**、根容器本来就是滚动容器 ⇒
-     * 卡内再套一个滚动容器就是**双层滚动条**（滚轮在框里框外行为还不一样），而且内容被压在框里看不见。
-     * 现在：行**直接进页面流**，超出 `AUDIT_LIMIT` 的由这个钮铺开（纯显示、零请求），
-     * 并且**照旧明说**「投影共 N 条 · 已列 M 条」（不静默截断这条纪律一个字没动）。
-     */
-    function 审计展开() {
-      return 界面store.快照.审计展开 === true;
-    }
-
-    /** 点「展开全部审计」：纯显示动作（零请求、零写账）。 */
-    function 切审计展开() {
-      发通知(界面store, Object.assign({}, 界面store.快照, { 审计展开: !审计展开() }));
     }
 
     /**
@@ -3833,64 +3764,176 @@ window.__ModuleLoader__.load({
       ]);
     }
 
-    function 监控反馈页(props) {
-      var monitor = props.monitor;
-      var form = useState({ id: '', reason: '', reference: '', category: '未知', verdict: 'unknown', busy: false, message: '' });
-      var value = form[0]; var set = form[1];
-      var life = useState(function () { return { active: true, generation: 0, busy: false }; })[0];
-      useEffect(function () { life.active = true; return function () { life.active = false; life.generation++; }; }, []);
-      function edit(key, text) { set(function (old) { var next = Object.assign({}, old); next[key] = text; return next; }); }
-      function send(row) {
-        if (life.busy || !value.reason.trim() || !value.reference.trim()) return;
-        life.busy = true; var generation = life.generation;
-        edit('busy', true); edit('message', '提交中，尚未确认');
-        var route = '/plugins/dsh-mind/monitor?sessionId=' + encodeURIComponent(row.subject);
-        runCommand(activeCtx, row.subject, { method: 'POST', path: route, body: { 阻塞引用: row.id, 原因分类: value.category,
-          判定: value.verdict, 原因: value.reason, 来源引用: value.reference } }).then(function (out) {
-          if (!life.active || life.generation !== generation) return;
-          var receipt = obj(out.value);
-          if (!out.ok || !receipt || !receipt.feedbackId || receipt.blockId !== row.id || receipt.source !== 'human_confirmation') {
-            life.busy = false; edit('busy', false); edit('message', '反馈未确认：' + (out.error || '回执不匹配，请回读核查。')); return;
+    function 浏览按钮(label, action, disabled) { return h('button', { type: 'button', className: 'dshmind-set__btn', disabled: !!disabled, onClick: action }, label); }
+    function 浏览地址(route, values) { return route + '?' + Object.keys(values).filter(function (key) { return values[key] !== undefined && values[key] !== null && values[key] !== ''; }).map(function (key) { return encodeURIComponent(key) + '=' + encodeURIComponent(values[key]); }).join('&'); }
+    function 审计行列表(rows, detail) {
+      return h('div', { className: 'dshmind-audit' }, rows.map(function (row, index) {
+        var label = h('div', { className: 'dshmind-auditRow ' + auditClass(row) }, [
+          h('span', { className: 'dshmind-mono', title: 完整时间(审计时刻(row)) }, shortTime(审计时刻(row)) || '—'),
+          h('span', null, auditGrade(row)),
+          h('span', { className: 'dshmind-auditAction' }, (row.告警 ? '⚑ ' : '') + (row.动作 || '未命名操作') + (row.结果 ? ' · ' + row.结果 : '')),
+          h('span', { className: 'dshmind-auditWho', title: actorOf(row) }, 短主体(actorOf(row))),
+        ]);
+        return h('article', { key: row.key || 'preview-' + index, className: 'dshmind-historyItem', 'data-audit-key': row.key }, [label,
+          detail && (row.依据 || row.对象 && row.对象.id) ? h('details', null, [h('summary', null, '查看详情'),
+            row.对象 && row.对象.id ? h('p', null, '相关对象：' + (row.对象.kind || '') + ' ' + row.对象.id) : null,
+            row.依据 ? h('p', { className: 'dshmind-historyBody' }, row.依据 + (row.依据截断 ? '（依据过长，仅显示片段）' : '')) : null,
+            h('p', { className: 'dshmind-set__hint' }, '执行者：' + actorOf(row)),
+          ]) : null,
+        ]);
+      }));
+    }
+    function 审计浏览页(props) {
+      var project = props.project;
+      var state = useState({ phase: 'idle', rows: [], cursor: null, total: null, error: '', filters: { action: '', from: '', to: '' } });
+      var value = state[0], set = state[1];
+      var draft = useState({ action: '', from: '', to: '' }), form = draft[0], edit = draft[1];
+      var life = useState(function () { return { active: true, seq: 0, busy: false }; })[0];
+      function load(more) {
+        if (!life.active || life.busy || !project || more && !value.cursor) return;
+        var filters = more ? value.filters : Object.assign({}, form); var cursor = more ? value.cursor : null;
+        var query = { project: project, action: filters.action.trim(), cursor: cursor, limit: 20 };
+        try {
+          if (filters.from) query.from = new Date(filters.from).toISOString();
+          if (filters.to) query.to = new Date(filters.to).toISOString();
+          if (query.from && query.to && query.from >= query.to) throw Error('结束时间须晚于开始时间。');
+        } catch (error) { set(function (old) { return Object.assign({}, old, { error: '请核对本地时间范围，结束时间须晚于开始时间。' }); }); return; }
+        life.busy = true; var seq = ++life.seq;
+        set(function (old) { return Object.assign({}, old, { phase: 'loading', error: '', filters: filters, rows: more ? old.rows : [], total: more ? old.total : null, cursor: cursor }); });
+        runCommand(activeCtx, '', { method: 'GET', path: 浏览地址('/plugins/dsh-mind/audit', query) }).then(function (out) {
+          if (!life.active || life.seq !== seq) return;
+          var data = out.ok && out.value && out.value.数据;
+          if (!data || data.project !== project || !Array.isArray(data.entries) || data.entries.length > 50 || data.entries.some(function (r) { return !r || typeof r.key !== 'string'; })
+              || !Number.isSafeInteger(data.total) || data.total < 0 || !(data.nextCursor === null || typeof data.nextCursor === 'string' && data.nextCursor && data.nextCursor !== cursor)) {
+            life.busy = false; set(function (old) { return Object.assign({}, old, { phase: 'error', error: out.error || '审计记录或分页位置不可核对，请重新读取。' }); }); return;
           }
-          return runCommand(activeCtx, row.subject, { method: 'GET', path: route }).then(function (read) {
-            if (!life.active || life.generation !== generation) return;
-            var data = read.ok && read.value && read.value.数据;
-            var item = data && arr(data.阻塞).find(function (entry) { return entry.id === row.id && entry.subject === row.subject; });
-            var confirmed = item && arr(item.feedback).some(function (f) { return f.eventId === receipt.feedbackId && f.source === 'human_confirmation'; });
-            life.busy = false; edit('busy', false); edit('message', confirmed ? '已回读确认反馈；权限与审批未改变。' : '提交回执已收到，独立回读未确认；请核查后再提交。');
-            if (confirmed) 刷新投影();
-          });
+          life.busy = false;
+          set(function (old) { var seen = Object.create(null); var rows = more ? old.rows.slice() : []; rows.forEach(function (r) { seen[r.key] = true; }); data.entries.forEach(function (r) { if (!seen[r.key]) { rows.push(r); seen[r.key] = true; } }); return { phase: 'ready', rows: rows, cursor: data.nextCursor, total: data.total, error: '', filters: filters }; });
         });
       }
-      if (!monitor) return h('p', null, '监控尚未接入，覆盖与分母未知。');
-      var health = monitor.健康 || {};
-      return h('section', { 'data-dshmind': 'monitor-feedback' }, [
-        h('h2', { key: 'title' }, '阻塞与原因反馈'),
-        h('p', { key: 'scope' }, String(monitor.范围 || '范围未知') + ' · 采集 ' + String(health.状态 || '未知') + ' · 已落账尝试 ' + String(monitor.尝试总数 === null ? '未知' : monitor.尝试总数)),
-        h('p', { key: 'coverage' }, JSON.stringify(health.覆盖 || {}) + ' · ' + String(health.分母 || '') + ' · ' + String(health.崩溃窗口 || '')),
-        h('p', { key: 'denom' }, '误拦截率：未知（缺少有效分母）；模型声明与人侧确认分别统计。批准或重试发起不等于恢复。'),
-        h('p', { key: 'paging' }, '阻塞共 ' + String(monitor.阻塞总数) + ' 条，此页展示最近 ' + arr(monitor.阻塞).length + ' 条；模型可用 monitor_query + 监控偏移继续读取。规则共 ' + String(monitor.规则总数) + ' 条，展示上限100；每条仅展示最近10条反馈与跟进。'),
-        h('p', { key: 'timing' }, monitor.耗时口径 || ''),
-        arr(monitor.规则汇总).map(function (r) { return h('p', { key: r.ruleId + r.ruleVersion },
-          r.ruleId + ' · 版本 ' + String(r.ruleVersion).slice(0, 12) + ' · 阻塞 ' + r.blocked + ' · 恢复 ' + r.recovered + ' · 放弃 ' + r.abandoned + ' · 未跟进 ' + r.unresolved
-          + ' · 人侧确认误拦 ' + r.humanFalsePositive + ' · 未确认 ' + r.unconfirmed + ' · 模型声明 ' + r.modelClaims + ' · 按来源的最新原因 ' + JSON.stringify(r.reasonCounts || {})); }),
-        !arr(monitor.阻塞).length ? h('p', { key: 'none' }, '本可见域尚无已落账阻塞；不代表宿主从未拒绝。') : null,
-        arr(monitor.阻塞).map(function (row) { return h('article', { key: row.id, 'data-block-id': row.id }, [
-          h('h3', { key: 'head' }, row.tool + (row.action ? ' / ' + row.action : '') + ' · ' + ({ recovered: '已恢复', abandoned: '已放弃', unresolved: '未跟进' }[row.state] || '未知')),
-          h('p', { key: 'ref' }, row.id + ' · ' + row.subject + ' · 项目 ' + row.project + ' · 规则 ' + (row.block && row.block.ruleId)),
-          h('p', { key: 'recover' }, row.recovery ? '关联成功执行 ' + row.recovery.attemptId + ' · 等待间隔 ' + (row.recovery.recoveryMs === null ? '未知' : row.recovery.recoveryMs + ' ms') : '尚无关联成功执行'),
-          h('p', { key: 'feedback-count' }, '反馈 ' + String(row.feedbackTotal) + ' 条，跟进 ' + String(row.followupsTotal) + ' 条'),
-          arr(row.feedback).map(function (f) { return h('p', { key: f.eventId }, f.source + ' · ' + f.category + ' · ' + f.verdict + ' · ' + f.reason + ' · 来源 ' + f.reference); }),
-          h('button', { key: 'open', type: 'button', className: 'dshmind-set__btn', disabled: value.busy, onClick: function () { edit('id', row.id); } }, '记录原因反馈'),
-          value.id === row.id ? h('form', { key: 'form', onSubmit: function (event) { event.preventDefault(); send(row); } }, [
-            h('label', { key: 'category' }, ['原因分类 ', h('select', { value: value.category, onChange: function (e) { edit('category', e.target.value); } }, ['授权缺口', '规则缺陷疑似', '材料不足', '环境故障', '调用不合法', '主动放弃', '其他', '未知'].map(function (x) { return h('option', { key: x, value: x }, x); }))]),
-            h('label', { key: 'verdict' }, ['人侧判定 ', h('select', { value: value.verdict, onChange: function (e) { edit('verdict', e.target.value); } }, [h('option', { key: 'u', value: 'unknown' }, '尚未确认'), h('option', { key: 'f', value: 'false_positive' }, '确认误拦截'), h('option', { key: 'c', value: 'correct_block' }, '确认正确拦截')])]),
-            h('label', { key: 'reason' }, ['理由 ', h('textarea', { required: true, maxLength: 1000, value: value.reason, onChange: function (e) { edit('reason', e.target.value); } })]),
-            h('label', { key: 'reference' }, ['来源引用 ', h('input', { required: true, maxLength: 500, value: value.reference, onChange: function (e) { edit('reference', e.target.value); } })]),
-            h('button', { key: 'submit', className: 'dshmind-set__btn', type: 'submit', disabled: value.busy || !value.reason.trim() || !value.reference.trim() }, '提交反馈'),
+      useEffect(function () { life.active = true; load(false); return function () { life.active = false; life.seq++; }; }, [project]);
+      function field(name, text) { edit(function (old) { var next = Object.assign({}, old); next[name] = text; return next; }); }
+      return h('section', { className: 'dshmind-history', 'data-dshmind': 'audit-browser', 'aria-busy': value.phase === 'loading' }, [
+        h('h2', null, '审计'), h('p', { className: 'dshmind-set__hint' }, '查看发生过的操作。时间按本地时区 ' + 显示时区() + ' 显示。'),
+        h('form', { className: 'dshmind-historyToolbar', onSubmit: function (event) { event.preventDefault(); load(false); } }, [
+          h('input', { className: 'dshmind-set__input', 'aria-label': '筛选审计操作', placeholder: '搜索操作', value: form.action, maxLength: 160, onChange: function (event) { field('action', event.target.value); } }),
+          h('label', null, ['从 ', h('input', { type: 'datetime-local', 'aria-label': '审计开始时间', value: form.from, onChange: function (event) { field('from', event.target.value); } })]),
+          h('label', null, ['到 ', h('input', { type: 'datetime-local', 'aria-label': '审计结束时间', value: form.to, onChange: function (event) { field('to', event.target.value); } })]),
+          h('button', { type: 'submit', className: 'dshmind-set__btn', disabled: life.busy }, '筛选审计'), 浏览按钮('重新读取审计', function () { load(false); }, life.busy),
+        ]),
+        !project ? h('p', null, '请先选择项目。') : null,
+        value.error ? h('p', { role: 'alert' }, value.error) : null,
+        value.phase === 'loading' ? h('p', { role: 'status' }, '正在读取审计…') : null,
+        value.phase === 'ready' && !value.rows.length ? h('p', null, '当前范围没有审计记录。') : null,
+        审计行列表(value.rows, true),
+        value.total !== null ? h('p', { className: 'dshmind-set__hint' }, '已加载 ' + value.rows.length + ' / ' + value.total + ' 条 · 按账本顺序从新到旧，重新读取可查看最新记录。') : null,
+        value.cursor ? 浏览按钮('加载更早', function () { load(true); }, life.busy) : value.phase === 'ready' && value.rows.length ? h('p', { className: 'dshmind-set__hint' }, '当前范围已读到底。') : null,
+      ]);
+    }
+    function 可显示记忆(row) { return row && typeof row.id === 'string' && row.id.length <= 256 && ['标题','摘要','内容','类','岗位','状态','记于','复验警示'].every(function (key) { return row[key] === undefined || row[key] === null || typeof row[key] === 'string'; }); }
+    function 观察计数(value) { return Number.isSafeInteger(value) && value >= 0 ? String(value) : '未知'; }
+    function 记忆浏览页(props) {
+      var project = props.project;
+      var state = useState({ phase: 'idle', rows: [], offset: null, version: null, total: null, error: '', filters: { q: '', kind: '', includeInactive: false } });
+      var value = state[0], set = state[1];
+      var draft = useState({ q: '', kind: '', includeInactive: false }), form = draft[0], edit = draft[1];
+      var detailState = useState(null), detail = detailState[0], setDetail = detailState[1];
+      var life = useState(function () { return { active: true, seq: 0, busy: false, detailSeq: 0, detailBusy: false, detailId: null, usageBusy: false }; })[0];
+      function closeDetail() { life.detailSeq++; life.detailBusy = false; life.detailId = null; life.usageBusy = false; setDetail(null); }
+      function load(more) {
+        if (!life.active || life.busy || !project || more && value.offset === null) return;
+        var filters = more ? value.filters : Object.assign({}, form), offset = more ? value.offset : 0;
+        life.busy = true; var seq = ++life.seq; if (!more) closeDetail();
+        set(function (old) { return Object.assign({}, old, { phase: 'loading', error: '', filters: filters, rows: more ? old.rows : [], total: more ? old.total : null }); });
+        runCommand(activeCtx, '', { method: 'GET', path: 浏览地址('/plugins/dsh-mind/memory', { project: project, q: filters.q.trim(), kind: filters.kind, includeInactive: filters.includeInactive, offset: offset, dataVersion: more ? value.version : undefined, limit: 15 }) }).then(function (out) {
+          if (!life.active || life.seq !== seq) return;
+          var data = out.ok && out.value && out.value.数据;
+          if (!data || data.项目 !== project || !Array.isArray(data.条目) || data.条目.some(function (r) { return !可显示记忆(r); }) || typeof data.数据版本 !== 'string'
+              || !(data.下一偏移 === null || Number.isSafeInteger(data.下一偏移) && data.下一偏移 > offset)) {
+            life.busy = false; set(function (old) { return Object.assign({}, old, { phase: 'error', error: out.error || '记忆内容或分页位置不可核对，请重新读取。' }); }); return;
+          }
+          life.busy = false;
+          set(function (old) { var rows = more ? old.rows.slice() : [], seen = Object.create(null); rows.forEach(function (r) { seen[r.id] = true; }); var incoming = data.条目.slice(); if (!filters.q.trim()) incoming.reverse(); incoming.forEach(function (r) { if (!seen[r.id]) { rows.push(r); seen[r.id] = true; } }); return { phase: 'ready', rows: rows, offset: data.下一偏移, version: data.数据版本, total: data.条目总数, error: '', filters: filters }; });
+        });
+      }
+      function openDetail(row, more) {
+        if (!life.active || life.detailBusy || !project || more && (!detail || detail.next === null)) return;
+        life.detailBusy = true; life.detailId = row.id; var seq = ++life.detailSeq; var offset = more ? detail.next : 0;
+        setDetail(more ? Object.assign({}, detail, { phase: 'loading', error: '' }) : { id: row.id, row: row, phase: 'loading', body: '', next: null, version: null, error: '', reference: '', usage: null });
+        runCommand(activeCtx, '', { method: 'GET', path: 浏览地址('/plugins/dsh-mind/memory', { project: project, id: row.id, kind: row.类, includeInactive: value.filters.includeInactive, bodyOffset: offset, dataVersion: more ? detail.version : undefined }) }).then(function (out) {
+          if (!life.active || life.detailSeq !== seq) return;
+          life.detailBusy = false; var data = out.ok && out.value && out.value.数据, item = data && Array.isArray(data.条目) && data.条目[0];
+          if (!可显示记忆(item) || data.项目 !== project || item.id !== row.id || typeof item.内容 !== 'string' || item.正文偏移 !== offset || !(item.下一正文偏移 === null || Number.isSafeInteger(item.下一正文偏移) && item.下一正文偏移 > offset)) {
+            setDetail(function (old) { return old && Object.assign({}, old, { phase: 'error', error: out.error || '这条记忆已变化、不可见或不再存在，请重新读取。' }); }); return;
+          }
+          setDetail(function (old) { return Object.assign({}, old, { phase: 'ready', row: item, body: (more ? old.body : '') + item.内容, next: item.下一正文偏移, version: data.数据版本, error: '' }); });
+        });
+      }
+      function copyReference() {
+        if (!life.active || !detail || life.detailId !== detail.id) return;
+        var text = '关于这条记忆：' + (detail.row.标题 || detail.body.slice(0, 80) || '所选记忆') + '\n记忆引用：' + detail.id + '\n请按我的说明更正或遗忘：'; var seq = life.detailSeq;
+        function fallback() { if (life.active && life.detailSeq === seq) setDetail(function (old) { return old && Object.assign({}, old, { reference: text, message: '可复制下方引用，在会话中说明要怎么改。' }); }); }
+        try { if (typeof navigator === 'undefined' || !navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') return fallback();
+          navigator.clipboard.writeText(text).then(function () { if (life.active && life.detailSeq === seq) setDetail(function (old) { return old && Object.assign({}, old, { message: '引用已复制，可粘贴到会话中说明。' }); }); }, fallback);
+        } catch (error) { fallback(); }
+      }
+      function readUsage() {
+        if (!life.active || life.usageBusy || !detail || life.detailId !== detail.id) return;
+        life.usageBusy = true; var seq = life.detailSeq, id = detail.id;
+        setDetail(function (old) { return old && Object.assign({}, old, { usage: { phase: 'loading' } }); });
+        runCommand(activeCtx, '', { method: 'GET', path: 浏览地址('/plugins/dsh-mind/memory-use', { project: project, id: id, limit: 10 }) }).then(function (out) {
+          if (!life.active || life.detailSeq !== seq) return;
+          life.usageBusy = false; var data = out.ok && out.value && out.value.数据;
+          setDetail(function (old) { return old && Object.assign({}, old, { usage: data && data.counts ? { phase: 'ready', counts: data.counts } : { phase: 'error', error: out.error || '调用观察暂不可用。' } }); });
+        });
+      }
+      useEffect(function () { life.active = true; load(false); return function () { life.active = false; life.seq++; life.detailSeq++; }; }, [project]);
+      function field(name, text) { edit(function (old) { var next = Object.assign({}, old); next[name] = text; return next; }); }
+      var bodyStyle = { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' };
+      return h('section', { className: 'dshmind-history', 'data-dshmind': 'memory-browser', 'aria-busy': value.phase === 'loading' }, [
+        h('h2', null, '记忆'), h('p', { className: 'dshmind-set__hint' }, '浏览已保存的内容与来源。记错了或想忘记，可以在会话中自然说明。'),
+        h('form', { className: 'dshmind-historyToolbar', onSubmit: function (event) { event.preventDefault(); load(false); } }, [
+          h('input', { type: 'search', className: 'dshmind-set__input', 'aria-label': '搜索记忆', placeholder: '搜索记住的内容', value: form.q, maxLength: 500, onChange: function (event) { field('q', event.target.value); } }),
+          h('select', { className: 'dshmind-set__select', 'aria-label': '记忆分类', value: form.kind, onChange: function (event) { field('kind', event.target.value); } }, [['', '全部记忆'], ['偏好', '人格与偏好'], ['经历', '经历'], ['知识', '知识与方法']].map(function (item) { return h('option', { key: item[0], value: item[0] }, item[1]); })),
+          h('label', null, [h('input', { type: 'checkbox', 'aria-label': '查看已停用记忆', checked: form.includeInactive, onChange: function (event) { field('includeInactive', event.target.checked); } }), ' 包含已停用']),
+          h('button', { type: 'submit', className: 'dshmind-set__btn', disabled: life.busy }, '查找记忆'), 浏览按钮('刷新记忆', function () { load(false); }, life.busy),
+        ]),
+        !project ? h('p', null, '请先选择项目。') : null,
+        value.error ? h('p', { role: 'alert' }, value.error) : null,
+        value.phase === 'loading' ? h('p', { role: 'status' }, '正在读取记忆…') : null,
+        value.phase === 'ready' && !value.rows.length ? h('p', null, '当前范围没有符合条件的记忆。') : null,
+        h('div', { className: 'dshmind-memoryLayout' }, [
+          h('div', { className: 'dshmind-memoryList' }, value.rows.map(function (row) { return h('article', { key: row.id, className: 'dshmind-historyItem', 'data-memory-id': row.id }, [
+            h('h3', null, row.标题 || (row.摘要 || row.内容 || '未命名记忆').slice(0, 60)),
+            h('p', { className: 'dshmind-set__hint' }, [row.连续性 && row.连续性.类别 || row.类, row.岗位, row.状态, shortTime(row.记于)].filter(Boolean).join(' · ')),
+            h('p', { className: 'dshmind-historyBody' }, row.摘要 || row.内容 || '正文需打开查看。'),
+            row.复验警示 ? h('p', { className: 'dshmind-set__hint' }, row.复验警示) : null,
+            浏览按钮('查看记忆 ' + (row.标题 || row.id), function () { openDetail(row, false); }, life.detailBusy),
+          ]); })),
+          detail ? h('aside', { className: 'dshmind-memoryDetail', 'aria-label': '记忆详情' }, [
+            h('div', { className: 'dshmind-historyToolbar' }, [h('h3', null, detail.row.标题 || '记忆详情'), 浏览按钮('关闭记忆详情', closeDetail)]),
+            detail.error ? h('p', { role: 'alert' }, detail.error) : null,
+            detail.phase === 'loading' ? h('p', { role: 'status' }, '正在读取正文…') : null,
+            h('p', { style: bodyStyle }, detail.body),
+            detail.next !== null ? 浏览按钮('继续读取正文', function () { openDetail(detail.row, true); }, life.detailBusy) : null,
+            detail.phase === 'ready' ? 浏览按钮('复制记忆引用', copyReference) : null,
+            detail.message ? h('p', { role: 'status' }, detail.message) : null,
+            detail.reference ? h('textarea', { readOnly: true, 'aria-label': '可复制的会话引用', value: detail.reference, style: { width: '100%', minHeight: 90 }, onFocus: function (event) { if (event.target && typeof event.target.select === 'function') event.target.select(); } }) : null,
+            h('details', null, [h('summary', null, '来源与使用'),
+              h('p', null, [detail.row.类, detail.row.岗位, detail.row.状态, detail.row.项目].filter(Boolean).join(' · ')),
+              h('p', { title: 完整时间(detail.row.记于) }, '记于：' + (shortTime(detail.row.记于) || '未知')),
+              h('pre', { style: bodyStyle }, JSON.stringify(detail.row.来源 || '来源未提供', null, 2)),
+              detail.row.知识说明 ? h('pre', { style: bodyStyle }, JSON.stringify(detail.row.知识说明, null, 2)) : null,
+              detail.row.复验警示 ? h('p', null, detail.row.复验警示) : null,
+              浏览按钮('查看调用记录', readUsage, detail.usage && detail.usage.phase === 'loading'),
+              detail.usage && detail.usage.phase === 'loading' ? h('p', null, '正在读取调用观察…') : null,
+              detail.usage && detail.usage.phase === 'error' ? h('p', { role: 'alert' }, detail.usage.error) : null,
+              detail.usage && detail.usage.phase === 'ready' ? h('p', null, '当前可见观察：装入上下文 ' + 观察计数(detail.usage.counts.assembled) + ' 次 · 工具读取 ' + 观察计数(detail.usage.counts['explicit-read']) + ' 次 · 声明采用 ' + 观察计数(detail.usage.counts['adoption-declared']) + ' 次。观察有覆盖限制，不代表理解或收益；未观察到也不证明没用过。') : null,
+            ]),
           ]) : null,
-        ]); }),
-        value.message ? h('p', { key: 'message', role: 'status' }, value.message) : null,
+        ]),
+        value.total !== null ? h('p', { className: 'dshmind-set__hint' }, '已显示 ' + value.rows.length + ' / ' + value.total + ' 条') : null,
+        value.offset !== null ? 浏览按钮('加载更多记忆', function () { load(true); }, life.busy) : null,
       ]);
     }
 
@@ -4124,7 +4167,7 @@ window.__ModuleLoader__.load({
       // 审计：**全量留着**，渲染多少由「展开」决定（2026-10-13 晚去掉卡内滚动框）。
       // 旧写法在这里就 `.slice(-AUDIT_LIMIT)` 把多出来的行丢掉 ⇒ 展开钮根本无从展开。
       var 审计全 = view ? view.审计尾.slice().reverse() : [];
-      var audit = 审计展开() ? 审计全 : 审计全.slice(0, AUDIT_LIMIT);
+      var audit = 审计全;
       // 投影里**一共**多少条（用来在列表尾部说清"看不全是因为投影只有这些/还有多少没列"）。
       var 审计总条数 = view ? view.审计尾.length : 0;
       var boundReadOnly = view ? boolOf(firstOf(view.边界, ['只读', 'readonly'])) : null;
@@ -4151,7 +4194,7 @@ window.__ModuleLoader__.load({
       if (review[0]) return h(审批详情, { key: review[0].sessionId + '/' + review[0].requestId, sessionId: review[0].sessionId, requestId: review[0].requestId, onBack: function () { review[1](null); 刷新投影(); } });
 
       var children = [
-        h('style', { key: 'dshmind-css' }, CSS),
+        h('style', { key: 'dshmind-css' }, CSS + HISTORY_CSS),
 
         // 未连接公告（有快照时说明「显示的是旧数据」）
         snap.phase === 'error' ? h('div', { key: 'notice', className: 'dshmind-notice' }, [
@@ -4551,47 +4594,11 @@ window.__ModuleLoader__.load({
               : null,
           ]),
 
-        // ④ 审计流
-        // **别静默截断**（Batch 9）这条没变：`AUDIT_LIMIT` 只是"一次渲染多少行"的上限，
-        // 超出时必须**看得出来**（「投影共 N 条 · 已列 M 条」）并且**能铺开**。
-        // ⚠️ 2026-10-13 晚改形：**去掉卡内滚动框**。审计自成一页后，根容器就是滚动容器 ⇒
-        // 框内再套一个 `overflow-y:auto` 是双层滚动（滚轮在框里框外还不一样），
-        // 而且内容被压在一个小盒子里看不见。现在行**直接进页面流**，铺开靠「展开全部」钮
-        // （纯显示、零请求，同折叠钮）。
-        section(4, '审计流', '只增的事实记录 · 本地时间（' + 显示时区() + '）',
-          audit.length ? '已列 ' + audit.length + (审计总条数 > audit.length ? ' / 共 ' + 审计总条数 : '') : '',
-          audit.length
-            ? [
-                h('div', { key: 'list', className: 'dshmind-audit' }, audit.map(function (row, index) {
-                  var grade = auditGrade(row);
-                  var alarm = boolOf(firstOf(row, ['告警', 'alarm'])) === true;
-                  return h('div', { key: 'a' + index, className: 'dshmind-auditRow ' + auditClass(row) }, [
-                    h('span', { key: 't', className: 'dshmind-mono', title: 完整时间(审计时刻(row)), style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary,#81858c)' } },
-                      shortTime(审计时刻(row)) || '—'),
-                    h('span', { key: 'g', style: { fontSize: 11 } }, grade),
-                    h('span', { key: 'a', className: 'dshmind-auditAction' }, [
-                      alarm ? h('span', { key: 'x', style: { color: RED, marginRight: 4 } }, '⚑') : null,
-                      line(firstOf(row, ['动作', 'action']), '未命名动作'),
-                      line(firstOf(row, ['结果', 'result'])) ? h('span', { key: 'r', style: { color: 'var(--dsw-alias-label-tertiary,#81858c)' } }, ' · ' + line(firstOf(row, ['结果', 'result']))) : null,
-                    ].filter(Boolean)),
-                    h('span', { key: 'w', className: 'dshmind-auditWho', title: actorOf(row) }, 短主体(actorOf(row))),
-                  ]);
-                })),
-                // 尾部说明 + 铺开钮：有多少条、看不全怎么铺开（不让人猜是不是被裁了）。
-                h('div', { key: 'hint', className: 'dshmind-auditHint' }, [
-                  h('span', { key: 't' }, 审计总条数 > audit.length
-                    ? '投影共 ' + 审计总条数 + ' 条 · 已列 ' + audit.length + ' 条'
-                    : '投影共 ' + 审计总条数 + ' 条，已全部列出'),
-                  audit.length > AUDIT_LIMIT || 审计总条数 > AUDIT_LIMIT
-                    ? h('button', {
-                        key: 'b', type: 'button', className: 'dshmind-toggle',
-                        onClick: function () { 切审计展开(); },
-                        title: 审计展开() ? '只列最近的一批' : '把投影里的审计全铺开',
-                      }, 审计展开() ? '▾ 收起（只列最近 ' + AUDIT_LIMIT + ' 条）' : '▸ 展开全部（共 ' + 审计总条数 + ' 条待铺开）')
-                    : null,
-                ].filter(Boolean)),
-              ]
-            : h('div', { className: 'dshmind-empty' }, '审计尾为空 —— 没有事实记录，或工作台投影未附带审计尾。')),
+        // The overview keeps its existing metadata snapshot. The audit page loads native history on demand.
+        section(4, '审计预览', '本地时间（' + 显示时区() + '）', '', [
+          审计行列表(audit, false),
+          h('p', { className: 'dshmind-auditHint' }, '最近投影 ' + audit.length + ' 条；打开审计页可筛选并加载更早记录。'),
+        ]),
 
         // ⑤ 消息总线（⑦·2026-10-11）：**全部**有消息的线程（不只未投递）——
         // 「有没有人想说话」一眼可见；未投递 >0 高亮。会审讨论线程按盲评口径收起正文

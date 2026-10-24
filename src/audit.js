@@ -9,6 +9,7 @@
  *  3. **归档 takes precedence over 状态** —— §7 明确「不承担回滚、不做状态」，
  *     所以这里没有任何 `update`/`delete` 方法，将来也不加。
  */
+import { auditPage } from './audit-page.js';
 import { appendLines, atomicWrite, ensureDirPath, listDirs, listFiles, readJsonl, readJsonlHealth, readJsonOrNull, withLock, serializeByKey } from './kernel/fsx.js';
 import { readTaskLedger } from './task-ledger.js';
 import { chainHash } from './kernel/text.js';
@@ -284,7 +285,7 @@ export class AuditLog {
    * @param {{ months?: string[], grade?: string, project?: string, subject?: string, since?: string, limit?: number }} [query]
    * @returns {Promise<object[]>}
    */
-  async read(query = {}) {
+  async #readRows(query = {}) {
     const months = query.months ?? (await this.months());
     // 排序键是 **(月, seq)**（W3 批2·2026-10-09）：`seq` 是**逐月**从 1 开始的，
     // 拿它当全局键会把两个月交错成一团（1 月的第 7 条排在 2 月的第 2 条后面，
@@ -304,8 +305,14 @@ export class AuditLog {
         (a.row.seq ?? 0) - (b.row.seq ?? 0) ||
         String(a.row.时间).localeCompare(String(b.row.时间)),
     );
-    const rows = 条目.map((x) => x.row);
+    return 条目;
+  }
+  async read(query = {}) {
+    const rows = (await this.#readRows(query)).map(x => x.row);
     return query.limit ? rows.slice(-query.limit) : rows;
+  }
+  async page(query) {
+    return auditPage(await this.#readRows({ project: query.project }), query);
   }
 
   /** A monitoring snapshot must not race an append between ledger, anchor and manifest writes. */
