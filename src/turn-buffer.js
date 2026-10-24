@@ -6,7 +6,7 @@ import { ensureDir, readJsonOrNull, serializeByKey, withLock } from './kernel/fs
 import { canonical, digest } from './kernel/text.js';
 import { Denied, Fault, InvalidBody } from './kernel/errors.js';
 import { currentProfessionalScope } from './professional-context.js';
-import { qqInputSource, qqToolProjection, validConversationOrigin, externalConversationMessage } from './conversation-origin.js';
+import { externalInputSource, externalToolProjection, validConversationOrigin, externalConversationMessage } from './conversation-origin.js';
 
 export const TURN_BUFFER_LIMITS = Object.freeze({ days: 30, rounds: 128, messages: 512,
   text: 16384, bytes: 2 * 1024 * 1024, context: 6000, query: 24000 });
@@ -20,7 +20,7 @@ export function projectTurnEvent(event, context) {
   if (!integer(event?.seq) || typeof event.type !== 'string') throw new InvalidBody('轮级缓冲事件需要有效序号和类型。');
   const row = { seq: event.seq, type: 'skip', time: Number.isFinite(event.time) ? event.time : null };
   const data = event.data;
-  const sent = qqToolProjection(event, context);
+  const sent = externalToolProjection(event, context);
   if (sent && identifier(sent.id)) return { ...row, type: 'message', ...sent, clipped: false, turn: positive(data?.turn) ? data.turn : null, interrupted: false };
   if (event.type === 'working-directory/change') return { ...row, type: 'scope-change' };
   if (event.surfaceOp && typeof event.surfaceOp === 'object' && event.surfaceOp.op === 'replace') {
@@ -42,7 +42,7 @@ export function projectTurnEvent(event, context) {
   }
   if (event.surfaceOp !== 'append') return row;
   const human = event.type === 'user/message' && data?.role === 'user' && data.source?.kind === 'user';
-  const external = event.type === 'user/message' && data?.role === 'user' ? qqInputSource(data.source) : null;
+  const external = event.type === 'user/message' && data?.role === 'user' ? externalInputSource(data.source) : null;
   const assistant = event.type === 'assistant/message' && data?.message?.role === 'assistant' && positive(data.turn);
   const message = human || external ? data : assistant ? data.message : null;
   if (!message || !identifier(message.id) || !Array.isArray(message.content)) return row;
@@ -158,12 +158,12 @@ export class TurnBufferService {
       if (info && info.size > TURN_BUFFER_LIMITS.bytes + 8192) throw fail();
       const state = await readJsonOrNull(file);
       if (!state) return null;
-      if (![1, 2].includes(state.version) || state.project !== project || state.session !== session || !integer(state.nextSeq)
+      if (![1, 2, 3].includes(state.version) || state.project !== project || state.session !== session || !integer(state.nextSeq)
           || !integer(state.floor) || state.floor > state.nextSeq || !integer(state.missing) || !integer(state.removed)
           || !Array.isArray(state.rounds) || state.rounds.length > TURN_BUFFER_LIMITS.rounds
            || !(state.open === null || positive(state.open))) throw fail();
-      if (state.sourceRecovery !== undefined && (state.sourceRecovery?.version !== 2 || !integer(state.sourceRecovery.throughSeq) || state.sourceRecovery.throughSeq > state.nextSeq || !integer(state.sourceRecovery.omitted))) throw fail();
-      if (state.sourceProjection !== undefined && state.sourceProjection !== 2) throw fail();
+      if (state.sourceRecovery !== undefined && (![2, 3].includes(state.sourceRecovery?.version) || !integer(state.sourceRecovery.throughSeq) || state.sourceRecovery.throughSeq > state.nextSeq || !integer(state.sourceRecovery.omitted))) throw fail();
+      if (state.sourceProjection !== undefined && ![2, 3].includes(state.sourceProjection)) throw fail();
       if (state.owner !== undefined && (state.owner.kind !== 'Lead' || state.owner.project !== project || state.owner.session !== session)) throw fail();
       let count = 0; let last = -1;
       for (const round of state.rounds) {
@@ -172,7 +172,7 @@ export class TurnBufferService {
         for (const m of round.messages) {
           if (!integer(m.seq) || m.seq <= last || m.seq >= state.nextSeq || !integer(m.anchor) || m.anchor < m.seq
               || m.anchor >= state.nextSeq || !['user', 'assistant', 'external-user', 'external-assistant'].includes(m.role)
-               || externalConversationMessage(m) && (state.version !== 2 || !validConversationOrigin(m.origin, m.role))
+               || externalConversationMessage(m) && (![2, 3].includes(state.version) || state.version === 2 && m.origin?.version !== undefined || !validConversationOrigin(m.origin, m.role))
                || !externalConversationMessage(m) && m.origin !== undefined || !identifier(m.id)
               || typeof m.text !== 'string' || m.text.length > TURN_BUFFER_LIMITS.text || typeof m.clipped !== 'boolean'
               || typeof m.interrupted !== 'boolean' || (m.at !== undefined && !Number.isFinite(m.at))) throw fail();
@@ -197,13 +197,13 @@ export class TurnBufferService {
     return state;
   }
   async saveState(file, state) {
-    if (state.rounds.some(r => r.messages.some(externalConversationMessage))) {
-      state.version = 2;
-      // Must precede external text: older readers must never reinterpret QQ as local user input.
+    if (state.sourceProjection === 3 || state.rounds.some(r => r.messages.some(externalConversationMessage))) {
+      if (state.rounds.some(r => r.messages.some(externalConversationMessage))) state.version = 3;
+      // Persist the compatibility barrier before any external text.
       const marker = join(this.layout.memoryRoot(), 'external-conversation-layout.json');
       const old = await readJsonOrNull(marker);
-      if (old && old.version !== 2) throw fail();
-      if (!old) await save(marker, { version: 2 });
+      if (old && ![2, 3].includes(old.version)) throw fail();
+      if (old?.version !== 3) await save(marker, { version: 3 });
     }
     await save(file, state);
   }
@@ -231,7 +231,7 @@ export class TurnBufferService {
       if (!active()) return;
       const before = await this.authorize(subject, project, session);
       const state = await this.load(project, session) ?? { version: 1, project, session,
-        sourceProjection: 2, nextSeq: fromSeq, floor: fromSeq, missing: 0, removed: 0, open: null, rounds: [] };
+        sourceProjection: 3, nextSeq: fromSeq, floor: fromSeq, missing: 0, removed: 0, open: null, rounds: [] };
       state.owner = { kind: 'Lead', project, session };
       if (throughSeq <= state.nextSeq) {
         // 重复事件和清空前迟到的批次都不能复活正文；顺便物理清理已到期资料。

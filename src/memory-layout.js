@@ -23,7 +23,7 @@ export function memoryLayoutVersion(root) {
   const version = marker?.version ?? 1;
   if (transaction && ((transaction.phase === 'committed' && version !== 2) || (transaction.phase === 'rolled-back' && version !== 1))) throw invalid('记忆布局标记与迁移回执不一致，停止读写。');
   if (version === 2) {
-    const allowed = new Set([MEMORY_LAYOUT_FILE, '长期记忆', '工作记忆', '提炼状态']);
+    const allowed = new Set([MEMORY_LAYOUT_FILE, '长期记忆', '工作记忆', '提炼状态', 'external-conversation-layout.json']);
     if (readdirSync(root).some((name) => !allowed.has(name))) throw invalid('布局2根目录混入旧路径或未知文件，停止读写以免遗漏旧账。');
   }
   return version;

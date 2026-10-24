@@ -1,6 +1,6 @@
-/** 只读本会话本轮已接纳的用户来源文本；不窥待接纳消息，不缓存或复制聊天账本。 */
+/** 只读本会话本轮已接纳文本并保留来源；不窥待接纳消息，不缓存或复制聊天账本。 */
 import { canonical, digest } from '../../../src/kernel/text.js';
-import { qqInputSource } from '../../../src/conversation-origin.js';
+import { externalInputSource } from '../../../src/conversation-origin.js';
 
 export const EXPRESSION_EVENT_LIMIT = 256;
 export const EXPRESSION_TEXT_LIMIT = 800;
@@ -20,7 +20,11 @@ export function readAcceptedExpression(session, { allowExternal = false } = {}) 
       if (!candidate && event.type === 'agent/inbox/spliced' && event.data?.removedCount > 0 && event.data?.outcome !== 'canceled') return null;
       if (!candidate && event.type === 'user/message') {
         if (event.data?.source?.kind === 'user') candidate = event;
-        else if (qqInputSource(event.data?.source)) { if (!allowExternal) return null; candidate = event; }
+        else {
+          const origin = externalInputSource(event.data?.source);
+          if (origin?.contentType === 'conversation' && !allowExternal) return null;
+          if (origin && origin.contentType !== 'notification' && allowExternal) candidate = event;
+        }
       }
       if (event.type !== 'turn/start') continue;
       const message = candidate?.data;
@@ -39,8 +43,9 @@ export function readAcceptedExpression(session, { allowExternal = false } = {}) 
       }
       query = query.trim();
       if (!query) return null;
-      const description = { 类型: message.source.kind === 'user' ? '已接纳用户来源文本' : '已接纳QQ插件来源文本，参与者身份未核对', 会话: session.id, 轮次: event.data.turn,
+      const description = { 类型: message.source.kind === 'user' ? '已接纳用户来源文本' : '已接纳外部来源文本，类型见来源，参与者身份未核对', 会话: session.id, 轮次: event.data.turn,
         事件序号: candidate.seq, 消息: message.id, 截断: truncated,
+        ...(message.source.kind !== 'user' ? { 来源: externalInputSource(message.source) } : {}),
         依据: '本轮已接纳文本的词面线索；来源标记不认证原话、意图或授权' };
       return { query, description, stamp: digest(canonical({ description, query })) };
     }

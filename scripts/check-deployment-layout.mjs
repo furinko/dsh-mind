@@ -12,7 +12,7 @@ const fail = (message) => { throw Error(message); };
 const hash = (value) => createHash('sha256').update(value.replace(/\r\n/g, '\n')).digest('hex');
 const LEGACY_PATHS = '1085715d2dd2de82d1a933e9a6507989cd2c9f79ec7e2774faa60b9800686b27';
 const V2_PATHS = '3fc532ba362d2a0566bd814f3157da685f165ee4ed4f88ff699d14356507b93f';
-const V2_READER = '8939a3cd5a7ae45f5d6de28abc2df2dc19b6a3728ed7c45a82eb52834bb7990d';
+const V2_READERS = new Set(['8939a3cd5a7ae45f5d6de28abc2df2dc19b6a3728ed7c45a82eb52834bb7990d', 'ae2f24d175bfcc306a052d153ad9d74e1f8218d5df3505ed9781fd2bcf7a3409']);
 const stripBom = (value) => value.replace(/^\ufeff/, '');
 
 // Compatibility declarations belong to the frozen target commit. Older releases
@@ -29,7 +29,7 @@ export function supportedMemoryLayouts({ manifest, paths, reader }) {
       || new Set(parsed.objectHistoryLayouts).size !== parsed.objectHistoryLayouts.length) fail('目标提交的对象历史兼容清单无效，拒绝部署。');
     if (parsed.informationLayouts !== undefined && (!Array.isArray(parsed.informationLayouts) || !parsed.informationLayouts.length
       || parsed.informationLayouts.some(v => ![1, 2].includes(v)) || new Set(parsed.informationLayouts).size !== parsed.informationLayouts.length)) fail('目标提交的信息收录兼容清单无效，拒绝部署。');
-    if (parsed.turnBufferLayouts !== undefined && (!Array.isArray(parsed.turnBufferLayouts) || !parsed.turnBufferLayouts.length || parsed.turnBufferLayouts.some(v => ![1, 2].includes(v)) || new Set(parsed.turnBufferLayouts).size !== parsed.turnBufferLayouts.length)) fail('目标提交的轮级缓冲兼容清单无效，拒绝部署。');
+    if (parsed.turnBufferLayouts !== undefined && (!Array.isArray(parsed.turnBufferLayouts) || !parsed.turnBufferLayouts.length || parsed.turnBufferLayouts.some(v => ![1, 2, 3].includes(v)) || new Set(parsed.turnBufferLayouts).size !== parsed.turnBufferLayouts.length)) fail('目标提交的轮级缓冲兼容清单无效，拒绝部署。');
     return { memoryLayouts: parsed.memoryLayouts, objectHistoryLayouts: parsed.objectHistoryLayouts,
       ...(parsed.turnBufferLayouts ? { turnBufferLayouts: parsed.turnBufferLayouts } : {}),
       ...(parsed.informationLayouts ? { informationLayouts: parsed.informationLayouts } : {}) };
@@ -39,7 +39,7 @@ export function supportedMemoryLayouts({ manifest, paths, reader }) {
   if (start < 0 || end <= start || !paths.includes("  基础设施: '集体L2-共享基础设施',") || !paths.includes("  记忆服务: '记忆服务',")) fail('目标提交没有可核验的存储兼容声明，拒绝部署。');
   const signature = hash(paths.slice(start, end));
   if (signature === LEGACY_PATHS && reader === null) return { memoryLayouts: [1], objectHistoryLayouts: [1] };
-  if (signature === V2_PATHS && reader !== null && hash(reader) === V2_READER
+  if (signature === V2_PATHS && reader !== null && V2_READERS.has(hash(reader))
     && paths.includes('  memoryRoot() { return this.private(DIR.基础设施, DIR.记忆服务); }')) return { memoryLayouts: [1, 2], objectHistoryLayouts: [1] };
   fail('目标提交的旧版存储实现未获核验，拒绝部署。');
 }
@@ -101,7 +101,7 @@ export async function turnBufferLayoutVersion(privateRoot) {
     const info = await lstat(file);
     if (!info.isFile() || info.isSymbolicLink() || info.size > 1024) fail('轮级缓冲布局标记不可核对，拒绝部署。');
     let marker; try { marker = JSON.parse(await readFile(file, 'utf8')); } catch { fail('轮级缓冲布局标记无效，拒绝部署。'); }
-    if (marker?.version !== 2) fail('轮级缓冲布局未知，拒绝部署。'); return 2;
+    if (![2, 3].includes(marker?.version)) fail('轮级缓冲布局未知，拒绝部署。'); return marker.version;
   } catch (error) { if (error.code === 'ENOENT') return 1; throw error; }
 }
 
@@ -121,7 +121,7 @@ export async function checkDeploymentLayout({ repository, git = 'git', target, p
   if (!supported.memoryLayouts.includes(version)) fail('目标提交不支持当前记忆布局' + version + '，拒绝切换或回退；数据保持原状。');
   if (!supported.objectHistoryLayouts.includes(objectHistoryLayout)) fail('目标提交不支持当前对象历史布局' + objectHistoryLayout + '，拒绝切换或回退；数据保持原状。');
   if (!(supported.informationLayouts ?? [1]).includes(informationLayout)) fail('目标提交不支持当前信息收录布局' + informationLayout + '，拒绝切换或回退；解析资料保持原状。');
-  if (!(supported.turnBufferLayouts ?? [1]).includes(turnBufferLayout)) fail('目标提交不支持当前轮级缓冲来源布局' + turnBufferLayout + '，拒绝切换或回退；不让QQ参与者被旧读取器当成本地用户。');
+  if (!(supported.turnBufferLayouts ?? [1]).includes(turnBufferLayout)) fail('目标提交不支持当前轮级缓冲来源布局' + turnBufferLayout + '，拒绝切换或回退；不让外部来源被旧读取器当成本地用户。');
   if (await turnBufferLayoutVersion(privateRoot) !== turnBufferLayout) fail('检查期间轮级缓冲来源布局发生变化，拒绝部署。');
   if (await historyVersion() !== objectHistoryLayout) fail('检查期间对象历史布局发生变化，拒绝部署。');
   if (memoryLayoutVersion(root) !== version) fail('检查期间记忆布局发生变化，拒绝部署。');

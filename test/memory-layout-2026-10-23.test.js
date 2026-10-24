@@ -223,3 +223,8 @@ it('真实Memory/TurnBuffer/ProjectBrief服务在迁移前后读回一致，新�
     assert.ok((await org.memory.query({ subject: LEAD, 项目: 'layout-other' })).条目.some(row => row.id === other.id));
   } finally { await f.cleanup(); }
 });
+
+it('未知外部来源兼容标记不能被记忆目录迁移带过',async()=>scene(async({layout,root})=>{
+ await writeFile(join(root,'external-conversation-layout.json'),JSON.stringify({version:99}));const before=await memoryTree(root);
+ await assert.rejects(planMemoryMigration(layout),/标记未知或损坏/);assert.deepEqual(await memoryTree(root),before);
+}));

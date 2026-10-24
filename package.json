@@ -1,6 +1,6 @@
 {
   "name": "dsh-mind",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "type": "module",
   "description": "心智 · 数字组织 —— 一张插件卡，三个组件：内核 / 安全类 / 看板",
   "keywords": [

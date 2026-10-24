@@ -141,7 +141,7 @@ export async function apply(ctx, config = {}) {
     llmOf: () => 取服务(ctx, 'llm'), logger, enabled: config.轮级缓冲 !== false && config.自动协作记忆 === true });
   org.continuityCaptureHooks = continuityCaptureHooks;
   ctx.effect?.(() => () => continuityCaptureHooks.stop());
-  const informationHooks = createInformationHooks({ org, projectOf: 当前项目键, llmOf: () => 取服务(ctx, 'llm'), toolsOf: () => 取服务(ctx, 'tools'), agentsOf: () => 取服务(ctx, 'agents'), logger });
+  const informationHooks = createInformationHooks({ org, projectOf: 当前项目键, llmOf: () => 取服务(ctx, 'llm'), logger });
   org.informationHooks = informationHooks;
   const leadSpaceHooks = createLeadSpaceHooks({ org, projectOf: 当前项目键, llmOf: () => 取服务(ctx, 'llm'), logger });
   org.leadSpaceHooks = leadSpaceHooks;

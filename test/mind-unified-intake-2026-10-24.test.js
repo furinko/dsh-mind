@@ -6,7 +6,6 @@ import { makeFixture, LEAD, SOVEREIGN } from './helpers.mjs';
 import { runAction } from '../lib/actions.js';
 import { recallLeadContext } from '../src/lead-context.js';
 import { recallProfessionalContext } from '../src/professional-context.js';
-import { exploreSource } from '../components/kernel/lib/source-exploration.js';
 
 const P = 'unified-intake';
 const spec = (subject = LEAD) => ({ subject, project: P, session: subject.id });
@@ -190,58 +189,3 @@ it('多岗位知识的审批包括每次正式写入，重新分配的审批同�
   assert.equal(next.native.length, 1);
   for (const old of r.native) assert.equal(await org.memory.intakeActive(old.id), false);
 }, { defaults: { 介入度: '审批' } }));
-it('自主探索使用当前真实Agent和完整工具流水线，选题与取稿有统一预算，材料走原记忆', async () => scene(async org => {
-  const session = { id: LEAD.id, header: { cwd: process.cwd() } }; const agent = { session }; const calls = [];
-  const tools = { get: () => ({}), async execute(exec) {
-    assert.equal(exec.agent, agent); assert.ok(exec.signal instanceof AbortSignal); calls.push(exec.name);
-    const value = exec.name === 'bili_humanism_candidates' ? { result: [{ bvid: 'BV1xx411c7mD', title: '鸟声与竹笛', author: '合成作者' }] }
-      : { result: { segments: [{ text: '竹笛可以模仿鸟叫。' }], coverage: '合成一页字幕' } };
-    return { isError: false, content: [{ type: 'text', text: JSON.stringify(value) }] };
-  } };
-  const args = { org, session, spec: spec(), tools, agents: { get: () => agent }, route: { provider: 'fixture', model: 'fixture' },
-    signal: new AbortController().signal, active: () => true, llm: fixtureModel(input => ({ id: input.candidates[0].id })) };
-  const result = await exploreSource(args); assert.ok(result.material);
-  assert.deepEqual(calls, ['bili_humanism_candidates', 'bili_humanism_read']);
-  assert.equal((await exploreSource(args)).skipped, true); assert.equal(calls.length, 2);
-  const state = await org.information.load(); assert.equal(Object.values(state.usage)[0].sourceReads, 1);
-  assert.equal(Object.values(state.usage)[0].modelCalls, 1);
-  const prepared = await org.information.prepareLearning(spec());
-  await org.information.commitLearning(spec(), prepared, { records: [{ type: 'growth', kind: '兴趣', title: '鸟声乐器', text: '我想多听听模仿鸟声的乐器。', quote: '竹笛可以模仿鸟叫' }] });
-  assert.match(JSON.stringify((await recallLeadContext({ org, subject: LEAD, project: P })).记录), /鸟声乐器|模仿鸟声/);
-}));
-
-it('探索不能抓取模型自造目标；宿主拒绝、暂停和Agent被替换均不收录或重试', async () => scene(async org => {
-  const session = { id: LEAD.id, header: { cwd: process.cwd() } }; const agent = { session }; let calls = 0;
-  const tools = { get: () => ({}), async execute() { calls++; return { isError: true, content: [{ type: 'text', text: 'host-denied' }] }; } };
-  const args = { org, session, spec: spec(), tools, agents: { get: () => agent }, route: { provider: 'fixture', model: 'fixture' }, signal: new AbortController().signal,
-    active: () => true, llm: fixtureModel(() => { throw Error('拒绝后不能调用模型'); }) };
-  await assert.rejects(exploreSource(args), { code: 'INFORMATION_SOURCE_FAILED' });
-  assert.equal(calls, 1); assert.equal((await org.information.load()).items.length, 0);
-  assert.equal((await exploreSource(args)).skipped, true);
-  assert.equal((await exploreSource({ ...args, agents: { get: () => ({ session: {} }) } })).available, false);
-}));
-
-for (const mode of ['invented', 'pause', 'agent-change']) it(`探索边界 ${mode}：取稿前复核候选、暂停和真实Agent，不写入无效来源`, async () => scene(async org => {
-  const session = { id: LEAD.id, header: { cwd: process.cwd() } }; const agent = { session }; let live = agent; let calls = 0;
-  const tools = { get: () => ({}), async execute() { calls++; return { isError: false, content: [{ type: 'text', text: JSON.stringify({ result: [{ bvid: 'BV1xx411c7mD', title: '合成候选' }] }) }] }; } };
-  const llm = fixtureModel(async input => {
-    if (mode === 'pause') { const state = await org.information.load(); await org.information.admin(human(), { op: 'configure', expectedRevision: state.configRevision, config: { ...state.config, paused: true } }); }
-    if (mode === 'agent-change') live = { session };
-    return { id: mode === 'invented' ? 'BV1xx411c7mE' : input.candidates[0].id };
-  });
-  await assert.rejects(exploreSource({ org, session, spec: spec(), tools, agents: { get: () => live }, route: { provider: 'fixture', model: 'fixture' },
-    signal: new AbortController().signal, active: () => true, llm }),
-  { code: mode === 'invented' ? 'INFORMATION_SELECTION_INVALID' : mode === 'pause' ? 'INFORMATION_SCOPE_CHANGED' : 'INFORMATION_SOURCE_CHANGED' });
-  assert.equal(calls, 1); assert.equal((await org.information.load()).items.length, 0);
-}));
-
-it('B站取稿成功但没有实际文字时，只留探索回执，元数据不冒充阅读或知识', async () => scene(async org => {
-  const session = { id: LEAD.id, header: { cwd: process.cwd() } }; const agent = { session };
-  const tools = { get: () => ({}), async execute(exec) { return { isError: false, content: [{ type: 'text', text: JSON.stringify({ result:
-    exec.name === 'bili_humanism_candidates' ? [{ bvid: 'BV1xx411c7mD', title: '只有元数据' }] : { title: '只有元数据', route: null, segments: [], coverage: '未取得字幕' } }) }] }; } };
-  const result = await exploreSource({ org, session, spec: spec(), tools, agents: { get: () => agent }, route: { provider: 'fixture', model: 'fixture' },
-    signal: new AbortController().signal, active: () => true, llm: fixtureModel(input => ({ id: input.candidates[0].id })) });
-  assert.equal(result.reason, 'no-readable-text');
-  const state = await org.information.load(); assert.equal(state.items.length, 0); assert.equal(state.records.length, 0);
-  assert.equal(state.jobs.at(-1).state, 'completed'); assert.equal(state.jobs.at(-1).material, null);
-}));

@@ -185,5 +185,7 @@ it('QQ来源布局落盘后禁止旧轮缓冲读取器接管，未知标记也�
  const file=join(f.layout.memoryRoot(),'external-conversation-layout.json');await f.put(file,JSON.stringify({version:2}));const oldBytes=await readFile(f.ledger,'utf8');
  await assert.rejects(f.check(f.current),/轮级缓冲来源布局2/);
  const supported=await f.commit(JSON.stringify({version:1,memoryLayouts:[1,2],objectHistoryLayouts:[1,2],turnBufferLayouts:[1,2]}));assert.equal((await f.check(supported)).turnBufferLayout,2);assert.equal(await readFile(f.ledger,'utf8'),oldBytes);
- await f.put(file,JSON.stringify({version:3}));await assert.rejects(f.check(supported),/布局未知/);
+ await f.put(file,JSON.stringify({version:3}));await assert.rejects(f.check(supported),/轮级缓冲来源布局3/);
+ const generic=await f.commit(JSON.stringify({version:1,memoryLayouts:[1,2],objectHistoryLayouts:[1,2],turnBufferLayouts:[1,2,3]}));assert.equal((await f.check(generic)).turnBufferLayout,3);
+ await f.put(file,JSON.stringify({version:4}));await assert.rejects(f.check(generic),/布局未知/);
 }));

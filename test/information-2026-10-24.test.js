@@ -251,13 +251,13 @@ it('来源工具回执只收正式成功文字，限定本会话且卸载即失�
   const listeners = new Map();
   const hooks = createInformationHooks({ org, projectOf: () => P });
   const off = hooks.attach({ on: (name, fn) => { listeners.set(name, fn); return () => listeners.delete(name); } });
-  const exec = { name: 'bili_humanism_source', agent: { session: { id: 'lead', header: { cwd: process.cwd() } } } };
+  const exec = { name: 'independent_source_reader', agent: { session: { id: 'lead', header: { cwd: process.cwd() } } } };
   const receive = listeners.get('tools/result');
   receive({ ...exec, name: 'shell' }, { isError: false, content: [{ type: 'text', text: '不应收集任意命令结果' }] });
   receive(exec, { isError: true, content: [{ type: 'text', text: '失败' }] });
   receive(exec, { isError: false, content: [{ type: 'text', text: '{"success":false}' }] });
   assert.equal(service.toolReceipts.size, 0);
-  receive(exec, { isError: false, content: [{ type: 'text', text: '来源工具提供的一页字幕' }] });
+  receive(exec, { isError: false, content: [{ type: 'text', text: JSON.stringify({mindExternal:{version:1,contentType:'material',status:'returned',text:'来源工具提供的一页字幕',coverage:'一页文字，不含画面'}}) }] });
   const receipt = (await service.context(spec())).sourceToolReceipts[0]; assert.ok(receipt);
   await assert.rejects(service.submitTool({ ...spec(), session: 'other' }, { receiptId: receipt.id, title: '伪造范围' }));
   const item = await service.submitTool(spec(), { receiptId: receipt.id, title: '一页字幕' });
@@ -379,4 +379,25 @@ it('人侧多目录新增原子保存：无效路径、重复目录和旧设置�
   await assert.rejects(service.admin(human(), { op: 'sources_add', expectedRevision: 0, sources: [source(one)] }), { code: 'INFORMATION_CONFLICT' });
   assert.deepEqual(await service.load(), saved);
   await assert.rejects(service.admin(spec(), { op: 'sources_add', expectedRevision: 1, sources: [source(f.home)] }), { code: 'DENIED' });
+}));
+
+it('任意两个材料工具使用同一交接协议；保留覆盖与出处，拒绝失败及普通工具输出',async()=>scene(async(service,org)=>{
+ const listeners=new Map();const hooks=createInformationHooks({org,projectOf:()=>P});hooks.attach({on:(n,fn)=>{listeners.set(n,fn);return()=>listeners.delete(n);}});const receive=listeners.get('tools/result');
+ for(const name of ['new_connector_one','new_connector_two']){
+  const exec={name,agent:{session:{id:'lead',header:{cwd:process.cwd()}}}};
+  const envelope={mindExternal:{version:1,contentType:'material',status:'returned',channel:'knowledge',conversationId:'private-room',participantId:'private-author',text:'通用材料正文-'+name,coverage:'只有一页文字'}};
+  receive(exec,{isError:true,content:[{type:'text',text:JSON.stringify(envelope)}]});receive(exec,{isError:false,content:[{type:'text',text:'普通输出不收集'}]});assert.equal(service.toolReceipts.size,name==='new_connector_one'?0:1);
+  receive(exec,{isError:false,content:[{type:'text',text:JSON.stringify(envelope)}]});const receipt=[...service.toolReceipts.values()].at(-1);
+  const item=await service.submitTool(spec(),{receiptId:receipt.id,title:'交接材料'});const detail=await service.read(spec(),{id:item.id});assert.equal(detail.declaredCoverage,'只有一页文字');assert.equal(detail.context.origin.producer,'tool:'+name);assert.equal(detail.context.origin.identity,'unverified');assert.doesNotMatch(JSON.stringify(detail.context),/private-room|private-author/);
+ }
+ hooks.stop();
+}));
+
+it('相同工具返回相同正文时，不同已声明参与者仍保留各自出处',async()=>scene(async(service)=>{
+ const {externalMaterialResult}=await import('../src/conversation-origin.js');const items=[];
+ for(const participantId of ['author-one','author-two']){
+  const material=externalMaterialResult({isError:false,content:[{type:'text',text:JSON.stringify({mindExternal:{version:1,contentType:'material',status:'returned',channel:'community',participantId,text:'相同的正文',coverage:'一段文字'}})}]},'generic-reader');
+  const receiptId=service.captureTool({...spec(),tool:'generic-reader',...material});items.push(await service.submitTool(spec(),{receiptId,title:'同文不同来源'}));
+ }
+ assert.notEqual(items[0].id,items[1].id);const a=await service.read(spec(),{id:items[0].id});const b=await service.read(spec(),{id:items[1].id});assert.notEqual(a.context.origin.participant,b.context.origin.participant);
 }));

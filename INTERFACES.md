@@ -16,13 +16,17 @@
 
 用户确认撤掉宿主服务全局包装。Mind保留自身人设读取、设置及公开文件工具接口规则，不替换宿主权限解析、沙箱、终端或进程方法；三档权限由宿主执行，完全权限shell可修改人设文件。状态提供`hostServicesWrapped=false`及`shellCoreProtection=false`，完整范围见[核心人设合同](docs/design/本地主权核心人设-2026-10-23.md)。宿主内置`tool-plugin-manager`默认禁用，启用属于部署配置，Mind不替其他profile自动打开。
 
-### QQ对话来源适配（1.7.0）
+### 统一外部来源（1.8.0，替代1.7.0的平台专用逻辑）
 
-- 轮缓冲明确接收 `plugin:dsh-qq-bridge` 及旧 `{kind:plugin,plugin:qq-bridge}` 的已接纳文本，角色为 `external-user`；来源固定标为QQ、参与者身份未核对。未知插件、昵称或正文前缀不构成来源凭据，也不认证本地主人身份。仍只留文字，不收图片、推理或普通工具参数。
-- 对 `qq_bridge_send`，按同一项目历史中的真实callId配对调用与工具结果；仅 `sent=1,dropped=false` 且目的地可核对时留 `external-assistant`。正文是发送请求，桥接可能去除Markdown，不认证实际字节、送达或已读；仅保留正文与目的地散列，不复制其余参数/结果。失败、拒发、缺配对、目的地冲突和清空前调用均不算发出。
-- 对尚未投影QQ来源的旧缓冲，在公开live会话观察租约内一次补读最多100000个事件；只取本项目、自有事件、floor之后、30天内且有时间的QQ文字，保留128轮/512消息/2MiB上限。旧本地正文只使用原已保留条目，不重新捞回；重放真实表面节点，压缩锚点、撤回、清空和并发检查继续生效。已知省略通过 `历史来源补读` 报告；无历史观察接口或超过事件上限时不冒称补齐。新接纳事件继续按原检查点保存。
-- QQ可作为专业召回的问题线索；本地人格/偏好自动整理和项目需求接续不把external角色当主人的表达。QQ收录仍经原 `information_query/read/update`、阅读预算和MemoryService。外部对话使用独立处理位置，旧的本地/助手处理游标不会跳过刚补回的QQ；正式收获带QQ身份未知出处，保持当前项目/显式关系和仅Lead范围，不自动跨会话合并人物、共享私聊或发布能力。
-- 含外部角色的缓冲文件版本2；首次保存之前先写无正文 `external-conversation-layout.json`。部署清单需声明 `turnBufferLayouts:[1,2]`，旧读取器不支持时拒绝回退。原缓冲、项目接续、正式记忆仍各为原单源，不包装宿主权限，也不改变QQ白名单或自动发送设置。
+Mind 不按平台名、昵称、正文前缀、工具名或平台成功字段识别对话，不设置逐平台适配器。文件目录、固定收录端点和会话入口继续复用现有信息阅读、MemoryService与能力候选流程；来源元数据不是身份认证、授权或可信指令。
+
+- 已接纳的 user/message 中，任意合法 plugin:<producer>（兼容旧 kind=plugin 加 plugin 字段）的文字都进入同一轮缓冲，传输角色为 external-user；没有结构化说明时 contentType=unknown、channel/conversation/participant=null，不假定存在人类对话。宿主 user、runtime-context、compact-checkpoint 等非插件来源保持原合同；文本前缀不会改变来源。无图片、推理或工具参数收集。
+- 插件可在 source.mindExternal 提供统一声明：{version:1,contentType:"conversation"|"material"|"notification"|"unknown",channel?,conversationId?,participantId?}。字符串最多256字符；原始会话与参与者标识按producer加盐散列后保存，缺失仍为null，不从昵称或正文猜测。producer始终取宿主事件来源。声明不验证身份，不自动跨会话合并人物。
+- 材料工具统一交接：任意成功工具返回单一文字JSON {mindExternal:{version:1,contentType:"material",status:"returned",text,coverage,channel?,conversationId?,participantId?}}，可生成原有的30分钟sourceToolReceipt；文字最多12000字符，覆盖说明必填且最多1000字符。保留工具名与通用出处，缺声明的普通结果不自动抓取。平台工具名单与专用后台取稿流程已撤除，普通Lead工具能力不变。
+- 任意工具可返回单一文字JSON {mindExternal:{version:1,direction:"outbound",status:"submitted",contentType:"conversation",text,channel?,conversationId?,participantId?}}。只在同项目、自有范围及清空屏障之后的 tool/call 与非错误 tool/result 按 callId 严格配对时保留 external-assistant；producer固定为实际工具名的 tool: 前缀，正文最多16384字符，来自回执明文，不从调用参数取草稿。它只是工具声明，不证明实际送达、原样字节或已读。普通工具JSON、平台私有成功字段、孤立/重复调用、错误来源和拒发均不猜测为发送成功。既有插件未提供此声明时，不能承诺自动恢复其发出正文。
+- 旧缓冲投影版本1/2可在公开live会话观察租约中重投影至3，最多100000事件；只补当前项目、自有事件、floor之后、30天内且有时间的外部文本。原已保留本地及外部条目沿用，不重捞旧本地正文。压缩锚点、撤回、清空、并发核验和128轮/512消息/2MiB限制继续生效。缺SDK历史读面、事件超限或时间不明时明确报告缺口，不冒称补齐。
+- 专业检索可用外部已接纳文本作只读词面线索（通知除外）；未知输入与材料不认证为人类问题或意图。所有external角色均不进入本地主人偏好与项目需求自动提炼。信息阅读按producer/channel/conversation/participant/contentType独立游标分批，不把不同已标识参与者混成一场相遇；未知字段不允许推断同一个人。旧版已处理位置仅用于旧记录兼容，新来源从自己的位置开始。正式收获保留通用来源说明及当前项目/显式关系、仅Lead范围，不新增正式记忆族、不自动共享隐私或发布能力。
+- 含外部记录的缓冲保存为版本3，新来源投影首次写入前先写无正文 external-conversation-layout.json 版本3（仅本地文本的投影也先立兼容屏障）。部署清单声明 turnBufferLayouts:[1,2,3]，禁止交给只支持1/2的旧读取器；保留原有2版出处仅读兼容，不含任何实时平台识别分支。没有包装宿主权限、修改来源插件或发送真实外部消息。
 
 ### 跨岗位召回与记忆调用观察（1.6.0）
 

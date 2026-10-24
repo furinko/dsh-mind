@@ -41,10 +41,10 @@ it('设置主页面保持紧凑，来源管理是有关闭入口的分栏小弹�
   assert.equal(dialog.props['aria-label'], '信息来源与沉淀管理'); assert.equal(dialog.props['aria-modal'], true);
   for (const tab of ['连接目录', '收录与沉淀', '阅读设置']) assert.ok(s.button(tab));
   assert.equal(s.field('适用岗位'), undefined, '岗位归属交给Lead，不让用户逐条分配');
-  await s.click('阅读设置'); s.change('每日自主探索上限', '2');
+  await s.click('阅读设置'); s.change('每日模型调用上限', '2');
   s.field('关闭信息来源管理').props.onClick(); await s.flush();
   assert.equal(s.elements().filter(e => e.props.role === 'dialog').length, 0);
-  await s.click('管理信息来源'); assert.equal(s.field('每日自主探索上限').props.value, 2);
+  await s.click('管理信息来源'); assert.equal(s.field('每日模型调用上限').props.value, 2);
 }, { informationClosed: true }));
 
 it('实际设置组件连接本地目录，经认证路由收录并查看文字版本；会话是分享主入口', async () => scene(async (s, org, f) => {
@@ -59,11 +59,11 @@ it('实际设置组件连接本地目录，经认证路由收录并查看文字�
 }));
 
 it('阅读预算草稿在刷新后保留，设置变化时不能以新版本覆盖旧草稿', async () => scene(async (s, org) => {
-  s.change('每日模型调用上限（含选题）', '2');
+  s.change('每日模型调用上限', '2');
   const before = await org.information.load();
   await org.information.admin({ subject: SOVEREIGN, project, session: null }, { op: 'configure', expectedRevision: before.configRevision, config: { ...before.config, dailyReadChars: 12345 } });
   await s.click('刷新见闻与成长');
-  assert.equal(s.field('每日模型调用上限（含选题）').props.value, 2);
+  assert.equal(s.field('每日模型调用上限').props.value, 2);
   assert.match(s.text(), /草稿保留/); assert.equal(s.button('保存阅读设置').props.disabled, true);
   await s.click('放弃阅读设置修改'); assert.equal(s.field('每日阅读字符上限').props.value, 12345);
 }));
