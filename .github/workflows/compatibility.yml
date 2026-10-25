@@ -28,5 +28,5 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
-      - run: npm test
       - run: node scripts/verify-profile-install.mjs --selftest
+      - run: npm test

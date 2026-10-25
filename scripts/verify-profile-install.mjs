@@ -409,14 +409,15 @@ async function selftest() {
 
 const arg = process.argv[2];
 if (arg === '--selftest') {
-  process.exit((await selftest()) ? 0 : 1);
-}
-if (!arg || arg.startsWith('-')) {
+  // Let piped stdout drain on Windows; process.exit can discard the case report.
+  process.exitCode = (await selftest()) ? 0 : 1;
+} else if (!arg || arg.startsWith('-')) {
   process.stderr.write('用法：node scripts/verify-profile-install.mjs <profileDir>\n      node scripts/verify-profile-install.mjs --selftest\n');
-  process.exit(2);
+  process.exitCode = 2;
+} else {
+  const [失败, 通过] = await 检查(arg);
+  for (const line of 通过) process.stdout.write(`  ✓ ${line}\n`);
+  for (const line of 失败) process.stdout.write(`  ✗ ${line}\n`);
+  process.stdout.write(失败.length === 0 ? '安装自检通过。\n' : `安装自检失败 ${失败.length} 条。\n`);
+  process.exitCode = 失败.length === 0 ? 0 : 1;
 }
-const [失败, 通过] = await 检查(arg);
-for (const line of 通过) process.stdout.write(`  ✓ ${line}\n`);
-for (const line of 失败) process.stdout.write(`  ✗ ${line}\n`);
-process.stdout.write(失败.length === 0 ? '安装自检通过。\n' : `安装自检失败 ${失败.length} 条。\n`);
-process.exit(失败.length === 0 ? 0 : 1);
