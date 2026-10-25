@@ -1108,15 +1108,37 @@ window.__ModuleLoader__.load({
       '.dshmind-actbar>i{flex:0 0 auto;width:10px;display:block;border-radius:2px}',
 
       // ── 图谱 ───────────────────────────────────────────────────────────────
-      '.dshmind-graphWrap{border:.5px solid var(--dsw-alias-border-l2,#d3dcea);border-radius:8px;',
-      'background:var(--dsw-alias-bg-layer-1,#fff);overflow:hidden}',
-      '.dshmind-graph{display:block;width:100%;height:auto}',
-      '.dshmind-gEdge{fill:none}',
-      '.dshmind-gNode{cursor:pointer}',
-      '.dshmind-gNodeOff{opacity:.10}',
-      '.dshmind-gLabel{font-size:10px;fill:var(--dsw-alias-label-secondary,#61666b)}',
-      '.dshmind-gLabelStrong{font-size:11px;fill:var(--dsw-alias-label-primary,#1a2233)}',
-      '.dshmind-graphBar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px}',
+      '.dshmind-graphWrap{position:relative;border:1px solid var(--mk-bd,#2a303d);border-radius:14px;',
+      'background:var(--mk-bg,#161a22);overflow:hidden}',
+      '.dshmind-graphViewport{min-width:0;overflow-x:auto;',
+      'background-image:radial-gradient(var(--mk-bd,#2a303d) .6px,transparent .6px);background-size:20px 20px}',
+      '.dshmind-graph{display:block;width:100%;min-width:780px;height:auto;cursor:grab;touch-action:none}',
+      '.dshmind-graph:active{cursor:grabbing}',
+      '.dshmind-gEdge{fill:none;pointer-events:none;transition:opacity .18s ease}',
+      '.dshmind-gNode{cursor:pointer;outline:none;transition:opacity .18s ease}',
+      '.dshmind-gCard{fill:var(--mk-bg,#161a22);stroke:var(--mk-bd,#2a303d);stroke-width:1;',
+      'transition:fill .15s ease,stroke .15s ease}',
+      '.dshmind-gNode:hover .dshmind-gCard,.dshmind-gNode:focus-visible .dshmind-gCard{',
+      'fill:var(--mk-bg2,#1c212b);stroke:var(--mk-ac,#5b8def)}',
+      '.dshmind-gNodeOn .dshmind-gCard{fill:var(--mk-bg2,#1c212b);stroke:var(--mk-ac,#5b8def);stroke-width:1.8}',
+      '.dshmind-gNodeLinked .dshmind-gCard{stroke:var(--mk-tx3,#6b7280)}',
+      '.dshmind-gNodeOff{opacity:.36}.dshmind-gEdgeOff{opacity:.06!important}',
+      '.dshmind-gLabel{font-size:11px;fill:var(--mk-tx2,#9aa3b2)}',
+      '.dshmind-gLabelStrong{font-size:14px;font-weight:600;fill:var(--mk-tx,#e7e9ee)}',
+      '.dshmind-gCapabilityLabel{font-size:12.5px;font-weight:500;fill:var(--mk-tx,#e7e9ee)}',
+      '.dshmind-gColumn{font-size:11px;font-weight:500;letter-spacing:.08em;fill:var(--mk-tx3,#6b7280)}',
+      '.dshmind-gPort{fill:var(--mk-bg,#161a22);stroke-width:1.5}',
+      '.dshmind-graphBar{display:flex;gap:8px 12px;flex-wrap:wrap;align-items:center;margin-bottom:2px}',
+      '.dshmind-graphBar .dshmind-tileK{margin-left:auto}',
+      '.dshmind-graphNotes{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 20px}',
+      '.dshmind-graphLegend{flex-direction:row;flex-wrap:wrap;gap:10px 18px;padding:2px 0 6px}',
+      '.dshmind-graphGaps{min-width:0;overflow-x:auto}',
+      '@media(max-width:760px){.dshmind-shell.dshmind-shellGraph{flex-direction:column;align-items:stretch}',
+      '.dshmind-shellGraph>.dshmind-nav{position:static;width:100%;max-height:none;flex-direction:row;flex-wrap:wrap;padding:8px}',
+      '.dshmind-shellGraph>.dshmind-pages{width:100%;flex:auto}',
+      '.dshmind-shellGraph .dshmind-navBtn{width:auto;flex:none}',
+      '.dshmind-shellGraph .dshmind-navBrand{flex-basis:100%;padding:4px 8px 8px}',
+      '.dshmind-shellGraph .dshmind-navBrand span{display:none}}',
       '.dshmind-graphNote{font-size:11px;color:var(--dsw-alias-label-caption,#adb2b8);padding:6px 2px 0}',
       // 缺口榜：窄面板下**横向可滚**，不许把单元格挤成一字一行（与任务图同一款处置）。
       '.dshmind-tbl{width:100%;border-collapse:collapse;font-size:12px;border-radius:8px;overflow:hidden}',
@@ -1233,25 +1255,23 @@ window.__ModuleLoader__.load({
       '.dshmind-tlRow.dshmind-tlBad{border-left-color:var(--mk-bad)}',
       '.dshmind-tlRow.dshmind-tlWarn{border-left-color:var(--mk-warn)}',
 
-      // 图谱：画布 + 详情抽屉（点节点开；纯显示、零请求）
-      '.dshmind-graphWrap{position:relative;background:var(--mk-bg);border:.5px solid var(--mk-bd);border-radius:12px}',
-      // 手势光标（2026-10-14 加缩放/平移）：抓取态一眼可读。
-      // 纯 CSS，**不新增控件**——只读面板的可点面白名单原样不动。
-      '.dshmind-graph{cursor:grab;touch-action:none}',
-      '.dshmind-graph:active{cursor:grabbing}',
-      '.dshmind-gDrawer{position:absolute;top:10px;right:10px;width:252px;max-height:calc(100% - 20px);overflow:auto;',
-      'background:var(--mk-bg2);border:.5px solid var(--mk-bd);border-radius:10px;padding:11px 12px;font-size:11.5px;',
+      // 详情随画布排版，窄面板放在下方，避免遮挡能力节点。
+      '.dshmind-pageBox[data-dshmind-page="graph"]{container:mindgraph / inline-size}',
+      '.dshmind-gDrawer{min-width:0;max-height:340px;overflow:auto;border-top:1px solid var(--mk-bd);',
+      'background:var(--mk-bg2);padding:18px 20px;font-size:12px;',
       'color:var(--mk-tx2)}',
-      '.dshmind-gDrawer h5{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--mk-tx);font-weight:600}',
+      '.dshmind-gDrawer h5{display:flex;flex-wrap:wrap;align-items:center;gap:7px;font-size:13px;color:var(--mk-tx);font-weight:600}',
+      '.dshmind-gDrawer h5 .dshmind-mono{overflow-wrap:anywhere}',
       '.dshmind-gDrawerRow{display:flex;gap:8px;margin-top:6px}',
       '.dshmind-gDrawerRow b{flex:none;width:46px;color:var(--mk-tx3);font-weight:400}',
       '.dshmind-gLinks{margin-top:9px;padding-top:8px;border-top:.5px solid var(--mk-bd);display:flex;',
       'flex-direction:column;gap:4px}',
       '.dshmind-gLink{display:flex;align-items:center;gap:6px}',
-      '.dshmind-gNodeOn circle{stroke:var(--mk-tx);stroke-width:1.7}',
-      '.dshmind-gNodeOff{opacity:.12}',
-      '.dshmind-gEdgeOff{opacity:.05}',
       '.dshmind-graphNote{color:var(--mk-tx3);line-height:1.7}',
+      '@container mindgraph (min-width:1100px){',
+      '.dshmind-graphHasDetail{display:grid;grid-template-columns:minmax(0,1fr) 264px;align-items:start}',
+      '.dshmind-graphHasDetail .dshmind-graph{min-width:720px}',
+      '.dshmind-gDrawer{height:100%;max-height:620px;border-top:0;border-left:1px solid var(--mk-bd)}}',
 
       // ══ 视觉打磨（2026-10-13 · 把还没统一的老组件收进同一套间距/字阶/卡片语言）══════
       // 这一层做两件事：**统一**（间距 4/8/12/16 · 圆角 12/10/8/999 · 字阶 16/13/12/11/10.5）
@@ -1398,13 +1418,6 @@ window.__ModuleLoader__.load({
       // 侧栏当前页：左侧 2px 强调色内嵌条（设计稿导航同款；不动原底色/字色）。
       '.dshmind-navBtnOn{box-shadow:inset 2px 0 0 var(--mk-ac,#5b8def)}',
       '.dshmind-navBtn,.dshmind-btn{transition:background-color .15s,color .15s,border-color .15s}',
-      // 图谱：缺口虚线缓慢流动（给"这是没接上的活口"一点方向感）。
-      // stroke-dashoffset 动画只对带 dasharray 的线可见 ⇒ 实线（已接线）不受影响。
-      '.dshmind-gEdge[data-wired="0"]{animation:dshmind-flow 2.2s linear infinite}',
-      '@keyframes dshmind-flow{to{stroke-dashoffset:-14}}',
-      // 图谱节点：悬浮发光 + 选中节点常亮光晕（circle 的 filter 不影响文本层）。
-      '.dshmind-gNode:hover circle{filter:brightness(1.18) drop-shadow(0 0 5px rgba(91,141,239,.55))}',
-      '.dshmind-gNodeOn circle{filter:drop-shadow(0 0 6px rgba(91,141,239,.6))}',
       // 详情抽屉：淡入下移一眼（0.18s，快到不挡手、慢到看得见）。
       '.dshmind-gDrawer{animation:dshmind-in .18s ease-out}',
       '@keyframes dshmind-in{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}',
@@ -2043,7 +2056,7 @@ window.__ModuleLoader__.load({
         }, 页体[p.id] || []);
       });
       return 样式.concat(公告, [
-        h('div', { key: 'shell', className: 'dshmind-shell' }, [
+        h('div', { key: 'shell', className: 'dshmind-shell' + (现在 === 'graph' ? ' dshmind-shellGraph' : '') }, [
           导航(ctx),
           h('div', { key: 'pages', className: 'dshmind-pages' }, 页节点),
         ]),
@@ -2250,33 +2263,35 @@ window.__ModuleLoader__.load({
     }
 
     // ── 图谱（岗位 × 能力接线）─────────────────────────────────────────────────
-    /**
-     * 布局：**两列定宽 + 纵向均分**（岗位左、能力右）。不用力导向——
-     * 力导向每次渲染位置都变，读的人记不住「上次那个红点在哪」，而这张图上
-     * 「哪条红线在哪个岗位」正是要一眼看出来的东西。
-     */
+    /** 两列卡片，能力按相连岗位的重心稳定排序，减少交叉；不改变投影或接线判定。 */
     function 图谱坐标(岗位, 能力) {
-      // 两列拉开到画布两侧（2026-10-13 晚第二轮）：原来 120/540 挤在左边，
-      // 宽屏上卡片右 1/3 全空（主权者：「面板右面空白一大堆」）。现在 150/760，标签向右吃到边。
-      var 宽 = 1240;
-      // 高按两列里**多的一边**算（2026-10-14 审查 P2-22）：修前只看能力数——岗位 > 能力时
-      // 岗位节点被压进 240px 里纵向重叠。
-      var 高 = Math.max(240, Math.max(能力.length, 岗位.length) * 34 + 48);
-      var pos = {};
+      var 宽 = 1040, 高 = Math.max(400, Math.max(能力.length, 岗位.length) * 80 + 96);
+      var pos = {}, 岗位序 = Object.create(null);
+      岗位.forEach(function (r, i) { 岗位序[r.id] = i; });
+      var 能力序 = 能力.map(function (c, i) {
+        var 关联 = c.适用岗位.filter(function (id) { return Object.prototype.hasOwnProperty.call(岗位序, id); });
+        return { 卡: c, 序: i, 重心: 关联.length
+          ? 关联.reduce(function (sum, id) { return sum + 岗位序[id]; }, 0) / 关联.length : 岗位.length };
+      }).sort(function (a, b) { return a.重心 - b.重心 || a.序 - b.序; });
+      var y = function (i, n) { return n <= 1 ? 高 / 2 + 14 : 96 + (高 - 156) * i / (n - 1); };
       var i;
       for (i = 0; i < 岗位.length; i += 1) {
-        pos['角色:' + 岗位[i].id] = {
-          x: 150,
-          y: 岗位.length <= 1 ? 高 / 2 : 46 + (高 - 92) * i / (岗位.length - 1),
-        };
+        pos['角色:' + 岗位[i].id] = { x: 174, y: y(i, 岗位.length) };
       }
-      for (i = 0; i < 能力.length; i += 1) {
-        pos['能力:' + 能力[i].id] = {
-          x: 760,
-          y: 能力.length <= 1 ? 高 / 2 : 30 + (高 - 60) * i / (能力.length - 1),
-        };
+      for (i = 0; i < 能力序.length; i += 1) {
+        pos['能力:' + 能力序[i].卡.id] = { x: 824, y: y(i, 能力序.length) };
       }
       return { 宽: 宽, 高: 高, pos: pos };
+    }
+
+    /** SVG 不会自动省略长名称；正文详情与 title 始终保留完整 id。 */
+    function 图谱短名(id, 预算) {
+      var 字 = Array.from(id), 已用 = 0;
+      for (var i = 0; i < 字.length; i += 1) {
+        已用 += /[^\x00-\xff]/.test(字[i]) ? 2 : 1;
+        if (已用 > 预算) return 字.slice(0, Math.max(0, i - 1)).join('') + '…';
+      }
+      return id;
     }
 
     /**
@@ -2310,7 +2325,7 @@ window.__ModuleLoader__.load({
       var 类名 = function (key) {
         if (!选中) return 'dshmind-gNode';
         if (key === 选中) return 'dshmind-gNode dshmind-gNodeOn';
-        return 邻接[选中] && 邻接[选中][key] ? 'dshmind-gNode' : 'dshmind-gNode dshmind-gNodeOff';
+        return 邻接[选中] && 邻接[选中][key] ? 'dshmind-gNode dshmind-gNodeLinked' : 'dshmind-gNode dshmind-gNodeOff';
       };
       var 边类名 = function (a, b) {
         if (!选中) return 'dshmind-gEdge';
@@ -2322,6 +2337,9 @@ window.__ModuleLoader__.load({
       // 点哪个都选到最后一个（2026-10-13 首跑被 ⑪e 当场抓出）。工厂把键固化进参数。
       // 点节点的处理器：**也吃拖拽尾巴的抑制**（拖完松手不该顺手换选中）。
       var 点击器 = function (键) { return function () { if (拖拽尾巴()) return; 切图谱选中(键); }; };
+      var 键盘器 = function (键) { return function (event) {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); 切图谱选中(键); }
+      }; };
       for (i = 0; i < 岗位.length; i += 1) {
         var r = 岗位[i], rp = 坐标.pos['角色:' + r.id], r键 = '角色:' + r.id;
         var 实例 = 实例计数Of(ctx.实例计数, r.id);
@@ -2331,20 +2349,23 @@ window.__ModuleLoader__.load({
         var 闲置 = 岗位闲置Of(ctx.岗位闲置, r.id);
         节点.push(h('g', {
           key: 'r' + i, className: 类名(r键), 'data-node': r键,
-          onClick: 点击器(r键),
+          role: 'button', tabIndex: 0, 'aria-label': '岗位 ' + r.id, 'aria-pressed': 选中 === r键,
+          onClick: 点击器(r键), onKeyDown: 键盘器(r键),
         }, [
-          h('circle', { key: 'c', cx: rp.x, cy: rp.y, r: 12, fill: '#5b8def', fillOpacity: 0.9 }),
-          h('text', { key: 't', x: rp.x + 17, y: rp.y + 4, className: 'dshmind-gLabelStrong' }, r.id),
-          h('text', { key: 's', x: rp.x + 17, y: rp.y + 17, className: 'dshmind-gLabel' },
-            '在岗 ' + 实例.在岗 + (实例.封存 ? ' · 封存 ' + 实例.封存 : '') + ' · 接线 ' + (r.能力引用 ? r.能力引用.length : 0)
+          h('rect', { key: 'card', x: rp.x - 124, y: rp.y - 29, width: 248, height: 58, rx: 11, className: 'dshmind-gCard' }),
+          h('circle', { key: 'c', cx: rp.x - 105, cy: rp.y - 7, r: 4, fill: '#5b8def' }),
+          h('text', { key: 't', x: rp.x - 93, y: rp.y - 3, className: 'dshmind-gLabelStrong' }, 图谱短名(r.id, 26)),
+          h('text', { key: 's', x: rp.x - 106, y: rp.y + 17, className: 'dshmind-gLabel' },
+            '在岗 ' + (实例.在岗 === null ? '—' : 实例.在岗) + (实例.封存 ? ' · 封存 ' + 实例.封存 : '') + ' · 接线 ' + (r.能力引用 ? r.能力引用.length : 0)
             + (闲置.闲置 === true ? ' · 闲置' : (闲置.已知 && !闲置.最近派发于 ? ' · 未见派发' : ''))),
+          h('circle', { key: 'port', cx: rp.x + 124, cy: rp.y, r: 3.5, className: 'dshmind-gPort', stroke: '#5b8def' }),
           闲置.已知
             ? h('title', { key: 'i' },
                 r.id + '：在岗实例 ' + (闲置.在岗实例 === null ? '—' : 闲置.在岗实例)
                 + ' · 封存 ' + (闲置.封存实例 === null ? '—' : 闲置.封存实例)
                 + ' · 最近派发 ' + (闲置.最近派发于 || '未见')
                 + (闲置.闲置 === null ? '（未判闲置：阈值关）' : '（闲置阈值 ' + 闲置.阈值 + ' 天，' + (闲置.闲置 ? '已超' : '未超') + '）'))
-            : null,
+            : h('title', { key: 'i' }, r.id),
         ].filter(Boolean)));
       }
       for (i = 0; i < 能力.length; i += 1) {
@@ -2352,10 +2373,16 @@ window.__ModuleLoader__.load({
         var 色 = c.来源 === '自治' ? '#a97bea' : c.来源 === '出厂' ? '#3fb27f' : '#7d8590';
         节点.push(h('g', {
           key: 'c' + i, className: 类名(c键), 'data-node': c键,
-          onClick: 点击器(c键),
+          role: 'button', tabIndex: 0, 'aria-label': '能力卡 ' + c.id, 'aria-pressed': 选中 === c键,
+          onClick: 点击器(c键), onKeyDown: 键盘器(c键),
         }, [
-          h('circle', { key: 'o', cx: cp.x, cy: cp.y, r: 8, fill: 色, fillOpacity: 0.9 }),
-          h('text', { key: 't', x: cp.x + 13, y: cp.y + 4, className: 'dshmind-gLabel' }, c.id),
+          h('rect', { key: 'card', x: cp.x - 170, y: cp.y - 29, width: 340, height: 58, rx: 11, className: 'dshmind-gCard' }),
+          h('circle', { key: 'o', cx: cp.x - 151, cy: cp.y - 7, r: 4, fill: 色 }),
+          h('text', { key: 't', x: cp.x - 139, y: cp.y - 3, className: 'dshmind-gCapabilityLabel dshmind-mono' }, 图谱短名(c.id, 36)),
+          h('text', { key: 's', x: cp.x - 152, y: cp.y + 17, className: 'dshmind-gLabel' },
+            (c.来源 || '来源未知') + '能力 · 适用 ' + c.适用岗位.length + ' 个岗位'),
+          h('circle', { key: 'port', cx: cp.x - 170, cy: cp.y, r: 3.5, className: 'dshmind-gPort', stroke: 色 }),
+          h('title', { key: 'title' }, c.id),
         ]));
       }
       for (i = 0; i < 能力.length; i += 1) {
@@ -2364,20 +2391,19 @@ window.__ModuleLoader__.load({
           var A = 坐标.pos['角色:' + 岗位名], B = 坐标.pos['能力:' + 能力[i].id];
           if (!A || !B) continue;
           var 已接 = (引用表[岗位名] || []).indexOf(能力[i].id) >= 0;
-          // 单段二次曲线 + **每条边给一点纵向错位**：48 条边全走同一根中线会结成死结
-          // （截图实测）。错位按边序取 ±2 档，够把线束摊开成"扇"，又不至于看着乱。
-          var 中线 = (A.y + B.y) / 2 + ((i % 5) - 2) * 5;
-          var 控制x = (A.x + B.x) / 2;
+          // 从卡片端口水平出入，连线始终在文字背后。
+          var 起x = A.x + 124, 终x = B.x - 170, 弯 = (终x - 起x) * 0.48;
           var 相关 = !!选中 && (('角色:' + 岗位名) === 选中 || ('能力:' + 能力[i].id) === 选中);
           边.push(h('path', {
             key: 'e' + i + '-' + j,
             className: 边类名('角色:' + 岗位名, '能力:' + 能力[i].id),
             'data-wired': 已接 ? '1' : '0',
-            d: 'M' + A.x + ' ' + A.y + ' Q' + 控制x + ' ' + 中线 + ' ' + B.x + ' ' + B.y,
+            d: 'M' + 起x + ' ' + A.y + ' C' + (起x + 弯) + ' ' + A.y + ' ' + (终x - 弯) + ' ' + B.y + ' ' + 终x + ' ' + B.y,
+            vectorEffect: 'non-scaling-stroke',
             style: 已接
               // 默认**压低不透明度**：48 条线是「纹理」不是主角；选中/悬停时才亮起来
-              ? { stroke: '#3fb27f', strokeWidth: 相关 ? 1.7 : 1, opacity: 相关 ? 0.95 : 0.42 }
-              : { stroke: '#e5534b', strokeWidth: 相关 ? 1.8 : 1.2, strokeDasharray: '4 3', opacity: 相关 ? 0.95 : 0.75 },
+              ? { stroke: 相关 ? '#3fb27f' : '#6f9f92', strokeWidth: 相关 ? 2 : 1.2, opacity: 相关 ? 0.95 : 0.32 }
+              : { stroke: '#e5534b', strokeWidth: 相关 ? 2 : 1.3, strokeDasharray: '5 5', opacity: 相关 ? 0.95 : 0.55 },
           }));
         }
       }
@@ -2394,16 +2420,17 @@ window.__ModuleLoader__.load({
             '适用边 ' + 接线.适用边 + ' 条 ⇒ 接线率 ' + (接线.接线率 === null ? '—' : 接线.接线率 + '%')
             + '（自治卡 ' + 接线.自治接线 + '/' + 接线.自治适用 + '）'),
         ]),
-        h('div', { key: 'wrap', className: 'dshmind-graphWrap' }, [
+        h('div', { key: 'wrap', className: 'dshmind-graphWrap' + (选中 ? ' dshmind-graphHasDetail' : '') }, [
           // 缩放/平移：`图谱手势()` 返回的 props 直接摊进来（滚轮缩放 / 拖拽平移 / 双击复位）。
           // 复用 `Object.assign` 而不是写进对象字面量：手势那组是"可选增强"，
           // 显式摊开更能看出它**不改变** svg 的身份（key/className/viewBox 仍由这里定）。
-          h('svg', Object.assign({
+          h('div', { key: 'viewport', className: 'dshmind-graphViewport' }, h('svg', Object.assign({
             key: 'svg', className: 'dshmind-graph',
             viewBox: (视图
               ? 视图.x + ' ' + 视图.y + ' ' + (坐标.宽 / 视图.k) + ' ' + (坐标.高 / 视图.k)
               : '0 0 ' + 坐标.宽 + ' ' + 坐标.高),
             'data-dshmind': 'graph',
+            role: 'group', 'aria-label': '岗位与能力关系图，滚轮缩放、拖拽平移、双击复位',
             preserveAspectRatio: 'xMidYMid meet',
           }, 图谱手势(坐标.宽, 坐标.高)), [
             // 空白层：铺满画布、垫在节点下面。点空白 ⇒ 取消选中（见 清图谱选中 的注释）。
@@ -2414,32 +2441,17 @@ window.__ModuleLoader__.load({
               // 拖拽尾巴不算点击（见 拖拽尾巴 的注释）
               onClick: function () { if (!拖拽尾巴()) 清图谱选中(); },
             }),
-          ].concat(边, 节点)),
+            h('text', { key: 'roles-label', x: 50, y: 35, className: 'dshmind-gColumn', pointerEvents: 'none' }, '岗位 / ' + 岗位.length),
+            h('text', { key: 'caps-label', x: 654, y: 35, className: 'dshmind-gColumn', pointerEvents: 'none' }, '能力 / ' + 能力.length),
+          ].concat(边, 节点))),
           // 详情抽屉：点节点开（纯显示动作）。不选就不画 —— 不给一壳空抽屉。
           选中 ? 图谱详情(选中, ctx, 引用表, 邻接) : null,
         ]),
-        // 两段说明**并排**（各占一半）—— 单列时右半边空着（宽屏上很扎眼）
-        h('div', {
-          key: 'notes',
-          style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(380px,1fr))', gap: '10px', marginTop: 8 },
-        }, [
-          h('div', { key: 'note', className: 'dshmind-graphNote', style: { maxWidth: 'none' } },
-            '左列＝岗位卡（蓝）· 右列＝能力卡（紫＝自治／绿＝出厂）。绿实线＝岗位卡的 个体L2 真引用了这张卡；'
-            + '红虚线＝能力卡声明「适用这个岗位」但岗位卡里没有 ⇒ **成员实际看不到这张卡**（发卡 ≠ 接线）。'
-            // 手势提示：**只给文字、不给控件**（只读面板的可点面有白名单，多一类就算破规）。
-            + '　📐 **滚轮缩放 · 拖拽平移 · 双击复位**'),
-          h('div', { key: 'mem', className: 'dshmind-graphNote', style: { maxWidth: 'none' } },
-            '记忆（按类）：' + (ctx.记忆 && ctx.记忆.按类
-              ? '经历 ' + (ctx.记忆.按类.经历 === null ? '—' : ctx.记忆.按类.经历)
-                + ' · 知识 ' + (ctx.记忆.按类.知识 === null ? '—' : ctx.记忆.按类.知识)
-                + ' · 偏好 ' + (ctx.记忆.按类.偏好 === null ? '—' : ctx.记忆.按类.偏好)
-                + '　—　**条目级血缘（「教训立卡」）暂不上图**：它要一条免审计的条目浅读面（工作台是 3 秒轮询，'
-                + '走 memory.query 会把审计链灌成流水），且「标题算不算内容」需先定披露口径。宁可不画，不画编的关系。'
-              : '宿主没给按类计数 ⇒ 不画。')),
+        h('div', { key: 'notes', className: 'dshmind-graphNotes' }, [
+          h('div', { key: 'note', className: 'dshmind-graphNote' }, '点选节点查看关联 · 滚轮缩放 · 拖拽平移 · 双击复位'),
+          h('div', { key: 'mem', className: 'dshmind-graphNote' }, '图中展示岗位与能力；记忆内容与来源可在记忆页查看。'),
         ]),
-        // 图例：把上面那句话里的颜色/线型**画出来**（文字解释留一处，图例只做对照）
-        h('div', { key: 'legend', className: 'dshmind-legend',
-          style: { flexDirection: 'row', flexWrap: 'wrap', gap: 14, marginTop: 8 } }, [
+        h('div', { key: 'legend', className: 'dshmind-legend dshmind-graphLegend' }, [
           h('span', { key: 'r', className: 'dshmind-legendRow' }, [
             h('i', { key: 's', className: 'dshmind-swatch', style: { borderRadius: '50%', background: '#5b8def' } }),
             h('span', { key: 't' }, '岗位'),
@@ -2454,12 +2466,12 @@ window.__ModuleLoader__.load({
           ]),
           h('span', { key: 'w', className: 'dshmind-legendRow' }, [
             h('i', { key: 's', className: 'dshmind-swatch', style: { background: '#3fb27f' } }),
-            h('span', { key: 't' }, '已接线（岗位卡真引用了它）'),
+            h('span', { key: 't' }, '已接线'),
           ]),
           h('span', { key: 'u', className: 'dshmind-legendRow' }, [
             h('i', { key: 's', className: 'dshmind-swatch',
               style: { background: 'repeating-linear-gradient(90deg,#e5534b 0 4px,transparent 4px 7px)' } }),
-            h('span', { key: 't' }, '未接线（声明了，但成员看不到）'),
+            h('span', { key: 't' }, '未接线'),
           ]),
         ]),
         // 缺口榜收进卡片（与其它分区同一套卡片语言；裸标题会显得像没做完的一页）
@@ -2467,10 +2479,10 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dshmind-secHead' }, [
             h('h3', { key: 't', className: 'dshmind-secTitle' }, '接线缺口榜'),
             h('span', { key: 'h', className: 'dshmind-secHint' },
-              缺口榜.length ? '能力卡声明了适用、岗位卡里却没引用 ⇒ 成员实际看不到这张卡' : '没有缺口：声明与接线一致'),
+              缺口榜.length ? '能力声明适用，但岗位卡尚未引用' : '没有缺口：声明与接线一致'),
             h('span', { key: 'c', className: 'dshmind-secCount dshmind-mono' }, String(缺口榜.length)),
           ]),
-          h('div', { key: 'b', className: 'dshmind-secBody' }, 缺口榜.length
+          h('div', { key: 'b', className: 'dshmind-secBody dshmind-graphGaps' }, 缺口榜.length
             ? h('table', { key: 'tbl', className: 'dshmind-tbl' }, [
                 h('thead', { key: 'h' }, h('tr', {}, [
                   h('th', { key: 'a' }, '能力卡'), h('th', { key: 'b' }, '来源'),
