@@ -7,6 +7,7 @@ import { serializeByKey, withLock, stripBom } from './kernel/fsx.js';
 import { savePrivateBufferState } from './turn-buffer.js';
 import { conversationRef, conversationText, externalConversationMessage, externalScopeKey } from './conversation-origin.js';
 import { legacyConversationCursor } from './conversation-compatibility.js';
+import { sessionRelationship } from './data-ownership.js';
 import { Denied, Fault, InvalidBody } from './kernel/errors.js';
 import { INFORMATION_EXTENSIONS, DOCUMENT_EXTENSIONS, sourceRoot, readSourceFile, decodeMaterial, walkBatch, verifyRoot } from './information-files.js';
 import { informationLocations } from './information-locations.js';
@@ -120,6 +121,21 @@ export class InformationService {
       for (const u of Object.values(state.usage)) if (!natural(u.readChars) || !natural(u.modelCalls)) throw new Error('usage');
       for (const reading of state.readings) if (!txt(reading.id) || !hash(reading.hash) || !natural(reading.start) || !natural(reading.end)
         || !natural(reading.total) || reading.start > reading.end || reading.end > reading.total) throw new Error('reading');
+      // 旧会话默认以session作关系键。只依据保存的真实来源会话接续其范围，
+      // 不改目录/插件声明的任意关系，也不从昵称或正文推断人物。
+      const legacy = new Map();
+      for (const item of state.items) {
+        const session = item.context?.session;
+        if (txt(session) && item.scope.relationship === session) {
+          const relationship = sessionRelationship(session, state.bindings);
+          legacy.set(session, relationship); item.scope.relationship = relationship;
+        }
+      }
+      for (const record of state.records) if (legacy.has(record.scope.relationship)
+        && record.sources.every(ref => state.items.some(item => item.id === ref.item
+          && (item.scope.relationship === null || item.scope.relationship === legacy.get(record.scope.relationship))))) {
+        record.scope.relationship = legacy.get(record.scope.relationship);
+      }
       return state;
     } catch (error) { throw new Fault('INFORMATION_STATE_INVALID', '信息收录账本无法完整读取，保留原文件，停止沿用旧投影。', { cause: error }); }
   }
@@ -145,7 +161,7 @@ export class InformationService {
     const actor = spec.subject;
     let credential = null;
     const bindings = (await this.load()).bindings;
-    spec.relationship = bindings[digest(spec.session ?? '')] ?? spec.session ?? null;
+    spec.relationship = await this.org.dataOwnership.relationship(spec.session, bindings);
     if (actor.kind !== '主权者') {
       const member = (await this.org.registry.identity()).members?.[actor.id];
       if (!member || member.status !== '在岗' || (actor.roleId && actor.roleId !== member.岗位)) throw new Denied('信息收录身份', '当前实例不在岗或岗位不匹配。');
@@ -945,13 +961,13 @@ export class InformationService {
       if (input.expectedRevision !== state.configRevision) throw new Fault('INFORMATION_CONFLICT', '信息来源设置已在别处更新，请重新读取。');
       if (input.op === 'configure') state.config = configOf(input.config);
       if (input.op === 'relationship') {
-        if (!txt(input.session) || !(input.relationship === null || txt(input.relationship))) throw new InvalidBody('关联会话需要session与稳定的relationship标识；null恢复会话独立范围，不从昵称自动推断人。');
+        if (!txt(input.session) || !(input.relationship === null || txt(input.relationship))) throw new InvalidBody('关联会话需要session与稳定的relationship标识；null恢复本地主人默认关系，不从昵称自动推断外部人物。');
         if (Object.keys(state.bindings).length >= 1000 && !Object.hasOwn(state.bindings, digest(input.session))) throw new InvalidBody('最多关联1000个会话。');
         if (input.relationship === null) delete state.bindings[digest(input.session)]; else state.bindings[digest(input.session)] = input.relationship;
         // Only records from that exact conversation move with its owner-confirmed relationship.
         for (const item of state.items.filter(i => i.context?.session === input.session)) {
-          item.scope.relationship = input.relationship ?? input.session;
-          for (const r of state.records.filter(r => r.sources.some(s => s.item === item.id))) r.scope.relationship = input.relationship ?? input.session;
+          item.scope.relationship = await this.org.dataOwnership.relationship(input.session, state.bindings);
+          for (const r of state.records.filter(r => r.sources.some(s => s.item === item.id))) r.scope.relationship = item.scope.relationship;
         }
       }
       if (input.op === 'source_remove') {

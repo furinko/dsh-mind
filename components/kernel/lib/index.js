@@ -50,6 +50,7 @@ import { createMemoryUseHooks } from './memory-use-hooks.js';
 import { injectLeadContext } from './lead-context.js';
 import { injectWorkContext } from './work-context.js';
 import { createTurnBufferHooks, injectTurnBuffer } from './turn-buffer-hooks.js';
+import { injectConversationRecall } from './conversation-recall-hooks.js';
 import { createProjectBriefHooks, injectProjectBrief } from './project-brief-hooks.js';
 import { createContinuityCaptureHooks, injectPendingContinuity } from './continuity-capture-hooks.js';
 import { injectPersonaCore } from './persona-core.js';
@@ -281,7 +282,9 @@ export async function apply(ctx, config = {}) {
         const 当前工作 = await injectWorkContext(专业上下文, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
         const 轮缓冲 = await injectTurnBuffer(当前工作, { agent: context?.agent, org, hooks: turnBufferHooks,
           projectOf: 当前项目键, logger, active: () => !delegation.closed });
-        const 待整理协作表达 = await injectPendingContinuity(轮缓冲, { agent: context?.agent, org, hooks: continuityCaptureHooks,
+        const 既往对话 = await injectConversationRecall(轮缓冲, { agent: context?.agent, org, hooks: turnBufferHooks,
+          projectOf: 当前项目键, logger, active: () => !delegation.closed });
+        const 待整理协作表达 = await injectPendingContinuity(既往对话, { agent: context?.agent, org, hooks: continuityCaptureHooks,
           projectOf: 当前项目键, logger, active: () => !delegation.closed });
         const Lead连续性 = await injectLeadContext(待整理协作表达, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
         const 项目接续 = await injectProjectBrief(Lead连续性, { agent: context?.agent, org, hooks: projectBriefHooks,
@@ -461,7 +464,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations, 
       '数字组织的唯一入口：查看组织状态、任务图、记忆、能力库、消息总线、审计、探针，并执行组织动作。',
       '所有写动作都过策略引擎；被拒绝时结果里带「哪条规则 + 改它要什么授权」。',
       '读取请用 status / workbench / memory_query / capability_list / audit_tail；写入用 task_* / memory_write / bus_send 等。',
-      'turn_buffer_query读取本会话本项目的近期轮级缓冲；可用limit与内容预算限量，截断不证明遗漏不存在。缓冲是历史资料，不认证用户决定或执行完成；稳定偏好与教训仍需经memory_write记录。人可用/mind turn_buffer_forget清空当前缓冲。',
+      'turn_buffer_query不带文本时读本会话本项目轮缓冲；带文本时直接检索本地主人的跨会话、跨项目原文，不要求先记入长期记忆，可带跨项目=false限本项目。按turn-引用id与正文偏移读原文，扫描截断时按扫描下一偏移传扫描偏移继续。新会话按当前话题自动召回相关片段与近期对话；长期记忆用于整理压缩和稳定复用。历史不认证当前决定或完成，人可用/mind turn_buffer_forget清空当前缓冲。',
       'project_brief_query读取本项目跨会话的有来源工作摘要；id可读取条目及来源原文片段。用户明确表达、助手记录与推断分开，当前正式目标状态优先，历史资料不授予权限。人可用/mind project_brief_forget清空当前项目摘要并保留旧来源处理屏障。',
       'usage_query只读当前接线的assistant-stream观察窗口；已报告token字段汇总可能不完整，目标token总量和费用仍未知，不修改准入预算。',
       'operation_query只读成员创建意图与已落盘阶段回执，可按操作UUID或精确任务id查询；拟用实例不证明宿主已创建，audited不证明宿主已停止；不提供重放、恢复或清零操作。',
@@ -547,7 +550,9 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations, 
         授权引用: { type: 'string', description: '主权者授权依据 id（audit_correct 必填：决议 / 任务节点 id；原样进链接受复核。v2 起复核员任命/复核豁免不再用授权引用——复核员是普通岗位卡，豁免走部署设置「复核免审」开关）' },
         岗位: { type: 'string', description: '岗位名（registry_assign / memory_* / capability_* / member_spawn）；记忆写入时 = 知识双标签的岗位标签（受限晋升必填：这条知识对哪个岗位可召回，不是整理它的人）；member_spawn 时须已有岗位卡' },
         标签: { type: 'string' },
-        文本: { type: 'string', description: '检索查询词' },
+        文本: { type: 'string', description: '检索查询词；turn_buffer_query带此字段时检索跨会话原文，空字符串按最近顺序浏览' },
+        跨项目: { type: 'boolean', description: 'turn_buffer_query原文召回默认true；false仅查当前项目，始终限定当前关系的Lead' },
+        扫描偏移: { type: 'number', description: 'turn_buffer_query扫描截断时，传返回的扫描下一偏移继续扫描其余来源；与命中分页偏移分开' },
         返回模式: { type: 'string', enum: ['摘要', '全文'], description: 'memory_query 默认摘要；按 id 查看全文仍受内容预算、项目与读域限制' },
         内容预算: { type: 'number', description: 'memory_query 的命中与条目两数组 JSON 字符预算（UTF-16代码单元）；默认12000，512至32000整数，元数据同样计入。turn_buffer_query为正文字符预算，默认24000，1至24000整数；截断消息可按id重读' },
         偏移: { type: 'number', description: 'memory_query列表分页偏移按下一偏移继续；goal_query/budget_query/usage_query/operation_query/knowledge_reuse_query为非负整数页偏移。知识复用按采用页.下一偏移续页并带同一数据版本，内容预算可能使实际条数少于请求条数' },
@@ -1409,7 +1414,7 @@ async function 注入Lead已钉规程(assembly, agent, org, logger, 宿主) {
 }
 
 /** 布尔型参数白名单（与上方 schema 的 type:'boolean' 一一对应）。 */
-const BOOLEAN_ARGS = new Set(['显式', '含失效', '含待复验', '全量', '敏感', '披露豁免', '暂不投递', '延后', '未投递']);
+const BOOLEAN_ARGS = new Set(['显式', '含失效', '含待复验', '跨项目', '全量', '敏感', '披露豁免', '暂不投递', '延后', '未投递']);
 
 function normalizeArgs(args) {
   const out = { ...args };
@@ -1422,7 +1427,7 @@ function normalizeArgs(args) {
     else if (out[key] === 'false') out[key] = false;
   }
   // 命令键值对没有 JSON 数字类型；只转换显式数字参数（分页、目标/预算修订与上限），不改自由文本。
-  for (const key of ['limit', '条数上限', '内容预算', '偏移', '正文偏移', '条数', '修订', '预算修订', '上限']) {
+  for (const key of ['limit', '条数上限', '内容预算', '偏移', '正文偏移', '扫描偏移', '条数', '修订', '预算修订', '上限']) {
     if (typeof out[key] === 'string' && /^(0|[1-9]\d*)$/.test(out[key])) out[key] = Number(out[key]);
   }
   // 采用知识是结构声明，命令只接受JSON数组；不把坏串或null改成空声明。

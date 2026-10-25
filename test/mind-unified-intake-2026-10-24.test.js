@@ -84,8 +84,9 @@ it('正式知识由Lead分配到真实岗位；重新分配退休旧原生条目
   await assert.rejects(org.information.distribute(spec(), { id: privateRow.id, revision: 1, roles: ['插件工程'], reason: '试图扩散私密知识' }), /私密|私人/);
 }));
 
-it('不同人际关系的偏好和真实共同经历默认隔离，显式关联后跨会话及重开均可调用', async () => scene(async (org, f) => {
+it('显式不同人际关系的偏好和真实共同经历隔离，关联后跨会话及重开均可调用', async () => scene(async (org, f) => {
   const other = await root(org, 'another-human');
+  await associate(org, [other.id], 'different-human');
   const own = await action(org, { action: 'memory_write', 类: '偏好', 内容: '这个用户喜欢先看图再听解释', 来源: '用户明确表达',
     连续性: { 类别: '用户偏好', 主题: '讲解方式', 依据: '明确表达', 范围: '部署' } });
   assert.equal((await query(org, other)).条目.length, 0);
@@ -141,6 +142,7 @@ it('来源撤回期间的查询不返回旧帧，来源账本损坏仍可读原�
 
 it('不同关系可以用相同摘要id，清空一方不清空另一方，迟到旧历史仍受屏障约束', async () => scene(async org => {
   const other = await root(org, 'isolated-summary'); const oldAt = Date.now() - 10000;
+  await associate(org, [other.id], 'explicitly-different-summary-owner');
   const summarize = text => input => ({ items: [{ id: 'work', kind: '约束', claim: '用户表达', state: '进行中', text, sources: [input.messages[0].source] }] });
   await capture(org, LEAD, '甲的私密项目', oldAt); await org.projectBrief.update(spec(), { extract: summarize('甲的私密摘要') });
   await capture(org, other, '乙的私密项目', oldAt); await org.projectBrief.update(spec(other), { extract: summarize('乙的私密摘要') });

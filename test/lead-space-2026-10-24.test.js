@@ -146,7 +146,7 @@ it('模型动作和上下文说明直接入口；个人知识默认拥有关系�
   await assert.rejects(runAction({ org, 项目: 'other', 主体: LEAD, args: { action: 'lead_space_query' }, 宿主: host }), { code: 'DENIED' });
   const record = await runAction({ org, 项目: P, 主体: LEAD, args: { action: 'memory_write', 类: '知识', 内容: '我的待验证理解', 来源: '自己的推断，待验证', 岗位: 'Lead' }, 宿主: host });
   const memory = await org.memory.query({ subject: LEAD, 类: '知识', 项目: P, id: record.条目.id });
-  assert.equal(memory.条目[0].数据归属.范围.relationship, LEAD.id);
+  assert.equal(memory.条目[0].数据归属.范围.relationship, await org.dataOwnership.relationship(LEAD.id));
   const hooks = { bind() {}, health: () => ({ bound: true }) };
   const out = await injectLeadSpace({ sections: [] }, { org, agent: { session }, hooks, projectOf: () => P });
   assert.match(out.sections.find(s => s.name === LEAD_SPACE_SECTION).text, /不必先建任务/);

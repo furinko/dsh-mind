@@ -214,6 +214,11 @@ it('实际内核接线、工具查询与人侧清空使用真实会话，不提�
     const exec = { agent: { session }, name: 'mind', arguments: { action: 'turn_buffer_query' }, callId: 'buffer-query' };
     const tool = host.工具.get('mind'); const response = JSON.parse(await tool.execute({ action: 'turn_buffer_query' }, exec));
     assert.equal(response.成功, true); assert.deepEqual(texts(response.缓冲), ['真实接线内容']);
+    const recalled = await host.命令.get('mind').handler({ agent: exec.agent,
+      rawInput: 'turn_buffer_query 文本=真实接线内容 跨项目=false 扫描偏移=0 limit=1 内容预算=2000' });
+    assert.equal(recalled.kind, 'success', recalled.text);
+    const recalledFrame = JSON.parse(recalled.text).召回;
+    assert.equal(recalledFrame.范围, '本项目'); assert.equal(recalledFrame.条目[0].文本, '真实接线内容');
     assert.ok(ACTIONS.includes('turn_buffer_query')); assert.ok(READ_ONLY_ACTIONS.includes('turn_buffer_query'));
     assert.ok(!ACTIONS.includes('turn_buffer_forget')); assert.ok(COMMAND_ONLY_ACTIONS.includes('turn_buffer_forget'));
     await assert.rejects(runAction({ org, 项目: P, 主体: LEAD, args: { action: 'turn_buffer_forget' } }), { code: 'DENIED' });

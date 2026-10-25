@@ -116,12 +116,15 @@ it('并发读取不能穿透字符预算，暂停不清空计量', async () => s
   assert.equal((await service.preview(human(), { id: item.id })).text.length, 100);
 }));
 
-it('会话本身可投递，引用实际消息；换会话不能偷看，明确关联后才延续关系', async () => scene(async (service, org) => {
+it('会话本身可投递，引用实际消息；本地主人默认跨会话延续，显式其他关系隔离', async () => scene(async (service, org) => {
   const id = await capture(org, '这首歌里奇怪的节奏好好玩，记一下');
   const item = await service.submit(spec(), { messageIds: [id], title: '我们聊到的一首歌' }); await growth(service, item);
   await assert.rejects(service.submit(spec(), { messageIds: ['fake'], title: '伪造用户原话' }));
   await org.registry.assign({ subject: SOVEREIGN, 岗位: 'Lead', 实例: 'other' });
   const other = spec({ id: 'other', kind: 'Lead' });
+  assert.equal((await service.query(other, { collection: 'materials' })).total, 1);
+  const state = await service.load();
+  await service.admin(human(), { op: 'relationship', expectedRevision: state.configRevision, session: 'other', relationship: 'another-person' });
   assert.equal((await service.query(other, { collection: 'materials' })).total, 0);
   for (const session of ['lead', 'other']) { const state = await service.load(); await service.admin(human(), { op: 'relationship', expectedRevision: state.configRevision, session, relationship: 'owner' }); }
   assert.equal((await service.query(other, { collection: 'growth' })).total, 1);
@@ -185,11 +188,11 @@ it('自动反思有原文证据且能在新服务重建上下文；不允许模�
 
 it('来源范围不能由模型提炼扩大；人侧分享创建独立副本', async () => scene(async (service, org) => {
   const msg = await capture(org, '只有我们知道的一个玩笑'); const item = await service.submit(spec(), { messageIds: [msg] }); const r = await growth(service, item);
-  assert.equal(r.scope.relationship, LEAD.id);
+  assert.equal(r.scope.relationship, await org.dataOwnership.relationship(LEAD.id));
   await assert.rejects(service.record(spec(), { type: 'growth', kind: '兴趣', title: 'x', text: 'x', sources: [], scope: scope() }));
   const shared = await service.admin(human(), { op: 'share', id: item.id, revision: item.revision, reason: '我确认此材料可供指定岗位使用', scope: scope({ audience: 'roles', roles: ['插件工程'] }) });
   assert.notEqual(shared.id, item.id); assert.equal(shared.scope.relationship, null);
-  assert.equal((await materials(service)).entries.find(i => i.id === item.id).scope.relationship, LEAD.id);
+  assert.equal((await materials(service)).entries.find(i => i.id === item.id).scope.relationship, await org.dataOwnership.relationship(LEAD.id));
   await assert.rejects(service.query(spec(MEMBER), {}), { code: 'DENIED' });
 }));
 

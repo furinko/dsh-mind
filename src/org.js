@@ -36,6 +36,7 @@ import { ModelUsageService } from './model-usage.js';
 import { SpawnOperationService } from './spawn-operations.js';
 import { KnowledgeReuseService } from './knowledge-reuse.js';
 import { TurnBufferService } from './turn-buffer.js';
+import { ConversationRecallService } from './conversation-recall.js';
 import { ProjectBriefService } from './project-brief.js';
 import { ContinuityCaptureService } from './continuity-capture.js';
 import { PersonaCoreService } from './persona-core.js';
@@ -148,6 +149,7 @@ export class Org {
     });
     org.observability = new ObservabilityService({ audit, clock, registry, tasks, policy, logger: spec.logger ?? console });
     org.turnBuffer = new TurnBufferService({ layout, org, clock });
+    org.conversationRecall = new ConversationRecallService(org);
     org.projectBrief = new ProjectBriefService({ layout, org, clock });
     org.continuityCapture = new ContinuityCaptureService({ layout, org, clock });
     org.personaCore = new PersonaCoreService({ layout, policy, clock });

@@ -152,13 +152,19 @@ export class TurnBufferService {
     return scope.stamp;
   }
   async load(project, session) {
-    const file = this.file(project, session);
+    return this.loadKey(project, digest(session), session);
+  }
+  async loadKey(project, key, expectedSession) {
+    if (!/^[a-f0-9]{64}$/.test(key)) throw fail();
+    const file = this.layout.turnBufferFile(project, key);
     try {
       const info = await stat(file).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
       if (info && info.size > TURN_BUFFER_LIMITS.bytes + 8192) throw fail();
       const state = await readJsonOrNull(file);
       if (!state) return null;
-      if (![1, 2, 3].includes(state.version) || state.project !== project || state.session !== session || !integer(state.nextSeq)
+      const session = state.session;
+      if (!identifier(session) || digest(session) !== key || expectedSession !== undefined && session !== expectedSession
+          || ![1, 2, 3].includes(state.version) || state.project !== project || !integer(state.nextSeq)
           || !integer(state.floor) || state.floor > state.nextSeq || !integer(state.missing) || !integer(state.removed)
           || !Array.isArray(state.rounds) || state.rounds.length > TURN_BUFFER_LIMITS.rounds
            || !(state.open === null || positive(state.open))) throw fail();
