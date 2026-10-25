@@ -604,7 +604,7 @@ window.__ModuleLoader__.load({
         return {
           id: line(firstOf(r, ['id', '名', 'name']), ''),
           来源: line(firstOf(r, ['来源', 'zone', 'source']), ''),
-          适用岗位: arr(firstOf(r, ['适用岗位', 'roles', '适用'])).map(refText).filter(Boolean),
+          适用岗位: arr(firstOf(r, ['适用岗位', 'roles', '适用'])).map(refText).filter(function (id) { return !!id && id !== '_模板'; }),
         };
       }).filter(function (r) { return r.id !== ''; });
     }
@@ -624,7 +624,7 @@ window.__ModuleLoader__.load({
           摘要: line(firstOf(r, ['摘要', 'summary']), ''),
           能力引用: arr(firstOf(r, ['能力引用', 'capabilities'])).map(refText).filter(Boolean),
         };
-      }).filter(function (r) { return r.id !== ''; });
+      }).filter(function (r) { return r.id !== '' && r.id !== '_模板'; });
     }
 
     /**
@@ -1255,23 +1255,26 @@ window.__ModuleLoader__.load({
       '.dshmind-tlRow.dshmind-tlBad{border-left-color:var(--mk-bad)}',
       '.dshmind-tlRow.dshmind-tlWarn{border-left-color:var(--mk-warn)}',
 
-      // 详情随画布排版，窄面板放在下方，避免遮挡能力节点。
-      '.dshmind-pageBox[data-dshmind-page="graph"]{container:mindgraph / inline-size}',
-      '.dshmind-gDrawer{min-width:0;max-height:340px;overflow:auto;border-top:1px solid var(--mk-bd);',
-      'background:var(--mk-bg2);padding:18px 20px;font-size:12px;',
-      'color:var(--mk-tx2)}',
-      '.dshmind-gDrawer h5{display:flex;flex-wrap:wrap;align-items:center;gap:7px;font-size:13px;color:var(--mk-tx);font-weight:600}',
+      // 详情悬浮在画布上，不参与排版；选中前后画布尺寸和节点位置一致。
+      '.dshmind-gDrawer{position:absolute;z-index:3;width:min(320px,calc(100% - 24px));min-width:0;',
+      'left:clamp(12px,var(--mk-popover-x,calc(50% - 160px)),max(12px,calc(100% - 332px)));',
+      'top:clamp(12px,var(--mk-popover-y,24px),max(12px,calc(100% - 372px)));',
+      'max-height:min(360px,calc(100% - 24px));overflow:auto;border:1px solid var(--mk-bd);border-radius:14px;',
+      'background:var(--mk-bg2);padding:18px;font-size:12px;color:var(--mk-tx2);',
+      'box-shadow:0 4px 12px rgba(0,0,0,.12),0 20px 60px -12px rgba(0,0,0,.38)}',
+      '.dshmind-gDrawerHead{display:flex;align-items:flex-start;gap:14px;margin-bottom:8px}',
+      '.dshmind-gDrawer h5{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mk-tx);font-weight:600}',
+      '.dshmind-gDrawerKind{font-size:10px;font-weight:400;color:var(--mk-tx3)}',
       '.dshmind-gDrawer h5 .dshmind-mono{overflow-wrap:anywhere}',
+      '.dshmind-gClose{flex:none;display:grid;place-items:center;width:26px;height:26px;padding:0;border:0;border-radius:7px;',
+      'background:transparent;color:var(--mk-tx3);font-family:inherit;font-size:20px;line-height:1;cursor:pointer}',
+      '.dshmind-gClose:hover{background:var(--mk-bg);color:var(--mk-tx)}',
       '.dshmind-gDrawerRow{display:flex;gap:8px;margin-top:6px}',
       '.dshmind-gDrawerRow b{flex:none;width:46px;color:var(--mk-tx3);font-weight:400}',
       '.dshmind-gLinks{margin-top:9px;padding-top:8px;border-top:.5px solid var(--mk-bd);display:flex;',
       'flex-direction:column;gap:4px}',
       '.dshmind-gLink{display:flex;align-items:center;gap:6px}',
       '.dshmind-graphNote{color:var(--mk-tx3);line-height:1.7}',
-      '@container mindgraph (min-width:1100px){',
-      '.dshmind-graphHasDetail{display:grid;grid-template-columns:minmax(0,1fr) 264px;align-items:start}',
-      '.dshmind-graphHasDetail .dshmind-graph{min-width:720px}',
-      '.dshmind-gDrawer{height:100%;max-height:620px;border-top:0;border-left:1px solid var(--mk-bd)}}',
 
       // ══ 视觉打磨（2026-10-13 · 把还没统一的老组件收进同一套间距/字阶/卡片语言）══════
       // 这一层做两件事：**统一**（间距 4/8/12/16 · 圆角 12/10/8/999 · 字阶 16/13/12/11/10.5）
@@ -1413,13 +1416,15 @@ window.__ModuleLoader__.load({
       //    `outline: 2px solid rgb(91,141,239)` 就已在生效，activeElement = BODY）。
       //    这属于「看着像能点的东西」多了一圈"选中态"，与只读面板的气质冲突。
       '.dshmind-navBtn:focus-visible,.dshmind-btn:focus-visible,.dshmind-toggle:focus-visible,',
-      '.dshmind-descToggle:focus-visible,.dshmind-projChip:focus-visible,.dshmind-projChipOn:focus-visible{',
+      '.dshmind-descToggle:focus-visible,.dshmind-projChip:focus-visible,.dshmind-projChipOn:focus-visible,.dshmind-gClose:focus-visible{',
       'outline:2px solid var(--mk-ac,#5b8def);outline-offset:2px}',
       // 侧栏当前页：左侧 2px 强调色内嵌条（设计稿导航同款；不动原底色/字色）。
       '.dshmind-navBtnOn{box-shadow:inset 2px 0 0 var(--mk-ac,#5b8def)}',
       '.dshmind-navBtn,.dshmind-btn{transition:background-color .15s,color .15s,border-color .15s}',
-      // 详情抽屉：淡入下移一眼（0.18s，快到不挡手、慢到看得见）。
-      '.dshmind-gDrawer{animation:dshmind-in .18s ease-out}',
+      '.dshmind-gDrawer{animation:dshmind-popover-in .18s cubic-bezier(.2,.8,.2,1);transform-origin:top center}',
+      '@keyframes dshmind-popover-in{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:none}}',
+      '@media(prefers-reduced-motion:reduce){.dshmind-gDrawer{animation:none}',
+      '.dshmind-gNode,.dshmind-gEdge,.dshmind-gCard{transition:none}}',
       '@keyframes dshmind-in{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}',
 
       // ══ 视觉打磨 v2.2（2026-10-14 · 按真机截图逐条收口）════════════════════════
@@ -2294,6 +2299,21 @@ window.__ModuleLoader__.load({
       return id;
     }
 
+    /** 点击点附近的卡片位置，只读取当前 DOM 几何；没有 DOM 的宿主使用居中兜底。 */
+    function 图谱卡片位置(event) {
+      var node = event && event.currentTarget;
+      if (!node || typeof node.closest !== 'function' || typeof node.getBoundingClientRect !== 'function') return null;
+      var wrap = node.closest('.dshmind-graphWrap');
+      if (!wrap || typeof wrap.getBoundingClientRect !== 'function') return null;
+      var bounds = wrap.getBoundingClientRect(), anchor = node.getBoundingClientRect();
+      if (!(bounds.width > 24 && bounds.height > 24)) return null;
+      var width = Math.min(320, bounds.width - 24), height = Math.min(360, bounds.height - 24);
+      var x = anchor.right - bounds.left + 12;
+      if (x + width > bounds.width - 12) x = anchor.left - bounds.left - width - 12;
+      return { x: Math.max(12, Math.min(x, bounds.width - width - 12)),
+        y: Math.max(12, Math.min(anchor.top - bounds.top, bounds.height - height - 12)) };
+    }
+
     /**
      * 图谱页：岗位 × 能力的接线图 ＋ 缺口清单。
      *
@@ -2320,6 +2340,7 @@ window.__ModuleLoader__.load({
       }
       能力.forEach(function (c) { c.适用岗位.forEach(function (role) { 连('能力:' + c.id, '角色:' + role); }); });
       var 选中 = 图谱选中();
+      if (选中 && !坐标.pos[选中]) 选中 = null;
       // 当前缩放/平移视图（null ＝ 整图）。放这里是为了让 viewBox 与手势共用同一份读数。
       var 视图 = 图谱视图();
       var 类名 = function (key) {
@@ -2336,9 +2357,9 @@ window.__ModuleLoader__.load({
       // `onClick: function () { 切图谱选中(r键) }` 会让所有节点共享同一个变量 ⇒
       // 点哪个都选到最后一个（2026-10-13 首跑被 ⑪e 当场抓出）。工厂把键固化进参数。
       // 点节点的处理器：**也吃拖拽尾巴的抑制**（拖完松手不该顺手换选中）。
-      var 点击器 = function (键) { return function () { if (拖拽尾巴()) return; 切图谱选中(键); }; };
+      var 点击器 = function (键) { return function (event) { if (拖拽尾巴()) return; 切图谱选中(键, 图谱卡片位置(event)); }; };
       var 键盘器 = function (键) { return function (event) {
-        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); 切图谱选中(键); }
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); 切图谱选中(键, 图谱卡片位置(event)); }
       }; };
       for (i = 0; i < 岗位.length; i += 1) {
         var r = 岗位[i], rp = 坐标.pos['角色:' + r.id], r键 = '角色:' + r.id;
@@ -2349,7 +2370,7 @@ window.__ModuleLoader__.load({
         var 闲置 = 岗位闲置Of(ctx.岗位闲置, r.id);
         节点.push(h('g', {
           key: 'r' + i, className: 类名(r键), 'data-node': r键,
-          role: 'button', tabIndex: 0, 'aria-label': '岗位 ' + r.id, 'aria-pressed': 选中 === r键,
+          role: 'button', tabIndex: 0, 'aria-label': '岗位 ' + r.id, 'aria-pressed': 选中 === r键, 'aria-haspopup': 'dialog',
           onClick: 点击器(r键), onKeyDown: 键盘器(r键),
         }, [
           h('rect', { key: 'card', x: rp.x - 124, y: rp.y - 29, width: 248, height: 58, rx: 11, className: 'dshmind-gCard' }),
@@ -2373,7 +2394,7 @@ window.__ModuleLoader__.load({
         var 色 = c.来源 === '自治' ? '#a97bea' : c.来源 === '出厂' ? '#3fb27f' : '#7d8590';
         节点.push(h('g', {
           key: 'c' + i, className: 类名(c键), 'data-node': c键,
-          role: 'button', tabIndex: 0, 'aria-label': '能力卡 ' + c.id, 'aria-pressed': 选中 === c键,
+          role: 'button', tabIndex: 0, 'aria-label': '能力卡 ' + c.id, 'aria-pressed': 选中 === c键, 'aria-haspopup': 'dialog',
           onClick: 点击器(c键), onKeyDown: 键盘器(c键),
         }, [
           h('rect', { key: 'card', x: cp.x - 170, y: cp.y - 29, width: 340, height: 58, rx: 11, className: 'dshmind-gCard' }),
@@ -2420,7 +2441,9 @@ window.__ModuleLoader__.load({
             '适用边 ' + 接线.适用边 + ' 条 ⇒ 接线率 ' + (接线.接线率 === null ? '—' : 接线.接线率 + '%')
             + '（自治卡 ' + 接线.自治接线 + '/' + 接线.自治适用 + '）'),
         ]),
-        h('div', { key: 'wrap', className: 'dshmind-graphWrap' + (选中 ? ' dshmind-graphHasDetail' : '') }, [
+        h('div', { key: 'wrap', className: 'dshmind-graphWrap', onKeyDown: function (event) {
+          if (event.key === 'Escape') 清图谱选中();
+        } }, [
           // 缩放/平移：`图谱手势()` 返回的 props 直接摊进来（滚轮缩放 / 拖拽平移 / 双击复位）。
           // 复用 `Object.assign` 而不是写进对象字面量：手势那组是"可选增强"，
           // 显式摊开更能看出它**不改变** svg 的身份（key/className/viewBox 仍由这里定）。
@@ -2444,7 +2467,7 @@ window.__ModuleLoader__.load({
             h('text', { key: 'roles-label', x: 50, y: 35, className: 'dshmind-gColumn', pointerEvents: 'none' }, '岗位 / ' + 岗位.length),
             h('text', { key: 'caps-label', x: 654, y: 35, className: 'dshmind-gColumn', pointerEvents: 'none' }, '能力 / ' + 能力.length),
           ].concat(边, 节点))),
-          // 详情抽屉：点节点开（纯显示动作）。不选就不画 —— 不给一壳空抽屉。
+          // 悬浮详情不改变画布宽高；只读显示，不发请求。
           选中 ? 图谱详情(选中, ctx, 引用表, 邻接) : null,
         ]),
         h('div', { key: 'notes', className: 'dshmind-graphNotes' }, [
@@ -2525,14 +2548,19 @@ window.__ModuleLoader__.load({
         行.push(['来源', 能力 && 能力.来源 ? 能力.来源 + '能力库' : '—']);
         行.push(['适用', (能力 ? 能力.适用岗位.length : 0) + ' 个岗位']);
       }
-      return h('div', { key: 'drawer', className: 'dshmind-gDrawer' }, [
-        h('h5', { key: 'h' }, [
-          h('span', { key: 'i' }, 是岗位 ? '岗位' : '能力卡'),
-          h('span', { key: 'x', className: 'dshmind-mono' }, id),
+      var 位置 = 界面store.快照.图谱卡片位置;
+      return h('div', { key: 'drawer:' + 键, className: 'dshmind-gDrawer', role: 'dialog', 'aria-label': (是岗位 ? '岗位 ' : '能力卡 ') + id + '详情',
+        style: 位置 ? { '--mk-popover-x': 位置.x + 'px', '--mk-popover-y': 位置.y + 'px' } : null,
+      }, [
+        h('div', { key: 'head', className: 'dshmind-gDrawerHead' }, [
+          h('h5', { key: 'h' }, [
+            h('span', { key: 'i', className: 'dshmind-gDrawerKind' }, 是岗位 ? '岗位' : '能力卡'),
+            h('span', { key: 'x', className: 'dshmind-mono' }, id),
+          ]),
+          h('button', { key: 'close', type: 'button', className: 'dshmind-gClose', 'aria-label': '关闭节点详情', onClick: 清图谱选中 }, '×'),
         ]),
       ].concat(
-        // 取消方式写在抽屉里（不然「怎么收起来」得靠猜；点同一个节点也能收）
-        [h('div', { key: 'hint', className: 'dshmind-graphNote', style: { marginTop: 3 } }, '点空白处或再点它一次即可取消')],
+        [h('div', { key: 'hint', className: 'dshmind-graphNote', style: { marginTop: 3 } }, '点空白处、再点节点或按 Esc 关闭')],
         行.map(function (r, i) {
           return h('div', { key: 'r' + i, className: 'dshmind-gDrawerRow' }, [
             h('b', { key: 'k' }, r[0]), h('span', { key: 'v' }, r[1]),
@@ -3132,7 +3160,7 @@ window.__ModuleLoader__.load({
      * **不挂 useEffect**（设计债⑩：这个宿主给插件的 effect 可能是空实现，取数如此，UI 状态也如此）。
      * `折叠会审` 是覆盖表（id → 折不折）；没点过的场次走默认（首场展开、其余折叠）。
      */
-    var 界面store = { 快照: { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null, 当前页: null, 图谱选中: null, 图谱视图: null }, 订阅者: [] };
+    var 界面store = { 快照: { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null, 当前页: null, 图谱选中: null, 图谱卡片位置: null, 图谱视图: null }, 订阅者: [] };
     /** 轮询间隔：2~5 秒量级（人看的板子，又不至于把宿主问烦）。 */
     var POLL_MS = 3000;
     /** 轮询把手：`apply` 起、disposer 清（**不许留定时器**）。 */
@@ -3217,7 +3245,7 @@ window.__ModuleLoader__.load({
       自由store.快照 = { phase: 'reading', data: null, runtime: null, error: '' };
       投影store.快照 = EMPTY;
       设置store.快照 = { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' };
-      界面store.快照 = { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null, 当前页: null, 图谱选中: null, 图谱视图: null };
+      界面store.快照 = { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null, 当前页: null, 图谱选中: null, 图谱卡片位置: null, 图谱视图: null };
     }
 
     /**
@@ -3306,9 +3334,10 @@ window.__ModuleLoader__.load({
      * 与折叠钮、切页同款：**纯显示动作**（零请求、零写账）。选中态只改一件事——
      * 把无关节点/边调暗 + 开一张详情卡，让「这个岗位到底接了哪几张卡」不必来回对照两列。
      */
-    function 切图谱选中(key) {
+    function 切图谱选中(key, 位置) {
       if (typeof key !== 'string' || key === '') return;
-      发通知(界面store, Object.assign({}, 界面store.快照, { 图谱选中: 图谱选中() === key ? null : key }));
+      var 选中 = 图谱选中() === key ? null : key;
+      发通知(界面store, Object.assign({}, 界面store.快照, { 图谱选中: 选中, 图谱卡片位置: 选中 ? 位置 || null : null }));
     }
 
     /**
@@ -3321,7 +3350,7 @@ window.__ModuleLoader__.load({
      */
     function 清图谱选中() {
       if (!图谱选中()) return;
-      发通知(界面store, Object.assign({}, 界面store.快照, { 图谱选中: null }));
+      发通知(界面store, Object.assign({}, 界面store.快照, { 图谱选中: null, 图谱卡片位置: null }));
     }
 
     // ── 图谱缩放/平移（2026-10-14 · 主权者：「能把图谱做成可放大缩小平移的吗」）──────
