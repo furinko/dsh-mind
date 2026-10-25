@@ -34,7 +34,7 @@
 //      看板是裸包名载体行；两个宿主组件各自都得有行（只数行数会让「删内核行换重复 guard 行」蒙混过关）；
 //   ⑤ 组件行子路径从 profile 上下文可解析（require.resolve 逐条验）。
 
-import { existsSync, readFileSync, readdirSync, mkdirSync, rmSync, writeFileSync, cpSync, mkdtempSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, mkdirSync, rmSync, writeFileSync, cpSync, mkdtempSync, statSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -276,7 +276,7 @@ async function selftest() {
   }
   const 真源 = await import(pathToFileURL(join(本仓库, 'src', 'paths.js')).href);
   // 夹具落 os.tmpdir()：跑在仓库里会留下 .selftest-verify 这种脏目录（git status 会看见）。
-  const tmp = mkdtempSync(join(tmpdir(), 'dsh-mind-verify-'));
+  const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-mind-verify-')));
   const cases = [];
   const 判 = async (名, fn) => {
     // Report each case before it starts, even if a native filesystem call aborts.
@@ -292,7 +292,9 @@ async function selftest() {
   try {
     /** 造一个假 dsh-mind 包：按本包 package.json 的 files 白名单复制（发布物清单单一来源）。 */
     const 造profile = (name, { profile文本 } = {}) => {
-      const dir = join(tmp, name);
+      // Similar Chinese names have the same short UTF-8 hex prefix. Each mutation
+      // needs a fresh directory so a later case never overwrites an imported one.
+      const dir = mkdtempSync(join(tmp, `${name}-`));
       const 包目录 = join(dir, 'node_modules', BUNDLE);
       mkdirSync(包目录, { recursive: true });
       for (const rel of [...(本包.值.files ?? []), 'package.json']) {
