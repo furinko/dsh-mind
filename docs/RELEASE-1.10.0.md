@@ -2,6 +2,8 @@
 
 2026-10-25已发布：[GitHub Release](https://github.com/furinko/dsh-mind/releases/tag/v1.10.0)，代码提交`5dfd86d30ac0f5899f3041c6b05b1a165addbb48`。[下载安装包](https://github.com/furinko/dsh-mind/releases/download/v1.10.0/dsh-mind-1.10.0.tgz)及[SHA256SUMS](https://github.com/furinko/dsh-mind/releases/download/v1.10.0/SHA256SUMS)。
 
+同版已发布到[npm](https://www.npmjs.com/package/dsh-mind)，`latest`为`1.10.0`。可执行`dsh plugin --profile web add dsh-mind@1.10.0`；npm下载包与GitHub附件的SHA-256一致，空profile按包名安装和包内自检通过。
+
 心智为DSH增加可追溯的任务协作、对话延续、记忆和工作台。普通对话直接进行；需要正式交付时，再使用任务、成员、独立复核与Lead采纳。
 
 ## 首版能力

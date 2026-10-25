@@ -64,12 +64,13 @@ Lead还可保存[可修正的需求解释](https://github.com/furinko/dsh-mind/b
 
 组件共用同一个 `Org`。关闭内核会失去 Mind 的工具边界；安全类只定位回滚目标、记账并告警，不自动替用户改运行文件。看板从服务端投影读取事实，受控按钮调用正式命令入口。
 
-在目标 profile 中按宿主支持的安装方式安装本地包或已发布包，例如：
+[npm正式版 `dsh-mind@1.10.0`](https://www.npmjs.com/package/dsh-mind) 已发布。以 `web` profile 为例：
 
 ```powershell
-dsh plugin --profile <名> add <包或本地包路径>
-node scripts/verify-profile-install.mjs <profile绝对路径>
+dsh plugin --profile web add dsh-mind@1.10.0
 ```
+
+也可从[GitHub Release](https://github.com/furinko/dsh-mind/releases/tag/v1.10.0)下载同一版本的 `.tgz`，将上面包名替换为本地文件路径。安装自检脚本位于插件包内的 `scripts/verify-profile-install.mjs`，运行时传入目标 profile 的绝对路径。
 
 安装后核对 profile 的依赖与 `dsh.profile.bundles`、三组件及各导出。安装自检检查包与 profile 形状；真实工具链是否生效仍须在目标宿主核验。旧安装故障与历史证据见[重整前 README](https://github.com/furinko/dsh-mind/blob/main/docs/归档/设计史/README-2026-10-20-重整前.md)。
 

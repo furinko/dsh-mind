@@ -1,5 +1,7 @@
 # 当前代码、部署与验收状态
 
+2026-10-25 `dsh-mind@1.10.0`已在[npm公开发布](https://www.npmjs.com/package/dsh-mind)，`latest`指向`1.10.0`。npm下载的tarball与GitHub Release附件均为SHA-256 `02496bd3ac9e0d883c1c48aef4b23b87b45c16dc742213fa1019da58cbf55efa`，没有重新打包或改写冻结代码。在仓外空profile通过`dsh plugin --profile npm-registry add dsh-mind@1.10.0`安装，包内自检通过，151个安装文件与已验收冻结包逐一一致，代码指纹匹配。早期读取一度仅取得`0.0.0-stage`占位版本，最初下载和安装失败记录保留；最终版本、latest、实际下载及成功安装均重新核对，未以CLI成功回执替代公开可用性证明。本次未重启DSH或改变运行中的插件；证据位于`~/.local/share/dsh-mind/audits/release-v1-1arT6M/npm-publish/`。
+
 2026-10-25 `v1.10.0`正式版已在[GitHub Release](https://github.com/furinko/dsh-mind/releases/tag/v1.10.0)发布，标签精确指向`5dfd86d30ac0f5899f3041c6b05b1a165addbb48`，附实际安装包与SHA256SUMS。候选最终[Linux/Windows × Node22/24矩阵](https://github.com/furinko/dsh-mind/actions/runs/40173355005)四组全部通过；Linux每组2250通过、7跳过，Windows每组2246通过、11跳过，均零失败，各含549客户端断言与10项安装自检。跳过项涉及可选解析依赖、平台及宿主路径别名适用性，没有计为通过；本机带解析组件的2257项复验为2254通过、0失败、3跳过。
 
 用户本次回复“装载吧”后，经标准部署流程从`77add74`切至上述冻结提交并冷启动。目标及回退版本存储兼容检查、profile安装检查通过，runtime干净。认证ping与工作台均HTTP 200，加载指纹与已验收发布包一致，四项开机检查全绿；既有“探针恒绿”健康提示继续保留。刷新后的真实浏览器显示最新工作台，间隔约76秒的观察点均没有超时或缓存回退提示；图谱5岗位、6能力，无模板节点，卡片打开前后画布与11节点几何完全一致。三轮配对HTTP读取中工作台约2.2–3.3秒；本批不承诺后续所有请求延迟，也不把机械验收扩成模型一般理解质量证明。
