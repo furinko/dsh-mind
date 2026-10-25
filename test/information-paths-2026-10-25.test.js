@@ -31,6 +31,7 @@ it('Windows盘符大小写不构成目录别名，后续核对及读取使用相
  const dir=join(root,'资料目录');await mkdir(dir);await writeFile(join(dir,'原文.txt'),'同一真实来源');
  const lower=dir[0].toLowerCase()+dir.slice(1),upper=dir[0].toUpperCase()+dir.slice(1);
  const one=await sourceRoot(lower),two=await sourceRoot(upper);assert.equal(one.identity,two.identity);
+ assert.equal(one.path,two.path);assert.equal(one.path,await realpath(dir));
  await verifyRoot(one);await verifyRoot(two);
  assert.equal((await readSourceFile(one,'原文.txt',1024)).hash,(await readSourceFile(two,'原文.txt',1024)).hash);
 }));

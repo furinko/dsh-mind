@@ -64,8 +64,18 @@ export async function atomicWrite(file, content) {
   const tmp = `${file}.tmp-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   try {
     await writeFile(tmp, content, 'utf8');
-    // Node 在 Windows 上用 MOVEFILE_REPLACE_EXISTING，覆盖已存在目标是原子的。
-    await rename(tmp, file);
+    // Windows 并发读或扫描可能暂时拒绝覆盖。只重试同一次 rename，不重写业务、
+    // 不先删除旧文件；持久权限错误仍在有限退避后原样返回。
+    for (let retry = 0; ; retry++) {
+      try {
+        await rename(tmp, file);
+        break;
+      } catch (error) {
+        if (process.platform !== 'win32' || retry >= 6
+          || !['EPERM', 'EACCES', 'EBUSY'].includes(error?.code)) throw error;
+        await sleep(10 * (2 ** retry));
+      }
+    }
   } catch (error) {
     await rm(tmp, { force: true }).catch(() => {});
     throw error;

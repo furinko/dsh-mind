@@ -22,7 +22,8 @@ export async function sourceRoot(directory, excluded = []) {
   if (excluded.some(p => inside(resolve(p), root) || inside(root, resolve(p)))) throw new InvalidBody('信息来源不能包含 Mind 私有数据、出厂目录或索引目录，避免自我收录。');
   const info = await lstat(root);
   if (!info.isDirectory() || info.isSymbolicLink()) throw new InvalidBody('信息来源必须是普通目录。');
-  return { path: root, identity: `${info.dev}:${info.ino}` };
+  // Persist one real spelling so c:\\ and C:\\ cannot connect the same source twice.
+  return { path: resolve(canonical), identity: `${info.dev}:${info.ino}` };
 }
 
 export async function verifyRoot(source) {
