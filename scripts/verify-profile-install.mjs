@@ -279,11 +279,15 @@ async function selftest() {
   const tmp = mkdtempSync(join(tmpdir(), 'dsh-mind-verify-'));
   const cases = [];
   const 判 = async (名, fn) => {
+    // Report each case before it starts, even if a native filesystem call aborts.
+    writeFileSync(1, `  检查 ${名}…\n`);
     try {
       cases.push([名, (await fn()) === true]);
     } catch (error) {
       cases.push([`${名}（夹具或判据抛异常：${error.message}）`, false]);
     }
+    const [结果名, ok] = cases.at(-1);
+    writeFileSync(1, `  ${ok ? '✓' : '✗'} ${结果名}\n`);
   };
   try {
     /** 造一个假 dsh-mind 包：按本包 package.json 的 files 白名单复制（发布物清单单一来源）。 */
@@ -294,7 +298,9 @@ async function selftest() {
       for (const rel of [...(本包.值.files ?? []), 'package.json']) {
         const 源 = join(本仓库, rel);
         if (!existsSync(源)) continue;
-        cpSync(源, join(包目录, rel), { recursive: statSync(源).isDirectory() });
+        // A filter keeps Node's JS/libuv copy path. The native no-filter fast path
+        // can terminate on Windows Unicode paths (nodejs/node#54476, #63970).
+        cpSync(源, join(包目录, rel), { recursive: statSync(源).isDirectory(), filter: () => true });
       }
       const profile = { name: 'probe', dependencies: { [BUNDLE]: 'file:probe' }, dsh: { profile: { bundles: [BUNDLE] } } };
       writeFileSync(join(dir, 'package.json'), profile文本 ?? JSON.stringify(profile, null, 2));
@@ -400,8 +406,7 @@ async function selftest() {
     rmSync(tmp, { recursive: true, force: true });
   }
   let 自检通过 = true;
-  for (const [名, ok] of cases) {
-    process.stdout.write(`  ${ok ? '✓' : '✗'} ${名}\n`);
+  for (const [, ok] of cases) {
     if (!ok) 自检通过 = false;
   }
   return 自检通过;
