@@ -479,6 +479,7 @@ export function loadClient(options = {}) {
   // 假 `fetch` 装成**全局**（组件取的是裸 `fetch` / `globalThis.fetch`）——
   // 不传就真的没有 fetch，用来守「拿不到 fetch 要响亮降级」那条。
   if (options.fetch) sandbox.fetch = options.fetch;
+  if (options.AbortController) sandbox.AbortController = options.AbortController;
   // 不给计时器：`noTimers: true` 时沙箱里**没有** setTimeout/setInterval
   // （守住"拿不到计时器要响亮，不许静默不设超时 / 不轮询"那条纪律）。
   if (options.noTimers) {

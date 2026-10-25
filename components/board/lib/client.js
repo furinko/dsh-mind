@@ -1804,7 +1804,7 @@ window.__ModuleLoader__.load({
      * @param {string} 说明 超时时要带出去的可诊断信息（路由 / 等了多久）
      * @returns {Promise<T>} 超时以 reject 的方式失败（错误信息就是那句可诊断信息）
      */
-    function 限时(promise, ms, 说明) {
+    function 限时(promise, ms, 说明, 到时取消) {
       return new Promise(function (resolve, reject) {
         var 到了 = false;
         var 计时器 = null;
@@ -1815,6 +1815,7 @@ window.__ModuleLoader__.load({
             计时器 = 设时(function () {
               if (到了) return;
               到了 = true;
+              try { if (到时取消) 到时取消(); } catch (error) { /* 取消失败仍按原超时结果返回 */ }
               reject(new Error('超时：' + 说明));
             }, ms);
           } catch (error) { 计时器 = null; }
@@ -2811,6 +2812,14 @@ window.__ModuleLoader__.load({
           return;
         }
         var 选项 = { method: 方法 };
+        // 超时必须释放仍在排队或读响应体的传输，避免后续轮询继续积压。
+        // POST 的业务提交不会由取消传输撤回，调用者仍须独立回读确认。
+        var 控制器 = null;
+        try {
+          if (typeof AbortController === 'function') 控制器 = new AbortController();
+        } catch (error) { /* 老宿主保留限时降级 */ }
+        if (控制器) 选项.signal = 控制器.signal;
+        function 取消传输() { if (控制器) 控制器.abort(); }
         // 插件通道标记（2026-10-13 真机取证用）：官方客户端里插件页的请求到达路由时
         // **不带 Fetch Metadata 头**（`sec-fetch-site` 缺席）⇒ 与「本机任意进程」无法区分
         // ⇒ 被同源栅栏整类拒掉（P1-10 的 fail-closed）。这里带一个自有标记头，用来实测
@@ -2833,13 +2842,13 @@ window.__ModuleLoader__.load({
         }
         var 说明 = '路由 ' + 方法 + ' ' + 路径 + ' · 会话 ' + 会话尾
           + ' · 等 ' + Math.round(COMMAND_TIMEOUT_MS / 1000) + ' 秒无回应';
-        限时(pending, COMMAND_TIMEOUT_MS, 说明).then(function (response) {
+        限时(pending, COMMAND_TIMEOUT_MS, 说明, 取消传输).then(function (response) {
           try {
             if (!response || typeof response !== 'object') { resolve({ ok: false, error: '请求没有返回响应体' }); return; }
             var 状态 = Number(response.status);
             var 行不行 = response.ok === true || (状态 >= 200 && 状态 < 300);
             // 读文本再自己解析：响应**不是** JSON 时也要能给出人话（别让 `res.json()` 抛出去）。
-            限时(Promise.resolve(typeof response.text === 'function' ? response.text() : ''), COMMAND_TIMEOUT_MS, 说明 + '（响应体）').then(function (text) {
+            限时(Promise.resolve(typeof response.text === 'function' ? response.text() : ''), COMMAND_TIMEOUT_MS, 说明 + '（响应体）', 取消传输).then(function (text) {
               try {
                 var parsed = parseLooseJson(text);
                 if (!obj(parsed)) {
@@ -3191,6 +3200,7 @@ window.__ModuleLoader__.load({
       };
     }
     var 投影序号 = 序号器();
+    var 投影读取 = null;
     var 设置序号 = 序号器();
     var 调度序号 = 序号器();
     var 人设序号 = 序号器();
@@ -3244,6 +3254,7 @@ window.__ModuleLoader__.load({
       自由页已访问 = false; 自由最近读取 = 0; 自由请求序++;
       自由store.快照 = { phase: 'reading', data: null, runtime: null, error: '' };
       投影store.快照 = EMPTY;
+      投影读取 = null;
       设置store.快照 = { phase: 'reading', 读数: null, 设置文件: '', error: '', 保存中: false, 提示: '', 提示调: 'warn' };
       界面store.快照 = { 折叠会审: null, 折叠描述: null, 折叠总线: null, 项目选择: null, 自动选择: null, 当前页: null, 图谱选中: null, 图谱卡片位置: null, 图谱视图: null };
     }
@@ -3610,10 +3621,14 @@ window.__ModuleLoader__.load({
     /** 拉一次工作台投影并写进 store（失败保留旧快照，只是标 stale）。 */
     function 刷新投影() {
       var ctx = activeCtx;
+      var session = { id: '', source: '' };
+      try { session = resolveSessionId(ctx); } catch (error) { session = { id: '', source: '' }; }
+      var 选择 = 项目选择();
+      // 只合并同一显示范围内的在途读取，不缓存已完成投影，也不合并设置写入后的回读。
+      var 读取键 = JSON.stringify([session.id, 选择]);
+      if (投影读取 && 投影读取.key === 读取键) return 投影读取.promise;
       var 号 = 投影序号.取号();
-      return new Promise(function (resolve) {
-        var session = { id: '', source: '' };
-        try { session = resolveSessionId(ctx); } catch (error) { session = { id: '', source: '' }; }
+      var pending = new Promise(function (resolve) {
         if (!session.id) {
           var cached = readCache();
           投影签名.值 = null; // 会话丢失后复位签名：会话回来时数据没变也要把 nosession 翻回 live
@@ -3626,7 +3641,6 @@ window.__ModuleLoader__.load({
           resolve();
           return;
         }
-        var 选择 = 项目选择();
         fetchView(ctx, session.id, 选择).then(function (out) {
           if (!投影序号.该用(号)) { resolve(); return; } // 旧响应：丢掉，不覆盖更新的快照
           if (out.ok) {
@@ -3674,6 +3688,11 @@ window.__ModuleLoader__.load({
           resolve();
         });
       });
+      var current = { key: 读取键, promise: pending };
+      投影读取 = current;
+      function 完成() { if (投影读取 === current) 投影读取 = null; }
+      pending.then(完成, 完成);
+      return pending;
     }
 
     /** 拉一次设置读数并写进 store。**保留** `保存中 / 提示`（那是交互状态，不该被轮询抹掉）。 */
