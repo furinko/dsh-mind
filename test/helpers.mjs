@@ -5,7 +5,7 @@
  * 一份完整的规则件；否则测出来的全是「引擎不健康」这一种拒绝，覆盖不到真正的判定分支。
  * 夹具与出厂内容解耦：它只保证结构合规，不复制 `mind/` 里的产品文案。
  */
-import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Clock } from '../src/kernel/time.js';
@@ -201,7 +201,8 @@ export async function makeFixture(options = {}) {
       );
     }
   }
-  const home = await mkdtemp(join(tmpdir(), 'mind-fix-'));
+  // Windows runner TEMP may use an 8.3 spelling; ordinary fixtures need the actual root.
+  const home = await realpath(await mkdtemp(join(tmpdir(), 'mind-fix-')));
   const factoryRoot = join(home, 'mind');
   const privateRoot = join(home, 'mind-private');
   const leadMode = options.lead ?? 'pinned';

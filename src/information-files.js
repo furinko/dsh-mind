@@ -10,12 +10,15 @@ export const DOCUMENT_EXTENSIONS = Object.freeze(['.pdf', '.docx', '.pptx', '.xl
 export const INFORMATION_EXTENSIONS = Object.freeze([...TEXT_EXTENSIONS, ...DOCUMENT_EXTENSIONS]);
 export const inside = (root, file) => { const p = relative(root, file); return p === '' || (!isAbsolute(p) && p !== '..' && !p.startsWith(`..${sep}`)); };
 const signature = s => `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`;
+// path.relative follows the local filesystem's path syntax, including Windows drive casing.
+// File identity and link checks below remain independent of this spelling comparison.
+const samePath = (a, b) => relative(resolve(a), resolve(b)) === '';
 
 export async function sourceRoot(directory, excluded = []) {
   if (typeof directory !== 'string' || !isAbsolute(directory)) throw new InvalidBody('信息来源需要本机绝对目录。');
   const root = resolve(directory);
   const canonical = await realpath(root);
-  if (resolve(canonical) !== root) throw new InvalidBody('请填写来源目录的真实路径，不使用符号链接或目录别名。');
+  if (!samePath(canonical, root)) throw new InvalidBody('请填写来源目录的真实路径，不使用符号链接或目录别名。');
   if (excluded.some(p => inside(resolve(p), root) || inside(root, resolve(p)))) throw new InvalidBody('信息来源不能包含 Mind 私有数据、出厂目录或索引目录，避免自我收录。');
   const info = await lstat(root);
   if (!info.isDirectory() || info.isSymbolicLink()) throw new InvalidBody('信息来源必须是普通目录。');
@@ -24,7 +27,7 @@ export async function sourceRoot(directory, excluded = []) {
 
 export async function verifyRoot(source) {
   const info = await lstat(source.path);
-  if (!info.isDirectory() || info.isSymbolicLink() || resolve(await realpath(source.path)) !== source.path
+  if (!info.isDirectory() || info.isSymbolicLink() || !samePath(await realpath(source.path), source.path)
       || `${info.dev}:${info.ino}` !== source.identity) throw new Fault('INFORMATION_SOURCE_CHANGED', '来源目录已被替换，请在设置中重新核对并连接。');
 }
 
@@ -56,7 +59,7 @@ export async function readSourceFile(source, name, maxBytes, { binary = false } 
       length += bytesRead;
     }
     if (length > maxBytes || length !== before.size || signature(await handle.stat()) !== signature(before)
-        || signature(await lstat(file)) !== signature(before) || resolve(await realpath(file)) !== file) throw new Fault('INFORMATION_FILE_CHANGED', '读取期间文件变化，未提交该版本。');
+        || signature(await lstat(file)) !== signature(before) || !samePath(await realpath(file), file)) throw new Fault('INFORMATION_FILE_CHANGED', '读取期间文件变化，未提交该版本。');
     await verifyRoot(source);
     if (binary) return { buffer: buffer.subarray(0, length), hash: digest(buffer.subarray(0, length)), bytes: length };
     const raw = new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, length)).replace(/^\uFEFF/, '');

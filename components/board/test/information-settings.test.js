@@ -1,7 +1,7 @@
 import { it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import { settingsScene } from './settings-fixture.mjs';
 import { jsonResponse } from './client-harness.mjs';
 import { makeFixture, SOVEREIGN } from '../../../test/helpers.mjs';
@@ -83,7 +83,7 @@ it('成长记录修订、停用和历史均经真实服务，人侧预览不计�
   assert.deepEqual((await org.information.load()).usage, usage);
 }));
 
-const listing = (path, entries = [], home = path) => ({ path, home, crumbs: [{ name: '主目录', path: home }, ...(path === home ? [] : [{ name: path.split('/').at(-1), path }])], entries: entries.map(p => ({ name: p.split('/').at(-1), path: p, hidden: p.split('/').at(-1).startsWith('.') })), truncated: false });
+const listing = (path, entries = [], home = path) => ({ path, home, crumbs: [{ name: '主目录', path: home }, ...(path === home ? [] : [{ name: basename(path), path }])], entries: entries.map(p => ({ name: basename(p), path: p, hidden: basename(p).startsWith('.') })), truncated: false });
 it('像工作区一样浏览并跨目录多选，一次保存全部来源；取消不连接，已连接项不可重复选择', async () => scene(async (s, org, f, calls) => {
   const one = join(f.home, '知识库甲'); const two = join(f.home, '插件导出乙');
   await mkdir(one); await mkdir(two);

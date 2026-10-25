@@ -82,7 +82,7 @@ it('选中、装配、请求观察、显式读取和采用声明分开持久化�
  const args={action:'task_submit',id:n.id,结论:'完成',采用知识:[{id:k.id,用途:'检查重连',适用判断:'幂等',使用结果:'未知'}]};
  const submitted=await runAction({org,主体:MEMBER,项目:P,args});hooks.result({agent,name:'mind',callId:'submit-1',arguments:args},toolResult(submitted));await hooks.flush();
  const report=await org.memoryUse.query({subject:LEAD,project:P,id:k.id}); assert.deepEqual(report.counts,{selected:1,assembled:1,'request-observed':1,'explicit-read':1,'adoption-declared':1});assert.equal(report.coverage.actualUnderstanding,'未知');
- const files=await readdir(org.memoryUse.root(P));const file=join(org.memoryUse.root(P),files.find(n=>n.endsWith('.jsonl')));const disk=await readFile(file,'utf8');assert.doesNotMatch(disk,/secret-body-abcdef|内容片段|"query":|"描述":/);assert.equal((await stat(file)).mode&0o777,0o600);
+ const files=await readdir(org.memoryUse.root(P));const file=join(org.memoryUse.root(P),files.find(n=>n.endsWith('.jsonl')));const disk=await readFile(file,'utf8');assert.doesNotMatch(disk,/secret-body-abcdef|内容片段|"query":|"描述":/);if(process.platform!=='win32')assert.equal((await stat(file)).mode&0o777,0o600);
  close();const reopened=await Org.open({home:f.home,privateRoot:f.privateRoot,factoryRoot:f.factoryRoot,project:P});assert.equal((await reopened.memoryUse.query({subject:LEAD,project:P,id:k.id})).total,5);
 }));
 it('官方请求钩子透传同一迭代器，不改请求；卸载后不记录',async()=>fixture(async org=>{
