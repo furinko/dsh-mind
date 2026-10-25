@@ -7,11 +7,12 @@ import {requireLiveActor} from './runtime-actor.js';
 import {复核对象引用} from './review-scope.js';
 import {EXPERIMENT_RECIPES,normalizeExperimentConfig,experimentDigest,experimentKeys,experimentId,verifyExperimentCandidate,verifyExperimentNode,copyExperimentCandidate,verifyExperimentCopy,experimentEnvironment,removeExperimentScope} from './review-experiment-files.js';
 import {executeReviewProcess} from './review-experiment-process.js';
+import {autonomousExperimentConfig,prepareAutonomousCandidate,autonomousExperimentPolicy,candidateRecipe,verifyAutonomousInterpreters} from './review-autonomy.js';
 
 const EVENT='复核实验事件';
 const READ_STATES=new Set(['已派发','执行中','已交卷','已打回']);
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
-const denied=message=>new Denied('冻结实验 · 任务与天然凭据',message,{howToChange:'核对真实派发Lead、复核实例、当前项目/任务代次/读根和部署可信清单；不得用聊天、自报sandbox或任意命令替代。'});
+const denied=message=>new Denied('冻结实验 · 任务与天然凭据',message,{howToChange:'核对实际派发关系、冻结任务/代码/配方及宿主当前权限；由Lead登记本次许可，不要求主权者逐项审读候选或代跑。'});
 const clockMs=org=>typeof org.clock?.ms==='function'?org.clock.ms():Date.now();
 const parentId=agent=>typeof agent.session?.header?.parentSession==='string'?agent.session.header.parentSession:null;
 const stamp=m=>({generation:m.代??1,card:m.卡版本?.摘要??null});
@@ -21,15 +22,16 @@ const safeTask=n=>({id:n.id,状态:n.状态,代:n.代??1,负责人:n.负责人,�
 const resultTarget=(id,project)=>({id,kind:'产物',authority:'自治',zone:'私有',project,sandbox:true});
 
 /**
- * 任务内冻结实验服务：不提供通用命令、不创建智能体、不修改被验对象。
+ * 任务内冻结实验服务：复核员只能选Lead冻结的配方，不提供通用命令面、不创建智能体。
+ * 原树变化会拒收结果；完全权限仍沿宿主原义，不把事后检测声称为写隔离。
  * @param {{org:object,config?:object,services:()=>object}} spec
  * @throws {Denied|InvalidBody} 显式部署配置不合法时拒绝构造，不能退回不受限执行。
  */
 export class ReviewExperimentService {
   #org;#config;#services;#closed=false;#active=new Map();
-  constructor({org,config={},services=()=>({})}){this.#org=org;this.#config=normalizeExperimentConfig(config);this.#services=services;}
+  constructor({org,config={},services=()=>({})}){this.#org=org;this.#config=Object.keys(config).some(k=>['node','candidates','boundary'].includes(k))?normalizeExperimentConfig(config):autonomousExperimentConfig(config);this.#services=services;}
   /** 只描述准入，不把配置启用写成实际后端/enforcement通过。 */
-  status(){return {enabled:this.#config.enabled&&!this.#closed,boundary:this.#config.boundary??null,configuration:this.#config.digest??null,recipes:Object.keys(EXPERIMENT_RECIPES),closed:this.#closed,actualEnforcement:'未验'};}
+  status(){return {enabled:this.#config.enabled&&!this.#closed,mode:this.#config.mode??'deployment',boundary:this.#config.boundary??null,configuration:this.#config.digest??null,recipes:Object.keys(EXPERIMENT_RECIPES),closed:this.#closed,actualEnforcement:'未验'};}
   #ready(){if(this.#closed)throw new Fault('EXPERIMENT_DISPOSED','实验服务已卸载。');if(!this.#config.enabled)throw new Fault('EXPERIMENT_DISABLED',this.#config.reason??'实验服务未配置。');}
   async #actor(spec){
     if(this.#closed)throw new Fault('EXPERIMENT_DISPOSED','实验服务已卸载。');
@@ -60,7 +62,7 @@ export class ReviewExperimentService {
     const credentialEpoch={holder:identityAnchor(holderId),owner:identityAnchor(owner),binding:bindingAnchor,targets:targets.map(id=>({id,anchor:taskAnchor(id)}))};
     return {...actor,node,holder,owner,ownerMember:lead,roots,targets,credentialEpoch};
   }
-  #candidate(id){const candidate=this.#config.candidates?.find(c=>c.id===id);if(!candidate)throw denied('候选未在部署可信清单中。');return candidate;}
+  #candidate(id,snapshot){const candidate=this.#config.mode==='autonomous'&&snapshot?.id===id?snapshot:this.#config.candidates?.find(c=>c.id===id);if(!candidate)throw denied('候选快照或部署可信清单中没有该候选。');return candidate;}
   #rootAllowed(ctx,candidate){
     const permitted=ctx.roots.some(root=>{try{return fs.statSync(root).isDirectory()&&inside(fs.realpathSync(root),candidate.root);}catch{return false;}});
     if(!permitted)throw denied('可信候选根没有落在该复核任务的正式读根内。');
@@ -79,7 +81,7 @@ export class ReviewExperimentService {
     const common=['action','project'];
     if(action==='review_experiment_allow'){
       if(args.决定==='撤回')experimentKeys(args,[...common,'审批引用','决定','许可id']);
-      else{experimentKeys(args,[...common,'审批引用','决定','任务','实例','候选id','配方列表','实验次数','有效秒数','运行秒数','输出上限字节']);if(args.决定!=='登记')throw new InvalidBody('实验许可决定只能为登记/撤回。');}
+      else{experimentKeys(args,[...common,'审批引用','决定','任务','实例','候选id','候选根','实验配方','配方列表','实验次数','有效秒数','运行秒数','输出上限字节']);if(args.决定!=='登记')throw new InvalidBody('实验许可决定只能为登记/撤回。');}
     }else if(action==='review_experiment_run')experimentKeys(args,[...common,'审批引用','许可id','配方']);
     else if(action==='review_experiment_read')experimentKeys(args,[...common,'许可id','运行id','输出流','输出偏移','输出长度']);
     else throw new InvalidBody('未知实验动作。');
@@ -130,18 +132,31 @@ export class ReviewExperimentService {
     if(grant.revoked||clockMs(this.#org)>=grant.expiresAt)throw denied('许可已撤回或过期。');
     const ctx=await this.#reviewTask(spec,grant.task,grant.holder,{running});
     if((ctx.node.代??1)!==grant.generation||!same(stamp(ctx.holder),grant.holderStamp)||!same(stamp(ctx.ownerMember),grant.ownerStamp)||!same(ctx.targets,grant.targets)||!same(ctx.credentialEpoch,grant.credentialEpoch))throw denied('任务/实例/钉卡代次或被验对象已变化，旧许可不能复活。');
-    const candidate=this.#candidate(grant.candidate);if(candidate.manifestHash!==grant.manifest)throw denied('候选清单已变化。');this.#rootAllowed(ctx,candidate);
+    if(this.#config.mode==='autonomous'&&!same(await autonomousExperimentPolicy(spec,ctx,this.#services()),grant.nativePolicy))throw denied('宿主会话权限已变化，需要Lead重新冻结许可。');
+    const candidate=this.#candidate(grant.candidate,grant.candidateSnapshot);if(candidate.manifestHash!==grant.manifest)throw denied('候选清单已变化。');this.#rootAllowed(ctx,candidate);
     return {...ctx,candidate};
   }
   async #describe(spec){
     this.#validateArgs(spec.action,spec.args);const args=spec.args;
     if(spec.action==='review_experiment_allow'&&args.决定==='登记'){
       this.#ready();if(spec.subject.kind!=='Lead')throw denied('只有派发Lead能登记实验许可。');
-      experimentId(args.候选id,'候选id');const ctx=await this.#reviewTask(spec,String(args.任务??''),String(args.实例??''));await this.#directChild(spec,ctx.holder.id);
-      const candidate=this.#candidate(args.候选id);this.#rootAllowed(ctx,candidate);verifyExperimentCandidate(candidate,this.#config.limits);verifyExperimentNode(this.#config.node);
-      if(!Array.isArray(args.配方列表)||!args.配方列表.length||args.配方列表.length>5||new Set(args.配方列表).size!==args.配方列表.length||args.配方列表.some(r=>typeof r!=='string'||!Object.hasOwn(EXPERIMENT_RECIPES,r)))throw denied('配方必须来自封闭五项且不得重复。');
-      const recipes=[...args.配方列表].sort(),limits=this.#limits(args);const ledger=await this.#ledger(spec.project);this.#fence(ledger,ctx.holder.id,ctx.node.id);
-      return {ctx,candidate,recipes,limits,policyAction:'write',target:{id:ctx.node.id,kind:'任务',authority:'自治',zone:'私有',project:spec.project}};
+      const ctx=await this.#reviewTask(spec,String(args.任务??''),String(args.实例??''));await this.#directChild(spec,ctx.holder.id);
+      let candidate,recipes,nativePolicy;
+      if(this.#config.mode==='autonomous'){
+        if(typeof args.候选根!=='string'||!path.isAbsolute(args.候选根))throw new InvalidBody('自主复核需要Lead指定绝对候选根。');
+        this.#rootAllowed(ctx,{root:fs.realpathSync(args.候选根)});
+        nativePolicy=await autonomousExperimentPolicy(spec,ctx,this.#services());
+        const services=this.#services();if(typeof services?.subprocess?.spawn!=='function'||nativePolicy.mode!=='danger-full-access'&&typeof services?.sandbox?.confine!=='function')throw new Fault('EXPERIMENT_HOST_UNAVAILABLE','复核执行所需的原生权限/进程服务尚不可用。');
+        candidate=prepareAutonomousCandidate(args,this.#config);recipes=Object.keys(candidate.recipes).sort();
+      }else{
+        if(args.候选根!==undefined||args.实验配方!==undefined)throw new InvalidBody('当前部署使用旧白名单模式，不接受自主候选或配方。');
+        experimentId(args.候选id,'候选id');candidate=this.#candidate(args.候选id);
+        if(!Array.isArray(args.配方列表)||!args.配方列表.length||args.配方列表.length>5||new Set(args.配方列表).size!==args.配方列表.length||args.配方列表.some(r=>typeof r!=='string'||!Object.hasOwn(EXPERIMENT_RECIPES,r)))throw denied('配方必须来自封闭五项且不得重复。');
+        recipes=[...args.配方列表].sort();
+      }
+      this.#rootAllowed(ctx,candidate);verifyExperimentCandidate(candidate,this.#config.limits);if(!candidate.recipes)verifyExperimentNode(this.#config.node);verifyAutonomousInterpreters(candidate);
+      const limits=this.#limits(args),ledger=await this.#ledger(spec.project);this.#fence(ledger,ctx.holder.id,ctx.node.id);
+      return {ctx,candidate,recipes,nativePolicy,limits,policyAction:'write',target:{id:ctx.node.id,kind:'任务',authority:'自治',zone:'私有',project:spec.project}};
     }
     const found=await this.#lookup(spec,args.许可id);
     if(spec.action==='review_experiment_allow'){
@@ -154,8 +169,8 @@ export class ReviewExperimentService {
       const ctx=await this.#validGrant(spec,found.grant,{running:true});
       if(!found.grant.recipes.includes(args.配方))throw denied('配方不在本许可的冻结列表内。');
       if(found.grant.runs.length>=found.grant.limits.maxRuns)throw denied('实验次数预算已耗尽。');this.#fence(found.ledger,found.grant.holder,found.grant.task);
-      verifyExperimentCandidate(ctx.candidate,this.#config.limits);verifyExperimentNode(this.#config.node);
-      const services=this.#services();if(typeof services?.sandbox?.confine!=='function'||typeof services?.subprocess?.spawn!=='function')throw new Fault('EXPERIMENT_HOST_UNAVAILABLE','缺正式沙箱/进程服务，零进程拒绝。');
+      verifyExperimentCandidate(ctx.candidate,this.#config.limits);if(!ctx.candidate.recipes)verifyExperimentNode(this.#config.node);verifyAutonomousInterpreters(ctx.candidate);
+      const services=this.#services();if(typeof services?.subprocess?.spawn!=='function'||found.grant.nativePolicy?.mode!=='danger-full-access'&&typeof services?.sandbox?.confine!=='function')throw new Fault('EXPERIMENT_HOST_UNAVAILABLE','缺正式沙箱/进程服务，零进程拒绝。');
       return {...found,ctx,candidate:ctx.candidate,recipes:[args.配方],limits:found.grant.limits,policyAction:'experiment',target:resultTarget(found.grant.id,spec.project)};
     }
     return found;
@@ -165,7 +180,7 @@ export class ReviewExperimentService {
     const d=await this.#describe(spec);if(spec.action==='review_experiment_read')return {步骤:[]};
     const grant=d.grant,nodeFacts=d.candidate?this.#config.node:grant?.nodeSnapshot;
     const preview={凭证代次:d.ctx.credentialEpoch??grant?.credentialEpoch??null,源候选根:d.candidate?.root??grant?.sourceRoot??null,解释器源:nodeFacts?.path??null,决定:spec.args.决定??'运行',任务:d.ctx.node.id,复核实例:grant?.holder??d.ctx.holder.id,许可:grant?.id??null,候选:d.candidate?.id??grant?.candidate,manifest:d.candidate?.manifestHash??grant?.manifest,可信配置:d.candidate?this.#config.digest:grant?.config??null,NodeSHA:nodeFacts?.sha256??null,边界:d.candidate?this.#config.boundary:grant?.boundary??null,
-      配方:(d.recipes??grant?.recipes??[]).map(name=>({name,argv:['<本次随机专属副本>/可信Node',...EXPERIMENT_RECIPES[name]]})),预算:d.limits??grant?.limits,输出:'仅本次许可私有有界输出，非通用路径',清理:'仅宿主范围确认退出后清理；未知保留现场'};
+      配方:(d.recipes??grant?.recipes??[]).map(name=>{const c=d.candidate??grant?.candidateSnapshot;const r=candidateRecipe(c??{},name,{node:grant?.nodeSnapshot??this.#config.node});return {name,解释器:{...r.interpreter},argv:['<本次随机专属副本>/冻结执行器',...r.args]};}),宿主权限:d.nativePolicy??grant?.nativePolicy??null,快照排除:d.candidate?.omit??grant?.candidateSnapshot?.omit??[],预算:d.limits??grant?.limits,输出:'仅本次许可私有有界输出，非通用路径',清理:'仅宿主范围确认退出后清理；未知保留现场'};
     return {步骤:grant?.revoked&&spec.args.决定==='撤回'?[]:[{动作:d.policyAction,目标:d.target,上下文:{task:safeTask(d.ctx.node)},说明:spec.action==='review_experiment_run'?'在专属副本执行冻结实验':spec.args.决定==='撤回'?'撤回本任务实验许可':'登记本任务冻结实验许可',预览:preview}]};
   }
   async #policy(spec,d){await this.#org.policy.check({subject:spec.subject,action:d.policyAction,target:d.target,context:{task:d.ctx.node}});}
@@ -181,11 +196,11 @@ export class ReviewExperimentService {
         return {...this.#summary(d.grant),撤回:true};
       }
       const permit={id:'rexp-'+randomUUID(),project:spec.project,owner:spec.subject.id,holder:d.ctx.holder.id,task:d.ctx.node.id,generation:d.ctx.node.代??1,holderStamp:stamp(d.ctx.holder),ownerStamp:stamp(d.ctx.ownerMember),targets:d.ctx.targets,credentialEpoch:d.ctx.credentialEpoch,
-        candidate:d.candidate.id,manifest:d.candidate.manifestHash,sourceRoot:d.candidate.root,nodeSnapshot:{...this.#config.node},boundary:this.#config.boundary,config:this.#config.digest,recipes:d.recipes,limits:d.limits,expiresAt:clockMs(this.#org)+d.limits.ttlMs};
+        candidate:d.candidate.id,manifest:d.candidate.manifestHash,sourceRoot:d.candidate.root,nodeSnapshot:{...this.#config.node},boundary:this.#config.boundary,config:this.#config.digest,...(this.#config.mode==='autonomous'?{candidateSnapshot:d.candidate,nativePolicy:d.nativePolicy}:{}),recipes:d.recipes,limits:d.limits,expiresAt:clockMs(this.#org)+d.limits.ttlMs};
       await this.#append(spec.project,spec.subject,{type:'granted',permit});return this.#summary({...permit,runs:[],revoked:false,confirmed:true});
     }));
   }
-  #summary(g){return {许可id:g.id,任务:g.task,复核实例:g.holder,候选id:g.candidate,manifest:g.manifest,配方列表:g.recipes,预算:g.limits,到期:g.expiresAt,撤回:g.revoked,审计确认:g.confirmed,已占用:g.runs?.length??0};}
+  #summary(g){return {许可id:g.id,任务:g.task,复核实例:g.holder,候选id:g.candidate,manifest:g.manifest,配方列表:g.recipes,候选根:g.sourceRoot,配方详情:g.recipes.map(name=>{const r=candidateRecipe(g.candidateSnapshot??{},name,{node:g.nodeSnapshot??this.#config.node});return {id:name,可执行文件:r.interpreter.path,SHA256:r.interpreter.sha256,参数:[...r.args]};}),快照排除:g.candidateSnapshot?.omit??[],模式:g.candidateSnapshot?'Lead自治':'部署白名单',宿主权限:g.nativePolicy?.mode??null,预算:g.limits,到期:g.expiresAt,撤回:g.revoked,审计确认:g.confirmed,已占用:g.runs?.length??0};}
   /** 复核实例独立选冻结配方；占用一旦落线绝不自动返还，失败不是许可复活条件。 */
   async run(spec){
     const first=await this.#describe(spec);await this.#policy(spec,first);spec.host?.signal?.throwIfAborted();
@@ -202,9 +217,9 @@ export class ReviewExperimentService {
   async #perform(spec,grant,run,controller){
     let scope=null,process=null,problem=null,cleanup={confirmed:false,retainedRoot:null},originalUnchanged=false,outputs={},invocationStarted=false,provedBeforeSpawn=false,copyResidual=null;
     try{
-      const candidate=this.#candidate(grant.candidate);scope=copyExperimentCandidate(candidate,this.#config);
+      const candidate=this.#candidate(grant.candidate,grant.candidateSnapshot);scope=copyExperimentCandidate(candidate,this.#config);
       invocationStarted=true;
-      process=await executeReviewProcess({services:this.#services(),scope,argv:[scope.nodePath,...EXPERIMENT_RECIPES[run.recipe]],env:()=>experimentEnvironment(scope),limits:grant.limits,signal:controller.signal,
+      process=await executeReviewProcess({services:this.#services(),scope,argv:[scope.executables?.[run.recipe]??scope.nodePath,...candidateRecipe(candidate,run.recipe,this.#config).args],...(grant.nativePolicy?{nativePolicy:()=>grant.nativePolicy}:{}),env:()=>experimentEnvironment(scope),limits:grant.limits,signal:controller.signal,
         withSpawn:launch=>this.#locked(spec.project,()=>this.#taskLocked(spec.project,async()=>{
           const current=await this.#ledger(spec.project),g=current.grants.get(grant.id),reserved=current.runs.get(run.id);
           if(!reserved?.confirmed||!g)throw denied('运行占用审计未确认。');
@@ -223,7 +238,7 @@ export class ReviewExperimentService {
       if(problem==='EXPERIMENT_COPY_CLEANUP_FAILED')copyResidual=error.detail?.root??null;
       if(!process||process.running){process=null;if(invocationStarted&&!provedBeforeSpawn)controller.abort(new Error('execution-result-unknown'));}
     }
-    try{verifyExperimentCandidate(this.#candidate(grant.candidate),this.#config.limits);originalUnchanged=true;}catch{problem='EXPERIMENT_ORIGINAL_CHANGED';}
+    try{verifyExperimentCandidate(this.#candidate(grant.candidate,grant.candidateSnapshot),this.#config.limits);originalUnchanged=true;}catch{problem='EXPERIMENT_ORIGINAL_CHANGED';}
     if(scope){
       if(process?.cleanupSafe===true||(!process&&problem&&(!invocationStarted||provedBeforeSpawn)&&problem!=='EXPERIMENT_COPY_CLEANUP_FAILED')){
         // executeReviewProcess抛出只表示它在spawn前硬拒；spawn后的未知必须以非cleanupSafe收据返回。

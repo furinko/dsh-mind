@@ -8,13 +8,14 @@ function streamDone(stream){
 }
 
 /**
- * 只使用正式 confine/spawn/terminate/waitForExit 合同；不使用裸进程回退。
+ * 受限模式只用正式confine包装；原生完全权限不加包装，均使用正式spawn/terminate/waitForExit。
+ * nativePolicy仅由可信领域服务提供，不接受模型参数，不回退node:child_process。
  * @param {{services:object,scope:object,argv:string[],env:object|Function,limits:object,signal?:AbortSignal,onHandle?:Function,onTick?:Function,withSpawn?:Function}} spec
  * @returns {Promise<object>} 输出为有界原字节；仅 cleanupSafe=true 才允许删除实验副本。
  * @throws {Fault} 缺提供者或沙箱包装时零进程拒绝。
  */
-export async function executeReviewProcess({services,scope,argv,env,limits,signal,onHandle,onTick,withSpawn}){
-  if(typeof services?.sandbox?.confine!=='function'||typeof services?.subprocess?.spawn!=='function')throw new Fault('EXPERIMENT_HOST_UNAVAILABLE','正式sandbox/subprocess服务未接线，不回退裸执行。');
+export async function executeReviewProcess({services,scope,argv,env,limits,signal,onHandle,onTick,withSpawn,nativePolicy}){
+  if(typeof services?.subprocess?.spawn!=='function'||!nativePolicy&&typeof services?.sandbox?.confine!=='function')throw new Fault('EXPERIMENT_HOST_UNAVAILABLE','正式进程/沙箱服务未接线。');
   const controller=new AbortController();let reason=null,handle=null,spawnAttempted=false,confined=null,outcome=null,rangeExited=false,outputComplete=false,hostError=null,interval=null;
   let stopResolve;const stopped=new Promise(resolve=>{stopResolve=resolve;});
   const stop=value=>{if(reason)return;reason=value;controller.abort(new Error(value));try{handle?.terminate?.();}catch{hostError='TERMINATE_FAILED';}stopResolve({stopped:true});};
@@ -32,13 +33,16 @@ export async function executeReviewProcess({services,scope,argv,env,limits,signa
   };
   try{
     controller.signal.throwIfAborted();
-    const attempt=Promise.resolve().then(()=>services.sandbox.confine(argv,{mode:'workspace-write',workspaceRoot:scope.workspace},controller.signal));
+    const native=nativePolicy?.();
+    if(nativePolicy&&!['read-only','workspace-write','danger-full-access'].includes(native?.mode))throw new Fault('EXPERIMENT_HOST_POLICY_INVALID','原生权限不可核对。');
+    const full=native?.mode==='danger-full-access';
+    const attempt=Promise.resolve().then(()=>full?{argv:[...argv],enforcement:'none',denialSignatures:[],runnerFailureRules:[]}:services.sandbox.confine(argv,{mode:native?.mode??'workspace-write',workspaceRoot:scope.workspace},controller.signal));
     const wrapped=await Promise.race([attempt,stopped]);
     if(wrapped?.stopped)return finish('sandbox-setup-unknown',false);
     confined=wrapped;
-    if(!confined||!Array.isArray(confined.argv)||confined.argv.length<=argv.length||!confined.argv.every(v=>typeof v==='string'&&v&&!v.includes('\0'))
-      ||confined.argv[confined.argv.length-argv.length-1]!=='--'||confined.argv.slice(-argv.length).some((v,i)=>v!==argv[i])
-      ||!['partial','full'].includes(confined.enforcement)||!Array.isArray(confined.denialSignatures)||!Array.isArray(confined.runnerFailureRules)){
+    if(!confined||!Array.isArray(confined.argv)||!confined.argv.every(v=>typeof v==='string'&&v&&!v.includes('\0'))
+      ||(full?confined.argv.length!==argv.length||confined.argv.some((v,i)=>v!==argv[i])||confined.enforcement!=='none':confined.argv.length<=argv.length||confined.argv[confined.argv.length-argv.length-1]!=='--'||confined.argv.slice(-argv.length).some((v,i)=>v!==argv[i])||!['partial','full'].includes(confined.enforcement))
+      ||!Array.isArray(confined.denialSignatures)||!Array.isArray(confined.runnerFailureRules)){
       throw new Fault('EXPERIMENT_SANDBOX_INVALID','沙箱未提供真实包装argv及能力元数据；零进程，不回退原argv。');
     }
     controller.signal.throwIfAborted();

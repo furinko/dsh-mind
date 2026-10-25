@@ -44,7 +44,8 @@ export async function reviewScene(fn,options={}){
       handles.push(handle);return handle;
     }};
     const config={enabled:true,boundary:EXPERIMENT_BOUNDARY,node:{path:node,sha256:createHash('sha256').update(fs.readFileSync(node)).digest('hex')},candidates:[{id:'trusted-candidate',root:source,...inspectExperimentCandidate(source),reviewed:true}],limits:{maxRuns:2,ttlMs:3600000,timeoutMs:1000,outputBytes:1024,closeMs:50}};
-    const services={sandbox,subprocess};service=new ReviewExperimentService({org,config,services:()=>services});
+    const sandboxPolicy={resolve:({session}={})=>({mode:options.nativeMode??'workspace-write',workspaceRoot:session?.header.cwd??f.home})};
+    const services={sandbox,subprocess,sandboxPolicy};service=new ReviewExperimentService({org,config,services:()=>services});
     const parent=(action,args={})=>({action,args:{action,...args},project:REVIEW_PROJECT,sessionProject:REVIEW_PROJECT,host:parentHost,subject:LEAD});
     const child=(action,args={})=>({action,args:{action,...args},project:REVIEW_PROJECT,sessionProject:REVIEW_PROJECT,host:childHost,subject:reviewer});
     const grantArgs={决定:'登记',任务:task.id,实例:REVIEW_HOLDER,候选id:'trusted-candidate',配方列表:['preflight','root-tests']};

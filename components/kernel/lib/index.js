@@ -333,12 +333,12 @@ export async function apply(ctx, config = {}) {
   // 宿主服务束：member_* 动作经它调官方运行时。每次调用现取（HMR/晚装载的服务取不到就如实为 null）。
   // signal 必带：Team/子会话服务内部 AbortSignal.any 会校验每一项（漏传 ⇒ "signals[0] is not of
   // type AbortSignal"，本机重启后实测），官方工具链恒传 exec.signal——这里对齐同一契约。
-  // 实验能力由部署者固定可信清单，缺省关闭；不能从模型入参注入解释器/命令。
+  // 默认由真实派发Lead冻结任务内候选/命名配方；复核员独立选名运行，继承宿主权限。
   let reviewExperiments = null;
   try {
     reviewExperiments = new ReviewExperimentService({
       org, config: config.reviewExperiments ?? {},
-      services: () => ({ sandbox: 取服务(ctx, 'sandbox'), subprocess: 取服务(ctx, 'subprocess') }),
+      services: () => ({ sandbox: 取服务(ctx, 'sandbox'), subprocess: 取服务(ctx, 'subprocess'), sandboxPolicy: 取服务(ctx, 'sandboxPolicy'), sessionQuery: 取服务(ctx, 'sessionQuery') }),
     });
     if (reviewExperiments.status().enabled && typeof ctx.effect !== 'function') throw Object.assign(new Error('实验生命周期未接线'), { code: 'EXPERIMENT_LIFECYCLE_UNAVAILABLE' });
     const lifetime = reviewExperiments;
@@ -570,9 +570,11 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations, 
         // 原动作——执行的是冻结请求（参数与步骤计划都按原样），不是这次的复述参数。
         审批引用: { type: 'string', description: '介入请求 id（v2 条目14/17）：写动作被介入度挂起后，主权者在设置页「待审批」批准，原申请者带 审批引用=<请求id> 重试原动作。执行的是冻结请求；参数/计划与记录不一致、已执行过、已失效都会拒' },
         许可id: { type: 'string', description: '冻结实验天然凭据id；不能以聊天授权或自报sandbox替代' },
-        候选id: { type: 'string', description: '部署者已审读固定SHA的候选id；不接受路径或manifest正文' },
-        配方: { type: 'string', enum: Object.keys(EXPERIMENT_RECIPES), description: '复核实例从许可冻结列表中独立选择一项，不接受argv/env/shell' },
-        配方列表: { type: 'array', items: { type: 'string', enum: Object.keys(EXPERIMENT_RECIPES) }, description: 'Lead登记本许可允许的封闭实验配方' },
+        候选id: { type: 'string', description: '仅旧部署白名单模式的候选id；默认自主模式使用候选根和实验配方' },
+        候选根: { type: 'string', description: '自主复核：Lead指定本任务正式复核读根内的绝对目录；服务自动冻结文件SHA，忽略版本库管理元数据，无需主权者登记候选版本' },
+        实验配方: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'object', additionalProperties: false, required: ['id','参数'], properties: { id: {type:'string',maxLength:100}, 可执行文件: {type:'string',description:'宿主绝对可执行文件路径；缺省当前Node，服务自动固定其SHA'}, 参数: {type:'array',maxItems:64,items:{type:'string',maxLength:4096}} } }, description: '仅派发Lead登记时提供命名的测试命令与参数；服务固定可执行文件SHA和argv。复核员运行时只选名字，不能改命令。cwd为专属候选副本，非通用命令接口' },
+        配方: { type: 'string', maxLength: 100, description: '复核实例从本许可冻结的配方名中独立选择一项，不能在run时修改argv/env/shell' },
+        配方列表: { type: 'array', items: { type: 'string', enum: Object.keys(EXPERIMENT_RECIPES) }, description: '兼容旧调用的五项内建配方；自主模式优先使用实验配方，不与其混用' },
         实验次数: { type: 'integer', minimum: 1, maximum: 8 },
         有效秒数: { type: 'integer', minimum: 1, maximum: 86400 },
         运行秒数: { type: 'integer', minimum: 1, maximum: 600 },
@@ -1289,6 +1291,7 @@ function 组织说明(org) {
     '派活流程（仅正式任务）：定判据→判权限→Lead 直接执行或按需 member_spawn（方式=team/subagent＋岗位＋节点＋任务书；机制完成 registry_assign 登记→绑定节点→装载岗位与判据→发开工消息，不等待成员确认）→交卷→复核→采纳/打回→记忆处置→结账。',
     '委派新任务时，task_create 的负责人直接填目标岗位；该岗可尚无实例，member_spawn 负责创建登记。若错建为 Lead 负责且目标岗位尚无实例，不能先 task_reassign：用 task_close＋task_successor（负责人=目标岗位）保留原判据与正式后继关系，再 member_spawn；不要伪造实例。',
     '正式复核：复核任务负责人填复核员，复核对象显式引用被验业务任务（不是依赖）。文件交付后，由 Lead 用 task_attach(id=复核任务id, 产出物引用=必要产物的真实绝对路径) 授予读根；交卷引用本身不授权读取。维护若提示缺少复核对象或读根，按返回的正式动作修复原任务，再用 member_message 联系原实例；无需重新创建或申请创建授权。',
+    '独立复跑由Lead自治准备：先建立有显式复核对象和正式读根的复核任务，再用review_experiment_allow(决定=登记,任务=复核任务id,实例=复核员实例,候选根=实际目录,实验配方=[{id,可执行文件?,参数}])冻结本次版本、命令及预算；无需让主权者预先审读/登记每个候选SHA或测试配方。默认复用双方宿主权限的交集，不改会话权限；部署显式停用或真实服务缺失时如实说明。需要独立复跑时，在让复核员开始审查前先完成许可登记；登记失败应先诊断通道，不要等静态审查做完才发现不能执行。复核员自行review_experiment_run(许可id,配方)并read取原始结果，不能由Lead代跑。测试回执不等于复核票，也不保证整体过。task_review的id为被验业务任务id；复核任务只承载复核报告，不能给自己交的报告出票。保留原未验票，补齐证据后追加新票，不改写旧票。',
     '推进方式由任务需要决定，不为流程额外建岗或起实例。任务判据派发后冻结；信息不足只停依赖它的动作，继续其他已授权工作；被拦时说明恢复条件，不自行绕闸。',
     '纪律：写操作一律先过策略引擎；被拒绝时结果里会带「哪条规则 + 改它要什么授权」，照着改，不要绕。',
     '阻塞反馈由执行者在会话中处理：先依据真实返回诊断，在已有授权内修复可恢复的问题；需要用户决定、补资料或授权时，由Lead在当前会话说明卡住的事项、已知原因和最小恢复条件。成员先向Lead汇报。不要要求用户打开面板填写原因分类、误拦判定或来源引用，也不要只把问题埋在面板或循环盲重试。monitor_query / monitor_feedback / monitor_followup供内部核对与留痕，模型声明不冒充人侧确认，登记重试不等于已恢复。',

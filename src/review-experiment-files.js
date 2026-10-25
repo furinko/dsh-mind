@@ -5,9 +5,9 @@ import {createHash} from 'node:crypto';
 import {canonical} from './kernel/text.js';
 import {Denied,Fault,InvalidBody} from './kernel/errors.js';
 
-/** 唯一支持的部署信任边界：可信冻结代码，部分文件写隔离，不保证读/网络隔离。 */
+/** 旧部署白名单模式的信任边界；自主模式另沿原生会话权限。 */
 export const EXPERIMENT_BOUNDARY='trusted-code-partial-write';
-/** 封闭五配方；工具schema、许可和执行argv均消费此处，不接受模型扩展脚本。 */
+/** 旧调用兼容用的五配方；自主模式允许Lead按任务冻结其它命名配方。 */
 export const EXPERIMENT_RECIPES=Object.freeze({
   preflight:Object.freeze(['test/preflight.mjs']),
   'root-tests':Object.freeze(['--test','test/*.test.js']),
@@ -45,11 +45,11 @@ function physicalRoot(root){
   const actual=fs.realpathSync(root);
   if(folded(path.resolve(root))!==folded(actual)||!fs.lstatSync(root).isDirectory())throw fail('候选根或父链发生重解析/别名跳转。');return actual;
 }
-function filesAt(root,limits,serviceCopy=false){
+function filesAt(root,limits,serviceCopy=false,omit=[]){
   const rows=[];let bytes=0;
   function walk(dir,relative=''){
     for(const entry of fs.readdirSync(dir,{withFileTypes:true})){
-      if(serviceCopy&&!relative&&[process.platform==='win32'?'.dsh-review-node.exe':'.dsh-review-node','.dsh-review-tmp'].includes(entry.name))continue;
+      if(!relative&&(omit.includes(entry.name)||serviceCopy&&[process.platform==='win32'?'.dsh-review-node.exe':'.dsh-review-node','.dsh-review-tmp','.dsh-review-bin'].includes(entry.name)))continue;
       const rel=safeRelative(relative?relative+'/'+entry.name:entry.name),full=path.join(dir,entry.name),st=fs.lstatSync(full);
       if(st.isSymbolicLink()||folded(fs.realpathSync(full))!==folded(path.resolve(full)))throw fail('拒绝符号链接/重解析穿越。');
       if(st.isDirectory()){walk(full,rel);continue;}
@@ -85,18 +85,21 @@ export function normalizeExperimentConfig(raw={}){
   const digest=experimentDigest(normalized);return freeze(JSON.parse(JSON.stringify({...normalized,digest})));
 }
 /** 只读生成清单，不代表已审读或已获得任何执行许可。 */
-export function inspectExperimentCandidate(root,limits=EXPERIMENT_HARD_LIMITS){const manifest=filesAt(physicalRoot(root),limits);return {manifest,manifestHash:experimentDigest(manifest)};}
+export function inspectExperimentCandidate(root,limits=EXPERIMENT_HARD_LIMITS,{omit=[]}={}){const manifest=filesAt(physicalRoot(root),limits,false,omit);return {manifest,manifestHash:experimentDigest(manifest)};}
 /** 执行前复核副本（服务专属Node和空临时目录单独验证），不凭复制已完成自述。 */
 export function verifyExperimentCopy(scope,candidate,config){
-  const st=fs.lstatSync(scope.nodePath);
-  if(!st.isFile()||st.isSymbolicLink()||st.nlink!==1||folded(fs.realpathSync(scope.nodePath))!==folded(path.resolve(scope.nodePath)))throw fail('副本解释器被替换或链接复用。');
-  verifyExperimentNode({...config.node,path:scope.nodePath});
+  const binaries=scope.executables?Object.entries(candidate.recipes).map(([id,r])=>({source:r.interpreter,file:scope.executables[id]})):[{source:config.node,file:scope.nodePath}];
+  for(const {source,file}of binaries){
+    const st=fs.lstatSync(file);
+    if(!st.isFile()||st.isSymbolicLink()||st.nlink!==1||folded(fs.realpathSync(file))!==folded(path.resolve(file)))throw fail('副本解释器被替换或链接复用。');
+    verifyExperimentNode({...source,path:file});
+  }
   if(!fs.lstatSync(scope.temp).isDirectory()||fs.lstatSync(scope.temp).isSymbolicLink()||folded(fs.realpathSync(scope.temp))!==folded(path.resolve(scope.temp))||fs.readdirSync(scope.temp).length)throw fail('副本临时目录不为空或发生重解析。');
   const actual=filesAt(physicalRoot(scope.workspace),config.limits,true);if(experimentDigest(actual)!==candidate.manifestHash)throw fail('副本manifest变化。');
 }
 /** 运行前及运行后都核原树，目录集合、实体类型及每个字节均在清单内。 */
 export function verifyExperimentCandidate(candidate,limits){
-  const actual=filesAt(physicalRoot(candidate.root),limits);
+  const actual=filesAt(physicalRoot(candidate.root),limits,false,candidate.omit??[]);
   if(experimentDigest(actual)!==candidate.manifestHash)throw fail('原候选manifest变化或出现额外/缺失文件。');return actual;
 }
 /** 校验 Node 实体及字节，不接受 PATH 解析、环境预加载或模型指定的解释器。 */
@@ -106,22 +109,32 @@ export function verifyExperimentNode(node){
 }
 /** 只新建随机专属树并复制实体文件，复制后再次核摘要；不执行候选代码。 */
 export function copyExperimentCandidate(candidate,config){
-  verifyExperimentCandidate(candidate,config.limits);const executable=verifyExperimentNode(config.node);
+  verifyExperimentCandidate(candidate,config.limits);const executable=candidate.recipes?null:verifyExperimentNode(config.node);
   const root=fs.mkdtempSync(path.join(tmpdir(),'mind-review-run-')),workspace=path.join(root,'dsh-mind');
   try{
     fs.mkdirSync(workspace);
     for(const row of candidate.manifest){const dest=path.join(workspace,row.path);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.copyFileSync(path.join(candidate.root,row.path),dest,fs.constants.COPYFILE_EXCL);}
     const copy={...candidate,root:workspace};verifyExperimentCandidate(copy,config.limits);
-    const nodePath=path.join(workspace,process.platform==='win32'?'.dsh-review-node.exe':'.dsh-review-node');fs.copyFileSync(executable,nodePath,fs.constants.COPYFILE_EXCL);if(process.platform!=='win32')fs.chmodSync(nodePath,0o500);verifyExperimentNode({...config.node,path:nodePath});
+    let nodePath=null,executables=null;
+    if(candidate.recipes){
+      executables={};let index=0;
+      for(const [id,recipe]of Object.entries(candidate.recipes)){
+        const source=verifyExperimentNode(recipe.interpreter),bin=path.join(workspace,'.dsh-review-bin',String(index++),path.basename(source));
+        fs.mkdirSync(path.dirname(bin),{recursive:true});fs.copyFileSync(source,bin,fs.constants.COPYFILE_EXCL);if(process.platform!=='win32')fs.chmodSync(bin,0o500);
+        verifyExperimentNode({...recipe.interpreter,path:bin});executables[id]=bin;
+      }
+    }else{
+      nodePath=path.join(workspace,process.platform==='win32'?'.dsh-review-node.exe':'.dsh-review-node');fs.copyFileSync(executable,nodePath,fs.constants.COPYFILE_EXCL);if(process.platform!=='win32')fs.chmodSync(nodePath,0o500);verifyExperimentNode({...config.node,path:nodePath});
+    }
     const temp=path.join(workspace,'.dsh-review-tmp');fs.mkdirSync(temp);
-    return {root,workspace,temp,nodePath};
+    return {root,workspace,temp,nodePath,...(executables?{executables}:{})};
   }catch(error){try{removeExperimentScope({root,workspace});}catch(cleanup){throw new Fault('EXPERIMENT_COPY_CLEANUP_FAILED','副本准备失败且清理未完成。',{detail:{root,originalCode:error.code??'UNKNOWN'}});}throw error;}
 }
 /** 清空环境注入（含 Windows 大小写别名），只显式恢复必要系统路径与本次临时目录。 */
 export function experimentEnvironment(scope){
   const env=Object.fromEntries(Object.keys(process.env).map(k=>[k,undefined]));
   for(const key of ['SystemRoot','WINDIR','ComSpec']){const found=Object.keys(process.env).find(k=>k.toUpperCase()===key.toUpperCase());if(found)env[key]=process.env[found];}
-  return {...env,TEMP:scope.temp,TMP:scope.temp,TMPDIR:scope.temp,HOME:scope.workspace,USERPROFILE:scope.workspace,PATH:path.dirname(scope.nodePath),NODE_OPTIONS:undefined,NODE_PATH:undefined};
+  return {...env,TEMP:scope.temp,TMP:scope.temp,TMPDIR:scope.temp,HOME:scope.workspace,USERPROFILE:scope.workspace,PATH:scope.executables?[...new Set(Object.values(scope.executables).map(p=>path.dirname(p))),process.env.PATH??''].filter(Boolean).join(path.delimiter):path.dirname(scope.nodePath),NODE_OPTIONS:undefined,NODE_PATH:undefined};
 }
 /** 删除前核绝对真实路径与专属命名前缀；只能删除本服务随机生成的实验根。 */
 export function removeExperimentScope(scope){

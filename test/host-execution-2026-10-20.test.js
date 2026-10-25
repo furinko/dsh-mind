@@ -30,7 +30,7 @@ for (const missing of ['startContinuable', 'sendMessage', 'drainContinuableChild
   const f = fixture(); delete f.subagents[missing];
   f.subagents.startActivation = async () => { throw Error('unverified old API'); };
   f.subagents.manager = { drainChildren() { throw Error('internal manager forbidden'); } };
-  await assert.rejects(createExecution(f.args), error => error.code === 'MEMBER_SPAWN_CONTRACT' && error.detail.缺.includes(missing));
+  await assert.rejects(createExecution(f.args), error => error.code === 'MEMBER_SPAWN_CONTRACT' && error.detail.缺.includes(missing==='startContinuable'?'drainChildren':missing));
   assert.equal(f.calls.start.length, 0); assert.equal(f.calls.oneShot, 0);
 });
 
@@ -95,4 +95,16 @@ it('host creation/message exceptions keep results unknown without exposing raw h
     assert.equal(reply.已确认阶段[0].已请求, true); assert.doesNotMatch(JSON.stringify(reply), /PRIVATE-/); return true;
   });
   assert.equal(f.calls.send.length, 1);
+});
+
+it('current SDK startActivation/drainChildren preserve parent delivery, reserved child id and real receipts',async()=>{
+ const f=fixture();delete f.subagents.startContinuable;delete f.subagents.drainContinuableChildren;
+ f.subagents.startActivation=async function(spec){assert.equal(this,f.subagents);f.calls.start.push(spec);return {childId:'durable-child',messageId:'new-inbox'};};
+ f.subagents.drainChildren=async function(parent,ids){assert.equal(this,f.subagents);f.calls.release.push({parent,ids});};
+ const r=await createExecution({...f.args,reservedChildId:'durable-child'});assert.equal(r.初始消息id,'new-inbox');assert.equal(f.calls.start[0].delivery,'parent');assert.equal(f.calls.start[0].request.parent,f.agent);assert.equal(f.calls.start[0].childId,'durable-child');assert.equal(f.calls.start[0].signal,f.signal);
+ await releaseExecution({host:f.host,mode:'subagent',agent:f.agent,id:r.实例});assert.deepEqual(f.calls.release,[{parent:f.agent,ids:['durable-child']}]);
+});
+it('a failed old creation never retries through a second public API',async()=>{
+ const f=fixture();let attempted=0;f.subagents.startContinuable=async()=>{attempted++;throw Error('result unknown');};f.subagents.startActivation=async()=>{attempted++;return {childId:'duplicate',messageId:'duplicate'};};f.subagents.drainChildren=async()=>{};
+ await assert.rejects(createExecution(f.args),e=>e.code==='MEMBER_SPAWN_RESULT_UNKNOWN');assert.equal(attempted,1);
 });
