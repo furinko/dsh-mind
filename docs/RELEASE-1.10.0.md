@@ -1,4 +1,6 @@
-# dsh-mind 1.10.0 发布候选
+# dsh-mind 1.10.0 正式版
+
+2026-10-25已发布：[GitHub Release](https://github.com/furinko/dsh-mind/releases/tag/v1.10.0)，代码提交`5dfd86d30ac0f5899f3041c6b05b1a165addbb48`。[下载安装包](https://github.com/furinko/dsh-mind/releases/download/v1.10.0/dsh-mind-1.10.0.tgz)及[SHA256SUMS](https://github.com/furinko/dsh-mind/releases/download/v1.10.0/SHA256SUMS)。
 
 心智为DSH增加可追溯的任务协作、对话延续、记忆和工作台。普通对话直接进行；需要正式交付时，再使用任务、成员、独立复核与Lead采纳。
 
@@ -25,4 +27,4 @@
 - 完整目标费用预算、统一跨进程恢复和知识质量闭环尚未完成。
 - 四项安全探针只说明各项机械检查的结果；长期“恒绿”仍按既有诊断规则提示，不认证一般安全性。
 
-发布候选的精确提交、Linux/Windows与Node矩阵、全新安装和宿主验收结果见[当前状态](STATUS.md)。本文件不将本地安装、候选提交或测试通过冒充公开发布。
+本版[Linux/Windows × Node22/24矩阵](https://github.com/furinko/dsh-mind/actions/runs/40173355005)四组通过，本机2257项测试为2254通过、0失败、3跳过；空profile正式安装与10项受控SDK核心流程、实际装载后的工作台及卡片交互通过。具体跳过项、验证范围与既有限制见[当前状态](STATUS.md)。
