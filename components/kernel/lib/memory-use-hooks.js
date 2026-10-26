@@ -1,6 +1,8 @@
 /** Passive observation through published hooks. Does not change host requests, tools or permissions. */
 import { agentSubject } from '../../../src/subject.js';
 import { digest } from '../../../src/kernel/text.js';
+import { randomUUID } from 'node:crypto';
+import { contextPayload } from './context-frame.js';
 
 export function createMemoryUseHooks({ org, projectOf, logger = console }) {
   const pending = new Set(); const frames = new Map(); let byAgent = new WeakMap();
@@ -20,29 +22,34 @@ export function createMemoryUseHooks({ org, projectOf, logger = console }) {
   const api = {
     clear(agent, channel = 'professional') { const group = byAgent.get(agent); const prior = group?.get(channel); if (prior) frames.delete(prior); group?.delete(channel); },
     recordAssembly(agent, frame, text, proof, channel = 'professional') {
-      const spec = scope(agent); if (stopped || !spec || !frame.观察ID) return;
+      const spec = scope(agent); if (stopped || !spec) return;
+      const observation = randomUUID(); // Correlation belongs to the observer, never the model prompt.
       spec.subject = { ...spec.subject, roleId: frame.岗位 ?? spec.subject.roleId }; spec.scopeStamp = proof?.stamp;
       const session = agent.session; const kind = spec.subject.kind;
       spec.valid = () => !stopped && agent.session === session && scope(agent)?.project === spec.project && scope(agent)?.subject.kind === kind;
       while (frames.size >= 128) frames.delete(frames.keys().next().value);
-      const entry = { agent, spec, session: agent.session, text, items: frameItems(frame), tasks: (frame.任务 ?? []).slice(0, 8), at: Date.now(), observed: new WeakSet() };
+      const entry = { agent, spec, session: agent.session, text, payload: contextPayload(text), items: frameItems(frame), tasks: (frame.任务 ?? []).slice(0, 8), at: Date.now(), observed: new WeakSet() };
       const group = byAgent.get(agent) ?? new Map(); const prior = group.get(channel); if (prior) frames.delete(prior);
-      frames.set(frame.观察ID, entry); group.set(channel, frame.观察ID); byAgent.set(agent, group);
-      for (const stage of ['selected', 'assembled']) track(() => org.memoryUse.observe({ ...spec, stage, observation: frame.观察ID, items: entry.items, tasks: entry.tasks }));
+      frames.set(observation, entry); group.set(channel, observation); byAgent.set(agent, group);
+      for (const stage of ['selected', 'assembled']) track(() => org.memoryUse.observe({ ...spec, stage, observation, items: entry.items, tasks: entry.tasks }));
     },
     observeRequest(options) {
-      if (stopped || !options || typeof options !== 'object') return;
-      // Only system/runtime-context text is eligible; a user's quote of a receipt cannot attest a request.
-      let text = typeof options.system === 'string' ? options.system.slice(-512000) : '';
-      for (const message of (options.messages ?? []).slice(-32)) {
-        if (message.role !== 'system' && !['system-prompt', 'runtime-context'].includes(message.source?.kind)) continue;
-        for (const block of message.content ?? []) if (block.type === 'text' && typeof block.text === 'string') text += block.text.slice(-512000);
-        if (text.length > 1024000) text = text.slice(-1024000);
-      }
+      if (stopped || !options || typeof options !== 'object' || typeof options.sessionId !== 'string' || options.purpose) return;
+      // The loop's sessionId binds identical text to its real session. Only the
+      // latest full runtime snapshot/current system is eligible; an old snapshot
+      // or a user quoting it cannot attest the current request.
+      const messages = options.messages ?? [];
+      const runtime = messages.findLast(message => message.source?.kind === 'runtime-context');
+      const system = messages.findLast(message => message.role === 'system' || message.source?.kind === 'system-prompt');
+      const texts = [typeof options.system === 'string' ? options.system.slice(-512000) : '',
+        ...[system, runtime].filter(Boolean).map(message => (message.content ?? [])
+          .filter(block => block.type === 'text' && typeof block.text === 'string').map(block => block.text).join('\n').slice(-512000))];
       for (const [observation, entry] of frames) {
         if (Date.now() - entry.at > 1800000) { frames.delete(observation); continue; }
         const now = scope(entry.agent);
-        if (entry.observed.has(options) || entry.agent.session !== entry.session || now?.project !== entry.spec.project || now?.session !== entry.spec.session || now?.subject.kind !== entry.spec.subject.kind || !text.includes(entry.text)) continue;
+        if (options.sessionId !== entry.spec.session || entry.observed.has(options) || entry.agent.session !== entry.session
+            || now?.project !== entry.spec.project || now?.session !== entry.spec.session || now?.subject.kind !== entry.spec.subject.kind
+            || !texts.some(text => text.includes(entry.text) || text.includes(entry.payload))) continue;
         entry.observed.add(options);
         track(() => org.memoryUse.observe({ ...entry.spec, stage: 'request-observed', observation, items: entry.items, tasks: entry.tasks }));
       }
@@ -75,7 +82,7 @@ export function createMemoryUseHooks({ org, projectOf, logger = console }) {
       } catch { disposers.forEach(fn => fn?.()); warn(); }
       return () => { stopped = true; attached = false; frames.clear(); byAgent = new WeakMap(); disposers.forEach(fn => fn?.()); };
     },
-    health() { return { attached, stopped, failedWrites, dropped, pending: pending.size, coverage: '本进程专业召回、Lead连续性段及mind全文读/交卷钩子观察；轮缓冲等其他上下文不在此记录。请求仅为llm/stream观察点，系统文字及末32条系统/运行上下文，截断、旁路和后续改写仍可能有缺口', actualUnderstanding: '未知' }; },
+    health() { return { attached, stopped, failedWrites, dropped, pending: pending.size, coverage: '本进程专业召回、Lead连续性段及mind全文读/交卷钩子观察；轮缓冲等其他上下文不在此记录。请求须有宿主sessionId，仅核对llm/stream观察点的当前system及最新runtime-context快照；无归因、截断、旁路和后续改写仍可能有缺口', actualUnderstanding: '未知' }; },
     async flush() { while (pending.size) await Promise.all([...pending]); },
   };
   return api;

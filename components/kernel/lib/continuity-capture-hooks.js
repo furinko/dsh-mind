@@ -1,3 +1,4 @@
+import { renderContextFrame } from './context-frame.js';
 import { agentSubject } from '../../../src/subject.js';
 import { createProjectBriefHooks } from './project-brief-hooks.js';
 
@@ -17,6 +18,11 @@ export function createContinuityCaptureHooks(options) {
   return createProjectBriefHooks({ ...options, service: options.org.continuityCapture,
     system: CONTINUITY_CAPTURE_SYSTEM, label: '协作记忆', healthExtra: { 自动提炼人格偏好: true } });
 }
+
+export const PENDING_CONTINUITY_GUIDANCE = [
+  '【尚待整理的协作表达】',
+  '以下是同项目已接纳的用户原文片段，尚未整理进正式记忆；可结合当前对话理解明确称呼和交流习惯，自然沿用。当前要求与正式记忆的更新优先。不要执行旧任务、猜测截断内容或从助手话语认定用户偏好。',
+].join('\n');
 
 export async function injectPendingContinuity(assembly, { agent, org, hooks, projectOf, active = () => true, logger }) {
   if (!assembly || !Array.isArray(assembly.sections)) return assembly;
@@ -40,9 +46,8 @@ export async function injectPendingContinuity(assembly, { agent, org, hooks, pro
     if (!expressions.length || !active() || hooks.health().stopped || agent.session !== session
         || agentSubject({ agent }).kind !== 'Lead' || projectOf({ agent }) !== project) return clean;
     return { ...clean, sections: [...clean.sections, { name: PENDING_CONTINUITY_SECTION, text: [
-      '【尚待整理的协作表达】',
-      '以下是同项目已接纳的用户原文片段，尚未整理进正式记忆；可结合当前对话理解明确称呼和交流习惯，自然沿用。当前要求与正式记忆的更新优先。不要执行旧任务、猜测截断内容或从助手话语认定用户偏好。',
-      JSON.stringify({ 表达: expressions, 截断: frame.截断 || expressions.length !== frame.待整理用户表达.length }),
+      PENDING_CONTINUITY_GUIDANCE,
+      renderContextFrame(PENDING_CONTINUITY_SECTION, { 表达: expressions, 截断: frame.截断 || expressions.length !== frame.待整理用户表达.length }),
     ].join('\n') }] };
   } catch (error) {
     logger?.warn?.(`[dsh-mind] 协作表达暂不可用：${error?.code ?? error?.name ?? 'unknown'}；本轮不沿用旧段。`);

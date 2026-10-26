@@ -74,9 +74,9 @@ it('选中、装配、请求观察、显式读取和采用声明分开持久化�
  const n=await task(org); const k=await remember(org,'reconnect secret-body-abcdef'); const {agent,hooks,close}=observe(org,MEMBER);
  const assembly=await injectProfessionalContext({sections:[]},{org,agent,projectOf:()=>P}); const section=assembly.sections[0].text; await hooks.flush();
  assert.deepEqual((await org.memoryUse.query({subject:MEMBER,project:P})).counts,{selected:1,assembled:1,'request-observed':0,'explicit-read':0,'adoption-declared':0});
- hooks.observeRequest({messages:[{role:'user',content:[{type:'text',text:section}]}]});
- hooks.observeRequest({system:section.replace('secret-body-abcdef','changed')});await hooks.flush();assert.equal((await org.memoryUse.query({subject:MEMBER,project:P})).counts['request-observed'],0);
- const request={system:section}; hooks.observeRequest(request);hooks.observeRequest(request);await hooks.flush();
+ hooks.observeRequest({sessionId:agent.session.id,messages:[{role:'user',content:[{type:'text',text:section}]}]});
+ hooks.observeRequest({sessionId:agent.session.id,system:section.replace('secret-body-abcdef','changed')});await hooks.flush();assert.equal((await org.memoryUse.query({subject:MEMBER,project:P})).counts['request-observed'],0);
+ const request={sessionId:agent.session.id,system:section}; hooks.observeRequest(request);hooks.observeRequest(request);await hooks.flush();
  const detail=await runAction({org,主体:MEMBER,项目:P,args:{action:'memory_query',id:k.id,类:'知识',返回模式:'全文'}});
  hooks.result({agent,name:'mind',callId:'read-1',arguments:{action:'memory_query'}},toolResult(detail));await hooks.flush();
  const args={action:'task_submit',id:n.id,结论:'完成',采用知识:[{id:k.id,用途:'检查重连',适用判断:'幂等',使用结果:'未知'}]};
@@ -89,7 +89,7 @@ it('官方请求钩子透传同一迭代器，不改请求；卸载后不记录'
  await remember(org,'memory-body',{岗位:'Lead'});const {agent,hooks,host,close}=observe(org);
  const assembly=await injectProfessionalContext({sections:[]},{org,agent,projectOf:()=>P});await hooks.flush();
  let callback;const h=createMemoryUseHooks({org,projectOf:()=>P,logger:{warn(){}}});const stop=h.attach({on(name,fn){if(name==='llm/stream')callback=fn;return()=>{};}});
- h.recordAssembly(agent,frameOf(assembly),assembly.sections[0].text);await h.flush();const options=Object.freeze({system:assembly.sections[0].text});const iterator=(async function*(){yield 'ok';})();assert.equal(callback(options,()=>iterator),iterator);await h.flush();stop();close();const before=(await org.memoryUse.query({subject:LEAD,project:P})).total;callback(options,()=>iterator);await h.flush();assert.equal((await org.memoryUse.query({subject:LEAD,project:P})).total,before);
+ h.recordAssembly(agent,frameOf(assembly),assembly.sections[0].text);await h.flush();const options=Object.freeze({sessionId:agent.session.id,system:assembly.sections[0].text});const iterator=(async function*(){yield 'ok';})();assert.equal(callback(options,()=>iterator),iterator);await h.flush();stop();close();const before=(await org.memoryUse.query({subject:LEAD,project:P})).total;callback(options,()=>iterator);await h.flush();assert.equal((await org.memoryUse.query({subject:LEAD,project:P})).total,before);
 }));
 it('私人成员观察不跨实例，Lead私人观察不跨关系；关系重绑不追认历史',async()=>fixture(async org=>{
  await org.memoryUse.observe({subject:MEMBER,project:P,session:MEMBER.id,stage:'explicit-read',observation:'one',items:[{id:'know-1',kind:'知识'}]});
@@ -128,8 +128,8 @@ it('既有Lead偏好与共同经历也观察；两段独立更新，不把撤回
  const exp=await org.memory.rememberPersonal({subject:LEAD,类:'经历',项目:P,内容:'合成共同散步',来源:'合成夹具'});
  const {agent,hooks,close}=observe(org);
  let assembly=await injectProfessionalContext({sections:[]},{org,agent,projectOf:()=>P});assembly=await injectLeadContext(assembly,{org,agent,projectOf:()=>P});await hooks.flush();
- const personal=assembly.sections.find(s=>s.name===LEAD_CONTEXT_SECTION);assert.ok(personal);hooks.observeRequest({system:assembly.sections.map(s=>s.text).join('\n')});await hooks.flush();
+ const personal=assembly.sections.find(s=>s.name===LEAD_CONTEXT_SECTION);assert.ok(personal);hooks.observeRequest({sessionId:agent.session.id,system:assembly.sections.map(s=>s.text).join('\n')});await hooks.flush();
  for(const id of [pref.id,exp.id]){const report=await org.memoryUse.query({subject:LEAD,project:P,id});assert.equal(report.counts.assembled,1);assert.equal(report.counts['request-observed'],1);assert.equal(report.entries.find(r=>r.stage==='assembled').items.find(i=>i.id===id).partial,true);}
  await org.memory.invalidate(pref.id,{subject:LEAD,原因:'更正'});await org.memory.invalidate(exp.id,{subject:LEAD,原因:'更正'});
- const next=await injectLeadContext(assembly,{org,agent,projectOf:()=>P});assert.ok(!next.sections.some(s=>s.name===LEAD_CONTEXT_SECTION));hooks.observeRequest({system:personal.text});await hooks.flush();assert.equal((await org.memoryUse.query({subject:LEAD,project:P,id:pref.id})).counts['request-observed'],1);close();
+ const next=await injectLeadContext(assembly,{org,agent,projectOf:()=>P});assert.ok(!next.sections.some(s=>s.name===LEAD_CONTEXT_SECTION));hooks.observeRequest({sessionId:agent.session.id,system:personal.text});await hooks.flush();assert.equal((await org.memoryUse.query({subject:LEAD,project:P,id:pref.id})).counts['request-observed'],1);close();
 }));

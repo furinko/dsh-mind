@@ -1,5 +1,11 @@
 # 当前代码、部署与验收状态
 
+2026-10-26 缓存装配修订（源码，尚未装载）：固定使用规则留在system，九类有界业务资料转入原生runtime-context；专业/连续性观察ID、轮缓冲水位、全局信息revision等内部字段退出模型文本，原查询与权限/版本复核不变。观察器内部生成ID并按宿主sessionId核对最新快照，避免相同文本跨会话误归因；知识撤销、更正、任务结束或资料段退出时清理旧自动快照，保留宿主其他资料和原用户/工具历史。旧宿主保留有界旧段，原生行为以DSH 0.2.1-rc.2为验证范围，详见[装配合同](design/缓存友好的上下文装配-2026-10-26.md)。
+
+仓外冻结副本全检2267项：2264通过、0失败、3项Windows专属检查跳过；549客户端断言、84模块preflight及10项安装自检通过。真实DSH隔离实例使用本地确定性适配器，10项检查通过，覆盖完整请求前缀保留、元数据变化不改模型资料、原生快照去重、按会话观察、撤销后整份请求不带旧自动知识、成员任务结束及位置式压缩恢复。共12次本地适配器调用（8次普通请求、4次辅助调用），外部模型调用为0。证据位于`~/.local/share/dsh-mind/audits/cache-context-00v929/`，最终日志为`candidate/full-final2.log`和`native-final2.log`，宿主回执为`native-receipt.json`。初轮完整测试因测试PATH缺Git而失败的20项及早期夹具失败保留；补齐测试环境并修正夹具后复跑通过。提供方真实缓存命中率、费用/订阅额度收益及真实模型行为尚未验证。
+
+本批未停止、重启、重载DSH，未修改已装载插件、profile或runtime检出；运行磁盘仍为`5dfd86d30ac0f5899f3041c6b05b1a165addbb48`。装载须取得本次明确同意后执行，不能将源码与隔离结果当作生产已生效。
+
 2026-10-25 `dsh-mind@1.10.0`已在[npm公开发布](https://www.npmjs.com/package/dsh-mind)，`latest`指向`1.10.0`。npm下载的tarball与GitHub Release附件均为SHA-256 `02496bd3ac9e0d883c1c48aef4b23b87b45c16dc742213fa1019da58cbf55efa`，没有重新打包或改写冻结代码。在仓外空profile通过`dsh plugin --profile npm-registry add dsh-mind@1.10.0`安装，包内自检通过，151个安装文件与已验收冻结包逐一一致，代码指纹匹配。早期读取一度仅取得`0.0.0-stage`占位版本，最初下载和安装失败记录保留；最终版本、latest、实际下载及成功安装均重新核对，未以CLI成功回执替代公开可用性证明。本次未重启DSH或改变运行中的插件；证据位于`~/.local/share/dsh-mind/audits/release-v1-1arT6M/npm-publish/`。
 
 2026-10-25 `v1.10.0`正式版已在[GitHub Release](https://github.com/furinko/dsh-mind/releases/tag/v1.10.0)发布，标签精确指向`5dfd86d30ac0f5899f3041c6b05b1a165addbb48`，附实际安装包与SHA256SUMS。候选最终[Linux/Windows × Node22/24矩阵](https://github.com/furinko/dsh-mind/actions/runs/40173355005)四组全部通过；Linux每组2250通过、7跳过，Windows每组2246通过、11跳过，均零失败，各含549客户端断言与10项安装自检。跳过项涉及可选解析依赖、平台及宿主路径别名适用性，没有计为通过；本机带解析组件的2257项复验为2254通过、0失败、3跳过。

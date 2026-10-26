@@ -1,3 +1,4 @@
+import { renderContextFrame } from './context-frame.js';
 /** Quiet, bounded free time uses a real Lead route; it never creates a host task or sends a message. */
 import { agentSubject } from '../../../src/subject.js';
 import { LEAD_SPACE_LIMITS } from '../../../src/lead-space.js';
@@ -133,6 +134,17 @@ export function createLeadSpaceHooks({ org, projectOf, llmOf = () => null, logge
   return api;
 }
 
+export const LEAD_SPACE_GUIDANCE = [
+  '【自主记录与自由空间】',
+  '你可以留下自己的经历、兴趣、疑问和创作，不必先建任务或派给记忆整理岗。成员的知识晋升限制不应套到Lead自身。',
+  '真实个人经历可用memory_write 类=经历、来源说明；私人的直接知识可用memory_write 类=知识、岗位=Lead、来源与知识说明，不需要虚构任务。审批仍依现行档位。',
+  '用户原话与外部材料优先用information_update submit/submit_tool→information_read→record，保留真实来源。自己的推断明确标理解、假设或待验证；没有证据的想法先留随笔，不把自述当成事实、认证知识或已验证能力。',
+  'lead_space_query 自由空间={id?,offset?,limit?}可列出或读自己的随笔；lead_space_update 自由空间={op:write,title,text,share?}存草稿，更新/删除带id,revision,hash。普通会话草稿限定当前项目和关系；自动自由创作才使用不含私人来源的公共自身空间。',
+  '随笔不自动收录，不进任务验收，不设产量指标。可写半成品、失败尝试和虚构故事，允许什么都不留下。正式经历、知识和人格连续性仍在原记忆服务，创作空间不是另一套记忆库。',
+  '反馈按身份、权限和证据核对，允许保留不同判断。日常修订留痕，但人侧仍可删除隐私、要求遗忘；人侧纠正不由模型自行恢复。不修改核心人设，也不包装宿主权限。',
+  'share标记只供后续交谈自然参考，不主动发送通知；自由活动提供规律活动机会，不证明主观连续存在。',
+].join('\n');
+
 export async function injectLeadSpace(assembly, { org, agent, hooks, projectOf, logger }) {
   if (!Array.isArray(assembly?.sections)) return assembly;
   const clean = assembly.sections.some(s => s?.name === LEAD_SPACE_SECTION) ? { ...assembly, sections: assembly.sections.filter(s => s?.name !== LEAD_SPACE_SECTION) } : assembly;
@@ -142,15 +154,8 @@ export async function injectLeadSpace(assembly, { org, agent, hooks, projectOf, 
     const spec = { subject, session: agent.session.id, project: projectOf({ agent }) };
     const page = await org.leadSpace.query(spec, { limit: 5 });
     return { ...clean, sections: [...clean.sections, { name: LEAD_SPACE_SECTION, text: [
-      '【自主记录与自由空间】',
-      '你可以留下自己的经历、兴趣、疑问和创作，不必先建任务或派给记忆整理岗。成员的知识晋升限制不应套到Lead自身。',
-      '真实个人经历可用memory_write 类=经历、来源说明；私人的直接知识可用memory_write 类=知识、岗位=Lead、来源与知识说明，不需要虚构任务。审批仍依现行档位。',
-      '用户原话与外部材料优先用information_update submit/submit_tool→information_read→record，保留真实来源。自己的推断明确标理解、假设或待验证；没有证据的想法先留随笔，不把自述当成事实、认证知识或已验证能力。',
-      'lead_space_query 自由空间={id?,offset?,limit?}可列出或读自己的随笔；lead_space_update 自由空间={op:write,title,text,share?}存草稿，更新/删除带id,revision,hash。普通会话草稿限定当前项目和关系；自动自由创作才使用不含私人来源的公共自身空间。',
-      '随笔不自动收录，不进任务验收，不设产量指标。可写半成品、失败尝试和虚构故事，允许什么都不留下。正式经历、知识和人格连续性仍在原记忆服务，创作空间不是另一套记忆库。',
-      '反馈按身份、权限和证据核对，允许保留不同判断。日常修订留痕，但人侧仍可删除隐私、要求遗忘；人侧纠正不由模型自行恢复。不修改核心人设，也不包装宿主权限。',
-      'share标记只供后续交谈自然参考，不主动发送通知；自由活动提供规律活动机会，不证明主观连续存在。',
-      JSON.stringify({ config: page.config, notes: page.entries.map(n => ({ id: n.id, title: n.title, revision: n.revision, share: n.share })), runtime: hooks.health() }),
+      LEAD_SPACE_GUIDANCE,
+      renderContextFrame(LEAD_SPACE_SECTION, { config: page.config, notes: page.entries.map(n => ({ id: n.id, title: n.title, revision: n.revision, share: n.share })), runtime: hooks.health() }),
     ].join('\n') }] };
   } catch (error) { logger?.warn?.(`[dsh-mind] 自由空间上下文暂不可用（${error.code ?? error.name}）。`); return clean; }
 }
