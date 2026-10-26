@@ -9,7 +9,9 @@ import { assertPathSegment } from './paths.js';
 // app.asar → dsh-experimental-tool-agent-team/lib/index.js 的 teamPolicy()。
 // 上游把旧的授权闸句（"…but create teammates only when the user explicitly asks…"）
 // 整句删除——新文本是纯协作纪律（写域 / FS_STALE_VERSION / 消息语义），没有要替换的闸门句。
-// 锚取首行+次段开头：够长能咬住所认的契约，上游再漂移即硬拒（fail-closed，不静默适配）。
+// 2026-10-26 再核对：实际桌面 0.2.1-rc.3 与官方源码 22ddee3792402c3e70ec5f86a63c3e3e895a2f60
+// 均保留此开头。装配 waterfall 可以返回嵌套 assemble 的结果，因此还须识别本项目的
+// 完整原样授权头；重复经过本组件不等于上游漂移。未知头或正文仍按同一锚硬拒。
 const OFFICIAL_TEAM_OPENER = 'Agent Teams is available in this session\n\nThe Team Lead and all teammates share the same working directory and filesystem.';
 const CREATION_TOOLS = new Set(['spawn_teammate', 'subagent', 'subagent_fork', 'role_spawn', 'workflow']);
 /** @param {string|undefined} name @returns {boolean} 只读查询创建工具闭名单，无副作用。 */
@@ -115,7 +117,7 @@ export class DelegationPolicy {
   }
 
   /**
-   * 正式装配 waterfall 的后处理：只原位替换一个 Team 策略段，保留官方其余协作约束。
+   * 正式装配 waterfall 的后处理：给唯一 Team 策略段加一次授权头，逐字保留官方文本。
    * @param {{sections: Array<{name: string, text: string}>, [key: string]: any}} assembly
    * @param {{project: string, isTeam: boolean}} spec
    * @returns {object} 新装配值；未授权或非 Team 作用域原样返回。
@@ -128,9 +130,6 @@ export class DelegationPolicy {
     const team = sections.filter((section) => section.name === 'team:policy');
     if (team.length !== 1) throw new Fault('DELEGATION_TEAM_POLICY', `授权范围内要求唯一 team:policy，实际 ${team.length} 段。`);
     const original = team[0].text;
-    if (typeof original !== 'string' || !original.startsWith(OFFICIAL_TEAM_OPENER)) {
-      throw new Fault('DELEGATION_UPSTREAM_POLICY_DRIFT', '官方 team:policy 入口已变化；先核对上游契约，不能盲目替换或追加相反指令。');
-    }
     const header = [
       `[${DelegationPolicy.generation}] The deployment owner explicitly authorizes the Team Lead to choose direct execution, ordinary subagents, or Agent Teams according to task needs in project ${JSON.stringify(project)}.`,
       'Delegation is optional: do not create agents merely to parallelize. Use mind member_spawn for governed delegation; it registers the actual instance, binds a task with acceptance criteria, loads role instructions, and only then sends the work.',
@@ -142,12 +141,23 @@ export class DelegationPolicy {
       'Only the Lead chooses and initiates delegation. Members and reviewers cannot create further agents or grant themselves authority. Reviewers are ordinary role cards: the Lead spawns a review instance per task like any other member, and independence is enforced by conflict exclusion (whoever submitted or owns the work must not review it) plus the criteria frozen by the mechanism, not by any appointment authorization.',
       'Use mind member_message and member_stop for organization-managed instances; Team names and ordinary child session ids are different addresses. The organization task graph remains the business-state authority; the Team task board is an execution mirror, not a second acceptance authority.',
     ].join('\n');
+    const prefix = header + '\n\n';
+    const alreadyAssembled = typeof original === 'string' && original.startsWith(prefix);
+    const official = alreadyAssembled ? original.slice(prefix.length) : original;
+    if (typeof official !== 'string' || !official.startsWith(OFFICIAL_TEAM_OPENER)) {
+      throw new Fault('DELEGATION_UPSTREAM_POLICY_DRIFT', 'team:policy 与已核对的契约不匹配；先核对上游及装配链路，不能盲目替换或追加相反指令。', {
+        detail: { section: 'team:policy', recognizedCurrentHeader: alreadyAssembled,
+          textFingerprint: typeof original === 'string' ? createHash('sha256').update(original).digest('hex') : null },
+      });
+    }
+    // 只认完整、当前代次、当前项目的原样头；不按标记模糊剥离，也不反复追加。
+    if (alreadyAssembled) return assembly;
     // 拼接形态换代（2026-10-17）：旧契约是「换掉授权闸句、保留尾巴」；上游删掉闸句后，
     // 改为组织授权头**前置**、官方全文逐字保留——不删不改不加相反指令（上游已不再说
     // 「仅用户明确要求才可创建」，组织纪律是部署者附加约束，与上游文本无冲突）。
     return {
       ...assembly,
-      sections: sections.map((section) => section === team[0] ? { ...section, text: header + '\n\n' + original } : section),
+      sections: sections.map((section) => section === team[0] ? { ...section, text: prefix + original } : section),
     };
   }
 

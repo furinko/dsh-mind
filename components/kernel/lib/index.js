@@ -268,7 +268,7 @@ export async function apply(ctx, config = {}) {
     const 撤销器 = [];
     let 确认写 = null;
     try {
-      // 提示词唯一改动点：官方 team:policy 的首段原位换成部署授权，其余协作纪律保持官方原文。
+      // 提示词唯一改动点：给官方 team:policy 前置一次部署授权头，官方全文逐字保留。
       // prepend=true 让本监听最后落值；官方 complete-prompt preset 会在 waterfall 后强制还原，
       // 那类 preset 不在本授权的兼容范围（delegation_status 读数里如实标注）。
       撤销器.push(ctx.on('system-prompt/assemble', async (assembly, context, next) => {
