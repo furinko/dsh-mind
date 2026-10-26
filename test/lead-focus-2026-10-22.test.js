@@ -181,7 +181,8 @@ it('真实内核按当前Lead会话组装目标与相关教训，其他Lead和�
       const input = base(); const out = await hook(input, { agent: agent(who.id) }, async () => input);
       const memory = JSON.parse(out.sections.find(item => item.name === LEAD_CONTEXT_SECTION).text.split('\n').at(-1));
       const work = JSON.parse(out.sections.find(item => item.name === WORK_CONTEXT_SECTION).text.split('\n').at(-1));
-      assert.equal(memory.焦点线索.目标, expectedGoal);
+      assert.ok(!Object.hasOwn(memory, '焦点线索'));
+      assert.equal((await recallLeadContext({ org, subject: who, project: P })).焦点线索.目标, expectedGoal);
       assert.deepEqual(memory.记录.map(item => item.id), [expectedMemory]);
       assert.equal(work.资料[0].id, expectedGoal);
     }

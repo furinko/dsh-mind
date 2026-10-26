@@ -111,7 +111,8 @@ it('同轮后续装配按已接纳中文表达检索教训，旧目标不挤入�
   const persona = await lesson(org, '保持好奇心', { 连续性: { 类别: '人格', 主题: '人格', 依据: '自省', 范围: '部署' } });
   const s = session(); start(s); accept(s, '发布之前核对回退路径');
   const out = frameOf(await inject(org, s));
-  assert.equal(out.焦点线索.类型, '已接纳用户来源文本');
+  assert.ok(!Object.hasOwn(out, '焦点线索'));
+  assert.equal((await recall(org, s)).焦点线索.类型, '已接纳用户来源文本');
   assert.deepEqual(new Set(out.记录.map(item => item.id)), new Set([useful.id, persona.id]));
   assert.doesNotMatch(JSON.stringify(out), /nebula/);
 }));
@@ -173,7 +174,8 @@ it('真实内核装配按各自Session取表达，不跨Lead或项目串用，�
       const s = session(who.id); start(s); accept(s, word); const base = assembly();
       const out = await hook(base, { agent: { session: s } }, async () => base);
       assert.deepEqual(frameOf(out).记录.map(item => item.id), [expected]);
-      assert.equal(frameOf(out).焦点线索.会话, who.id);
+      assert.ok(!Object.hasOwn(frameOf(out), '焦点线索'));
+      assert.equal((await recallLeadContext({ org, subject: who, project: P, readExpression: () => readAcceptedExpression(s) })).焦点线索.会话, who.id);
     }
     const local = await lesson(org, 'quartz-project-private', { 连续性: { 类别: '协作教训', 主题: '项目教训', 依据: '自省', 范围: '项目' } });
     const s = session(); start(s); accept(s, 'quartz-project-private');

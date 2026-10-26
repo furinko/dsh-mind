@@ -266,7 +266,7 @@ export class ProjectBriefService {
       return { updated: true, revision: state.revision, pending: pending.length - selected.length };
     });
   }
-  async read(spec, { id } = {}) {
+  async read(spec, { id, visible = [] } = {}) {
     if (id !== undefined && !string(id, 64)) throw new InvalidBody('项目接续id无效。');
     const before = await this.authorize(spec);
     const state = await this.load(spec.project);
@@ -282,8 +282,13 @@ export class ProjectBriefService {
       数据版本: digest(canonical({ epoch: state.epoch, revision: state.revision, sourceRevision: state.sourceRevision, items,
         pending: pending.map(p => [p.session, signature(p.session, p.message)]), goals: goals.目标 })), 条目: [], 截断: false };
     // 新会话首步不等待辅助模型，但必须能核对最新已接纳更正，避免只看到旧摘要。
-    const recent = [...pendingUsers].reverse().slice(0, 4);
-    frame.截断 = pendingUsers.length > recent.length;
+    // Only automatic assembly supplies its current session surface. Filter before
+    // budgeting so newer visible chatter cannot evict a missing correction.
+    // Default queries retain the original full pending index and provenance.
+    const visibleSet = new Set(visible);
+    const missingUsers = pendingUsers.filter(p => p.session !== spec.session || !visibleSet.has(p.message.seq));
+    const recent = [...missingUsers].reverse().slice(0, 4);
+    frame.截断 = missingUsers.length > recent.length;
     for (const { session, message: m } of recent) {
       const entry = { 会话: session, 事件序号: m.seq, 消息: m.id, 文本: m.text.slice(0, 800),
         时间: m.at ?? null, 截断: m.clipped || m.text.length > 800 };
