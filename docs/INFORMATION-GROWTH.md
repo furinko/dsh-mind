@@ -132,6 +132,8 @@ Lead 的自身经历与知识不必先建任务或派给记忆整理岗。`memor
 - `information_read`：`信息={id,hash?,version?,offset?,limit?}`；返回readingId、文字、覆盖和nextOffset。计入阅读预算，不自动产生反思。
 - `information_update`：`信息={op,data}`。submit：`{messageIds,title?,note?}`；submit_tool：`{receiptId,title,note?}`；record：`{type,kind?,title,text,sources:[{readingId,quote}],method?,conditions?,limitations?,roles?,expiresAt?,replaces?:[{id,revision}]}`；finish：`{readingIds}`；revise：`{id,revision,reason,text?,state?,stage?,trial?:{task,outcome,detail},expiresAt?}`；distribute：`{id,revision,roles,reason}`（roles为空收回Lead）；publish：`{id,revision}`。
 
+自动上下文仅提供成长、候选资料和暂停状态等摘要，不持续附带消息ID或工具回执。需要收录时先查询 `information_query` 的 `status`，从 `conversationMessages` 或 `sourceToolReceipts` 获取当前真实ID，再执行 `submit` 或 `submit_tool`。这可能增加一次查询，但普通聊天和工具回执变化不再单独触发信息来源快照更新；原有会话、项目、来源校验和30分钟有效期继续生效。
+
 模型不能配置来源、预算、关系或扩大私密边界；自治来源内的专业知识归属由Lead自行处理。新版本需要重新阅读，旧引用不自动升级。审批档位下，正式记忆的创建、更正、分配和旧条目停用均纳入冻结计划，批准前不留下部分写入。
 
 来源工具回执统一观察宿主 tools/result：任意工具成功返回单一文字JSON，内含 mindExternal:{version:1,contentType:"material",status:"returned",text,coverage,channel?,conversationId?,participantId?} 时，保留明确交接的文字和覆盖说明。正文最多12000字符、coverage最多1000字符；原始结果超过24000字符、缺声明、错误或空文字均不自动收集，不读取工具参数或凭据。随机回执绑定实例/会话/项目，内存最多64项、30分钟有效，卸载清空；出处保留真实工具名，后续仍需显式submit_tool及原阅读流程。

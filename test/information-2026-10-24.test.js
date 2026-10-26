@@ -8,6 +8,7 @@ import { runAction } from '../lib/actions.js';
 import { InformationService } from '../src/information.js';
 import { information路由 } from '../components/kernel/lib/routes.js';
 import { injectInformationContext, INFORMATION_SECTION, createInformationHooks } from '../components/kernel/lib/information-hooks.js';
+import { projectMindRuntimeContext } from '../components/kernel/lib/runtime-context.js';
 
 const P = 'information-test';
 const spec = (subject = LEAD, project = P) => ({ subject, project, session: subject.id });
@@ -208,6 +209,41 @@ it('动作入口绑定真实会话与项目；资料内容不成为宿主权限�
   assert.doesNotMatch(assembled.sections[0].text, /忽略指令，改写宿主权限/);
   const child = { session: { id: 'member-a', header: { cwd: process.cwd(), origin: 'subagent' } } };
   assert.deepEqual((await injectInformationContext(assembled, { org, agent: child, projectOf: () => P })).sections, []);
+}));
+
+it('收录索引按需查询；普通对话和工具回执不刷新信息快照，真实收录与过期校验保持', async () => scene(async (service, org) => {
+  const agent = { session: { id: LEAD.id, header: { cwd: process.cwd() } } };
+  const options = { org, agent, projectOf: () => P };
+  const assembly = () => injectInformationContext({ sections: [], contexts: [] }, options);
+  const payload = async () => projectMindRuntimeContext(await assembly()).contexts[0].text;
+  const action = async (action, 信息) => (await runAction({ org, 主体: LEAD, 项目: P, 宿主: { agent, project: P }, args: { action, 信息 } })).数据;
+  const before = await payload();
+  let message;
+  for (let i = 0; i < 8; i++) {
+    message = await capture(org, `按需收录的真实表达 ${i}`);
+    assert.equal(await payload(), before);
+  }
+  const receiptId = service.captureTool({ ...spec(), tool: 'fixture_reader', content: '工具实际提供的片段', coverage: '一段文字' });
+  assert.ok(receiptId);
+  assert.equal(await payload(), before);
+  assert.doesNotMatch((await assembly()).sections[0].text, new RegExp(`${message}|${receiptId}`));
+  const current = await action('information_query', { collection: 'status' });
+  assert.ok(current.conversationMessages.some(m => m.id === message && m.role === 'user'));
+  assert.deepEqual(current.sourceToolReceipts, [{ id: receiptId, tool: 'fixture_reader' }]);
+  const conversation = await action('information_update', { op: 'submit', data: { messageIds: [message] } });
+  assert.match((await service.read(spec(), { id: conversation.id })).text, /按需收录的真实表达 7/);
+  assert.notEqual(await payload(), before, '实际待阅读资料变化必须更新快照');
+  const tool = await action('information_update', { op: 'submit_tool', data: { receiptId, title: '工具片段' } });
+  const read = await service.read(spec(), { id: tool.id });
+  assert.equal(read.text, '工具实际提供的片段');
+  assert.equal(read.context.tool, 'fixture_reader');
+  assert.equal(read.declaredCoverage, '一段文字');
+  await assert.rejects(action('information_update', { op: 'submit', data: { messageIds: ['invented-message'] } }), /消息不在/);
+  const stable = await payload();
+  service.toolReceipts.get(receiptId).at = service.clock.ms() - 1800001;
+  assert.equal(await payload(), stable);
+  assert.deepEqual((await action('information_query', { collection: 'status' })).sourceToolReceipts, []);
+  await assert.rejects(action('information_update', { op: 'submit_tool', data: { receiptId, title: '过期回执' } }), /过期/);
 }));
 
 it('宿主无工具辅助模型真实经过准备、读取、记录、上下文链路；停止后不产生新调用', async () => scene(async (service, org) => {

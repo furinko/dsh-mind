@@ -5,7 +5,9 @@ const INTERNAL_FIELDS = {
   'mind:professional-context': ['观察ID', '数据版本'],
   'mind:lead-continuity': ['观察ID', '数据版本'],
   'mind:turn-buffer': ['数据版本', '下次事件序号'],
-  'mind:information-growth': ['dataRevision'],
+  // Submission IDs change with ordinary conversation and tool traffic. They remain
+  // available through information_query status, rather than renewing every snapshot.
+  'mind:information-growth': ['dataRevision', 'conversationMessages', 'sourceToolReceipts'],
   'mind:project-brief': ['数据版本', '来源修订'],
   'mind:lead-free-space': ['runtime'],
 };
