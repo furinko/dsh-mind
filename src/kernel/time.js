@@ -38,6 +38,14 @@ export function toIso(value) {
   return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
+/** Presentation ordering accepts only complete, zoned timestamps; unknown dates stay unknown. */
+export function timestampMillis(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return null;
+  const wall = value.slice(0, 19).replace(' ', 'T');
+  const calendar = new Date(wall + 'Z'), instant = Date.parse(value);
+  return Number.isFinite(instant) && Number.isFinite(calendar.getTime()) && calendar.toISOString().slice(0, 19) === wall ? instant : null;
+}
+
 /**
  * 审计日志按月分片用的分片键（§14.3：审计日志按月，不按项目分）。
  * @param {Date|string} value

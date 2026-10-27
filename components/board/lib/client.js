@@ -297,6 +297,21 @@ window.__ModuleLoader__.load({
     try { 本地时间格式器 = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZoneName: 'longOffset' }); } catch (error) { /* Keep the explicit original zone when formatting is unavailable. */ }
     function 显示时区() { return 本地时间格式器 ? 本地时间格式器.resolvedOptions().timeZone : '保留原始时区'; }
+    // Classic-script counterpart of kernel/time.timestampMillis (no host imports).
+    function 排序时刻(value) {
+      if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return null;
+      var wall = value.slice(0, 19).replace(' ', 'T'), date = new Date(wall + 'Z'), instant = Date.parse(value);
+      return isFinite(instant) && isFinite(date.getTime()) && date.toISOString().slice(0, 19) === wall ? instant : null;
+    }
+    function 最近在前(rows, fields) {
+      return arr(rows).map(function (row, index) {
+        var values = typeof fields === 'function' ? fields(row) : fields.map(function (key) { return row && row[key]; });
+        var at = -Infinity;
+        arr(values).forEach(function (value) { var time = 排序时刻(value); if (time !== null && time > at) at = time; });
+        return { row: row, at: at, index: index };
+      }).sort(function (a, b) { return a.at === b.at ? a.index - b.index : a.at > b.at ? -1 : 1; })
+        .map(function (entry) { return entry.row; });
+    }
     function 时间信息(value) {
       var raw = typeof value === 'string' ? value : '';
       var fallback = { short: raw, full: raw ? '原始时间（未转换；格式或时区无法核对）：' + raw : '时间未提供' };
@@ -471,6 +486,8 @@ window.__ModuleLoader__.load({
             见红: arr(firstOf(probeBag, ['见红', '红灯', 'red'])).map(probeName).filter(Boolean),
             恒红: boolOf(firstOf(probeBag, ['恒红', 'stuckRed'])) === true,
             恒绿: boolOf(firstOf(probeBag, ['恒绿', 'stuckGreen'])) === true,
+            于: line(probeBag.于, ''),
+            结果: arr(probeBag.结果).map(function (item) { var r = obj(item) || {}; return { 探针: line(r.探针, ''), 状态: line(r.状态, '未知') }; }).filter(function (r) { return r.探针; }),
           },
         },
         // 工作台仍是只读投影；审批行只带导航标识，完整计划按需从认证人侧路由读取。
@@ -1883,17 +1900,17 @@ window.__ModuleLoader__.load({
     // ── 分页外壳与可视化（2026-10-13 重做）────────────────────────────────────
     /**
      * 七页：id / 标签 / 计数（计数为 `null` 就不画徽章——「没数据就别占位置」）。
-     * **顺序＝注意力顺序**：总览（要我做什么）→ 图谱（组织长什么样）→ 任务/会审/总线/审计（明细）→ 记忆。
+     * 常用工作与记忆在前，组织结构与协作明细随后，审计用于追溯。
      */
     function 页清单(ctx) {
       return [
         { id: 'overview', 名: '总览' },
-        { id: 'graph', 名: '图谱' },
         { id: 'tasks', 名: '任务', 计数: ctx.tasks ? ctx.tasks.length : null },
+        { id: 'memory', 名: '记忆' },
+        { id: 'graph', 名: '图谱' },
         { id: 'reviews', 名: '会审', 计数: ctx.会审 ? ctx.会审.length : null },
         { id: 'bus', 名: '总线', 计数: ctx.总线 ? ctx.总线.length : null },
         { id: 'audit', 名: '审计' },
-        { id: 'memory', 名: '记忆' },
       ];
     }
 
@@ -3808,6 +3825,7 @@ window.__ModuleLoader__.load({
           return h('article', { key: goal.id, 'data-goal-id': goal.id }, [
             h('h4', { key: 'result' }, String(result.文本 || goal.id) + (result.省略 ? '…（摘要）' : '')),
             h('p', { key: 'state' }, String(goal.状态) + ' · 修订 ' + String(goal.修订)),
+            goal.更新于 ? h('p', { key: 'time', title: 完整时间(goal.更新于) }, '更新 ' + shortTime(goal.更新于)) : null,
             h('p', { key: 'next' }, nextLabel + String(step.文本 || '见目标详情') + (step.省略 ? '…（摘要）' : '')),
             h('p', { key: 'limits' }, '禁用文件工具：' + (arr(goal.禁止工具).join('、') || '无') + '；另有 ' + String(goal.文本约束条数) + ' 条文本约束，使用 goal_query 读取全文。'),
             h('p', { key: 'progress' }, '关联任务 ' + String(progress.关联) + '；已合法采纳 ' + String(progress.合法采纳) + '。任务进度不代表目标自动完成。'),
@@ -3965,6 +3983,7 @@ window.__ModuleLoader__.load({
         !project ? h('p', null, '请先选择项目。') : null,
         value.error ? h('p', { role: 'alert' }, value.error) : null,
         value.phase === 'loading' ? h('p', { role: 'status' }, '正在读取记忆…') : null,
+        h('p', { className: 'dshmind-set__hint' }, value.filters.q.trim() ? '搜索结果按相关性排列。' : '按记于时间显示最新记录，加载更多继续读取较早记录。'),
         value.phase === 'ready' && !value.rows.length ? h('p', null, '当前范围没有符合条件的记忆。') : null,
         h('div', { className: 'dshmind-memoryLayout' }, [
           h('div', { className: 'dshmind-memoryList' }, value.rows.map(function (row) { return h('article', { key: row.id, className: 'dshmind-historyItem', 'data-memory-id': row.id }, [
@@ -4202,6 +4221,8 @@ window.__ModuleLoader__.load({
       var ctx = activeCtx;
       var review = useState(null);
       var decideExpanded = useState(false);
+      var tasksExpanded = useState(null);
+      var reviewsExpanded = useState(null);
 
       // ⚠️ **取数不在这里做**（Batch 7 的方向修正，见模块顶部 `起轮询` 的长注释）：
       // 这个宿主给插件的 `useEffect` 很可能是**空实现** ⇒ 把取数挂在 effect 上 = 页面永远不动。
@@ -4219,10 +4240,10 @@ window.__ModuleLoader__.load({
       var bar = view ? view.状态条 : null;
       var gate = bar ? bar.闸 : null;
       var probe = bar ? bar.探针 : null;
-      var tasks = view ? view.任务节点 : [];
+      var tasks = view ? 最近在前(view.任务节点, ['最近事件于', '创建于']) : [];
       var 待你决定 = view ? view.待你决定 : [];
-      var 会审 = view ? view.会审 : [];
-      var 总线 = view ? view.消息总线 : [];
+      var 会审 = view ? 最近在前(view.会审, ['收敛于', '解锁于', '创建于']) : [];
+      var 总线 = view ? 最近在前(view.消息总线, function (row) { return arr(row.最新).map(function (message) { return message.追加于; }); }) : [];
       // 项目解析（2026-10-11，主权者指令「修」）：面板默认只看一个项目，而活账常在别的
       // 项目下 ⇒ 这份清单是"说清现在看的是哪个项目、还有哪些项目有账"的唯一来源。
       var 项目清单 = view ? view.项目清单 : null;
@@ -4230,7 +4251,7 @@ window.__ModuleLoader__.load({
       var 自动选择 = line(snap.自动选择, '') || null;
       // 审计：**全量留着**，渲染多少由「展开」决定（2026-10-13 晚去掉卡内滚动框）。
       // 旧写法在这里就 `.slice(-AUDIT_LIMIT)` 把多出来的行丢掉 ⇒ 展开钮根本无从展开。
-      var 审计全 = view ? view.审计尾.slice().reverse() : [];
+      var 审计全 = view ? 最近在前(view.审计尾.slice().reverse(), function (row) { return [审计时刻(row)]; }) : [];
       var audit = 审计全;
       // 投影里**一共**多少条（用来在列表尾部说清"看不全是因为投影只有这些/还有多少没列"）。
       var 审计总条数 = view ? view.审计尾.length : 0;
@@ -4241,7 +4262,7 @@ window.__ModuleLoader__.load({
       var 失联态 = bar ? bar.失联 : '未知';
       // 「探针有结论」= 有状态且不是"未知"，或者有见红/恒红/恒绿这类明确信号。
       // 缺一格数据时 `normalizeView` 会造出 `状态:'未知'` 的空袋，别把它当成"有数据"。
-      var 探针有结论 = !!probe && (probe.状态 !== '未知' || probe.见红.length > 0 || probe.恒红 || probe.恒绿);
+      var 探针有结论 = !!probe && (probe.状态 !== '未知' || probe.见红.length > 0 || probe.恒红 || probe.恒绿 || probe.于 || probe.结果.length);
       var 失联详情 = bar ? bar.失联详情 : 失联详情Of(null);
       var lostAlarm = !!bar && (失联态 === '已失联' || 失联态 === '已关闭');
       /** 故障注入开关（只在测试/探针里打开；见下面状态条那两笔）。 */
@@ -4369,6 +4390,9 @@ window.__ModuleLoader__.load({
                     probe.见红.length ? h('span', { key: 'r' }, '见红：' + probe.见红.join('、')) : null,
                     probe.恒红 ? badge('恒红警报', 'red') : null,
                     probe.恒绿 ? badge('恒绿警报', 'warn') : null,
+                  ].filter(Boolean)), false, h('span', { className: 'dshmind-readoutNote' }, [
+                    probe.于 ? h('span', { key: 'at', title: 完整时间(probe.于) }, '上次检查 ' + shortTime(probe.于)) : null,
+                    probe.结果.length ? h('span', { key: 'results' }, probe.结果.map(function (r) { return r.探针 + '：' + r.状态; }).join(' · ')) : null,
                   ].filter(Boolean)))
                 : null,
               // **故障注入**（Batch 9 交付物 4）：探针那一格的"退化形态"。
@@ -4417,10 +4441,10 @@ window.__ModuleLoader__.load({
         ),
 
         // ② 会审（v2 条目18：与会话绑定的独立功能 · 存档形状）
-        section(2, '会审', '§10 · 盲评提交后解锁 · 零分歧是异常信号',
+        section(2, '会审', '最近活动在前 · 盲评提交后解锁 · 零分歧是异常信号',
           会审.length ? 会审.length + ' 场' : '',
           view && 会审.length
-            ? h('div', { className: 'dshmind-reviews' }, 会审.slice(0, REVIEW_LIMIT).map(function (row, index) {
+            ? h('div', { className: 'dshmind-reviews' }, 会审.slice(0, reviewsExpanded[0] === 当前项目 ? undefined : REVIEW_LIMIT).map(function (row, index) {
                 // ③ 折叠的键与 article 的 key 同源：id 稳定在会审 id（缺时才退回序号占位）。
                 var 会审id = line(row.id, 'review-' + index);
                 // 问题全文 + 默认折叠（2026-10-12 主权者口径「要全文 + 默认折叠」）：
@@ -4434,7 +4458,7 @@ window.__ModuleLoader__.load({
                   : row.状态 === '作答中' ? WARN
                   : row.状态 === '已解锁' || row.状态 === '讨论中' ? BRAND
                   : GREY;
-                return h('article', { key: 会审id, className: 'dshmind-review' }, [
+                return h('article', { key: 会审id, className: 'dshmind-review', 'data-review-id': 会审id }, [
                   // ① 身份行：左＝状态徽章 + 参与者数 + 轮次，右＝会审 id（与任务卡同一套解剖）
                   h('div', { key: 'top', className: 'dshmind-reviewTop' }, [
                     h('span', {
@@ -4524,7 +4548,7 @@ window.__ModuleLoader__.load({
                       return h('div', { key: 'zero', className: 'dshmind-anomaly' },
                         '⚠ 零分歧（全票一致）—— §10：这是趋同异常信号，应转人工抽检');
                     }
-                    return h('div', { key: 'zero', className: 'dshmind-consensus' }, '存在分歧（正常）');
+                    return h('div', { key: 'zero', className: 'dshmind-consensus' }, row.零分歧 === false ? '存在分歧（正常）' : '零分歧：未提供判定');
                   })(),
                   row.状态 === '讨论中'
                     ? h('div', { key: 'disc', className: 'dshmind-consensus' }, '💬 讨论进行中（Lead 显式开启）')
@@ -4534,23 +4558,26 @@ window.__ModuleLoader__.load({
                     ? h('div', { key: 'src', className: 'dshmind-counter' }, '来源会话：' + row.来源会话)
                     : null,
                   (row.创建于 || row.收敛于)
-                    ? h('div', { key: 'at', className: 'dshmind-counter' },
-                        '创建 ' + (row.创建于 || '—')
-                          + (row.解锁于 ? ' · 解锁 ' + row.解锁于 : '')
-                          + (row.收敛于 ? ' · 收敛 ' + row.收敛于 : ''))
+                    ? h('div', { key: 'at', className: 'dshmind-counter', title: [row.创建于, row.解锁于, row.收敛于].filter(Boolean).map(完整时间).join('\n') },
+                        '创建 ' + (shortTime(row.创建于) || '—')
+                          + (row.解锁于 ? ' · 解锁 ' + shortTime(row.解锁于) : '')
+                          + (row.收敛于 ? ' · 收敛 ' + shortTime(row.收敛于) : ''))
                     : null,
                 ].filter(Boolean));
-              }))
-            : emptyGuide('没有进行中的会审', '会审是与会话绑定的独立咨询：Lead 发起 → 参与者盲评作答 → 交齐解锁 → 收敛存档',
+              }).concat(会审.length > REVIEW_LIMIT ? [h('button', {
+                key: 'more-reviews', type: 'button', className: 'dshmind-descToggle', 'aria-expanded': reviewsExpanded[0] === 当前项目,
+                onClick: function () { reviewsExpanded[1](reviewsExpanded[0] === 当前项目 ? null : 当前项目); },
+              }, reviewsExpanded[0] === 当前项目 ? '收起会审' : '展开全部会审（共 ' + 会审.length + ' 场）')] : []))
+            : emptyGuide('暂无会审记录', '会审是与会话绑定的独立咨询：Lead 发起 → 参与者盲评作答 → 交齐解锁 → 收敛存档',
               "mind {action:'debate_open', 问题:'要收敛的问题', 参与者:'member-a,member-b'}"),
         ),
 
         // ③ 任务图
-        section(3, '任务图', '状态权威 · 判据派发后冻结' + (view && obj(view.任务) && typeof view.任务.只读历史数 === 'number' ? ' · 只读历史 ' + view.任务.只读历史数 + ' · 现行未结账 ' + (typeof view.任务.现行未结账数 === 'number' ? view.任务.现行未结账数 : '—') : ''), tasks.length ? tasks.length + ' 节点' : '',
+        section(3, '任务图', '最近更新在前 · 状态权威 · 判据派发后冻结' + (view && obj(view.任务) && typeof view.任务.只读历史数 === 'number' ? ' · 只读历史 ' + view.任务.只读历史数 + ' · 现行未结账 ' + (typeof view.任务.现行未结账数 === 'number' ? view.任务.现行未结账数 : '—') : ''), tasks.length ? tasks.length + ' 节点' : '',
           [
             tasks.length
             ? h('div', { className: 'dshmind-nodes' },
-                tasks.slice(0, TASK_LIMIT).map(function (task, index) {
+                tasks.slice(0, tasksExpanded[0] === 当前项目 ? undefined : TASK_LIMIT).map(function (task, index) {
                   var rejects = numOf(task.打回次数) || 0;
                   var 只读历史 = task.只读历史 === true;
                   var 已终止 = task.已终止 === true || task.状态 === '已终止';
@@ -4572,7 +4599,7 @@ window.__ModuleLoader__.load({
                   var 任务id = line(task.id, 'task-' + index);
                   var 任务描述长 = 任务描述.length > 80;
                   var 任务折 = 描述折叠(任务id);
-                  return h('article', { key: 任务id, className: cls }, [
+                  return h('article', { key: 任务id, className: cls, 'data-task-id': 任务id }, [
                     // ① 身份行（设计稿解剖）：左＝状态徽章 + 等宽 id，右＝负责人/模式/交卷/打回。
                     // 旧版把**描述当标题置顶**、徽章跟在后面 ⇒ 一屏全是长句，状态反而要往下找。
                     h('div', { key: 'top', className: 'dshmind-nodeTop' }, [
@@ -4591,6 +4618,7 @@ window.__ModuleLoader__.load({
                       只读历史 ? h('span', { key: 'history', className: 'dshmind-badge', title: line(task.写入说明, '旧会审仅保留历史，不改不迁移。') }, '只读历史') : null,
                       h('span', { key: 'id', className: 'dshmind-cardId', title: 任务id }, 任务id),
                       h('span', { key: 'meta', className: 'dshmind-cardMeta' }, [
+                        task.最近事件于 || task.创建于 ? h('span', { key: 'at', title: 完整时间(task.最近事件于 || task.创建于) }, (task.最近事件于 ? '更新 ' : '创建 ') + shortTime(task.最近事件于 || task.创建于)) : null,
                         h('span', { key: 'o' }, '负责人 ' + (owners.length ? owners.join('、') : '未指派')),
                         task.模式 ? h('span', { key: 'm' }, line(task.模式)) : null,
                         h('span', { key: 's', className: 'dshmind-mono' }, '交卷 ' + progressText(task.交卷)),
@@ -4654,7 +4682,9 @@ window.__ModuleLoader__.load({
             : emptyGuide('任务图为空', '从建一张卡开始：判据在派发后冻结，先想清「什么样算验收通过」' + 他处有账(项目清单, 当前项目),
               "mind {action:'task_create', 描述:'示例：校准一条拒绝理由', 判据:'每条拒绝都带可执行的理由'}"),
             view && tasks.length > TASK_LIMIT
-              ? h('div', { key: 'more', className: 'dshmind-empty' }, '另有 ' + (tasks.length - TASK_LIMIT) + ' 个节点未在此列出（工作台投影可展开）。')
+              ? h('button', { key: 'more', type: 'button', className: 'dshmind-descToggle', 'aria-expanded': tasksExpanded[0] === 当前项目,
+                  onClick: function () { tasksExpanded[1](tasksExpanded[0] === 当前项目 ? null : 当前项目); },
+                }, tasksExpanded[0] === 当前项目 ? '收起任务' : '展开全部任务（共 ' + tasks.length + ' 个）')
               : null,
           ]),
 
@@ -4672,7 +4702,7 @@ window.__ModuleLoader__.load({
         // 旧版 `slice(0, BUS_LIMIT)` + `slice(-BUS_MSGS_LIMIT)` 会让超出的线程/消息直接消失、
         // 还不说少了多少——与本仓「别静默截断（Batch 9）」相悖。现在：数据全在（投影已给全量），
         // 默认只画预览，点钮铺开全部，并**明说还有多少**。纯显示、零请求（同「独立答案」「描述」折叠）。
-        section(5, '消息总线', '§7 结构化通信 · 全部线程 · 未投递高亮 · 投影只读',
+        section(5, '消息总线', '最新消息在前 · 全部线程 · 未投递高亮 · 投影只读',
           总线.length ? 总线.length + ' 线程' : '',
           总线.length
             ? h('div', { className: 'dshmind-reviews' }, (function () {
@@ -4684,10 +4714,10 @@ window.__ModuleLoader__.load({
                 // 消息层折叠：默认画最新的 BUS_MSGS_PREVIEW 条，其余收起。
                 var 消息键 = '消息:' + 线程id;
                 var 消息展开 = !总线折叠(消息键);
-                var 全部消息 = arr(row.最新);
-                var 画消息 = 消息展开 ? 全部消息 : 全部消息.slice(-BUS_MSGS_PREVIEW);
+                var 全部消息 = 最近在前(arr(row.最新).slice().reverse(), ['追加于']);
+                var 画消息 = 消息展开 ? 全部消息 : 全部消息.slice(0, BUS_MSGS_PREVIEW);
                 var 收起消息数 = 全部消息.length - 画消息.length;
-                return h('article', { key: 线程id, className: 'dshmind-bus' }, [
+                return h('article', { key: 线程id, className: 'dshmind-bus', 'data-bus-thread': 线程id }, [
                   h('div', { key: 'top', className: 'dshmind-reviewTop' }, [
                     h('span', { key: 't', className: 'dshmind-nodeTitle', title: row.线程 }, row.线程 || '（未命名线程）'),
                     h('span', { key: 'c', className: 'dshmind-mono' }, (row.条数 || 0) + ' 条'),
@@ -4697,7 +4727,7 @@ window.__ModuleLoader__.load({
                   ].filter(Boolean)),
                   row.会审讨论段
                     ? h('div', { key: 'mask', className: 'dshmind-decideWhy' },
-                        '讨论发言按盲评口径收起（未交齐不揭名）；讨论读数见上方会审区。')
+                        '讨论发言按盲评口径收起（未交齐不揭名）；讨论读数见会审页。')
                     : (全部消息.length
                         ? h('div', { key: 'msgs', className: 'dshmind-busMsgs' }, [
                             // 消息层：被收起时明说还有多少条（不静默）。
@@ -4731,7 +4761,7 @@ window.__ModuleLoader__.load({
                                 // 展开态不再挂 title（正文就在页面上，重复挂反而挡视线）。
                                 title: 要折 && 正文折 ? 摘要 : undefined,
                               }, 摘要);
-                              return h('div', { key: 'm' + i, className: 'dshmind-busRow' }, [
+                              return h('div', { key: m.id || 'm' + i, className: 'dshmind-busRow', 'data-message-id': m.id }, [
                                 // 元信息独立一行（时间/类型/发件）——不再和正文抢同一行的宽度。
                                 h('div', { key: 'meta', className: 'dshmind-busMeta' }, [
                                   h('span', { key: 't', className: 'dshmind-mono', style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary,#81858c)' } },

@@ -29,6 +29,20 @@ it('真实记忆正文、来源、分页和搜索可用；计数缺失不妨碍�
  e.change('搜索记忆','独有的私密正文回退方法');e.change('记忆分类','知识');await e.submit();assert.ok(e.calls.some(c=>c.url.includes('q=')&&c.url.includes('kind=')));
  assert.doesNotMatch([...e.cache.values()].join(''),/独有的私密正文/);assert.ok(e.calls.every(c=>c.method==='GET'));
 }));
+it('记忆跨类别在分页前按记于排序，连续加载全局新到旧；普通召回仍保留原顺序',async()=>scene(async e=>{
+ let now=Date.now();e.org.clock.now=()=>new Date(now);const created=[];
+ for(let i=0;i<18;i++){
+  now+=1000;const kind=['偏好','知识','经历'][i%3];
+  const row=await e.org.memory.remember({subject:LEAD,类:kind,项目:P,标题:'排序记录-'+i,内容:'合成排序内容-'+i,来源:'合成时间来源'});
+  created.push({id:row.id,kind});
+ }
+ await e.go('memory');const visible=()=>e.elements().filter(x=>x.props['data-memory-id']).map(x=>x.props['data-memory-id']);
+ assert.deepEqual(visible(),created.slice().reverse().slice(0,15).map(x=>x.id));
+ await e.click('加载更多记忆');assert.deepEqual(visible(),created.slice().reverse().map(x=>x.id));
+ assert.match(e.text(),/按记于时间显示最新记录/);
+ const native=await e.org.memory.query({subject:LEAD,读者:LEAD,项目:P,类:['知识','经历','偏好'],返回模式:'摘要',limit:30,条数上限:30});
+ assert.deepEqual(native.条目.map(x=>x.id),['知识','经历','偏好'].flatMap(kind=>created.filter(x=>x.kind===kind).map(x=>x.id)));
+}));
 it('正文分段续读且不切断或重复文本，来源变化后旧详情不得拼接',async()=>scene(async e=>{
  const text='长文片段。'.repeat(12000);const r=await e.org.memory.remember({subject:LEAD,类:'知识',项目:P,标题:'长文',内容:text,来源:'长文来源'});await e.go('memory');await e.click('查看记忆 长文');assert.ok(e.button('继续读取正文'));await e.click('继续读取正文');assert.ok(e.calls.some(c=>/bodyOffset=[1-9]/.test(c.url)&&c.url.includes('dataVersion=')));
  const body=()=>textOf(e.elements().find(x=>x.type==='p'&&x.props.style?.whiteSpace==='pre-wrap'));const loaded=body();assert.ok(loaded.length>16000&&loaded.length<text.length);assert.equal(loaded,text.slice(0,loaded.length));assert.ok(e.button('继续读取正文'));await e.org.memory.invalidate(r.id,{subject:LEAD,原因:'原文更正'});await e.click('继续读取正文');assert.match(e.text(),/变化|不可见|不再存在/);assert.equal(body(),loaded);

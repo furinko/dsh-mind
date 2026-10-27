@@ -17,6 +17,7 @@ import { stat } from 'node:fs/promises';
 import { InvalidBody, Denied, Fault } from './kernel/errors.js';
 import { objectId } from './kernel/ids.js';
 import { digest, canonical } from './kernel/text.js';
+import { timestampMillis } from './kernel/time.js';
 import { buildIndex, formatMiss, search } from './retrieval.js';
 import { memoryResponseOptions, memoryResponsePage, finalizeMemoryResponse } from './memory-response.js';
 import { normalizeKnowledgeContext, knowledgeReviewStatus, knowledgeReviewProjection, KNOWLEDGE_CONTEXT_LIST_FIELDS } from './knowledge-applicability.js';
@@ -1070,6 +1071,11 @@ export class MemoryService {
     const 状态可召回 = query.含失效 === true ? visible : visible.filter((entry) => !是否已被否(entry));
     const 需复验 = (entry) => ['待复验', '说明不可判'].includes(entry.复验状态);
     const 可召回 = query.含待复验 === true ? 状态可召回 : 状态可召回.filter((entry) => !需复验(entry));
+    // Human browsing spans multiple kind/scope ledgers. Order before paging, rather
+    // than reversing a page whose categories were concatenated in ledger order.
+    if (query.浏览项目 === true && !query.文本?.trim() && !query.id) {
+      可召回.sort((a, b) => (timestampMillis(a.记于) ?? -Infinity) - (timestampMillis(b.记于) ?? -Infinity));
+    }
     // 页码不对正在变化的账本承诺无漏重；变化即要求重启，不能拼接两个不同事实快照。
     const 复验指纹 = visible.map((entry) => [entry.id, entry.复验状态 ?? null]);
     const 数据版本 = digest(JSON.stringify({ 类: wanted, 项目: query.项目 ?? null, 岗位: query.岗位 ?? null, ...(query.连续性类别 === undefined ? {} : { 连续性类别: query.连续性类别 }), ...(query.精确岗位 === true ? { 精确岗位: true } : {}), 文本: query.文本 ?? '', id: query.id ?? null, 场景检索: query.场景检索 === true, 上下文经历: query.上下文经历 === true, 含待复验: query.含待复验 === true, 复验指纹, 条目: 可召回 }));
@@ -1128,7 +1134,7 @@ export class MemoryService {
       const end = Math.max(0, 可召回.length - 响应配置.偏移);
       const start = Math.max(0, end - 响应配置.条数上限);
       const entries = 可召回.slice(start, end);
-      说明们.push(`浏览从账本尾部偏移 ${响应配置.偏移} 条，本页最多 ${响应配置.条数上限} 条（按账本顺序，非按记于时间排序）；实际回传另受内容预算约束。`);
+      说明们.push(`浏览从${query.浏览项目 === true ? '记于时间排序后的' : ''}账本尾部偏移 ${响应配置.偏移} 条，本页最多 ${响应配置.条数上限} 条（${query.浏览项目 === true ? '跨类别按记于时间取最新记录，单页内由旧到新' : '按账本顺序，非按记于时间排序'}）；实际回传另受内容预算约束。`);
       return 装配(entries, [], 可召回.length, { 搜索面: '记忆服务', 查询词: '', 范围: wanted.join('/'), 文档数: 可召回.length, 命中数: 0 }, false, true);
     }
     // 索引缓存（2026-10-13 第四批）：键 = 账本合成签名 + 过滤口径。索引只取决于

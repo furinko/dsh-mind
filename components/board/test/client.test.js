@@ -125,7 +125,7 @@ test('优化批 ①④③：空态给可敲命令、读数分身份/健康两组
   全空.任务.节点 = [];
   全空.任务.总数 = 0;
   const e = await renderView(全空);
-  assert.ok(e.text.includes('没有需要你决定的事') && e.text.includes('没有进行中的会审')
+  assert.ok(e.text.includes('没有需要你决定的事') && e.text.includes('暂无会审记录')
     && e.text.includes('任务图为空'), '① 空态仍是明说的一句话（原有措辞保留）');
   assert.ok(e.text.includes("action:'task_create'") && e.text.includes("action:'task_pending'")
     && e.text.includes("action:'debate_open'"), '① 三块空态各给一条可敲的 mind 命令（会审入口是 debate_open）');
@@ -152,13 +152,13 @@ test('优化批 ①④③：空态给可敲命令、读数分身份/健康两组
   assert.ok(findAllByClass(卡[1], 'dshmind-answers').length === 0
     && textOf(卡[1]).includes('答案 3 份'), '③ 其余默认折叠成一行摘要');
   assert.ok(textOf(卡[1]).includes('member-a'), '③ 折叠摘要按存档给成员（已收敛场揭名）');
-  assert.ok(!活.text.includes('三档划分正确') && !活.text.includes('冻结点正确'),
-    '③ 折叠场的结论文本不在页面上（撑爆问题已治）');
+  assert.ok(!textOf(卡[1]).includes('三档划分正确') && textOf(卡[0]).includes('冻结点正确'),
+    '③ 仅最新活动的场次默认展开，其余折叠场不铺结论');
 
   // 按名点名 harness 本批新增断言（条数式总数看不出某一条没跑）。
   const report = await runHarness();
   const 要的 = [
-    '③ 首场会审默认展开答案（dshmind-answers 在）',
+    '③ 最新活动的会审默认展开答案（dshmind-answers 在）',
     '盲评卡一份结论文本都不出，也不补「（无结论）」假占位',
     '揭名卡展开后给每份结论文本',
     '③ 第二场默认折叠：一行摘要，不铺答案',
@@ -327,11 +327,14 @@ test('八件与环路已从源码里删除（不是注释掉）：渲染、常�
     'dshmind-stepper', 'dshmind-stage', 'dshmind-lamps', 'dshmind-lamp', 'dshmind-bulb',
     'dshmind-pending', 'dshmind-diff', 'dshmind-metricKey',
     'EIGHT', 'STAGES', 'STAGE_OF', 'metricOf', 'pathGet', 'probeLamps', 'probeState',
-    '策略状态', '探针灯', '升级挂起', '消息线程', '全部任务',
+    '策略状态', '探针灯', '升级挂起', '消息线程',
   ];
   for (const dead of gone) {
     assert.ok(!source.includes(dead), '已作废的「' + dead + '」不得留在 lib/client.js 里（包括注释与 CSS）');
   }
+  // The obsolete standalone metric must stay gone; the new task-list expansion
+  // button may describe its actual contents as “展开全部任务”.
+  assert.ok(!/['"]全部任务['"]/.test(source), '不恢复作废的全部任务元数据栏目');
   // 「成员」这个词本身还活着（会审的盲标与答案头里各有一处），死掉的是
   // **视图模型里的顶栏成员清单**与页脚那一行读数。
   assert.ok(!/['"]成员['"]\s*:/.test(source), '视图模型不得再取顶层「成员」清单');

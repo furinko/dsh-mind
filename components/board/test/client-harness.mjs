@@ -743,7 +743,7 @@ export function 半数缺数据的视图() {
 
 /** 页面上一旦缺数据就会出现的占位文本；给全量数据时不该出现。 */
 export const DEGRADED_MARKS = [
-  '未连接', '未接入', '任务图为空', '没有需要你决定的事', '没有进行中的会审', '审计尾为空',
+  '未连接', '未接入', '任务图为空', '没有需要你决定的事', '暂无会审记录', '审计尾为空',
 ];
 /** 盲评期的锁行：文案本身就是断言目标（§10 未交齐不揭名）。 */
 export const LOCK_LINE = '🔒 盲评中：全员交齐并解锁前，此处只显示盲标；揭名后显示成员与结论';
@@ -1001,7 +1001,7 @@ export async function runHarness() {
   }
   // 空态必须是**明说的话**：没有数据时最坏的结果是「信息少」，不是「猜」。
   passed.push(check(c0.text.includes('没有需要你决定的事'), '空清单时说「没有需要你决定的事」而不是留白'));
-  passed.push(check(c0.text.includes('没有进行中的会审'), '空会审时给明说的空态'));
+  passed.push(check(c0.text.includes('暂无会审记录'), '空会审时给明说的空态'));
   passed.push(check(c0.text.includes('任务图为空'), '空任务图给明说的空态'));
   passed.push(check(!c0.text.includes('八件') && !c0.text.includes('受理'),
     '投影不再带八件计数与环路阶段：界面也不许再画'));
@@ -1103,8 +1103,10 @@ export async function runHarness() {
     '页脚给记忆验账读数（存量 + 近7天新增 + 晋升）'));
 
   // ③c 会审（v2 存档形状）：盲评期只出盲标 + 锁行；已收敛行给答案/分歧/结论/零分歧。
-  const cards = findAllByClass(r1.tree, 'dshmind-review');
-  passed.push(check(cards.length === 3, '三场会审各一张卡', String(cards.length)));
+  const councilCards = () => ['council-a1', 'council-a2', 'council-a3'].map(id =>
+    findAllByClass(r1.tree, 'dshmind-review').find(card => card.props['data-review-id'] === id));
+  const cards = councilCards();
+  passed.push(check(findAllByClass(r1.tree, 'dshmind-review').length === 3 && cards.every(Boolean), '三场会审各一张卡', String(cards.length)));
   const hidden = textOf(cards[0]);
   passed.push(check(hidden.includes('成员 A') && hidden.includes('成员 B'), '盲评期的会审仍给盲标（服务层遮罩后的字段）'));
   passed.push(check(hidden.includes(LOCK_LINE), '盲评期的会审给锁行「' + LOCK_LINE + '」'));
@@ -1112,9 +1114,9 @@ export async function runHarness() {
     '盲评期成员 id 一个都不许出现在那张卡里', hidden.slice(0, 80)));
   passed.push(check(hidden.includes('参与者 2'), '参与者数按存档显示'));
   passed.push(check(hidden.includes('轮次 0/2'), '轮次按存档 `已用/上限` 显示'));
-  // 答案折叠：首场展开、其余一行摘要（摘要不出结论；展开后才出）。
-  passed.push(check(findAllByClass(cards[0], 'dshmind-answers').length === 1,
-    '③ 首场会审默认展开答案（dshmind-answers 在）'));
+  // 最新活动的场次排首位并默认展开；语义断言按会审id定位，不依赖旧的创建顺序。
+  passed.push(check(findAllByClass(cards[2], 'dshmind-answers').length === 1,
+    '③ 最新活动的会审默认展开答案（dshmind-answers 在）'));
   passed.push(check(!hidden.includes('三档划分正确') && !hidden.includes('（无结论）'),
     '盲评卡一份结论文本都不出，也不补「（无结论）」假占位'));
   passed.push(check(findAllByClass(cards[1], 'dshmind-answers').length === 0
@@ -1130,7 +1132,7 @@ export async function runHarness() {
   二场切换钮.props.onClick();
   await settle();
   r1.flush();
-  const cards点开 = findAllByClass(r1.tree, 'dshmind-review');
+  const cards点开 = councilCards();
   const shown = textOf(cards点开[1]);
   passed.push(check(shown.includes('member-a') && shown.includes('member-b') && shown.includes('member-c'),
     '揭名（已收敛）后答案给真成员 id'));
@@ -1144,11 +1146,11 @@ export async function runHarness() {
   二场切换钮2.props.onClick();
   await settle();
   r1.flush();
-  const cards收起 = findAllByClass(r1.tree, 'dshmind-review');
+  const cards收起 = councilCards();
   passed.push(check(findAllByClass(cards收起[1], 'dshmind-answers').length === 0
     && textOf(cards收起[1]).includes('答案 3 份'),
     '③ 再点一下收回去（覆盖表取反，摘要回来）'));
-  passed.push(check(findAllByClass(cards收起[0], 'dshmind-answers').length === 1,
+  passed.push(check(findAllByClass(cards收起[2], 'dshmind-answers').length === 1,
     '③ 切换按会审 id 记：首场仍是展开'));
   // 零请求：折叠切换是纯显示动作——两次点击之间一个命令都不许发（「不是写动作」的真判据）。
   passed.push(check(spy.calls.length === 请求前,
@@ -1157,12 +1159,15 @@ export async function runHarness() {
   passed.push(check(textOf(cards[2]).includes('分歧清单：member-a: 边界未覆盖复派'), '分歧清单渲染出来'));
   passed.push(check(textOf(cards[2]).includes('结论：按可修收敛'), '收敛结论渲染出来'));
   passed.push(check(textOf(cards[2]).includes('来源会话：session-lead-3'), '来源会话照实显示（会话绑定）'));
-  const 三场切换钮 = findAllByClass(findAllByClass(r1.tree, 'dshmind-review')[2], 'dshmind-toggle')[0];
+  // This newest council starts expanded. Collapse it once before exercising expansion.
+  findAllByClass(councilCards()[2], 'dshmind-toggle')[0].props.onClick();
+  await settle(); r1.flush();
+  const 三场切换钮 = findAllByClass(councilCards()[2], 'dshmind-toggle')[0];
   passed.push(check(!!三场切换钮, '第三场有答案切换钮'));
   三场切换钮.props.onClick();
   await settle();
   r1.flush();
-  const cards三 = findAllByClass(r1.tree, 'dshmind-review');
+  const cards三 = councilCards();
   passed.push(check(textOf(cards三[2]).includes('反例面：边界未覆盖复派'), '答案反例面渲染出来（展开后）'));
   passed.push(check(textOf(cards三[2]).includes('可修'), '结论层 chip 照存档显示'));
 
@@ -2030,7 +2035,7 @@ export async function runHarness() {
   全空视图.任务.节点 = [];
   全空视图.任务.总数 = 0;
   const 全空 = await renderView(全空视图);
-  passed.push(check(全空.text.includes('没有需要你决定的事') && 全空.text.includes('没有进行中的会审')
+  passed.push(check(全空.text.includes('没有需要你决定的事') && 全空.text.includes('暂无会审记录')
     && 全空.text.includes('任务图为空'), '① 空态仍是明说的一句话（原有措辞保留）'));
   passed.push(check(全空.text.includes('task_pending') && 全空.text.includes('debate_open')
     && 全空.text.includes('task_create'), '① 三块空态各给一条真命令（task_pending / debate_open / task_create）'));
@@ -3299,7 +3304,7 @@ export async function runHarness() {
       // 现在：元信息（时间/类型/发件）独立一行，正文独占下一行、吃满宽度。
       // 塞 bug 校准：把 `.dshmind-busRow` 改回 `display:grid` 四列（或把元信息与正文合成一行）⇒ 必红。
       {
-        const 行f = findAllByClass(r.tree, 'dshmind-busRow')[0];
+        const 行f = findAllByClass(r.tree, 'dshmind-busRow').find(row => row.props['data-message-id'] === 'msg-1');
         passed.push(check(!!行f, '⑦f 消息扫描行在'));
         // 结构：每行只有两个块 —— busMeta（元信息）+ busTextWrap（正文）。
         const 子块f = 行f ? (行f.props.children || []).filter(Boolean) : [];
@@ -3523,8 +3528,8 @@ export async function runHarness() {
       const r11 = await 挂(接线视图());
       const 页容器 = findAllByClass(r11.tree, 'dshmind-pageBox');
       const 页序 = 页容器.map((el) => el.props['data-dshmind-page']);
-      passed.push(check(页序.join(',') === 'overview,graph,tasks,reviews,bus,audit,memory',
-        '⑪a 七个页容器按注意力顺序在树里（总览→图谱→任务→会审→总线→审计→记忆）', 页序.join(',')));
+      passed.push(check(页序.join(',') === 'overview,tasks,memory,graph,reviews,bus,audit',
+        '⑪a 七个页容器按常用顺序在树里（总览→任务→记忆→图谱→会审→总线→审计）', 页序.join(',')));
       const 显示中 = 页容器.filter((el) => !(el.props.style && el.props.style.display === 'none'));
       passed.push(check(显示中.length === 1 && 显示中[0].props['data-dshmind-page'] === 'overview',
         '⑪a 默认只显示总览，其余六页 display:none（节点仍在树里 ⇒ 内容口径断言不受页影响）',
