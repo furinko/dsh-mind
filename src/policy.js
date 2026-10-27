@@ -268,8 +268,10 @@ export class PolicyEngine {
    */
   async #authSignature(路径表, 选项 = {}) {
     const 文件 = 路径表 ?? [...this.#签到路径];
-    const 部分 = [];
-    for (const p of 文件) 部分.push(`${p}=${(await mtimeMsOrNull(p)) ?? '-'}`);
+    // 每次判定仍检查全部依赖；独立 stat 同时发出，避免每个文件各等一次往返。
+    // Promise.all 按路径顺序返回，完成顺序不能改变签名或触发无变化重载。
+    // 不缓存结果、不合并跨判定读取，撤回/配置更新仍由本次新鲜检查发现。
+    const 部分 = await Promise.all(文件.map(async p => `${p}=${(await mtimeMsOrNull(p)) ?? '-'}`));
     if (选项.身份mtime !== undefined) {
       // 发布快照时用「与正文同一快照」的身份 mtime 覆盖那一格（R05：撕裂窗里读到旧正文、
       // 却记下新 mtime = 撤回永久失效）。其余依赖照常现 stat。
