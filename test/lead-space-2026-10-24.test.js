@@ -14,7 +14,8 @@ const spec = (subject = LEAD, project = P) => ({ subject, project, session: subj
 const human = () => spec(SOVEREIGN);
 async function scene(run) {
   const f = await makeFixture(); const org = await Org.open({ ...f, project: P });
-  let now = Date.parse('2026-10-24T02:00:00Z'); org.clock.ms = () => now; org.clock.iso = () => new Date(now).toISOString();
+  // Freeze the source used by all three clock views, including policy presence checks.
+  let now = Date.parse('2026-10-24T02:00:00Z'); org.clock.now = () => new Date(now);
   try { await run(org.leadSpace, org, f, value => { now = Date.parse(value); }); }
   finally { org.leadSpaceHooks?.stop(); await org.leadSpaceHooks?.flush(); await org.observability.flush(); await f.cleanup(); }
 }

@@ -1,8 +1,8 @@
 import { it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, writeFile, readdir, stat, symlink, rm } from 'node:fs/promises';
+import { readFile, writeFile, readdir, stat, lstat, symlink, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { makeFixture, LEAD, MEMBER } from './helpers.mjs';
+import { makeFixture, LEAD, MEMBER, SOVEREIGN } from './helpers.mjs';
 import { Org } from '../src/org.js';
 import { recallProfessionalContext, PROFESSIONAL_CONTEXT_BUDGET } from '../src/professional-context.js';
 import { createMemoryUseHooks } from '../components/kernel/lib/memory-use-hooks.js';
@@ -99,10 +99,40 @@ it('私人成员观察不跨实例，Lead私人观察不跨关系；关系重绑
  assert.ok(!(await org.memoryUse.query({subject:LEAD,project:P})).entries.some(r=>r.observation==='private'));
  assert.equal((await org.memoryUse.query({subject:{id:'human',kind:'主权者'},project:P})).total,2);
 }));
-it('观察损坏、符号链接和过时身份不伪装成零记录',async()=>fixture(async org=>{
- const row={subject:LEAD,project:P,session:LEAD.id,stage:'assembled',observation:'test',items:[]};await org.memoryUse.observe(row);
- const root=org.memoryUse.root(P);const file=join(root,(await readdir(root)).find(n=>n.endsWith('.jsonl')));await writeFile(file,'bad\n');await assert.rejects(org.memoryUse.query({subject:LEAD,project:P}),/损坏/);
- await rm(file);await symlink(org.layout.identityFile(),file);await assert.rejects(org.memoryUse.observe(row));await assert.rejects(org.memoryUse.query({subject:LEAD,project:P}));
+it('观察账本损坏时明确报错，保留坏文件而不返回零记录', async () => fixture(async org => {
+ const row = { subject: LEAD, project: P, session: LEAD.id, stage: 'assembled', observation: 'test', items: [] };
+ await org.memoryUse.observe(row);
+ const root = org.memoryUse.root(P), file = join(root, (await readdir(root)).find(n => n.endsWith('.jsonl')));
+ await writeFile(file, 'bad\n');
+ await assert.rejects(org.memoryUse.query({ subject: LEAD, project: P }), error => error.code === 'MEMORY_USE_INVALID' && /损坏/.test(error.message));
+ assert.equal(await readFile(file, 'utf8'), 'bad\n');
+}));
+it('观察账本文件符号链接拒绝读写，链接目标内容不变', async t => fixture(async org => {
+ const row = { subject: LEAD, project: P, session: LEAD.id, stage: 'assembled', observation: 'test', items: [] };
+ await org.memoryUse.observe(row);
+ const root = org.memoryUse.root(P), file = join(root, (await readdir(root)).find(n => n.endsWith('.jsonl')));
+ const target = org.layout.identityFile(), before = await readFile(target);
+ await rm(file);
+ try { await symlink(target, file, 'file'); }
+ catch (error) {
+  // Only the fixture creation may be skipped. Guard/assertion failures must still fail.
+  if (process.platform === 'win32' && error.code === 'EPERM') return t.skip('当前Windows测试进程无法创建文件符号链接（EPERM）；该防护场景未验证');
+  throw error;
+ }
+ assert.equal((await lstat(file)).isSymbolicLink(), true);
+ await assert.rejects(org.memoryUse.observe(row), error => error.code === 'PERSONA_CORE_INVALID');
+ await assert.rejects(org.memoryUse.query({ subject: LEAD, project: P }), error => error.code === 'PERSONA_CORE_INVALID');
+ assert.deepEqual(await readFile(target), before);
+}));
+it('观察主体封存后拒绝旧身份读写，保留原观察账本', async () => fixture(async org => {
+ const row = { subject: LEAD, project: P, session: LEAD.id, stage: 'assembled', observation: 'test', items: [] };
+ await org.memoryUse.observe(row);
+ const root = org.memoryUse.root(P), file = join(root, (await readdir(root)).find(n => n.endsWith('.jsonl')));
+ const before = await readFile(file);
+ await org.registry.seal({ subject: SOVEREIGN, 实例: LEAD.id, 理由: '隔离测试：旧身份失效' });
+ await assert.rejects(org.memoryUse.observe(row), error => error.code === 'DENIED' && /身份已变化/.test(error.message));
+ await assert.rejects(org.memoryUse.query({ subject: LEAD, project: P }), error => error.code === 'DENIED' && /当前身份不可用/.test(error.message));
+ assert.deepEqual(await readFile(file), before);
 }));
 it('队列写入时身份或关系变化丢弃旧观察，不将旧角色记入新身份',async()=>fixture(async org=>{
  let valid=true;const job=org.memoryUse.observe({subject:LEAD,project:P,session:LEAD.id,stage:'assembled',observation:'late',valid:()=>valid,items:[]});valid=false;await assert.rejects(job,/旧观察不归入/);
