@@ -46,9 +46,9 @@ async function select(r, id = 'r1') { await flush(r); const b=elements(r).find(x
 async function open(e, id = 'r1', session = A) { e.state.summaries=[summary(id,session)];const r=e.mount();await select(r,id);return r; }
 
 // Tests execute Dashboard and the real keyed review child. No private component is extracted.
-test('只注册心智工作台、侧栏和设置；聊天输入区、Git与全局浮层均无审批入口',async()=>{
+test('注册工作台、侧栏、设置及聊天接入开关；聊天区、Git与全局浮层均无审批入口',async()=>{
   const e=env(()=>{throw Error('未打开请求不应读私有计划');});const r=e.mount();await flush(r);
-  assert.deepEqual(e.registrations.inject.slice().sort(),['main','settings.section','sidebar.panellist']);
+  assert.deepEqual(e.registrations.inject.slice().sort(),['conversation.input.left','main','settings.section','sidebar.panellist']);
   assert.equal(e.registrations.register.filter(x=>x.options.name==='conversation.input.dock').length,1,'只保留宿主原action');
   assert.equal(e.calls.length,0);assert.ok(!review(r));assert.ok(!button(r,'批准'));assert.ok(!elements(r).some(x=>x.props.role==='dialog'));r.unmount();e.dispose();
 });

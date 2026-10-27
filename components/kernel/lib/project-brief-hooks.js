@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 /** 异步无工具提炼；对话只等待来源登记，不等待辅助模型。 */
 import { agentSubject } from '../../../src/subject.js';
 import { Fault } from '../../../src/kernel/errors.js';
+import { chatScope, sameChat } from './chat-connection.js';
 
 export const PROJECT_BRIEF_SECTION = 'mind:project-brief';
 export const PROJECT_BRIEF_SYSTEM = [
@@ -62,11 +63,11 @@ export function createProjectBriefHooks({ org, projectOf, llmOf = () => null, lo
   const specOf = session => {
     if (!enabled || stopped || !root(session)) return null;
     const subject = agentSubject({ agent: { session } });
-    return subject.kind === 'Lead' ? { subject, project: projectOf({ agent: { session } }), session: session.id } : null;
+    return subject.kind === 'Lead' ? chatScope(org, session, { subject, project: projectOf({ agent: { session } }), session: session.id }) : null;
   };
   const current = (session, spec) => {
     const now = specOf(session);
-    return now && now.project === spec.project && now.session === spec.session;
+    return sameChat(org, session, spec) && now && now.project === spec.project && now.session === spec.session;
   };
   const warn = error => {
     failed++;

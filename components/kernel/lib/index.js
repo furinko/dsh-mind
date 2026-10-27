@@ -59,6 +59,7 @@ import { createPersonaProtection } from './persona-protection.js';
 import { collaborationFeedbackSchema } from '../../../src/collaboration-feedback.js';
 import { createInformationHooks, injectInformationContext } from './information-hooks.js';
 import { createLeadSpaceHooks, injectLeadSpace } from './lead-space-hooks.js';
+import { ChatConnection, chatConnected, chatRevision } from './chat-connection.js';
 
 export const name = 'dsh-mind-kernel';
 export const inject = ['tools'];
@@ -104,6 +105,7 @@ export async function apply(ctx, config = {}) {
   }
 
   const 项目 = config.project ?? DEFAULT_PROJECT;
+  org.mindConnection = await new ChatConnection(org.layout.chatConnectionFile()).load();
   const personaProtection = createPersonaProtection({ org,
     cwdOf: exec => 会话工作目录(exec, { ctx }),
   });
@@ -273,27 +275,42 @@ export async function apply(ctx, config = {}) {
       // 那类 preset 不在本授权的兼容范围（delegation_status 读数里如实标注）。
       撤销器.push(ctx.on('system-prompt/assemble', async (assembly, context, next) => {
         const out = await next();
+        const session = context?.agent?.session;
+        const revision = chatRevision(org, session);
+        const active = () => !delegation.closed && chatConnected(org, session) && chatRevision(org, session) === revision;
+        const disconnected = () => {
+          professionalReceipts.begin(context?.agent);
+          org.memoryUseHooks?.clear(context?.agent);
+          org.memoryUseHooks?.clear(context?.agent, 'continuity');
+          const clean = { ...out, sections: (out.sections ?? []).filter(s => !s?.name?.startsWith('mind:')),
+            ...(Array.isArray(out.contexts) ? { contexts: out.contexts.filter(s => !s?.name?.startsWith('mind:')) } : {}),
+            ...(Array.isArray(out.tools) ? { tools: out.tools.filter(t => t?.name !== 'mind') } : {}) };
+          retireMindRuntimeSnapshots(clean, context?.agent, { disconnected: true });
+          return clean;
+        };
+        if (!active()) return disconnected();
         const 已接调度 = delegation.assemble(out, { project: 当前项目键({ agent: context?.agent }), isTeam: 是Team成员(ctx, context?.agent) });
         // v2 条目10（W7 实证）：Root 实例在**首个真实组织上下文装配前**出生/钉版，并把
         // 它钉住的那版 Lead 规程注入；子会话/伪 Lead 形状不在此列（agentSubject 判）。
         const 已钉规程 = await 注入Lead已钉规程(已接调度, context?.agent, org, logger, {
           agent: context?.agent, agents: 取服务(ctx, 'agents'), project: 当前项目键({ agent: context?.agent }),
         });
-        const 专业上下文 = await injectProfessionalContext(已钉规程, { agent: context?.agent, org, projectOf: 当前项目键, logger, receipts: professionalReceipts, active: () => !delegation.closed });
-        const 当前工作 = await injectWorkContext(专业上下文, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
+        const 专业上下文 = await injectProfessionalContext(已钉规程, { agent: context?.agent, org, projectOf: 当前项目键, logger, receipts: professionalReceipts, active });
+        const 当前工作 = await injectWorkContext(专业上下文, { agent: context?.agent, org, projectOf: 当前项目键, logger, active });
         const 轮缓冲 = await injectTurnBuffer(当前工作, { agent: context?.agent, org, hooks: turnBufferHooks,
-          projectOf: 当前项目键, logger, active: () => !delegation.closed });
+          projectOf: 当前项目键, logger, active });
         const 既往对话 = await injectConversationRecall(轮缓冲, { agent: context?.agent, org, hooks: turnBufferHooks,
-          projectOf: 当前项目键, logger, active: () => !delegation.closed });
+          projectOf: 当前项目键, logger, active });
         const 待整理协作表达 = await injectPendingContinuity(既往对话, { agent: context?.agent, org, hooks: continuityCaptureHooks,
-          projectOf: 当前项目键, logger, active: () => !delegation.closed });
-        const Lead连续性 = await injectLeadContext(待整理协作表达, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
+          projectOf: 当前项目键, logger, active });
+        const Lead连续性 = await injectLeadContext(待整理协作表达, { agent: context?.agent, org, projectOf: 当前项目键, logger, active });
         const 项目接续 = await injectProjectBrief(Lead连续性, { agent: context?.agent, org, hooks: projectBriefHooks,
-          projectOf: 当前项目键, logger, active: () => !delegation.closed });
-        const 见闻与成长 = await injectInformationContext(项目接续, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
+          projectOf: 当前项目键, logger, active });
+        const 见闻与成长 = await injectInformationContext(项目接续, { agent: context?.agent, org, projectOf: 当前项目键, logger, active });
         const 自由空间 = await injectLeadSpace(见闻与成长, { agent: context?.agent, org, hooks: leadSpaceHooks, projectOf: 当前项目键, logger });
         const 人格 = await injectPersonaCore(自由空间, { agent: context?.agent, org,
-          projectOf: 当前项目键, logger, active: () => !delegation.closed });
+          projectOf: 当前项目键, logger, active });
+        if (!active()) return disconnected();
         const 动态上下文 = projectMindRuntimeContext(人格);
         retireMindRuntimeSnapshots(动态上下文, context?.agent);
         return 动态上下文;
@@ -629,6 +646,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations, 
     async execute(args, exec) {
       const 主体 = agentSubject(exec);
       try { return await observations.execute(exec, async () => {
+        if (!chatConnected(org, exec?.agent?.session)) throw new Denied('当前聊天未接入心智', '请先在聊天框打开“接入心智”，再调用Mind工具。');
         // 项目键省略时取**当前工作区目录名**（§14.4-5：目录名即项目键）——
         // 否则面板永远只显示默认项目，而任务建在别的项目里，看起来就是"一块空白"。
         const 本次项目 = 项目键(exec);

@@ -927,9 +927,9 @@ export async function runHarness() {
     '只 require react 系模块（未 require 宿主内部包）', a.strict.asked.join(',')));
 
   const injected = a.calls.inject.slice().sort();
-  // 用户否定聊天区审批形式：审批由工作台待办显式导航，不能注册输入区或全局浮层。
-  passed.push(check(injected.join('|') === ['main', 'settings.section', 'sidebar.panellist'].join('|'),
-    'inject 仅含看板、设置和侧栏；审批不占聊天或全局浮层', a.calls.inject.join(',')));
+  // 新增用户要求的接入开关；聊天区依然不承载审批或全局浮层。
+  passed.push(check(injected.join('|') === ['conversation.input.left', 'main', 'settings.section', 'sidebar.panellist'].join('|'),
+    'inject 含聊天接入开关、看板、设置和侧栏；审批不占聊天或全局浮层', a.calls.inject.join(',')));
   // ⚠️ 这一条**改过**，理由必须留在注释里（不是把历史的红偷偷删掉）：
   //
   // 旧断言是「不再注册 settings.section」，理由是「看板已搬出设置页」。那条决定说的是
@@ -944,13 +944,13 @@ export async function runHarness() {
     '注册 settings.section：看板面板 ≠ 设置页，「心智设置」分区是失联限制唯一的写入口'));
   passed.push(check(a.calls.inject.indexOf('sidebar.footer.action') < 0,
     '不再占用侧边栏页脚席位（入口移到插件入口下面）'));
-  passed.push(check(a.calls.register.length === 3, '恰好三处 register', String(a.calls.register.length)));
+  passed.push(check(a.calls.register.length === 4, '恰好四处 register', String(a.calls.register.length)));
 
   const mainOptions = registrationOf(a, 'main').options;
   passed.push(check(mainOptions.key === PANEL_KEY, 'main 席位带 key ' + PANEL_KEY, JSON.stringify(mainOptions)));
   passed.push(check(typeof a.disposer === 'function', 'apply 返回合并后的 disposer'));
   a.disposer();
-  passed.push(check(a.calls.disposed === 3, '撤下时三处注册都被释放', String(a.calls.disposed)));
+  passed.push(check(a.calls.disposed === 4, '撤下时四处注册都被释放', String(a.calls.disposed)));
 
   const entryOptions = registrationOf(a, 'sidebar.panellist').options;
   passed.push(check(entryOptions.id === PANEL_KEY, '入口的 id 是 ' + PANEL_KEY, JSON.stringify(entryOptions)));
@@ -980,7 +980,7 @@ export async function runHarness() {
   await settle();
   passed.push(check(off.calls.disposed === 0, '注册后不自行撤下（没有名册探针了）', String(off.calls.disposed)));
   off.disposer();
-  passed.push(check(off.calls.disposed === 3, '清理器一次撤下三处席位', String(off.calls.disposed)));
+  passed.push(check(off.calls.disposed === 4, '清理器一次撤下四处席位', String(off.calls.disposed)));
 
   const noAnswer = boot({ services: session() });
   await settle();
@@ -2087,7 +2087,7 @@ export async function runHarness() {
   const throwingSlots = makeSlots();
   throwingSlots.slots.register = () => { throw new Error('槽位协议变了'); };
   const broken = boot({ services: Object.assign(session(), { slots: throwingSlots.slots }) });
-  passed.push(check(throwingSlots.calls.inject.length === 3, '仍然尝试了三次注入', throwingSlots.calls.inject.join(',')));
+  passed.push(check(throwingSlots.calls.inject.length === 4, '仍然尝试了四次注入', throwingSlots.calls.inject.join(',')));
   passed.push(check(typeof broken.disposer === 'function' || broken.disposer === undefined,
     '注册失败也不抛，apply 照常返回'));
 
@@ -2940,7 +2940,7 @@ export async function runHarness() {
       passed.push(check(缺钩终态.includes('失联保险 开') && 缺钩终态.includes('生效期限 72 小时'),
         '⑯ 缺 useEffect ⇒ 页面**照常有数据**（取数不再依赖 effect，这是 Batch 7 的重心）',
         缺钩终态.slice(0, 200)));
-      passed.push(check(缺钩.calls.register.length === 3,
+      passed.push(check(缺钩.calls.register.length === 4,
         '⑯ 缺 useEffect 也不影响注册（页面还在，只是不能自动取数）'));
       缺钩渲染.unmount();
     } finally {

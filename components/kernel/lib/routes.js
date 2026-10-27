@@ -24,7 +24,7 @@
  * 处理函数**复用命令面那一条路**（`runAction({ 面: 'command' })`）：策略引擎、merge 写、
  * `withLock`、`atomicWrite`、无条件入账、校验/拒绝口径全部照旧，这里既不复制也不放宽。
  */
-import { describeFailure, InvalidBody } from '../../../src/kernel/errors.js';
+import { describeFailure, InvalidBody, Fault } from '../../../src/kernel/errors.js';
 import { runAction } from '../../../lib/actions.js';
 // 看板尾长单源（设计评审 #17 · 2026-10-15）：本文件与 kernel/lib/index.js 的「40」
 // 都引 src/audit.js 的常量，值不变、出处归一。
@@ -35,6 +35,7 @@ export const 路由前缀 = '/plugins/dsh-mind';
 
 /** 只登记明确端点；调度授权另经宿主认证，不开放任意 action 代理。 */
 export const 端点表 = Object.freeze({
+  chatConnection: `${路由前缀}/chat-connection`,
   presence: `${路由前缀}/presence`,
   workbench: `${路由前缀}/workbench`,
   monitor: `${路由前缀}/monitor`,
@@ -768,6 +769,42 @@ function 取webServer(ctx) {
  *
  * @param {{ ctx: any, org: object, 项目: string, logger?: object, 间隔毫秒?: number, 次数?: number }} spec
  */
+export function chatConnection路由({ ctx, org }) {
+  return async (req, res) => {
+    const method = String(req.method ?? 'GET').toUpperCase();
+    if (!['GET', 'POST'].includes(method)) return 回方法不对(res, method, 'GET/POST');
+    try {
+      const connection = ctx.get?.('connection');
+      if (typeof connection?.requestRejection !== 'function' || !org.mindConnection) return 回JSON(res, 503, { 成功: false, 理由: '心智开关或宿主认证不可用。' });
+      const rejection = connection.requestRejection(req);
+      if (rejection !== undefined) return 回JSON(res, rejection === 401 ? 401 : 403, { 成功: false, 理由: '需要已认证的人侧入口。' });
+      if (!(method === 'GET' ? 读栅栏(req) : 写栅栏(req)).ok) return 回JSON(res, 403, { 成功: false, 理由: '需要同源请求。' });
+      const params = new URL(req.url, 'http://localhost').searchParams;
+      if (method === 'GET') {
+        if ([...params.keys()].length !== 1 || !params.has('sessionId')) throw new InvalidBody('只接受当前会话ID。');
+        return 回JSON(res, 200, { 成功: true, ...org.mindConnection.read(params.get('sessionId')) });
+      }
+      if ([...params.keys()].length) throw new InvalidBody('开关写入只接受JSON正文。');
+      if (取头(req, 'content-type').split(';')[0].trim().toLowerCase() !== 'application/json') return 回JSON(res, 415, { 成功: false, 理由: '只接受application/json。' });
+      let body;
+      try { body = JSON.parse(await 读请求体(req)); }
+      catch { throw new InvalidBody('心智开关需要有限的合法JSON。'); }
+      if (!body || Object.keys(body).some(k => !['sessionId', 'enabled', 'expectedRevision'].includes(k))) throw new InvalidBody('心智开关参数无效。');
+      org.mindConnection.read(body.sessionId);
+      const query = ctx.get?.('sessionQuery');
+      if (typeof query?.observeSession !== 'function') throw new Fault('MIND_CONNECTION_SESSION_UNAVAILABLE', '宿主无法核对当前会话位置，开关未保存。');
+      const lease = await query.observeSession(body.sessionId, { projectionMode: 'none' });
+      let nextSeq;
+      try {
+        if (lease.header?.id !== body.sessionId || !Number.isSafeInteger(lease.cursor) || lease.cursor < -1) throw new InvalidBody('当前会话位置不可核对。');
+        nextSeq = lease.cursor + 1;
+      } finally { lease[Symbol.dispose]?.(); }
+      const result = await org.mindConnection.set(body, nextSeq);
+      return 回JSON(res, 200, { 成功: true, ...result });
+    } catch (error) { return 回JSON(res, error.code === 'MIND_CONNECTION_CHANGED' ? 409 : error.code === 'INVALID_BODY' ? 400 : 503, { 成功: false, ...describeFailure(error) }); }
+  };
+}
+
 export function 挂同源路由(spec) {
   const { ctx, org, 项目, logger = console } = spec;
   const 间隔毫秒 = Number.isFinite(spec.间隔毫秒) ? spec.间隔毫秒 : 500;
@@ -791,6 +828,7 @@ export function 挂同源路由(spec) {
       if (!ws || typeof ws.register !== 'function') return false;
       const 新挂 = [];
       try {
+        新挂.push(ws.register({ kind: 'exact', path: 端点表.chatConnection, handler: chatConnection路由({ ctx, org }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.presence, handler: presence路由({ org, 项目, ctx }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.workbench, handler: workbench路由({ org, 项目 }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.ping, handler: ping路由({ org, ctx }) }));

@@ -3,6 +3,7 @@ import { renderContextFrame } from './context-frame.js';
 import { agentSubject } from '../../../src/subject.js';
 import { extractProjectBrief } from './project-brief-hooks.js';
 import { externalMaterialResult } from '../../../src/conversation-origin.js';
+import { chatScope, sameChat } from './chat-connection.js';
 
 export const INFORMATION_SECTION = 'mind:information-growth';
 export const INFORMATION_SYSTEM = [
@@ -27,9 +28,9 @@ export function createInformationHooks({ org, projectOf, llmOf = () => null, log
   const currentSpec = session => {
     if (stopped || !session?.id || !session?.header?.cwd) return null;
     const subject = agentSubject({ agent: { session } });
-    return subject.kind === 'Lead' ? { subject, project: projectOf({ agent: { session } }), session: session.id } : null;
+    return subject.kind === 'Lead' ? chatScope(org, session, { subject, project: projectOf({ agent: { session } }), session: session.id }) : null;
   };
-  const same = (session, spec) => { const next = currentSpec(session); return !!next && next.project === spec.project && next.session === spec.session; };
+  const same = (session, spec) => { const next = currentSpec(session); return sameChat(org, session, spec) && !!next && next.project === spec.project && next.session === spec.session; };
   const warn = (error, phase) => { failures++; lastFailure = { code: String(error?.code ?? error?.name ?? 'unknown'), phase, at: org.clock.iso() }; if (failures === 1) logger.warn?.(`[dsh-mind] 信息阅读暂未完成（${lastFailure.code}），保留待阅读状态与预算回执。`); };
   const api = {
     attach(ctx) {

@@ -5,6 +5,7 @@ import { projectTurnEvent, projectTurnSurfaceEvent, foldTurnRecords, TURN_BUFFER
 
 import { turnMetadataEvent, externalConversationMessage } from '../../../src/conversation-origin.js';
 import { canonical, digest } from '../../../src/kernel/text.js';
+import { chatScope, sameChat, captureAllowed } from './chat-connection.js';
 
 export const TURN_BUFFER_SECTION = 'mind:turn-buffer';
 const natural = n => Number.isSafeInteger(n) && n >= 0;
@@ -27,7 +28,7 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
   const scope = session => {
     if (!enabled || stopped || !root(session)) return null;
     const agent = { session };
-    return { subject: agentSubject({ agent }), project: projectOf({ agent }), session: session.id };
+    return chatScope(org, session, { subject: agentSubject({ agent }), project: projectOf({ agent }), session: session.id });
   };
   async function recoverSources(session, spec) {
     const before = await org.turnBuffer.load(spec.project, spec.session);
@@ -47,7 +48,7 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
       for (let seq = 0; seq < before.nextSeq; seq++) {
         const event = lease.events[seq]; if (event?.seq !== seq) throw new Error('外部来源历史补读存在事件缺口。');
         if (event.type === 'working-directory/change') project = projectAtCwd ? projectAtCwd(event.data?.cwd) : spec.project;
-        const eligible = seq >= Math.max(before.floor, inherited) && project === spec.project && session.isOwnSeq(seq) === true;
+        const eligible = captureAllowed(org, session, seq) && seq >= Math.max(before.floor, inherited) && project === spec.project && session.isOwnSeq(seq) === true;
         const body = eligible && (event.type === 'user/message' || event.type === 'tool/result');
         const source = body || eligible && event.type === 'tool/call' ? event : turnMetadataEvent({ ...event, data: event.type === 'tool/call' ? {} : event.data });
         let row = projectTurnSurfaceEvent(source, nodes, context);
@@ -72,18 +73,18 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
       const recovered = state.rounds.some(r => r.messages.some(externalConversationMessage)) ? state : { ...before, sourceProjection: 3 };
       recovered.sourceRecovery = { version: 3, throughSeq: before.nextSeq, omitted };
       await org.turnBuffer.recoverProjection({ ...spec, expected, state: recovered, active: () => {
-        const now = scope(session); return now?.project === spec.project && now.session === spec.session && session.seq >= before.nextSeq;
+        const now = scope(session); return sameChat(org, session, spec) && now?.project === spec.project && now.session === spec.session && session.seq >= before.nextSeq;
       } });
     } finally { lease[Symbol.dispose](); }
   }
   async function run(session, hint, spec) {
     const now = scope(session);
-    if (!now || now.session !== spec.session || now.project !== spec.project) return;
+    if (!sameChat(org, session, spec) || !now || now.session !== spec.session || now.project !== spec.project) return;
     const end = hint ? hint.seq + 1 : session.seq;
     const inherited = natural(session.inheritedEventCount) ? session.inheritedEventCount : 0;
     const current = () => {
       const now = scope(session);
-      return now && now.session === spec.session && now.project === spec.project && session.seq >= end;
+      return sameChat(org, session, spec) && now && now.session === spec.session && now.project === spec.project && session.seq >= end;
     };
     await recoverSources(session, spec);
     const position = await org.turnBuffer.position(spec);
@@ -98,7 +99,7 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
       return;
     }
     if (hint && hint.type !== 'surface-replay' && cursor === hint.seq) {
-      if (current()) await org.turnBuffer.capture({ ...spec, records: [hint], fromSeq: cursor, throughSeq: end, active: current });
+      if (current()) await org.turnBuffer.capture({ ...spec, records: [captureAllowed(org, session, hint.seq) ? hint : { seq: hint.seq, type: 'skip' }], fromSeq: cursor, throughSeq: end, active: current });
       return;
     }
     const query = queryOf();
@@ -122,10 +123,12 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
           if (event.type === 'working-directory/change') historicalProject = projectAtCwd ? projectAtCwd(event.data?.cwd) : spec.project;
           // Replay the ordered prefix even when its text belongs to another project
           // or predates this buffer. Keep only surface metadata and call identities for pairing, never tool arguments.
-          const projected = projectTurnSurfaceEvent(historicalProject === spec.project && seq >= cursor ? event
+          const allowed = captureAllowed(org, session, seq);
+          const projected = projectTurnSurfaceEvent(allowed && historicalProject === spec.project && seq >= cursor ? event
             : turnMetadataEvent(historicalProject === spec.project && seq >= (position?.floor ?? inherited) ? event : { ...event, data: {} }), nodes, context);
           if (seq < cursor) continue;
-          if (historicalProject === spec.project) records.push(projected);
+          if (!allowed) records.push(projected.type === 'replace' ? { ...projected, message: undefined } : { seq, type: 'skip', time: null });
+          else if (historicalProject === spec.project) records.push(projected);
           else if (event.surfaceOp && typeof event.surfaceOp === 'object') {
             // 其他项目的正文不复制，但表面撤回/压缩仍须作用于本项目已缓冲的原文。
             records.push(projected);
@@ -139,7 +142,7 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
       recoveryUnavailable++;
       // SDK未提供历史读面时仍采集新事件，但明确记录未核范围，不冒称完整。
       if (hint?.type === 'surface-replay') throw Object.assign(new Error('表面替换需要宿主历史节点，当前读面不可用。'), { code: 'TURN_BUFFER_SURFACE_UNAVAILABLE' });
-      if (hint && current()) await org.turnBuffer.capture({ ...spec, records: [hint], fromSeq: hint.seq, throughSeq: end, active: current });
+      if (hint && current()) await org.turnBuffer.capture({ ...spec, records: [captureAllowed(org, session, hint.seq) ? hint : { seq: hint.seq, type: 'skip' }], fromSeq: hint.seq, throughSeq: end, active: current });
       return;
     }
     // Older SDKs expose only event windows. Cache their metadata fold independently
@@ -162,8 +165,9 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
       if (!events.length || events.length > 256 || events.some((e, i) => e.seq !== surface.nextSeq + i || (e.seq >= cursor && session.isOwnSeq(e.seq) !== true))) throw new Error('宿主历史缺口或继承来源不可核对。');
       const nodes = [...surface.nodes]; const records = [];
       for (const event of events) {
-        const row = projectTurnSurfaceEvent(event.seq >= cursor ? event : turnMetadataEvent(event.seq >= (position?.floor ?? inherited) ? event : { ...event, data: {} }), nodes, surface.context);
-        if (event.seq >= cursor) records.push(row);
+        const allowed = captureAllowed(org, session, event.seq);
+        const row = projectTurnSurfaceEvent(allowed && event.seq >= cursor ? event : turnMetadataEvent(event.seq >= (position?.floor ?? inherited) ? event : { ...event, data: {} }), nodes, surface.context);
+        if (event.seq >= cursor) records.push(allowed ? row : row.type === 'replace' ? { ...row, message: undefined } : { seq: event.seq, type: 'skip' });
       }
       const throughSeq = events.at(-1).seq + 1;
       if (records.length) {
@@ -186,7 +190,7 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
     pending++;
     const work = previous.then(async () => {
       await run(session, hint, expected);
-      if (scope(session)?.project === expected.project && onPersist) {
+      if (sameChat(org, session, expected) && scope(session)?.project === expected.project && onPersist) {
         try { await onPersist(session, { summarize: !hint || hint.type === 'turn/end' }); }
         catch (error) { logger.warn?.(`[dsh-mind] 项目接续来源登记失败：${error?.code ?? error?.name ?? 'unknown'}；轮缓冲仍保留，后续重试。`); }
       }
@@ -225,7 +229,7 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
           const throughSeq = session.seq;
           const inherited = natural(session.inheritedEventCount) ? session.inheritedEventCount : 0;
           await api.sync(session);
-          if (!scope(session) || scope(session).project !== spec.project) return;
+          if (!sameChat(org, session, spec) || !scope(session) || scope(session).project !== spec.project) return;
           const position = await org.turnBuffer.position(spec);
           if ((position?.nextSeq ?? inherited) < throughSeq) {
             throw Object.assign(new Error('轮级缓冲尚有待补事件；下一次检查点继续，不报告完整持久化。'), { code: 'TURN_BUFFER_RECOVERY_PENDING' });

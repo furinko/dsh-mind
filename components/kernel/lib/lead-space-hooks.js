@@ -5,6 +5,7 @@ import { LEAD_SPACE_LIMITS } from '../../../src/lead-space.js';
 import { Fault, InvalidBody } from '../../../src/kernel/errors.js';
 import { extractProjectBrief } from './project-brief-hooks.js';
 import { INFORMATION_SYSTEM } from './information-hooks.js';
+import { chatScope, sameChat } from './chat-connection.js';
 
 export const LEAD_SPACE_SECTION = 'mind:lead-free-space';
 export const FREE_TIME_SYSTEM = [
@@ -31,15 +32,15 @@ export function createLeadSpaceHooks({ org, projectOf, llmOf = () => null, logge
   const specOf = session => {
     const subject = agentSubject({ agent: { session } });
     if (subject.kind !== 'Lead' || !session?.id || !session.header?.cwd) return null;
-    return { subject, project: projectOf({ agent: { session } }), session: session.id };
+    return chatScope(org, session, { subject, project: projectOf({ agent: { session } }), session: session.id });
   };
   const active = entry => !stopped && bound === entry && !busy.has(entry.spec.session)
-    && !controller?.signal.aborted && specOf(entry.session)?.project === entry.spec.project;
+    && sameChat(org, entry.session, entry.spec) && !controller?.signal.aborted && specOf(entry.session)?.project === entry.spec.project;
   const api = {
     bind(session) {
       const spec = specOf(session); const config = session?.requestHeader?.()?.config;
       if (!spec || !config?.provider || !config.model) return;
-      if (bound?.session === session && bound.spec.project === spec.project && bound.route.provider === config.provider && bound.route.model === config.model) return;
+      if (bound?.session === session && sameChat(org, session, bound.spec) && bound.spec.project === spec.project && bound.route.provider === config.provider && bound.route.model === config.model) return;
       controller?.abort(new Fault('LEAD_ACTIVITY_CANCELED', 'Lead会话或路由变化'));
       bound = { session, spec, route: { provider: config.provider, model: config.model } }; lastState = 'idle';
     },
@@ -57,6 +58,7 @@ export function createLeadSpaceHooks({ org, projectOf, llmOf = () => null, logge
       if (stopped || pending) return;
       const entry = bound;
       if (!entry) { lastState = 'waiting-for-lead'; return; }
+      if (!sameChat(org, entry.session, entry.spec)) { bound = null; lastState = 'waiting-for-lead'; return; }
       if (busy.has(entry.spec.session) || org.informationHooks?.health()?.pending) { lastState = 'busy'; return; }
       const llm = llmOf(); if (typeof llm?.prepareCall !== 'function') { lastState = 'waiting-for-model'; return; }
       pending = (async () => {
@@ -67,7 +69,7 @@ export function createLeadSpaceHooks({ org, projectOf, llmOf = () => null, logge
         const card = member?.status === '在岗' && member.岗位 === 'Lead' ? await org.registry.cardOf(spec.subject.id) : null;
         if (card?.就绪 !== true || card.卡版本?.摘要 !== member.卡版本?.摘要) { lastState = 'waiting-for-lead'; return; }
         await org.information.authorize(spec, true);
-        if (bound !== entry || busy.has(spec.session)) return;
+        if (!active(entry)) return;
         const wake = await service.reserve(spec); if (!wake) { lastState = 'idle'; return; }
         controller = new AbortController(); lastState = 'running';
         const abort = () => controller?.abort(new Fault('LEAD_ACTIVITY_CANCELED', '活动时间预算耗尽'));

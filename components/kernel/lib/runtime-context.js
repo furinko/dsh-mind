@@ -58,17 +58,19 @@ const frameOf = section => {
  * Only plugin context snapshots are replaced; original user/tool history stays owned
  * by its existing services. Replacements deliberately sacrifice prefix reuse.
  */
-export function retireMindRuntimeSnapshots(assembly, agent) {
+export function retireMindRuntimeSnapshots(assembly, agent, { disconnected = false } = {}) {
   const session = agent?.session;
   if (!Array.isArray(assembly?.contexts) || typeof session?.eventAt !== 'function'
       || typeof session?.append !== 'function' || !Array.isArray(session.surface?.nodes)) return;
   const current = new Map(assembly.contexts.filter(section => GUIDANCE.has(section.name)).map(section => [section.name, frameOf(section)]));
+  const owned = name => GUIDANCE.has(name) || disconnected && typeof name === 'string' && name.startsWith('mind:');
   for (const seq of [...session.surface.nodes]) {
     const event = session.eventAt(seq);
     const message = event?.type === 'user/message' ? event.data : null;
     if (message?.source?.kind !== 'runtime-context' || !Array.isArray(message.source.sections)) continue;
     const retired = message.source.sections.some(section => {
-      if (!GUIDANCE.has(section.name)) return false;
+      if (!owned(section.name)) return false;
+      if (disconnected) return true;
       const next = current.get(section.name);
       if (!next) return true;
       const previous = frameOf(section);
@@ -83,7 +85,7 @@ export function retireMindRuntimeSnapshots(assembly, agent) {
       } catch { return true; } // A malformed saved row must not keep its old model text alive.
     });
     if (!retired) continue;
-    const sections = message.source.sections.filter(section => !GUIDANCE.has(section.name));
+    const sections = message.source.sections.filter(section => !owned(section.name));
     session.append('user/message', { ...message,
       source: { ...message.source, sections },
       content: [{ type: 'text', text: ['Earlier Mind automatic context in this snapshot has been withdrawn.',

@@ -5969,6 +5969,58 @@ window.__ModuleLoader__.load({
      *
      * 入口排在**插件入口下面**：插件那一行的 `order` 是 0，本组件是 10。
      */
+    /** 会话级接入开关：只展示宿主已确认状态，不从全局会话列表猜当前聊天。 */
+    function ChatMindSwitch(props) {
+      var sessionId = line(props && props.sessionId, '');
+      var state = useState({ sessionId: '', value: null, busy: false, error: '' });
+      var setState = state[1];
+      var life = useState(function () { return { id: '', epoch: 0, active: true, busy: false }; })[0];
+      // Render-time scope invalidation also protects hosts with an unavailable effect hook.
+      if (life.id !== sessionId) { life.id = sessionId; life.epoch++; life.busy = false; }
+      var snap = state[0].sessionId === sessionId ? state[0] : { value: null, busy: false, error: '' };
+      var route = '/plugins/dsh-mind/chat-connection';
+      function valid(value) { return value && value.成功 === true && value.sessionId === sessionId && typeof value.enabled === 'boolean' && Number.isSafeInteger(value.revision) && value.revision >= 0; }
+      function request(write) {
+        if (!sessionId || !life.active || life.id !== sessionId || life.busy || write && !snap.value) return;
+        life.busy = true;
+        var epoch = ++life.epoch;
+        var target = write ? !snap.value.enabled : null;
+        setState({ sessionId: sessionId, value: snap.value, busy: true, error: '' });
+        function alive() { return life.active && life.id === sessionId && life.epoch === epoch; }
+        var spec = write ? { method: 'POST', path: route, body: { sessionId: sessionId, enabled: target, expectedRevision: snap.value.revision } }
+          : { method: 'GET', path: route + '?sessionId=' + encodeURIComponent(sessionId) };
+        runCommand(activeCtx, sessionId, spec).then(function (out) {
+          if (!alive()) return;
+          // An uncertain write cannot be clicked again using an old revision. Reread first.
+          if (!out.ok || !valid(out.value) || write && out.value.enabled !== target) {
+            life.busy = false;
+            setState({ sessionId: sessionId, value: null, busy: false, error: (write ? '保存未确认，请重新读取：' : '读取失败：') + (out.error || '会话或状态不匹配') });
+            return;
+          }
+          if (!write) return out;
+          return runCommand(activeCtx, sessionId, { method: 'GET', path: route + '?sessionId=' + encodeURIComponent(sessionId) });
+        }).then(function (out) {
+          if (!alive() || !out) return;
+          life.busy = false;
+          setState({ sessionId: sessionId, value: out.ok && valid(out.value) ? out.value : null, busy: false,
+            error: out.ok && valid(out.value) ? '' : '状态未确认，请重新读取：' + (out.error || '会话或状态不匹配') });
+        });
+      }
+      useEffect(function () { life.active = true; request(false); return function () { life.active = false; life.epoch++; life.busy = false; }; }, [sessionId]);
+      var title = '仅影响当前聊天，从下一轮生效。关闭后不带入心智资料、不记录新的心智内容；重新打开不补记关闭期间的消息。旧记忆和聊天记录保留，已有任务的安全限制继续生效。';
+      return h('span', { 'data-dshmind': 'chat-connection', style: { display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12 } }, [
+        h('button', Object.assign({ key: 'switch', type: 'button', disabled: !sessionId || snap.busy,
+          title: title, onClick: function () { request(!!snap.value); },
+          style: { display: 'inline-flex', alignItems: 'center', gap: 5, border: 0, background: 'transparent', color: 'inherit', cursor: snap.busy ? 'wait' : 'pointer', padding: '3px 5px' }
+        }, snap.value ? { role: 'switch', 'aria-label': '接入心智', 'aria-checked': snap.value.enabled } : { 'aria-label': '读取心智开关' }), [
+          h('span', { key: 'track', 'aria-hidden': true, style: { width: 30, height: 18, borderRadius: 10, background: snap.value ? snap.value.enabled ? '#388e69' : '#737373' : '#999', display: 'inline-flex', alignItems: 'center', padding: 2, boxSizing: 'border-box' } },
+            h('span', { style: { width: 14, height: 14, borderRadius: '50%', background: '#fff', transform: snap.value && snap.value.enabled ? 'translateX(12px)' : 'none' } })),
+          h('span', { key: 'label' }, snap.busy ? '心智…' : snap.value ? '心智' : '心智·读取')
+        ]),
+        snap.error ? h('span', { key: 'error', role: 'status', title: snap.error, style: { color: '#b45309', maxWidth: 220 } }, snap.error) : null
+      ]);
+    }
+
     function apply(ctx) {
       var slots = null;
       try {
@@ -6022,6 +6074,10 @@ window.__ModuleLoader__.load({
           // 分区标签由设置页渲染；主人只传 `{close}` 给组件（见 心智设置）。
           label: function () { return SETTINGS_SECTION_LABEL; },
         }, 心智设置);
+      });
+      // 聊天区只放接入开关；审批仍从工作台显式打开。
+      登记('conversation.input.left', function () {
+        return slots.register({ name: 'conversation.input.left', id: 'dsh-mind-connect', order: 100 }, ChatMindSwitch);
       });
 
       // 设置页那套样式走**文档级**注入（`document.head`）—— 它不住在看板面板的子树里，

@@ -414,6 +414,10 @@ export class Layout {
     return this.private(DIR.基础设施, DIR.默认值, '工具闸回执.json');
   }
 
+  chatConnectionFile() {
+    return this.private(DIR.基础设施, DIR.默认值, '会话心智开关.json');
+  }
+
   /**
    * 审计月份清单（R13/R14 · 审查 2026-10-16）：机制自持的「应当存在的分片」登记——
    * 每月首写时登记。verify 按清单∪日志∪锚核对，替代「日历连续性」这个把无活动月

@@ -1078,11 +1078,16 @@ await runAction({ org, 项目, subject, 主体, args: { action, ...args }, 面: 
 
 ### 2.21 同源路由面（kernel 组件，`components/kernel/lib/routes.js`）
 
+聊天输入区左侧通过会话级list槽位`conversation.input.left`登记`dsh-mind-connect`，只接受宿主标准props的精确`sessionId`。不从全局会话列表猜归属，不放审批入口。默认接入；只有宿主确认后才显示开关状态，保存后回读；未知、超时、冲突、失败均需重新读取，不能假称保存成功。
+
+`/plugins/dsh-mind/chat-connection`：宿主Connection认证及同源人侧入口。GET只接`sessionId`；POST只接JSON `{sessionId,enabled,expectedRevision}`，宿主通过`sessionQuery.observeSession`核对ID及实际事件位置，不接客户端自报游标。CAS冲突409；未认证401/403，不可核状态503。私有基础设施默认值中的`会话心智开关.json`只存会话ID、修订和关闭事件区间，不存正文或权限。关闭时停止当前聊天的Mind自动资料、工具与内容采集；保留旧记忆、宿主聊天历史和既有安全闸。重开后跳过关闭区间的原文；旧后台租约在关开后仍失效。已发出的模型请求不能撤回，必要的执行审计和预算计量不随内容采集关闭。其他聊天与原自动协作记忆默认关闭设置不变。
+
 端点由 `routes.端点表` 单源声明，无通用动作代理：
 
 | 端点 | 用途与边界 |
 |---|---|
 | `/plugins/dsh-mind/presence` | GET读设置；POST/PUT仅接开关、小时、介入度、复核免审；写必须宿主Connection认证及同源，仍记设置页入口而不由body冒充主权者 |
+| `/plugins/dsh-mind/chat-connection` | 已认证同源GET读取精确sessionId状态；POST仅接sessionId、enabled、expectedRevision，按宿主实际游标保存当前聊天接入状态，不提供任意动作代理 |
 | `/plugins/dsh-mind/workbench` | GET只读同一工作台投影，不另造状态真源 |
 | `/plugins/dsh-mind/ping` | GET诊断当前内核与通道，不以历史探针绿代替入口在位 |
 | `/plugins/dsh-mind/delegation` | 已认证GET/POST调度设置，正式ConfigEditor保存；认证缺失即不可用 |
