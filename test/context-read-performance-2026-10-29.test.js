@@ -83,7 +83,7 @@ it('尚未创建收录账本时，连续读取空状态不误判为文件被删�
   await service.withReadSnapshot(() => service.readState()); assert.equal(count(), 1);
 }));
 
-it('共用的首次读取期间文件被替换时，各等待者均拒绝旧数据并可重新读取', () => fixture(async org => {
+it('共用的首次读取期间文件被替换时，各等待者重读并取得当前数据', () => fixture(async org => {
   const service = org.information; const original = service.load.bind(service);
   const loaded = Promise.withResolvers(); const proceed = Promise.withResolvers(); let calls = 0;
   service.load = async () => {
@@ -93,8 +93,39 @@ it('共用的首次读取期间文件被替换时，各等待者均拒绝旧数�
   await loaded.promise;
   await replaceState(service, state => { state.config.paused = true; }); proceed.resolve();
   const results = await reads;
-  assert.ok(results.every(result => result.status === 'rejected' && result.reason.code === 'INFORMATION_SCOPE_CHANGED'));
+  assert.ok(results.every(result => result.status === 'fulfilled' && result.value.config.paused === true));
   assert.equal((await service.readState()).config.paused, true); assert.equal(calls, 2);
+}));
+
+it('后台计数撞上文件读取时重读稳定版本，不无故撤下本次上下文', () => fixture(async org => {
+  const service = org.information, load = service.load.bind(service); let collide = false;
+  const out = await withMindReadSnapshot(base(), { org }, async () => {
+    await service.readState();
+    await replaceState(service, state => { state.conversations.cursor = 1; });
+    service.load = async () => {
+      const state = await load();
+      if (!collide) { collide = true; await replaceState(service, fresh => { fresh.conversations.cursor = 2; }); }
+      return state;
+    };
+    assert.equal((await service.readState()).conversations.cursor, 2);
+    return { ...base(), contexts: [{ name: 'mind:professional-context', text: 'still valid' }] };
+  });
+  assert.equal(out.contexts[0].text, 'still valid');
+}));
+
+it('重读不能掩盖实际配置变化；始终被并发更新的文件也不会无限重试', () => fixture(async org => {
+  const service = org.information, load = service.load.bind(service); let collide = false;
+  await assert.rejects(service.withReadSnapshot(async () => {
+    await service.readState(); await replaceState(service, state => { state.conversations.cursor = 1; });
+    service.load = async () => {
+      const state = await load(); if (!collide) { collide = true; await replaceState(service, fresh => { fresh.config.paused = true; }); } return state;
+    };
+    assert.equal((await service.readState()).config.paused, true);
+  }), { code: 'INFORMATION_SCOPE_CHANGED' });
+  let loads = 0; await replaceState(service, state => { state.conversations.cursor = 2; });
+  service.load = async () => { const state = await load(); loads++; await replaceState(service, fresh => { fresh.conversations.cursor++; }); return state; };
+  await assert.rejects(service.readState(), { code: 'INFORMATION_SCOPE_CHANGED' });
+  assert.ok(loads <= 5, `bounded retries: ${loads}`);
 }));
 
 it('同尺寸原地改写并恢复mtime仍通过ctime识别，不能继续交付旧资料', () => fixture(async org => {

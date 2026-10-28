@@ -111,11 +111,23 @@ export class InformationService {
     if (frame === null) return this.load();
     // Check the actual file on every read, including queued/background callbacks.
     // Reuse parsed data across callers only while the file is exactly the same.
-    const version = await this.#stateVersion();
+    let version = await this.#stateVersion();
     if (frame?.active && frame.entry && frame.entry.version !== version && version === 'absent') frame.changed = true;
     let entry;
-    try { entry = await this.#readEntry(version); }
-    catch (error) { if (frame?.active && error.code === 'INFORMATION_SCOPE_CHANGED') frame.changed = true; throw error; }
+    for (let attempt = 0; ; attempt++) {
+      try { entry = await this.#readEntry(version); break; }
+      catch (error) {
+        // A background counter write can replace the file while it is being read.
+        // Obtain a stable version before comparing its actual scope with this frame.
+        if (error.code === 'INFORMATION_SCOPE_CHANGED' && attempt < 2) {
+          version = await this.#stateVersion();
+          if (frame?.active && frame.entry && frame.entry.version !== version && version === 'absent') frame.changed = true;
+          continue;
+        }
+        if (frame?.active && error.code === 'INFORMATION_SCOPE_CHANGED') frame.changed = true;
+        throw error;
+      }
+    }
     if (frame?.active) {
       // Counters, jobs and cursors can advance without changing the read scope.
       if (frame.scopeStamp !== null && frame.scopeStamp !== entry.scopeStamp) frame.changed = true;

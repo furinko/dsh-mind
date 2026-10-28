@@ -237,6 +237,12 @@ export class Org {
    * @returns {Promise<object>}
    */
   async workbench(spec = {}) {
+    // The full projection contains only derived data. Keep callers' result mutable,
+    // while its internal readers share immutable, file-version-checked audit rows.
+    const read = async () => structuredClone(await this.#workbench(spec));
+    return this.audit.withReadSnapshot ? this.audit.withReadSnapshot(read) : read();
+  }
+  async #workbench(spec = {}) {
     const 项目 = spec.项目 ?? this.project;
     const identity = await this.registry.identity();
     const 参与实例 = spec.读者?.kind === '成员' ? identity.members?.[spec.读者.id] : null;

@@ -17,6 +17,7 @@ import { monthKey } from './kernel/time.js';
 import { Denied, InvalidBody } from './kernel/errors.js';
 import { DIR } from './paths.js';
 import { observeAudit } from './observability.js';
+import { AuditReadSnapshot } from './audit-read-snapshot.js';
 
 /** §7 审计记录分级：全记 / 记汇总 / 不逐次记。 */
 export const GRADE = { 全记: '全记', 记汇总: '记汇总', 不逐次记: '不逐次记' };
@@ -104,6 +105,8 @@ const ACTION_GRADE = {
 };
 
 export class AuditLog {
+  #readSnapshot;
+  #verifiedReadVersion = null;
   /**
    * @param {{ layout: import('./paths.js').Layout, clock: import('./kernel/time.js').Clock, onAlarm?: (info: object) => void }} spec
    */
@@ -113,7 +116,11 @@ export class AuditLog {
     this.onAlarm = spec.onAlarm ?? (() => {});
     /** 内存里的链尾缓存，避免每次追加都扫全月账本；重启后由 anchor 文件重建。 */
     this._chain = new Map();
+    this.#readSnapshot = new AuditReadSnapshot(this.layout);
   }
+
+  /** Internal read-only projections share immutable rows; ordinary audit reads remain mutable. */
+  async withReadSnapshot(read) { return this.#readSnapshot.run(read); }
 
   /**
    * @param {string} action
@@ -291,7 +298,7 @@ export class AuditLog {
     // 而 2 月那条第 2 条其实更晚）。所以按月分组的结构先留住，再逐月按 seq 排。
     const 组 = [];
     for (const month of months) {
-      for (const row of await readJsonl(this.layout.auditLog(month))) 组.push({ month, row });
+      for (const row of await this.#readSnapshot.read(month, () => readJsonl(this.layout.auditLog(month)))) 组.push({ month, row });
     }
     let 条目 = 组;
     if (query.grade) 条目 = 条目.filter((x) => x.row.档位 === query.grade);
@@ -324,11 +331,25 @@ export class AuditLog {
         return serializeByKey(file, () => withLock(`${file}.lock`, () => lock(index + 1)));
       }
       return (async () => {
-        const verified = await this.verify();
-        if (!verified.ok) throw new InvalidBody('审计完整性未确认，监控不能报告完整分母');
+        const scoped = this.#readSnapshot.active();
+        const version = scoped ? await this.#readSnapshot.version() : null;
+        // Reuse verification only for an explicitly read-only projection and identical files.
+        // Explicit verify() and ordinary readVerified() still perform a complete fresh check.
+        if (!scoped || this.#verifiedReadVersion !== version) {
+          this.#verifiedReadVersion = null;
+          const verified = await this.verify();
+          if (!verified.ok) throw new InvalidBody('审计完整性未确认，监控不能报告完整分母');
+        }
         const rows = await this.read(query);
         if (!months.includes(monthKey(this.clock.iso())) || (await this.months()).some(month => !months.includes(month))) {
           throw new InvalidBody('核验期间出现未加锁的新月份；监控快照未确认，请重新读取');
+        }
+        if (scoped) {
+          if (await this.#readSnapshot.version() !== version) {
+            this.#verifiedReadVersion = null;
+            throw new InvalidBody('核验期间审计文件变化；监控快照未确认，请重新读取');
+          }
+          this.#verifiedReadVersion = version;
         }
         return rows;
       })();
