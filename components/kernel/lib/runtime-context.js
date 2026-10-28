@@ -20,7 +20,7 @@ const GUIDANCE = new Map([
   [LEAD_SPACE_SECTION, LEAD_SPACE_GUIDANCE],
 ]);
 
-/** A changed intake file invalidates the whole assembled view, including earlier sections. */
+/** A changed intake scope invalidates the assembled view, including earlier sections. */
 export async function withMindReadSnapshot(assembly, { org, logger }, assemble) {
   try { return await org.information.withReadSnapshot(assemble); }
   catch (error) {

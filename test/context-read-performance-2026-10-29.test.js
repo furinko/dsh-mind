@@ -69,12 +69,12 @@ it('原子替换、删除和损坏文件均不能命中旧快照，读取结束�
     assert.equal((await service.readState()).config.paused, true);
   }), { code: 'INFORMATION_SCOPE_CHANGED' });
   await assert.rejects(service.withReadSnapshot(async () => {
-    await service.readState(); await replaceState(service, state => { state.revision++; });
+    await service.readState(); await replaceState(service, state => { state.config.paused = !state.config.paused; });
   }), { code: 'INFORMATION_SCOPE_CHANGED' });
   await assert.rejects(service.withReadSnapshot(async () => {
     await service.readState(); await writeFile(service.file, '{broken');
     await assert.rejects(service.readState(), { code: 'INFORMATION_STATE_INVALID' });
-  }), { code: 'INFORMATION_SCOPE_CHANGED' });
+  }), { code: 'INFORMATION_STATE_INVALID' });
   await rm(service.file);
   await service.locked(() => {});
   await assert.rejects(service.withReadSnapshot(async () => {
@@ -104,6 +104,22 @@ it('装配结束后继承异步上下文的后台回调仍重新读盘', () => f
   });
   await replaceState(service, state => { state.config.paused = true; }); go.resolve();
   assert.equal((await background).config.paused, true);
+}));
+
+it('后台计数、任务回执和会话水位单独变化会刷新读取，但不会撤下有效上下文', () => fixture(async org => {
+  const service = org.information; const count = countLoads(service);
+  const out = await withMindReadSnapshot(base(), { org }, async () => {
+    const first = await service.readState();
+    await service.locked(state => {
+      state.usage['2026-10-29'] = { readChars: 100, modelCalls: 1 };
+      state.jobs.push({ id: 'background', state: 'running' }); state.conversations.cursor = 42;
+    });
+    const fresh = await service.readState(); assert.notEqual(first, fresh); assert.equal(fresh.conversations.cursor, 42);
+    await service.locked(state => { state.jobs[0].state = 'failed'; });
+    return { ...base(), contexts: [{ name: 'mind:professional-context', text: 'still valid' }] };
+  });
+  assert.equal(out.contexts[0].text, 'still valid');
+  assert.ok(count() < 10, `metadata refreshes are bounded: ${count()}`);
 }));
 
 it('实际召回的内容与原读取路径一致，条目增加不再逐条重新读取收录账本', () => fixture(async org => {
@@ -150,7 +166,7 @@ it('快照失效清掉自动资料但保留宿主规则、钉版规程及工具'
   const assembly = { ...base(), sections: [...base().sections, { name: 'mind:lead-pinned-rules', text: 'pinned' }, { name: 'mind:persona-core', text: 'old' }],
     contexts: [{ name: 'host:cwd', text: 'cwd' }, { name: 'mind:professional-context', text: 'old secret' }] };
   const out = await withMindReadSnapshot(assembly, { org }, async () => {
-    await org.information.readState(); await replaceState(org.information, state => { state.revision++; }); return assembly;
+    await org.information.readState(); await replaceState(org.information, state => { state.config.paused = true; }); return assembly;
   });
   assert.deepEqual(out.sections.map(s => s.name), ['host', 'mind:lead-pinned-rules']);
   assert.deepEqual(out.contexts.map(s => s.name), ['host:cwd']); assert.equal(out.tools, assembly.tools);

@@ -30,6 +30,8 @@ const key = prefix => `${prefix}-${randomUUID()}`;
 const dayOf = clock => new Date(clock.ms()).toISOString().slice(0, 10);
 const blank = () => ({ version: 1, revision: 0, configRevision: 0, config: { ...DEFAULT_CONFIG }, sources: [], items: [],
   readings: [], records: [], usage: {}, jobs: [], conversations: {}, conversationOffsets: {}, bindings: {}, lastScan: null });
+const visibilityStampOf = state => digest(canonical({ bindings: state.bindings, sources: state.sources.map(s => [s.id, s.enabled, s.scope]),
+  items: state.items.map(i => [i.id, i.hash, i.state, i.scope]), records: state.records.map(r => [r.id, r.nativeGeneration, r.integration, r.state, r.scope, r.humanStopped, r.expiresAt]) }));
 const scopeKey = scope => canonical(scope);
 const baseScope = (project, session = null) => ({ project, audience: 'lead', roles: [], relationship: session });
 const available = s => s && s.enabled !== false;
@@ -73,15 +75,17 @@ function mergeRanges(ranges) {
 
 export class InformationService {
   #readSnapshots = new AsyncLocalStorage();
+  #visibilityStamps = new WeakMap();
   constructor({ org, layout, clock }) { Object.assign(this, { org, layout, clock }); this.root = join(layout.privateRoot, '信息收录'); this.file = join(this.root, 'state.json'); this.toolReceipts = new Map(); this.documentParser = parseDocument; }
   /** Share only validated, immutable data within one assembly/query. Never cache permissions. */
   async withReadSnapshot(read) {
     if (this.#readSnapshots.getStore()?.active) return read();
-    const frame = { active: true, entry: null, pending: null, changed: false };
+    const frame = { active: true, entry: null, pending: null, scopeStamp: null, changed: false };
     return this.#readSnapshots.run(frame, async () => {
       try {
         const result = await read();
-        if (frame.changed || frame.entry && await this.#stateVersion() !== frame.entry.version) throw scopeChanged();
+        if (frame.entry && await this.#stateVersion() !== frame.entry.version) await this.readState();
+        if (frame.changed) throw scopeChanged();
         return result;
       } finally {
         // Background continuations can inherit AsyncLocalStorage, but cannot retain this snapshot.
@@ -103,14 +107,20 @@ export class InformationService {
     if (!frame?.active) return this.load();
     const version = await this.#stateVersion();
     if (frame.entry?.version === version) return frame.entry.state;
-    if (frame.entry) frame.changed = true;
+    if (frame.entry && version === 'absent') frame.changed = true;
     if (frame.pending?.version === version) return frame.pending.promise;
-    if (frame.pending) frame.changed = true;
     const pending = { version };
     pending.promise = (async () => {
       const state = await this.load();
       if (await this.#stateVersion() !== version) { frame.changed = true; throw scopeChanged(); }
       const frozen = freezeState(state);
+      const visibility = visibilityStampOf(frozen);
+      this.#visibilityStamps.set(frozen, visibility);
+      // Counters, jobs and conversation cursors can advance without changing read scope.
+      // Still reload their changed file; only actual scope/config changes retire the assembly.
+      const scopeStamp = digest(canonical({ visibility, config: frozen.config }));
+      if (frame.scopeStamp !== null && frame.scopeStamp !== scopeStamp) frame.changed = true;
+      frame.scopeStamp ??= scopeStamp;
       if (frame.active) frame.entry = { version, state: frozen };
       return frozen;
     })();
@@ -277,8 +287,7 @@ export class InformationService {
   }
   async visibilityStamp() {
     const state = await this.readState();
-    return digest(canonical({ bindings: state.bindings, sources: state.sources.map(s => [s.id, s.enabled, s.scope]),
-      items: state.items.map(i => [i.id, i.hash, i.state, i.scope]), records: state.records.map(r => [r.id, r.nativeGeneration, r.integration, r.state, r.scope, r.humanStopped, r.expiresAt]) }));
+    return this.#visibilityStamps.get(state) ?? visibilityStampOf(state);
   }
   nativeBody(r) {
     return r.type === 'candidate' ? `${r.text}\n\n## 方法\n\n${r.method}\n\n## 适用条件\n\n${r.conditions}\n\n## 局限\n\n${r.limitations}` : r.text;
