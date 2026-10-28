@@ -685,7 +685,13 @@ export class TaskGraph {
           layout: this.layout, policy: this.policy, subject: spec.subject, task: { ...nodeInLock, 项目: spec.项目 },
         }) } : {}),
       }),
-      this.#提审分离Guard(id, 'review', 复核者id),
+      async (nodeInLock, rows) => {
+        this.#提审分离Guard(id, 'review', 复核者id)(nodeInLock);
+        await this.policy.check({ subject: spec.subject, action: 'review',
+          target: { id, kind: '任务', authority: '自治', zone: '私有', project: spec.项目 }, context: {} });
+        // 复核任务与业务任务共用项目账本锁；不能拿锁外的历史绑定跨过并发终止。
+        await this.#assertReviewerEvidence(id, 复核者id, spec.项目, spec.subject, [...fold(rows).values()]);
+      },
     );
     if (spec.三态 === '不过') await this.reject(id, { subject: spec.subject, 项目: spec.项目, 理由: `复核不过：${(spec.分歧清单 ?? []).join('；') || '未给分歧清单'}` });
     // 打回路径下 reject 又写了一条事件：返回它折出来的最新节点才是真读数。
@@ -711,8 +717,9 @@ export class TaskGraph {
    * @param {string} 复核者id
    * @param {string} 项目
    * @param {object} subject
+   * @param {object[]|null} nodes 写账时传同一把锁内折叠的项目节点，避免重新读取旧缓存
    */
-  async #assertReviewerEvidence(被复核节点, 复核者id, 项目, subject) {
+  async #assertReviewerEvidence(被复核节点, 复核者id, 项目, subject, nodes = null) {
     if (!subject || ['Lead', '主权者'].includes(subject.kind)) return;
     if (subject.kind !== '成员' || subject.roleId !== '复核员') {
       throw new Denied(
@@ -752,7 +759,7 @@ export class TaskGraph {
       }
     }
     // ② 关联真：复核任务 = 绑定含本实例、且显式复核对象含被复核节点的节点（不能是它自己）。
-    const 关联 = (await this.list({ 项目 })).filter(
+    const 关联 = (nodes ?? await this.list({ 项目 })).filter(
       (n) => String(n.id) !== String(被复核节点)
         && (n.绑定 ?? []).some((b) => String(b?.实例 ?? '') === 复核者id)
         && 复核对象引用(n).includes(String(被复核节点)),
@@ -767,6 +774,16 @@ export class TaskGraph {
           detail: { 复核者: 复核者id, 被复核节点 },
         },
       );
+    }
+    // ③ 关联必须仍能授权：共用任务作用域的当前凭证、负责人和生命周期判据。
+    // 核的是复核员自己的任务，不能把业务任务传入 scopeOf 而误判为非负责人。
+    const scopes = 关联.map(node => this.policy.scopeOf(subject, node));
+    if (!scopes.some(scope => scope.ok)) {
+      throw new Denied('任务图 · 复核任务授权已失效', '历史复核关联不授予新出票权：' + scopes.map(scope => scope.reason).join('；'), {
+        requireAuthority: 'Lead',
+        howToChange: '由 Lead 派发尚未生效的复核任务；终态需另立复核任务，凭证变化须重新绑定。不得用旧任务或旧身份继续出票。',
+        detail: { 复核者: 复核者id, 被复核节点, 复核任务: 关联.map(node => node.id) },
+      });
     }
   }
 

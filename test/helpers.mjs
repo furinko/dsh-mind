@@ -421,12 +421,16 @@ export async function seedReviewRelation(fixture, spec = {}) {
   if (!目标) throw new Error('seedReviewRelation 需要 目标（被复核节点 id）。');
   const id = spec.id ?? `task-review-${Math.random().toString(36).slice(2, 7)}`;
   const 复核者 = spec.复核者 ?? 'reviewer';
+  // 正向关联与真实 task_bind 同形；缺证反例自行播种，不用历史裸绑定冒充当前授权。
+  const member = (await fixture.registry.identity()).members?.[复核者];
+  const 凭证 = member ? { 版本: 1, 代: member.代 ?? 1, 卡版本摘要: member.卡版本?.摘要 ?? null,
+    宿主代次: member.代次?.代 ?? null } : undefined;
   const 既有 = await readJsonl(fixture.layout.taskLog(项目));
   const seq = (既有.at(-1)?.seq ?? 0) + 1;
   const at = new Date().toISOString();
   await appendLines(fixture.layout.taskLog(项目), [
     { seq, at, by: { id: 'lead', kind: 'Lead' }, kind: 'created', id, 描述: `复核-${目标}`, 负责人: ['复核员'], 判据: ['核对'], 依赖: [], 复核对象: [目标], 状态: '待派发' },
-    { seq: seq + 1, at, by: { id: 'lead', kind: 'Lead' }, kind: 'bound', id, 绑定: { 实例: 复核者, 岗位: '复核员', 于: at } },
+    { seq: seq + 1, at, by: { id: 'lead', kind: 'Lead' }, kind: 'bound', id, 绑定: { 实例: 复核者, 岗位: '复核员', 于: at, ...(凭证 ? { 凭证 } : {}) } },
     { seq: seq + 2, at, by: { id: 'lead', kind: 'Lead' }, kind: 'dispatched', id, 判据冻结: true, 复核对象: [目标] },
   ]);
   return id;

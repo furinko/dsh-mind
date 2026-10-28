@@ -203,6 +203,7 @@ describe('2026-10-14 审查修复 · A 批（宿主 P1）', () => {
       // 且其复核任务显式 `复核对象` 含本节点 ⇒ 落结论。
       const 复核任务 = await org.tasks.create({ subject: LEAD, 项目: P, 描述: 'Lead 自办活的复核任务', 负责人: '复核员', 判据: ['核对'], 复核对象: [node.id] });
       await org.tasks.bind(复核任务.id, { subject: LEAD, 项目: P, 实例: 'reviewer', 岗位: '复核员' });
+      await org.tasks.dispatch(复核任务.id, { subject: LEAD, 项目: P });
       await assert.rejects(
         () => org.tasks.review(node.id, { subject: LEAD, 项目: P, 三态: '过', 复核者: 'reviewer' }),
         (e) => e instanceof Denied && /不许替别人署名|实际操作者/.test(e.rule + e.message),
