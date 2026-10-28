@@ -41,15 +41,60 @@ it('同一次读取共享不可变数据，并发与嵌套读取不重复解析�
   assert.notEqual(first, second); first.config.paused = true; assert.equal(second.config.paused, false);
 }));
 
-it('两个同时进行的装配互不共享快照；装配退出后不保留读取缓存', () => fixture(async org => {
+it('并发装配和队列外读取共享同版本不可变数据，文件变化后立即刷新', () => fixture(async org => {
   const service = org.information; const count = countLoads(service);
   let arrivals = 0; const ready = Promise.withResolvers();
   const read = () => service.withReadSnapshot(async () => {
     const state = await service.readState(); if (++arrivals === 2) ready.resolve(); await ready.promise;
     assert.equal(await service.readState(), state); return state;
   });
-  const [a, b] = await Promise.all([read(), read()]); assert.notEqual(a, b); assert.equal(count(), 2);
-  await service.withReadSnapshot(() => service.readState()); assert.equal(count(), 3);
+  const [a, b] = await Promise.all([read(), read()]); assert.equal(a, b); assert.equal(count(), 1);
+  assert.equal(await service.readState(), a);
+  await service.withReadSnapshot(() => service.readState()); assert.equal(count(), 1);
+  await replaceState(service, state => { state.config.paused = true; });
+  const fresh = await service.readState(); assert.notEqual(fresh, a); assert.equal(fresh.config.paused, true);
+  assert.equal(count(), 2); assert.equal(a.config.paused, false);
+}));
+
+it('后台来源登记的独立读取不再逐条解析账本，外部写入和损坏仍立即生效', () => fixture(async org => {
+  const service = org.information; const count = countLoads(service);
+  const reads = await Promise.all(Array.from({ length: 80 }, () => org.dataOwnership.bindings()));
+  assert.ok(reads.every(bindings => bindings === reads[0])); assert.equal(count(), 1);
+  assert.ok(Object.isFrozen(reads[0]));
+  const other = new InformationService({ org, layout: org.layout, clock: org.clock });
+  await other.locked(state => { state.bindings.test = 'changed-relationship'; });
+  assert.equal((await org.dataOwnership.bindings()).test, 'changed-relationship'); assert.equal(count(), 2);
+  await writeFile(service.file, '{broken');
+  await assert.rejects(service.readState(), { code: 'INFORMATION_STATE_INVALID' });
+  await assert.rejects(service.readState(), { code: 'INFORMATION_STATE_INVALID' });
+  await rm(service.file);
+  const blank = await service.readState(); assert.deepEqual(blank.bindings, {}); assert.equal(blank.revision, 0);
+  assert.ok(Object.isFrozen(blank));
+}));
+
+it('尚未创建收录账本时，连续读取空状态不误判为文件被删除', () => fixture(async org => {
+  const service = org.information; await rm(service.file);
+  const count = countLoads(service);
+  await service.withReadSnapshot(async () => {
+    const first = await service.readState();
+    for (let i = 0; i < 10; i++) assert.equal(await service.readState(), first);
+    assert.equal(first.revision, 0); assert.deepEqual(first.bindings, {});
+  });
+  await service.withReadSnapshot(() => service.readState()); assert.equal(count(), 1);
+}));
+
+it('共用的首次读取期间文件被替换时，各等待者均拒绝旧数据并可重新读取', () => fixture(async org => {
+  const service = org.information; const original = service.load.bind(service);
+  const loaded = Promise.withResolvers(); const proceed = Promise.withResolvers(); let calls = 0;
+  service.load = async () => {
+    const state = await original(); if (++calls === 1) { loaded.resolve(); await proceed.promise; } return state;
+  };
+  const reads = Promise.allSettled(Array.from({ length: 10 }, () => service.readState()));
+  await loaded.promise;
+  await replaceState(service, state => { state.config.paused = true; }); proceed.resolve();
+  const results = await reads;
+  assert.ok(results.every(result => result.status === 'rejected' && result.reason.code === 'INFORMATION_SCOPE_CHANGED'));
+  assert.equal((await service.readState()).config.paused, true); assert.equal(calls, 2);
 }));
 
 it('同尺寸原地改写并恢复mtime仍通过ctime识别，不能继续交付旧资料', () => fixture(async org => {
@@ -90,6 +135,8 @@ it('写事务及提交检查不使用只读快照，写入仍持久化且使当�
     await service.readState();
     await service.locked(async state => {
       const fresh = await service.readState(); assert.equal(Object.isFrozen(fresh), false);
+      const nested = await service.withReadSnapshot(() => service.readState());
+      assert.equal(Object.isFrozen(nested), false); assert.notEqual(nested, fresh);
       state.config.paused = true;
     });
     assert.equal((await service.readState()).config.paused, true);

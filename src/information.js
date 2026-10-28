@@ -76,11 +76,14 @@ function mergeRanges(ranges) {
 export class InformationService {
   #readSnapshots = new AsyncLocalStorage();
   #visibilityStamps = new WeakMap();
+  #readCache = null;
+  #readPending = null;
   constructor({ org, layout, clock }) { Object.assign(this, { org, layout, clock }); this.root = join(layout.privateRoot, '信息收录'); this.file = join(this.root, 'state.json'); this.toolReceipts = new Map(); this.documentParser = parseDocument; }
-  /** Share only validated, immutable data within one assembly/query. Never cache permissions. */
+  /** Track scope changes within one assembly/query. Never cache permissions. */
   async withReadSnapshot(read) {
-    if (this.#readSnapshots.getStore()?.active) return read();
-    const frame = { active: true, entry: null, pending: null, scopeStamp: null, changed: false };
+    const current = this.#readSnapshots.getStore();
+    if (current === null || current?.active) return read();
+    const frame = { active: true, entry: null, scopeStamp: null, changed: false };
     return this.#readSnapshots.run(frame, async () => {
       try {
         const result = await read();
@@ -88,8 +91,8 @@ export class InformationService {
         if (frame.changed) throw scopeChanged();
         return result;
       } finally {
-        // Background continuations can inherit AsyncLocalStorage, but cannot retain this snapshot.
-        frame.active = false; frame.entry = null; frame.pending = null;
+        // Background continuations must stop tracking this completed assembly's scope.
+        frame.active = false; frame.entry = null;
       }
     });
   }
@@ -104,29 +107,42 @@ export class InformationService {
   }
   async readState() {
     const frame = this.#readSnapshots.getStore();
-    if (!frame?.active) return this.load();
+    // Write transactions keep fresh mutable reads, including nested commit guards.
+    if (frame === null) return this.load();
+    // Check the actual file on every read, including queued/background callbacks.
+    // Reuse parsed data across callers only while the file is exactly the same.
     const version = await this.#stateVersion();
-    if (frame.entry?.version === version) return frame.entry.state;
-    if (frame.entry && version === 'absent') frame.changed = true;
-    if (frame.pending?.version === version) return frame.pending.promise;
+    if (frame?.active && frame.entry && frame.entry.version !== version && version === 'absent') frame.changed = true;
+    let entry;
+    try { entry = await this.#readEntry(version); }
+    catch (error) { if (frame?.active && error.code === 'INFORMATION_SCOPE_CHANGED') frame.changed = true; throw error; }
+    if (frame?.active) {
+      // Counters, jobs and cursors can advance without changing the read scope.
+      if (frame.scopeStamp !== null && frame.scopeStamp !== entry.scopeStamp) frame.changed = true;
+      frame.scopeStamp ??= entry.scopeStamp;
+      frame.entry = entry;
+    }
+    return entry.state;
+  }
+  async #readEntry(version) {
+    if (this.#readCache?.version === version) return this.#readCache;
+    // Do not retain the old version if loading its replacement fails.
+    this.#readCache = null;
+    if (this.#readPending?.version === version) return this.#readPending.promise;
     const pending = { version };
     pending.promise = (async () => {
       const state = await this.load();
-      if (await this.#stateVersion() !== version) { frame.changed = true; throw scopeChanged(); }
+      if (await this.#stateVersion() !== version) throw scopeChanged();
       const frozen = freezeState(state);
       const visibility = visibilityStampOf(frozen);
       this.#visibilityStamps.set(frozen, visibility);
-      // Counters, jobs and conversation cursors can advance without changing read scope.
-      // Still reload their changed file; only actual scope/config changes retire the assembly.
-      const scopeStamp = digest(canonical({ visibility, config: frozen.config }));
-      if (frame.scopeStamp !== null && frame.scopeStamp !== scopeStamp) frame.changed = true;
-      frame.scopeStamp ??= scopeStamp;
-      if (frame.active) frame.entry = { version, state: frozen };
-      return frozen;
+      const entry = { version, state: frozen, scopeStamp: digest(canonical({ visibility, config: frozen.config })) };
+      if (this.#readPending === pending) this.#readCache = entry;
+      return entry;
     })();
-    frame.pending = pending;
+    this.#readPending = pending;
     try { return await pending.promise; }
-    finally { if (frame.pending === pending) frame.pending = null; }
+    finally { if (this.#readPending === pending) this.#readPending = null; }
   }
   captureTool({ subject, project, session, tool, content, coverage, origin }) {
     if (subject?.kind !== 'Lead' || subject.id !== session || !txt(project) || !txt(tool) || !txt(content, 12000)) return;
