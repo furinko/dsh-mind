@@ -394,7 +394,7 @@ export class MemoryService {
   async tombstoneReadable(barrier, subject) {
     if (!barrier.归属会话 || subject?.kind === '主权者') return true;
     if (subject?.kind !== 'Lead' || !this.information) return false;
-    const bindings = (await this.information.load()).bindings;
+    const bindings = (await this.information.readState()).bindings;
     return (bindings[barrier.归属会话] ?? barrier.归属会话) === (bindings[digest(subject.id)] ?? digest(subject.id));
   }
   async rememberIntake({ subject, record, generation, project, role, body, check }) {
@@ -970,9 +970,12 @@ export class MemoryService {
    * @returns {Promise<{ 命中: object[], 口径: object, 条目: object[], 说明?: string }>}
    */
   async query(query = {}) {
-    const guard = {}; const result = await this.#query(query, guard);
-    if (guard.stamp !== undefined && guard.stamp !== await this.information?.visibilityStamp()) throw new Denied('记忆读取范围变化', '来源、关系或可用状态在读取期间变化，请重新读取。');
-    return guard.unavailable ? { ...result, 来源警示: '收录来源状态不可用，相关派生记忆未提供；原有其他记忆照常读取' } : result;
+    const read = async () => {
+      const guard = {}; const result = await this.#query(query, guard);
+      if (guard.stamp !== undefined && guard.stamp !== await this.information?.visibilityStamp()) throw new Denied('记忆读取范围变化', '来源、关系或可用状态在读取期间变化，请重新读取。');
+      return guard.unavailable ? { ...result, 来源警示: '收录来源状态不可用，相关派生记忆未提供；原有其他记忆照常读取' } : result;
+    };
+    return this.information ? this.information.withReadSnapshot(read) : read();
   }
   async #query(query = {}, intakeGuard = {}) {
     if (query.浏览项目 !== undefined && (query.浏览项目 !== true || query.subject?.kind !== '主权者' || !query.项目)) throw new InvalidBody('项目浏览仅供已认证的人侧按明确项目查看。');

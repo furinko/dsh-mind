@@ -10,7 +10,7 @@
  *     所以这里没有任何 `update`/`delete` 方法，将来也不加。
  */
 import { auditPage } from './audit-page.js';
-import { appendLines, atomicWrite, ensureDirPath, listDirs, listFiles, readJsonl, readJsonlHealth, readJsonOrNull, withLock, serializeByKey } from './kernel/fsx.js';
+import { appendLines, atomicWrite, ensureDirPath, listDirs, listFiles, readJsonl, readJsonlHealth, readJsonlTail, readJsonOrNull, withLock, serializeByKey } from './kernel/fsx.js';
 import { readTaskLedger } from './task-ledger.js';
 import { chainHash } from './kernel/text.js';
 import { monthKey } from './kernel/time.js';
@@ -232,8 +232,7 @@ export class AuditLog {
         const 已存 = [...new Set([...await this.months(), ...锚月])].sort();
         const 播种 = {};
         for (const m of 已存) {
-          const rows = await readJsonl(this.layout.auditLog(m));
-          const last = rows[rows.length - 1];
+          const last = await readJsonlTail(this.layout.auditLog(m));
           if (last?.seq && last?.hash) 播种[m] = { seq: last.seq, hash: last.hash };
         }
         doc.months = [...new Set([...已存, month])].sort();
@@ -658,8 +657,7 @@ export class AuditLog {
     //  ② 锚超前/同 seq 而 hash 不符 ⇒ 不接受任意尾部（截断/篡改与崩溃在此分流）⇒ 响亮拒；
     //  ③ 一致 ⇒ 原样。恢复只认「向前」，攻击者截短重造的尾部永远落在 ②。
     if (anchor?.hash) {
-      const rows = await readJsonl(this.layout.auditLog(month));
-      const last = rows[rows.length - 1] ?? null;
+      const last = await readJsonlTail(this.layout.auditLog(month));
       // 归零断面（第13代复核反例3 · 2026-10-16）：锚在（seq>0）而日志无行 ⇒ 该月账本
       // 被删/清空。锚只写在日志之后，此形态**没有合法崩溃成因**——修前静默按锚续写
       // （新行成为该月唯一一行），现响亮拒；verify 侧该形状由「尾部截断」红（回归钉住）。
@@ -684,8 +682,7 @@ export class AuditLog {
       this._chain.set(month, anchor);
       return anchor.hash;
     }
-    const rows = await readJsonl(this.layout.auditLog(month));
-    const last = rows[rows.length - 1];
+    const last = await readJsonlTail(this.layout.auditLog(month));
     const tail = { seq: last?.seq ?? 0, hash: last?.hash ?? null };
     this._chain.set(month, tail);
     return tail.hash;

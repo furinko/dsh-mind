@@ -132,6 +132,42 @@ export async function readJsonl(file) {
   return out;
 }
 
+/** Last parseable JSONL record, with readJsonl's BOM/blank/malformed-line semantics. */
+export async function readJsonlTail(file) {
+  let handle;
+  try { handle = await open(file, 'r'); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  try {
+    let position = (await handle.stat()).size;
+    let carry = Buffer.alloc(0);
+    while (position > 0) {
+      const length = Math.min(64 * 1024, position);
+      position -= length;
+      const buffer = Buffer.allocUnsafe(length);
+      let filled = 0;
+      while (filled < length) {
+        const { bytesRead } = await handle.read(buffer, filled, length - filled, position + filled);
+        if (!bytesRead) throw new InvalidBody('行式账本在读取尾部期间被截断，请重新核对。');
+        filled += bytesRead;
+      }
+      const bytes = Buffer.concat([buffer, carry]);
+      let end = bytes.length;
+      for (let newline; (newline = bytes.lastIndexOf(10, end - 1)) >= 0;) {
+        const text = stripBom(bytes.subarray(newline + 1, end).toString('utf8').trim());
+        if (text) {
+          try { return JSON.parse(text); } catch { /* Match readJsonl: skip malformed rows. */ }
+        }
+        end = newline;
+        if (end === 0) break;
+      }
+      carry = bytes.subarray(0, end);
+    }
+    const text = stripBom(carry.toString('utf8').trim());
+    if (text) { try { return JSON.parse(text); } catch { /* No parseable row. */ } }
+    return null;
+  } finally { await handle.close(); }
+}
+
 /**
  * readJsonl 的**带体检**版本（2026-10-13 审查 P1-7）：跳坏行的同时把坏行数报出来。
  * 审计链自检此前复用了「会跳行的读取器」——撕裂半行被读取与自检**一起**静默跳过，

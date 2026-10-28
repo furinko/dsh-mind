@@ -1,5 +1,6 @@
 /** Unified material inbox, reading receipts and revisable growth. No host service interception. */
 import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdir, readFile, stat, rm } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { canonical, digest, tokenize } from './kernel/text.js';
@@ -33,6 +34,13 @@ const scopeKey = scope => canonical(scope);
 const baseScope = (project, session = null) => ({ project, audience: 'lead', roles: [], relationship: session });
 const available = s => s && s.enabled !== false;
 const scopeChanged = () => new Fault('INFORMATION_SCOPE_CHANGED', '读取期间身份或关系范围变化，本次资料未交付，请重新读取。');
+const freezeState = value => {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.values(value).forEach(freezeState);
+    Object.freeze(value);
+  }
+  return value;
+};
 const containsScope = (parent, child) => (parent.project === null || parent.project === child.project)
   && (parent.relationship === null || parent.relationship === child.relationship)
   && (child.audience === 'lead' || parent.audience === 'auto' || (child.audience === 'roles' && parent.audience === 'roles' && child.roles.every(role => parent.roles.includes(role))));
@@ -64,7 +72,52 @@ function mergeRanges(ranges) {
 }
 
 export class InformationService {
+  #readSnapshots = new AsyncLocalStorage();
   constructor({ org, layout, clock }) { Object.assign(this, { org, layout, clock }); this.root = join(layout.privateRoot, '信息收录'); this.file = join(this.root, 'state.json'); this.toolReceipts = new Map(); this.documentParser = parseDocument; }
+  /** Share only validated, immutable data within one assembly/query. Never cache permissions. */
+  async withReadSnapshot(read) {
+    if (this.#readSnapshots.getStore()?.active) return read();
+    const frame = { active: true, entry: null, pending: null, changed: false };
+    return this.#readSnapshots.run(frame, async () => {
+      try {
+        const result = await read();
+        if (frame.changed || frame.entry && await this.#stateVersion() !== frame.entry.version) throw scopeChanged();
+        return result;
+      } finally {
+        // Background continuations can inherit AsyncLocalStorage, but cannot retain this snapshot.
+        frame.active = false; frame.entry = null; frame.pending = null;
+      }
+    });
+  }
+  async #stateVersion() {
+    try {
+      const info = await stat(this.file, { bigint: true });
+      return `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+    } catch (error) {
+      if (error.code === 'ENOENT') return 'absent';
+      throw new Fault('INFORMATION_STATE_INVALID', '信息收录账本无法核对当前文件，停止沿用旧投影。', { cause: error });
+    }
+  }
+  async readState() {
+    const frame = this.#readSnapshots.getStore();
+    if (!frame?.active) return this.load();
+    const version = await this.#stateVersion();
+    if (frame.entry?.version === version) return frame.entry.state;
+    if (frame.entry) frame.changed = true;
+    if (frame.pending?.version === version) return frame.pending.promise;
+    if (frame.pending) frame.changed = true;
+    const pending = { version };
+    pending.promise = (async () => {
+      const state = await this.load();
+      if (await this.#stateVersion() !== version) { frame.changed = true; throw scopeChanged(); }
+      const frozen = freezeState(state);
+      if (frame.active) frame.entry = { version, state: frozen };
+      return frozen;
+    })();
+    frame.pending = pending;
+    try { return await pending.promise; }
+    finally { if (frame.pending === pending) frame.pending = null; }
+  }
   captureTool({ subject, project, session, tool, content, coverage, origin }) {
     if (subject?.kind !== 'Lead' || subject.id !== session || !txt(project) || !txt(tool) || !txt(content, 12000)) return;
     const now = this.clock.ms();
@@ -141,7 +194,8 @@ export class InformationService {
   }
   async locked(fn) {
     await mkdir(this.root, { recursive: true, mode: 0o700 });
-    return serializeByKey(this.file, () => withLock(`${this.file}.lock`, async () => {
+    // Mutation and commit guards always read fresh mutable data, including nested callbacks.
+    return this.#readSnapshots.run(null, () => serializeByKey(this.file, () => withLock(`${this.file}.lock`, async () => {
       const state = await this.load(); const result = await fn(state);
       state.revision++;
       // Retain bounded historical usage, never evict today's budget counters.
@@ -154,13 +208,13 @@ export class InformationService {
       }
       await savePrivateBufferState(this.file, state);
       return result;
-    }, { timeoutMs: 5000, staleMs: 120000 }));
+    }, { timeoutMs: 5000, staleMs: 120000 })));
   }
   async authorize(spec, write = false) {
     if (!txt(spec?.project) || !txt(spec?.subject?.id) || !['Lead', '成员', '主权者'].includes(spec.subject.kind)) throw new Denied('信息收录身份', '需要真实的会话主体与项目。');
     const actor = spec.subject;
     let credential = null;
-    const bindings = (await this.load()).bindings;
+    const bindings = (await (write ? this.load() : this.readState())).bindings;
     spec.relationship = await this.org.dataOwnership.relationship(spec.session, bindings);
     if (actor.kind !== '主权者') {
       const member = (await this.org.registry.identity()).members?.[actor.id];
@@ -210,7 +264,7 @@ export class InformationService {
   async nativeReadable(entry, query = {}) {
     const proof = entry.收录;
     if (proof?.version !== 1 || !txt(proof.receipt) || !hash(proof.generation)) return false;
-    const state = await this.load(); const r = state.records.find(r => r.id === proof.receipt);
+    const state = await (query.mutation ? this.load() : this.readState()); const r = state.records.find(r => r.id === proof.receipt);
     if (!r) return false;
     const subject = query.subject ?? query.读者;
     if (subject?.kind === '主权者' && (query.mutation || query.含失效)) return true;
@@ -222,7 +276,7 @@ export class InformationService {
     return r.nativeGeneration === proof.generation && r.integration === 'complete' && this.validRecord(state, r);
   }
   async visibilityStamp() {
-    const state = await this.load();
+    const state = await this.readState();
     return digest(canonical({ bindings: state.bindings, sources: state.sources.map(s => [s.id, s.enabled, s.scope]),
       items: state.items.map(i => [i.id, i.hash, i.state, i.scope]), records: state.records.map(r => [r.id, r.nativeGeneration, r.integration, r.state, r.scope, r.humanStopped, r.expiresAt]) }));
   }
@@ -391,7 +445,7 @@ export class InformationService {
     const interests = state.records.filter(r => r.type === 'growth' && ['兴趣', '疑问'].includes(r.kind)
       && this.validRecord(state, r) && this.recordVisible(state, r, spec)).slice(-12);
     const terms = new Set(interests.flatMap(r => tokenize(`${r.title} ${r.text}`)).filter(t => t.length >= 2));
-    const explore = this.usage(state).modelCalls % 3 === 2;
+    const explore = (state.usage[dayOf(this.clock)]?.modelCalls ?? 0) % 3 === 2;
     return items.map(item => {
       const matching = [...new Set(tokenize(item.title))].filter(t => terms.has(t));
       return { item, score: explore ? 0 : matching.length, reason: !explore && matching.length ? '兴趣词面线索' : '给陌生领域留出发现机会' };
@@ -1172,7 +1226,7 @@ export class InformationService {
     });
   }
   async context(spec) {
-    const authorization = await this.authorize(spec); const state = await this.load();
+    const authorization = await this.authorize(spec); const state = await this.readState();
     const records = state.records.filter(r => this.recordVisible(state, r, spec) && this.validRecord(state, r));
     const recent = [];
     for (const r of records.filter(r => r.type === 'growth' && r.integration === 'complete').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))) {

@@ -48,7 +48,7 @@ import { injectProfessionalContext } from './professional-context.js';
 import { createProfessionalReceipts } from './professional-receipts.js';
 import { createMemoryUseHooks } from './memory-use-hooks.js';
 import { injectLeadContext } from './lead-context.js';
-import { MIND_RUNTIME_RULES, projectMindRuntimeContext, retireMindRuntimeSnapshots } from './runtime-context.js';
+import { MIND_RUNTIME_RULES, projectMindRuntimeContext, retireMindRuntimeSnapshots, withMindReadSnapshot } from './runtime-context.js';
 import { injectWorkContext } from './work-context.js';
 import { createTurnBufferHooks, injectTurnBuffer } from './turn-buffer-hooks.js';
 import { injectConversationRecall } from './conversation-recall-hooks.js';
@@ -279,22 +279,24 @@ export async function apply(ctx, config = {}) {
         const 已钉规程 = await 注入Lead已钉规程(已接调度, context?.agent, org, logger, {
           agent: context?.agent, agents: 取服务(ctx, 'agents'), project: 当前项目键({ agent: context?.agent }),
         });
-        const 专业上下文 = await injectProfessionalContext(已钉规程, { agent: context?.agent, org, projectOf: 当前项目键, logger, receipts: professionalReceipts, active: () => !delegation.closed });
-        const 当前工作 = await injectWorkContext(专业上下文, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
-        const 轮缓冲 = await injectTurnBuffer(当前工作, { agent: context?.agent, org, hooks: turnBufferHooks,
-          projectOf: 当前项目键, logger, active: () => !delegation.closed });
-        const 既往对话 = await injectConversationRecall(轮缓冲, { agent: context?.agent, org, hooks: turnBufferHooks,
-          projectOf: 当前项目键, logger, active: () => !delegation.closed });
-        const 待整理协作表达 = await injectPendingContinuity(既往对话, { agent: context?.agent, org, hooks: continuityCaptureHooks,
-          projectOf: 当前项目键, logger, active: () => !delegation.closed });
-        const Lead连续性 = await injectLeadContext(待整理协作表达, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
-        const 项目接续 = await injectProjectBrief(Lead连续性, { agent: context?.agent, org, hooks: projectBriefHooks,
-          projectOf: 当前项目键, logger, active: () => !delegation.closed });
-        const 见闻与成长 = await injectInformationContext(项目接续, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
-        const 自由空间 = await injectLeadSpace(见闻与成长, { agent: context?.agent, org, hooks: leadSpaceHooks, projectOf: 当前项目键, logger });
-        const 人格 = await injectPersonaCore(自由空间, { agent: context?.agent, org,
-          projectOf: 当前项目键, logger, active: () => !delegation.closed });
-        const 动态上下文 = projectMindRuntimeContext(人格);
+        const 动态上下文 = await withMindReadSnapshot(已钉规程, { org, logger }, async () => {
+          const 专业上下文 = await injectProfessionalContext(已钉规程, { agent: context?.agent, org, projectOf: 当前项目键, logger, receipts: professionalReceipts, active: () => !delegation.closed });
+          const 当前工作 = await injectWorkContext(专业上下文, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
+          const 轮缓冲 = await injectTurnBuffer(当前工作, { agent: context?.agent, org, hooks: turnBufferHooks,
+            projectOf: 当前项目键, logger, active: () => !delegation.closed });
+          const 既往对话 = await injectConversationRecall(轮缓冲, { agent: context?.agent, org, hooks: turnBufferHooks,
+            projectOf: 当前项目键, logger, active: () => !delegation.closed });
+          const 待整理协作表达 = await injectPendingContinuity(既往对话, { agent: context?.agent, org, hooks: continuityCaptureHooks,
+            projectOf: 当前项目键, logger, active: () => !delegation.closed });
+          const Lead连续性 = await injectLeadContext(待整理协作表达, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
+          const 项目接续 = await injectProjectBrief(Lead连续性, { agent: context?.agent, org, hooks: projectBriefHooks,
+            projectOf: 当前项目键, logger, active: () => !delegation.closed });
+          const 见闻与成长 = await injectInformationContext(项目接续, { agent: context?.agent, org, projectOf: 当前项目键, logger, active: () => !delegation.closed });
+          const 自由空间 = await injectLeadSpace(见闻与成长, { agent: context?.agent, org, hooks: leadSpaceHooks, projectOf: 当前项目键, logger });
+          const 人格 = await injectPersonaCore(自由空间, { agent: context?.agent, org,
+            projectOf: 当前项目键, logger, active: () => !delegation.closed });
+          return projectMindRuntimeContext(人格);
+        });
         retireMindRuntimeSnapshots(动态上下文, context?.agent);
         return 动态上下文;
       }, { prepend: true }));
