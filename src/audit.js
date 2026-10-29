@@ -10,13 +10,14 @@
  *     所以这里没有任何 `update`/`delete` 方法，将来也不加。
  */
 import { auditPage } from './audit-page.js';
-import { appendLines, atomicWrite, ensureDirPath, listDirs, listFiles, readJsonl, readJsonlHealth, readJsonOrNull, withLock, serializeByKey } from './kernel/fsx.js';
+import { appendLines, atomicWrite, ensureDirPath, listDirs, listFiles, readJsonl, readJsonlHealth, readJsonlTail, readJsonOrNull, withLock, serializeByKey } from './kernel/fsx.js';
 import { readTaskLedger } from './task-ledger.js';
 import { chainHash } from './kernel/text.js';
 import { monthKey } from './kernel/time.js';
 import { Denied, InvalidBody } from './kernel/errors.js';
 import { DIR } from './paths.js';
 import { observeAudit } from './observability.js';
+import { AuditReadSnapshot } from './audit-read-snapshot.js';
 
 /** §7 审计记录分级：全记 / 记汇总 / 不逐次记。 */
 export const GRADE = { 全记: '全记', 记汇总: '记汇总', 不逐次记: '不逐次记' };
@@ -104,6 +105,8 @@ const ACTION_GRADE = {
 };
 
 export class AuditLog {
+  #readSnapshot;
+  #verifiedReadVersion = null;
   /**
    * @param {{ layout: import('./paths.js').Layout, clock: import('./kernel/time.js').Clock, onAlarm?: (info: object) => void }} spec
    */
@@ -113,7 +116,11 @@ export class AuditLog {
     this.onAlarm = spec.onAlarm ?? (() => {});
     /** 内存里的链尾缓存，避免每次追加都扫全月账本；重启后由 anchor 文件重建。 */
     this._chain = new Map();
+    this.#readSnapshot = new AuditReadSnapshot(this.layout);
   }
+
+  /** Internal read-only projections share immutable rows; ordinary audit reads remain mutable. */
+  async withReadSnapshot(read) { return this.#readSnapshot.run(read); }
 
   /**
    * @param {string} action
@@ -232,8 +239,7 @@ export class AuditLog {
         const 已存 = [...new Set([...await this.months(), ...锚月])].sort();
         const 播种 = {};
         for (const m of 已存) {
-          const rows = await readJsonl(this.layout.auditLog(m));
-          const last = rows[rows.length - 1];
+          const last = await readJsonlTail(this.layout.auditLog(m));
           if (last?.seq && last?.hash) 播种[m] = { seq: last.seq, hash: last.hash };
         }
         doc.months = [...new Set([...已存, month])].sort();
@@ -292,7 +298,7 @@ export class AuditLog {
     // 而 2 月那条第 2 条其实更晚）。所以按月分组的结构先留住，再逐月按 seq 排。
     const 组 = [];
     for (const month of months) {
-      for (const row of await readJsonl(this.layout.auditLog(month))) 组.push({ month, row });
+      for (const row of await this.#readSnapshot.read(month, () => readJsonl(this.layout.auditLog(month)))) 组.push({ month, row });
     }
     let 条目 = 组;
     if (query.grade) 条目 = 条目.filter((x) => x.row.档位 === query.grade);
@@ -325,11 +331,25 @@ export class AuditLog {
         return serializeByKey(file, () => withLock(`${file}.lock`, () => lock(index + 1)));
       }
       return (async () => {
-        const verified = await this.verify();
-        if (!verified.ok) throw new InvalidBody('审计完整性未确认，监控不能报告完整分母');
+        const scoped = this.#readSnapshot.active();
+        const version = scoped ? await this.#readSnapshot.version() : null;
+        // Reuse verification only for an explicitly read-only projection and identical files.
+        // Explicit verify() and ordinary readVerified() still perform a complete fresh check.
+        if (!scoped || this.#verifiedReadVersion !== version) {
+          this.#verifiedReadVersion = null;
+          const verified = await this.verify();
+          if (!verified.ok) throw new InvalidBody('审计完整性未确认，监控不能报告完整分母');
+        }
         const rows = await this.read(query);
         if (!months.includes(monthKey(this.clock.iso())) || (await this.months()).some(month => !months.includes(month))) {
           throw new InvalidBody('核验期间出现未加锁的新月份；监控快照未确认，请重新读取');
+        }
+        if (scoped) {
+          if (await this.#readSnapshot.version() !== version) {
+            this.#verifiedReadVersion = null;
+            throw new InvalidBody('核验期间审计文件变化；监控快照未确认，请重新读取');
+          }
+          this.#verifiedReadVersion = version;
         }
         return rows;
       })();
@@ -658,8 +678,7 @@ export class AuditLog {
     //  ② 锚超前/同 seq 而 hash 不符 ⇒ 不接受任意尾部（截断/篡改与崩溃在此分流）⇒ 响亮拒；
     //  ③ 一致 ⇒ 原样。恢复只认「向前」，攻击者截短重造的尾部永远落在 ②。
     if (anchor?.hash) {
-      const rows = await readJsonl(this.layout.auditLog(month));
-      const last = rows[rows.length - 1] ?? null;
+      const last = await readJsonlTail(this.layout.auditLog(month));
       // 归零断面（第13代复核反例3 · 2026-10-16）：锚在（seq>0）而日志无行 ⇒ 该月账本
       // 被删/清空。锚只写在日志之后，此形态**没有合法崩溃成因**——修前静默按锚续写
       // （新行成为该月唯一一行），现响亮拒；verify 侧该形状由「尾部截断」红（回归钉住）。
@@ -684,8 +703,7 @@ export class AuditLog {
       this._chain.set(month, anchor);
       return anchor.hash;
     }
-    const rows = await readJsonl(this.layout.auditLog(month));
-    const last = rows[rows.length - 1];
+    const last = await readJsonlTail(this.layout.auditLog(month));
     const tail = { seq: last?.seq ?? 0, hash: last?.hash ?? null };
     this._chain.set(month, tail);
     return tail.hash;

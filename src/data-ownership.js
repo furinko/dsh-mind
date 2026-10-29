@@ -8,7 +8,7 @@ export const sessionRelationship = (session, bindings) => session ? bindings[dig
 
 export class DataOwnershipService {
   constructor(org) { this.org = org; }
-  async bindings() { return (await this.org.information.load()).bindings; }
+  async bindings() { return (await this.org.information.readState()).bindings; }
   async relationship(session, bindings = null) { return sessionRelationship(session, bindings ?? await this.bindings()); }
   async stamp(session) {
     const bindings = await this.bindings();

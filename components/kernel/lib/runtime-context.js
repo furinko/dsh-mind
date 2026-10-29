@@ -10,6 +10,7 @@ import { INFORMATION_GUIDANCE, INFORMATION_SECTION } from './information-hooks.j
 import { LEAD_SPACE_GUIDANCE, LEAD_SPACE_SECTION } from './lead-space-hooks.js';
 import { contextPayload } from './context-frame.js';
 import { canonical } from '../../../src/kernel/text.js';
+import { PERSONA_CORE_SECTION } from './persona-core.js';
 
 const GUIDANCE = new Map([
   [PROFESSIONAL_SECTION, PROFESSIONAL_GUIDANCE], [WORK_CONTEXT_SECTION, WORK_GUIDANCE],
@@ -18,6 +19,18 @@ const GUIDANCE = new Map([
   [PROJECT_BRIEF_SECTION, PROJECT_BRIEF_GUIDANCE], [INFORMATION_SECTION, INFORMATION_GUIDANCE],
   [LEAD_SPACE_SECTION, LEAD_SPACE_GUIDANCE],
 ]);
+
+/** A changed intake scope invalidates the assembled view, including earlier sections. */
+export async function withMindReadSnapshot(assembly, { org, logger }, assemble) {
+  try { return await org.information.withReadSnapshot(assemble); }
+  catch (error) {
+    if (!['INFORMATION_SCOPE_CHANGED', 'INFORMATION_STATE_INVALID'].includes(error?.code)) throw error;
+    logger?.warn?.('[dsh-mind] 上下文装配期间收录资料变化或不可读，本轮撤下自动资料，等待下步重新核对。');
+    const keep = section => !GUIDANCE.has(section?.name) && section?.name !== PERSONA_CORE_SECTION;
+    return { ...assembly, sections: assembly.sections.filter(keep),
+      ...(Array.isArray(assembly.contexts) ? { contexts: assembly.contexts.filter(keep) } : {}) };
+  }
+}
 
 export const MIND_RUNTIME_RULES = [
   '【Mind动态资料的使用规则】',
