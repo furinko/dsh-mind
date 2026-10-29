@@ -193,7 +193,7 @@ export async function apply(ctx, config = {}) {
   const 调度接线回执 = { promptRegistered: false, creationGuardRegistered: false };
   const 创建判定 = (exec) => observations.guard(exec, 'kernel.delegation', () => {
     if (!isCreationTool(exec?.name)) return undefined;
-    try { return delegation.creationGuard(exec, { subject: agentSubject(exec), project: 当前项目键(exec) }); }
+    try { return delegation.creationGuard(exec, { subject: agentSubject(exec), project: 当前项目键(exec), connected: chatConnected(org, exec?.agent?.session) }); }
     catch (error) { return `[dsh-mind] 调度项目身份不可判定，按 fail-closed 拒绝：${错误消息(error)}`; }
   });
   const 关闭调度接线 = () => {
@@ -282,9 +282,19 @@ export async function apply(ctx, config = {}) {
           professionalReceipts.begin(context?.agent);
           org.memoryUseHooks?.clear(context?.agent);
           org.memoryUseHooks?.clear(context?.agent, 'continuity');
+          // An unavailable Mind entry cannot be the advertised route for governed
+          // delegation. Hide only tools the same creation guard already refuses;
+          // stale calls still reach the guard and receive the reconnect instruction.
+          const unavailable = tool => {
+            if (tool?.name === 'mind') return true;
+            if (!isCreationTool(tool?.name)) return false;
+            try { return delegation.creationGuard(tool, { subject: agentSubject({ agent: context?.agent }),
+              project: 当前项目键({ agent: context?.agent }), connected: false }) !== undefined; }
+            catch { return true; }
+          };
           const clean = { ...out, sections: (out.sections ?? []).filter(s => !s?.name?.startsWith('mind:')),
             ...(Array.isArray(out.contexts) ? { contexts: out.contexts.filter(s => !s?.name?.startsWith('mind:')) } : {}),
-            ...(Array.isArray(out.tools) ? { tools: out.tools.filter(t => t?.name !== 'mind') } : {}) };
+            ...(Array.isArray(out.tools) ? { tools: out.tools.filter(t => !unavailable(t)) } : {}) };
           retireMindRuntimeSnapshots(clean, context?.agent, { disconnected: true });
           return clean;
         };
@@ -322,7 +332,7 @@ export async function apply(ctx, config = {}) {
       logger.warn?.(`[dsh-mind] 注册调度提示词监听失败：${错误消息(error)}`);
     }
     try {
-      // 创建闸：授权项目内，裸 spawn_teammate/subagent/fork/workflow 一律指回 member_spawn（先判据后创建）。
+      // 创建闸：授权项目内，接入时指向 member_spawn；关闭时暂停新委派并提示重新接入。
       // R06：注册失败不再仅 warn——回执记红（闸在位探针见红）；若调度授权在本项目生效，
       // 裸创建闸缺席 = 授权面无闸 ⇒ 拒绝激活（降级只读自述）；未授权项目的创建闸本就
       // 不承重，记红继续（异常本身仍值得看见）。
@@ -1315,7 +1325,7 @@ function 组织说明(org) {
     // 恒 default），而工具面每次调用都按工作区目录重新解析项目键——提示词说一个、
     // 实际操作另一个。静态句子只教解析规则，不替会话猜项目。
     '项目键：省略 project 时由完整工作目录生成稳定路径键；同名目录隔离。历史项目须由部署者通过 projectBindings 明确绑定目录归属。',
-    '先推进用户目标：普通问答、需求澄清和已授权的只读调查可直接进行；需要正式交付、委派或验收证据时建立任务。目标持久化与跨会话自动接管尚未提供，不声称自动恢复。',
+    '先推进用户目标：普通问答、需求澄清和已授权的只读调查可直接进行；需要正式交付、委派或验收证据时建立任务。持久目标已支持保存、查询和更新；新会话可按当前项目与权限取得未收尾目标和工作资料，这不代表自动接管或持续执行，下一步仍须核对当前用户要求和授权。',
     '身份约定：根会话执行者 = Lead（可派活、可建卡、可汇总验收）；复核者只读数、不改、不提案；成员以真实任务绑定、有效岗位凭证和现行授权执行，绑定任务不会自动授予任意工具或文件域。',
     '对话中自然使用用户约定的称呼和交流方式；岗位与实例名用于内部协作，不限定对外称呼，不必反复自报岗位或解释记忆机制。角色形象约定不改变真实模型、能力与权限。',
     '派活流程（仅正式任务）：定判据→判权限→Lead 直接执行或按需 member_spawn（方式=team/subagent＋岗位＋节点＋任务书；机制完成 registry_assign 登记→绑定节点→装载岗位与判据→发开工消息，不等待成员确认）→交卷→复核→采纳/打回→记忆处置→结账。',

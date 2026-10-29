@@ -105,14 +105,16 @@ export class DelegationPolicy {
   /**
    * 受授权项目的创建只走组织适配入口，避免裸工具绕过登记与任务装载。
    * @param {{name?: string}} exec
-   * @param {{subject: object, project: string}} spec
+   * @param {{subject: object, project: string, connected?: boolean}} spec
    * @returns {string|undefined} 宿主单调 guard 使用的拒绝理由。
    */
-  creationGuard(exec, { subject, project }) {
+  creationGuard(exec, { subject, project, connected = true }) {
     if (!CREATION_TOOLS.has(exec?.name)) return undefined;
     if (this.closed) return '调度组件已卸载或授权正在重载，暂不接受创建成员。';
     if (subject?.kind !== 'Lead') return '组织调度仅允许 Lead 发起；成员与复核者不能再起成员。';
-    if (this.status(project).authorized) return '本项目已启用组织调度：创建团队或子智能体请走 mind member_spawn，先定任务判据再登记、装载并开工；也可由 Lead 直接执行。';
+    if (this.status(project).authorized) return connected === false
+      ? '本项目已启用心智自主调度，但当前聊天未接入心智，暂停新委派。请在聊天框重新打开“接入心智”后再委派；也可由 Lead 直接执行。'
+      : '本项目已启用组织调度：创建团队或子智能体请走 mind member_spawn，先定任务判据再登记、装载并开工；也可由 Lead 直接执行。';
     return undefined;
   }
 

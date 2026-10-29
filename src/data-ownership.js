@@ -4,7 +4,10 @@ import { currentProfessionalScope } from './professional-context.js';
 
 // 同一部署的本地主人延续于不同根会话；显式关系绑定仍可划分其他使用者。
 export const LOCAL_OWNER_RELATIONSHIP = 'dsh:local-owner';
-export const sessionRelationship = (session, bindings) => session ? bindings[digest(session)] ?? LOCAL_OWNER_RELATIONSHIP : null;
+// Deletion barriers retain only a session digest. They must resolve ownership
+// through the same current bindings/default as records retaining the session id.
+export const sessionKeyRelationship = (key, bindings) => key ? bindings[key] ?? LOCAL_OWNER_RELATIONSHIP : null;
+export const sessionRelationship = (session, bindings) => sessionKeyRelationship(session ? digest(session) : null, bindings);
 
 export class DataOwnershipService {
   constructor(org) { this.org = org; }

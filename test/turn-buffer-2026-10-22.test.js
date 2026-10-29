@@ -50,6 +50,34 @@ async function scene(run) {
   try { await run({ f, org, session, hooks, emit, read, logs }); }
   finally { await hooks.flush(); await org.observability.flush(); await f.cleanup(); }
 }
+it('非目标文件权限错误不重试，保留原异常且健康信息不泄路径', async () => scene(async ({ org, session, hooks, logs }) => {
+  session.append('turn/start', { turn: 1 }); session.append('user/message', human('合成输入'), 'append');
+  let calls = 0; const original = org.turnBuffer.capture;
+  org.turnBuffer.capture = async () => { calls++; throw Object.assign(new Error('PRIVATE_PATH_DO_NOT_LOG'), { code: 'EACCES', syscall: 'open' }); };
+  try {
+    await assert.rejects(hooks.sync(session), { code: 'EACCES' }); await hooks.flush();
+    assert.equal(calls, 1); assert.equal(hooks.health().retryAttempts, 0);
+    assert.equal(hooks.health().lastFailure.code, 'EACCES'); assert.doesNotMatch(JSON.stringify(hooks.health()) + logs.join(''), /PRIVATE_PATH_DO_NOT_LOG/);
+  } finally { org.turnBuffer.capture = original; }
+}));
+
+it('共享错误等待期间项目切换不重放旧资料，切回后正常补读', { skip: process.platform !== 'win32' }, async () => scene(async ({ org, session }) => {
+  session.append('turn/start', { turn: 1 }); session.append('user/message', human('仅本项目合成内容'), 'append');
+  let project = P; let calls = 0; const original = org.turnBuffer.capture;
+  org.turnBuffer.capture = async () => {
+    calls++; project = 'other'; const target = org.turnBuffer.file(P, session.id);
+    throw Object.assign(new Error('synthetic share error'), { code: 'EPERM', syscall: 'rename', path: `${target}.tmp-1234-abcd`, dest: target });
+  };
+  const hooks = createTurnBufferHooks({ org, projectOf: () => project, queryOf: () => queryOf(session), logger: { warn() {} } });
+  try {
+    await hooks.sync(session); await hooks.flush();
+    assert.equal(calls, 1); assert.equal(hooks.health().retryAttempts, 1); assert.equal(hooks.health().retryRecovered, 0);
+    project = P; org.turnBuffer.capture = original; await hooks.sync(session);
+    const frame = await org.turnBuffer.read({ subject: LEAD, project: P, session: session.id });
+    assert.deepEqual(frame.轮次.flatMap(round => round.消息.map(m => m.文本)), ['仅本项目合成内容']);
+  } finally { org.turnBuffer.capture = original; await hooks.flush(); }
+}));
+
 const texts = frame => frame.轮次.flatMap(round => round.消息.map(m => m.文本));
 const base = () => ({ sections: [{ name: 'host', text: 'host' }], tools: [] });
 const inject = ({ org, session, hooks, ...extra }) => injectTurnBuffer(base(), { org, agent: { session }, hooks, projectOf: () => P, ...extra });

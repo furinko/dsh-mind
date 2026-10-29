@@ -323,9 +323,9 @@ export class InformationService {
   nativeKind(r) { return r.type === 'candidate' || r.kind === '知识' ? '知识' : r.kind === '共同回忆' ? '经历' : '偏好'; }
   nativeRoles(r) { return this.nativeKind(r) === '知识' && r.scope.audience === 'roles' ? r.scope.roles : ['Lead']; }
   nativeGeneration(r) { return digest(canonical({ id: r.id, revision: r.revision, body: this.nativeBody(r), scope: r.scope })); }
-  async hydrate(r, spec) {
+  async hydrate(r, spec, { mutation = false } = {}) {
     if (!r.native?.length) return { ...r, integration: r.integration ?? 'pending', claim: '待纳入正式记忆，尚不参与记忆召回' };
-    const entry = await this.org.memory.intakeEntry(r.native[0].id, { subject: spec.subject, project: spec.project, inspect: spec.subject.kind === '主权者' });
+    const entry = await this.org.memory.intakeEntry(r.native[0].id, { subject: spec.subject, project: spec.project, inspect: spec.subject.kind === '主权者', mutation });
     if (!entry) return { ...r, text: '', nativeUnavailable: true };
     let text = entry.内容; let method = null; let conditions = null; let limitations = null;
     if (r.type === 'candidate') {
@@ -336,6 +336,75 @@ export class InformationService {
       nativeState: entry.状态, nativeBody: entry.内容, nativeHistory: entry.历史, nativeActive: await this.org.memory.intakeActive(entry.id),
       claim: '正式记忆服务为正文与生命周期真源；此处仅提供收录处理回执' };
   }
+  // Governance reads retain the normal project/relationship checks but can inspect
+  // inactive bodies. Human dispositions live in the formal memory ledger, including
+  // the original side of a correction; the intake receipt is not a second authority.
+  async nativeMutationReferences(r, spec, state = null) {
+    // A pending replacement may not own a native entry yet. Its retirement list
+    // and saved witness still carry the sources whose human decisions govern it.
+    const view = state ?? await this.load(); const ids = new Set(); const visited = new Set();
+    const visit = (row, path = new Set()) => {
+      if (!row || path.has(row.id) || path.size >= 16 || !visited.has(row.id) && visited.size >= 64) {
+        throw new Fault('INFORMATION_NATIVE_CHANGED', '待处理替代链缺失、循环或超过核对范围，请由人侧核对原记录。');
+      }
+      if (!this.recordVisible(view, row, spec)) throw new Denied('成长记录范围', '待处理替代链包含当前范围外的记录。');
+      if (row.humanStopped && spec.subject.kind !== '主权者') throw new Denied('用户已纠正', '待处理替代链含人侧停用或纠正，模型不能恢复旧收录。');
+      if (!row.native?.length && row.replaces?.length && !row.retire?.length && !row.nativeGuard && spec.subject.kind !== '主权者') {
+        throw new Denied('旧收录依赖未确认', '旧版待处理替代记录未保存完整正式记忆依赖；需人侧核对或重新阅读，不能自动恢复旧草稿。');
+      }
+      if (visited.has(row.id)) return;
+      visited.add(row.id);
+      for (const id of [...(row.native ?? []).map(n => n.id), ...(row.retire ?? []).map(n => n.id), ...(row.nativeGuard?.ids ?? [])]) ids.add(id);
+      // A committed/native version is the new authority. Do not drag its retired
+      // ancestors back into later edits, including an explicit human restoration.
+      if (row.native?.length) return;
+      const ancestry = new Set([...path, row.id]);
+      for (const id of row.replaces ?? []) visit(view.records.find(candidate => candidate.id === id), ancestry);
+    };
+    visit(r);
+    return [...ids];
+  }
+  async nativeMutationGuard(references, spec) {
+    const ids = [...new Set(references.map(n => typeof n === 'string' ? n : n.id))];
+    const rows = [];
+    for (const id of ids) {
+      const query = { subject: spec.subject, project: spec.project, mutation: true, inspect: spec.subject.kind === '主权者' };
+      let next = id; const lineage = []; const seen = new Set();
+      while (next) {
+        if (seen.has(next) || lineage.length >= 16) throw new Fault('INFORMATION_NATIVE_CHANGED', '正式记忆替代链无法完整核对。');
+        seen.add(next);
+        const entry = await this.org.memory.intakeEntry(next, { ...query, followReplacements: false });
+        if (!entry) throw new Fault('INFORMATION_NATIVE_CHANGED', '原正式记忆已删除或不在当前治理范围，不能恢复旧收录。');
+        if (spec.subject.kind !== '主权者' && entry.历史.some(row => row.主体?.kind === '主权者'
+            && ['invalid', '降权', '推翻', '隔离', '待删除', '物理删除'].includes(row.追加))) {
+          throw new Denied('用户已纠正', '正式记忆已由人侧停用或纠正，模型不能通过收录恢复、重写或重新分配。');
+        }
+        lineage.push(entry);
+        next = entry.状态 === '被推翻' ? entry.历史.filter(row => row.追加 === '推翻').at(-1)?.新条目 : null;
+      }
+      rows.push(lineage);
+    }
+    return { ids, stamp: digest(canonical(rows)) };
+  }
+  async verifyNativeMutation(guard, spec, references = guard.ids) {
+    if (references.length !== guard.ids.length || references.some(id => !guard.ids.includes(id))) {
+      throw new Fault('INFORMATION_NATIVE_CHANGED', '正式记忆治理依赖与准备见证不符，不能忽略原记忆的处置。');
+    }
+    const current = await this.nativeMutationGuard(guard.ids, spec);
+    if (current.stamp !== guard.stamp) throw new Fault('INFORMATION_NATIVE_CHANGED', '正式记忆正文或生命周期在准备后变化，请重新核对。');
+  }
+  async mutationView(r, spec, state = null) {
+    if (r.humanStopped && spec.subject.kind !== '主权者') throw new Denied('用户已纠正', '此记录被人侧停用或纠正，模型不能自行恢复或改写。');
+    const guard = await this.nativeMutationGuard(await this.nativeMutationReferences(r, spec, state), spec);
+    const native = await this.hydrate(r, spec, { mutation: true });
+    await this.verifyNativeMutation(guard, spec);
+    return { native, guard };
+  }
+  assertNativeDraft(r) {
+    if (!txt(r.text, 6000) || r.type === 'candidate' && (!txt(r.method, 6000) || !txt(r.conditions, 1500) || !txt(r.limitations, 1500))) {
+      throw new Fault('INFORMATION_DRAFT_MISSING', '没有完整可核对的待处理正文，未保存恢复状态。');
+    }
+  }
   async finalizeRecord(spec, id, { guard = async () => {} } = {}) {
     await guard();
     const authorization = await this.authorize(spec, true);
@@ -344,7 +413,10 @@ export class InformationService {
       if (!r || !this.recordVisible(state, r, spec) || !this.validRecord(state, r)) throw new Denied('正式记忆收录范围', '待处理记录的来源、关系或状态已变化。');
       if (r.integration === 'complete' && r.native?.length && r.text === undefined) return r;
       if (state.config.paused) throw new Fault('INFORMATION_PAUSED', '阅读与沉淀已暂停，保留待处理回执。');
-      if (!txt(r.text, 6000)) throw new Fault('INFORMATION_DRAFT_MISSING', '没有可核对的待处理正文。');
+      this.assertNativeDraft(r);
+      const references = await this.nativeMutationReferences(r, spec, state);
+      const nativeGuard = r.nativeGuard ?? await this.nativeMutationGuard(references, spec);
+      await this.verifyNativeMutation(nativeGuard, spec, references);
       const generation = this.nativeGeneration(r);
       const roles = this.nativeRoles(r); const native = [];
       if (r.baseNative) {
@@ -364,6 +436,7 @@ export class InformationService {
           const live = await this.load(); const current = live.records.find(row => row.id === r.id);
           if (!current || current.revision !== r.revision || !this.validRecord(live, current) || live.config.paused
               || await this.authorize(spec, true) !== authorization) throw scopeChanged();
+          await this.verifyNativeMutation(nativeGuard, spec, await this.nativeMutationReferences(current, spec, live));
           if (r.baseNative) {
             const base = await this.org.memory.intakeEntry(r.baseNative.id, { subject: spec.subject, project: spec.project, inspect: spec.subject.kind === '主权者', mutation: true });
             if (!base || digest(base.内容) !== r.baseNative.hash) throw new Fault('INFORMATION_NATIVE_CHANGED', '正式记忆在提交前变化。');
@@ -372,6 +445,7 @@ export class InformationService {
       r.native = native; r.nativeGeneration = generation; r.integration = 'complete';
       delete r.text; delete r.method; delete r.conditions; delete r.limitations;
       delete r.baseNative;
+      delete r.nativeGuard;
       r.history = r.history.map(({ text: _text, ...receipt }) => receipt);
       return r;
     });
@@ -402,11 +476,13 @@ export class InformationService {
         const item = state.items.find(i => i.id === ref.item); const source = item.source ? state.sources.find(s => s.id === item.source) : null;
         if (scope.relationship !== null || !containsScope(item.scope, scope) || source && !containsScope(source.scope, scope)) throw new Denied('知识分配私密边界', '私人对话和私密来源不能扩大范围；自治来源由Lead决定适用岗位。');
       }
-      const native = await this.hydrate(r, spec);
+      const { native, guard: nativeGuard } = await this.mutationView(r, spec, state);
       if (native.nativeUnavailable) throw new Fault('INFORMATION_NATIVE_CHANGED', '原正式记忆不可用。');
+      this.assertNativeDraft(native);
       r.history.push({ revision: r.revision, scope: r.scope, native: r.native?.map(n => n.id), reason: input.reason, at: this.clock.iso() });
+      const retire = [...new Map([...(r.native ?? []), ...(r.retire ?? [])].map(n => [n.id, n])).values()];
       Object.assign(r, { text: native.text, method: native.method, conditions: native.conditions, limitations: native.limitations,
-        scope, roles: input.roles, integration: 'pending', revision: r.revision + 1, updatedAt: this.clock.iso(), retire: r.native ?? [] });
+        scope, roles: input.roles, integration: 'pending', revision: r.revision + 1, updatedAt: this.clock.iso(), retire, nativeGuard });
       if (native.nativeId) r.baseNative = { id: native.nativeId, hash: digest(native.nativeBody) };
       return r;
     });
@@ -422,11 +498,12 @@ export class InformationService {
     else {
       const old = state.records.find(r => r.id === input.data?.id);
       if (!old || old.revision !== input.data.revision || !this.recordVisible(state, old, spec)) throw new Fault('INFORMATION_CONFLICT', '待处理的正式记忆或回执版本变化。');
-      row = await this.hydrate(old, spec);
+      row = (await this.mutationView(old, spec, state)).native;
       if (operation === 'distribute') row.scope = { ...row.scope, audience: input.data.roles?.length ? 'roles' : 'lead', roles: input.data.roles ?? [] };
       const changed = operation === 'distribute' || input.data.text !== undefined || input.data.state === 'active';
       if (changed) {
         row.text = input.data.text ?? row.text; row.revision++; row.integration = 'pending';
+        this.assertNativeDraft(row);
         retires = [...(old.native ?? []), ...(old.retire ?? [])];
       } else if (input.data.state && input.data.state !== 'active' || input.data.stage === '需修订'
           || ['无改善', '变差'].includes(input.data.trial?.outcome)) retires = old.native ?? [];
@@ -503,6 +580,7 @@ export class InformationService {
       return { paused: state.config.paused, config: state.config, usage: state.usage[dayOf(this.clock)] ?? { readChars: 0, modelCalls: 0 },
         materials: items.length, pending: items.filter(i => i.state === 'active' && !processed.has(`${i.hash}:${scopeKey(i.scope)}`)).length,
         records: state.records.filter(r => this.recordVisible(state, r, spec)).length,
+        reviewPending: state.records.filter(r => r.state === 'needs-review' && r.reviewReason && this.recordVisible(state, r, spec)).length,
         sources: state.sources.filter(s => this.visible(s.scope, spec)).map(({ path: _path, identity: _identity, scan: _scan, ...s }) => s),
         conversationMessages: buffer?.rounds.slice(-2).flatMap(r => r.messages).slice(-8).map(m => ({ id: m.id, role: m.role, seq: m.seq, clipped: m.clipped, ...(m.origin ? { origin: m.origin } : {}) })) ?? [],
         sourceToolReceipts: [...this.toolReceipts.values()].filter(r => r.session === spec.session && r.project === spec.project && this.clock.ms() - r.at <= 1800000).slice(-4).map(r => ({ id: r.id, tool: r.tool })),
@@ -792,8 +870,15 @@ export class InformationService {
       scope.audience = input.roles?.length && (input.type === 'candidate' || input.kind === '知识') ? 'roles' : 'lead';
       scope.roles = scope.audience === 'roles' ? [...new Set(input.roles)] : [];
     }
-    const dedup = digest(canonical({ type: input.type, text: input.text, method: input.method ?? null, sources: sources.map(s => [s.item, s.hash]), scope }));
-    const prior = state.records.find(r => r.dedup === dedup); if (prior) return prior;
+    const base = { type: input.type, text: input.text, method: input.method ?? null, sources: sources.map(s => [s.item, s.hash]), scope };
+    const legacyDedup = digest(canonical(base));
+    // Attribution matters: identical words citing the user and the assistant
+    // must not collapse into the same receipt. Retain exact legacy retries.
+    const sourceQuotes = sources.map(s => [s.item, s.hash, s.quote]);
+    const dedup = digest(canonical({ ...base, kind: input.kind ?? null, sources: sourceQuotes }));
+    const prior = state.records.find(r => r.dedup === dedup || r.dedup === legacyDedup && r.kind === (input.kind ?? null)
+      && canonical(r.sources.map(s => [s.item, s.hash, s.quote])) === canonical(sourceQuotes));
+    if (prior) return prior;
     const replaced = [];
     if (input.replaces !== undefined) {
       if (!Array.isArray(input.replaces) || input.replaces.length > 4) throw new InvalidBody('最多替代4条旧认识。');
@@ -802,6 +887,7 @@ export class InformationService {
         const old = state.records.find(r => r.id === ref.id);
         if (!old || old.revision !== ref.revision || !this.recordVisible(state, old, spec) || old.humanStopped
             || scopeKey(old.scope) !== scopeKey(scope)) throw new Fault('INFORMATION_CONFLICT', '旧认识版本、范围或用户纠正状态变化，不能静默替代。');
+        await this.mutationView(old, spec, state);
         replaced.push(old);
       }
     }
@@ -813,7 +899,9 @@ export class InformationService {
       method: input.method ?? null, conditions: input.conditions ?? null, limitations: input.limitations ?? null, roles: input.roles ?? [],
       expiresAt: input.expiresAt ?? null, updatedAt: this.clock.iso(), author: spec.subject.id, claim: '模型整理，未认证语义有效或人格成长', dedup, history: [], trials: [] };
     row.replaces = replaced.map(r => r.id);
-    row.retire = replaced.flatMap(r => r.native ?? []);
+    row.retire = [...new Map(replaced.flatMap(r => [...(r.native ?? []), ...(r.retire ?? [])]).map(n => [n.id, n])).values()];
+    const dependencies = [...new Set((await Promise.all(replaced.map(r => this.nativeMutationReferences(r, spec, state)))).flat())];
+    if (replaced.length) row.nativeGuard = await this.nativeMutationGuard(dependencies, spec);
     for (const old of replaced) { old.history.push({ revision: old.revision, text: old.text, state: old.state, reason: `由${row.id}重新理解`, at: this.clock.iso() }); old.state = 'needs-review'; old.revision++; }
     state.records.push(row); return row;
   }
@@ -832,7 +920,7 @@ export class InformationService {
       if (!r || !this.recordVisible(state, r, spec)) throw new Denied('成长记录范围', '记录不在当前范围。');
       if (r.revision !== input.revision) throw new Fault('INFORMATION_CONFLICT', '记录已在别处变化，请重新读取后修订。');
       if (r.humanStopped && !human) throw new Denied('用户已纠正', '此记录被人侧停用，模型不能自行恢复或改写。');
-      const native = await this.hydrate(r, spec);
+      const { native, guard: nativeGuard } = await this.mutationView(r, spec, state);
       if (input.state !== undefined && !['active', 'dormant', 'withdrawn', 'needs-review'].includes(input.state)) throw new InvalidBody('state无效。');
       if (input.text !== undefined && !txt(input.text, 6000)) throw new InvalidBody('修订文字不能为空或超过6000字符。');
       if (input.expiresAt !== undefined && input.expiresAt !== null && (!Number.isFinite(Date.parse(input.expiresAt)) || Date.parse(input.expiresAt) <= this.clock.ms())) throw new InvalidBody('expiresAt必须为未来时间或null。');
@@ -852,13 +940,17 @@ export class InformationService {
       }
       r.history.push({ revision: r.revision, state: r.state, stage: r.stage, reason: input.reason, at: this.clock.iso(), human, native: r.native?.map(n => n.id) });
       if (input.text !== undefined || input.state === 'active') {
-        r.text = input.text ?? native.text; r.method = native.method; r.conditions = native.conditions; r.limitations = native.limitations;
+        const draft = { ...r, text: input.text ?? native.text, method: native.method, conditions: native.conditions, limitations: native.limitations };
+        this.assertNativeDraft(draft);
+        r.text = draft.text; r.method = draft.method; r.conditions = draft.conditions; r.limitations = draft.limitations;
         r.retire = [...(r.retire ?? []), ...(r.native ?? [])]; r.integration = 'pending';
+        r.nativeGuard = nativeGuard;
         if (native.nativeId) r.baseNative = { id: native.nativeId, hash: digest(native.nativeBody) };
       }
       if (r.history.length > 50) throw new Fault('INFORMATION_HISTORY_LIMIT', '单条修订超过50次，请建立有出处的新记录。');
       if (trial) { r.trials.push(trial); if (r.trials.length > 50) throw new InvalidBody('单候选最多50次试用。'); }
       for (const name of ['state', 'text', 'stage', 'expiresAt']) if (input[name] !== undefined) r[name] = input[name];
+      if (input.state === 'active') delete r.reviewReason;
       if (trial && ['无改善', '变差'].includes(trial.outcome)) { r.stage = '需修订'; r.state = 'needs-review'; }
       if (human && (input.text !== undefined || input.state !== undefined)) r.humanStopped = input.state !== 'active';
       if (input.stage === '需修订') r.state = 'needs-review';
@@ -1120,6 +1212,21 @@ export class InformationService {
       extraction: material.extraction ?? null, locations: materialLocations(material, offset, offset + text.length),
       nextOffset: offset + text.length < material.text.length ? offset + text.length : null };
   }
+  // Compare locally, after the model returns: do not send unrelated private
+  // formal memories to the auxiliary model. A lexical hit is a review signal,
+  // never proof of equivalence or grounds to delete either record.
+  async suspectedDuplicateKnowledge(spec, text) {
+    const result = await this.org.memory.query({ subject: spec.subject, 读者: spec.subject, 项目: spec.project,
+      类: '知识', 岗位: 'Lead', 文本: text.slice(0, 1800), 返回模式: '摘要', limit: 4, 条数上限: 4, 内容预算: 6000 });
+    if (result.来源警示) throw new Fault('INFORMATION_FORMAL_MEMORY_UNAVAILABLE', '既有知识的来源状态不可用，本次自动提炼不提交。');
+    const terms = value => new Set(tokenize(value.slice(0, 1800)).filter(token => token.length > 1));
+    const proposed = terms(text); if (proposed.size < 8) return [];
+    return (result.条目 ?? []).filter(entry => {
+      const existing = terms(entry.摘要 ?? '');
+      let overlap = 0; for (const token of proposed) if (existing.has(token)) overlap++;
+      return overlap >= 8 && overlap / Math.min(proposed.size, existing.size || 1) >= 0.18;
+    }).map(entry => entry.id);
+  }
   async prepareLearning(spec, { publicOnly = false, materialId = null } = {}) {
     await this.authorize(spec, true);
     if (spec.subject.kind !== 'Lead' || spec.session !== spec.subject.id) return null;
@@ -1199,11 +1306,36 @@ export class InformationService {
     own(response, ['records']);
     if (!Array.isArray(response.records) || response.records.length > 3) throw new InvalidBody('自动阅读最多产生3条收获；没有收获允许空数组。');
     const { chosen } = prepared;
+    const assertConversation = buffer => {
+      const messages = buffer?.rounds.flatMap(r => r.messages) ?? [];
+      if (!chosen.conversation.refs.every(ref => messages.some(m => m.id === ref.id && m.seq === ref.seq && digest(m.text) === ref.hash && m.role === ref.role && canonical(m.origin ?? null) === canonical(ref.origin ?? null)))) throw new Fault('INFORMATION_SOURCE_CHANGED', '对话来源已清空、裁剪或改变，本次提炼未提交。');
+      return messages;
+    };
+    const duplicateHints = new Map();
     if (chosen.conversation) {
-      const buffer = await this.org.turnBuffer.load(spec.project, spec.session);
-      if (!chosen.conversation.refs.every(ref => buffer?.rounds.flatMap(r => r.messages).some(m => m.id === ref.id && m.seq === ref.seq && digest(m.text) === ref.hash && m.role === ref.role && canonical(m.origin ?? null) === canonical(ref.origin ?? null)))) throw new Fault('INFORMATION_SOURCE_CHANGED', '对话来源已清空、裁剪或改变，本次提炼未提交。');
+      const messages = assertConversation(await this.org.turnBuffer.load(spec.project, spec.session));
+      const refs = new Set(chosen.conversation.refs.map(ref => ref.id));
+      if (chosen.scope.project === spec.project && typeof spec.relationship === 'string' && spec.relationship.trim()
+          && chosen.scope.relationship === spec.relationship) {
+        for (let i = 0; i < response.records.length; i++) {
+          const record = response.records[i];
+          if (!record || !(record.type === 'candidate' || record.type === 'growth' && record.kind === '知识')
+              || typeof record.text !== 'string' || typeof record.quote !== 'string' || record.quote.length < 8) continue;
+          const matches = messages.filter(m => refs.has(m.id) && m.text.includes(record.quote));
+          // Only a quote uniquely attributable to this assistant's own report is
+          // compared; shared wording and user/external statements remain untouched.
+          if (!matches.length || !matches.every(m => m.role === 'assistant')) continue;
+          const hints = await this.suspectedDuplicateKnowledge(spec, `${record.text}\n${typeof record.method === 'string' ? record.method : ''}`);
+          if (hints.length) duplicateHints.set(i, hints);
+        }
+      }
     }
-    const result = await this.locked(async state => {
+    const commit = async () => {
+      // Serialize validation and the information state commit with the same
+      // cross-process buffer lock used by capture/forget. A later forget is
+      // ordered after this commit; an earlier one invalidates these refs.
+      if (chosen.conversation) assertConversation(await this.org.turnBuffer.load(spec.project, spec.session));
+      return this.locked(async state => {
       await guard();
       const job = state.jobs.find(j => j.id === prepared.job.id);
       if (!job || job.state !== 'running' || !active() || state.config.paused || !state.config.autoLearn || state.configRevision !== job.configRevision) throw new Fault('INFORMATION_LEARNING_CANCELED', '阅读期间设置变化、暂停或会话切换；未提交收获。');
@@ -1214,15 +1346,36 @@ export class InformationService {
         name: 'conversation', material: chosen.material, scope: chosen.scope,
         context: { channel: 'conversation', session: spec.session, messages: chosen.conversation.refs, claim: '模型选取的相遇，不认证用户意图' } });
       if (item?.state === 'withdrawn') throw new Fault('INFORMATION_SOURCE_CHANGED', '此来源已撤回，不恢复旧材料。');
-      const ids = [];
+      const ids = []; const review = [];
       if (item && response.records.length) {
         const reading = { id: key('reading'), item: item.id, hash: item.hash, start: chosen.offset, end: chosen.offset + prepared.input.source.text.length,
           total: chosen.material.text.length, actor: spec.subject.id, session: spec.session, project: spec.project, at: this.clock.iso() };
         state.readings.push(reading); state.readings = state.readings.slice(-INFORMATION_LIMITS.readings);
-        for (const record of response.records) {
+        for (const [index, record] of response.records.entries()) {
           own(record, ['type', 'kind', 'title', 'text', 'quote', 'method', 'conditions', 'limitations', 'roles', 'replaces']);
           const { quote, ...fields } = record;
-          const out = await this.buildRecord(state, spec, { ...fields, sources: [{ readingId: reading.id, quote }] }); ids.push(out.id);
+          // These are conservative review signals, not semantic verdicts: retain
+          // the source and draft, and never silently drop or overwrite old data.
+          const insightHold = !!chosen.conversation && record.type === 'growth' && record.kind === '认识'
+            && typeof record.text === 'string' && !/^(?:我(?:的|想|会|觉得|认为|理解|意识到|倾向|希望|担心|好奇|喜欢|注意到|发现|感到|反思|更)|对我而言|在我看来)/u.test(record.text.trim());
+          const similar = duplicateHints.get(index) ?? [];
+          const hold = insightHold || similar.length > 0;
+          const before = new Set(state.records.map(row => row.id));
+          const out = await this.buildRecord(state, spec, { ...fields, ...(hold ? { replaces: undefined } : {}), sources: [{ readingId: reading.id, quote }] });
+          if (hold) {
+            if (!before.has(out.id)) {
+              out.state = 'needs-review';
+              out.reviewReason = similar.length ? '助手自述与已有知识词面相近，须核对是否重复' : '自动会话认识未明确表达自身理解，先核对事实与人格分类';
+              if (similar.length) out.reviewMatches = similar;
+              if (fields.replaces !== undefined) {
+                if (!Array.isArray(fields.replaces) || fields.replaces.length > 4) throw new InvalidBody('最多建议替代4条旧认识。');
+                for (const ref of fields.replaces) { own(ref, ['id', 'revision']); if (!txt(ref.id) || !natural(ref.revision)) throw new InvalidBody('待核替代建议需要id和修订。'); }
+                out.reviewSuggestedReplacements = fields.replaces.map(ref => ({ id: ref.id, revision: ref.revision }));
+              }
+            }
+            if (out.state === 'needs-review' && !out.native?.length) review.push(out.id);
+          } else if (out.state === 'active') ids.push(out.id);
+          else if (out.state === 'needs-review' && !out.native?.length) review.push(out.id);
         }
       }
       if (item) {
@@ -1236,12 +1389,15 @@ export class InformationService {
           delete state.conversationOffsets[chosen.conversation.checkpoint];
         } else state.conversationOffsets[chosen.conversation.checkpoint] = { fingerprint: chosen.conversation.fingerprint, offset: prepared.input.source.coverage.end };
       }
-      job.state = ids.length ? 'integrating' : 'completed'; job.records = ids; job.completedAt = this.clock.iso(); job.partial = !prepared.input.source.coverage.complete;
-      await this.authorize(spec, true); await guard(); return { job: job.id, records: ids, partial: job.partial };
-    });
+      job.state = ids.length ? 'integrating' : 'completed'; job.records = ids; job.reviewRecords = review; job.completedAt = this.clock.iso(); job.partial = !prepared.input.source.coverage.complete;
+      await this.authorize(spec, true); await guard(); return { job: job.id, records: ids, review, partial: job.partial };
+      });
+    };
+    const bufferFile = chosen.conversation ? this.org.turnBuffer.file(spec.project, spec.session) : null;
+    const result = bufferFile ? await serializeByKey(bufferFile, () => withLock(`${bufferFile}.lock`, commit, { timeoutMs: 3000 })) : await commit();
     for (const id of result.records) await this.finalizeRecord(spec, id, { guard });
     if (result.records.length) await this.locked(state => { const job = state.jobs.find(j => j.id === result.job); job.state = 'completed'; job.completedAt = this.clock.iso(); });
-    await this.audit(spec, '自动阅读纳入正式记忆', result.job, { records: result.records.length, partial: result.partial }); return result;
+    await this.audit(spec, '自动阅读纳入正式记忆', result.job, { records: result.records.length, review: result.review.length, partial: result.partial }); return result;
   }
   async failLearning(id, error, { discardPending = false } = {}) {
     return this.locked(async state => {
@@ -1270,6 +1426,11 @@ export class InformationService {
       if ((await this.hydrate(r, spec)).nativeActive) recent.push(r);
       if (recent.length >= 10) break;
     }
+    const candidates = [];
+    for (const r of records.filter(r => r.type === 'candidate').reverse()) {
+      if ((await this.hydrate(r, spec)).nativeActive) candidates.unshift({ id: r.id, title: r.title, stage: r.stage });
+      if (candidates.length >= 3) break;
+    }
     const processed = this.processedKeys(state);
     const pending = state.items.filter(i => this.itemVisible(state, i, spec) && i.state === 'active' && !processed.has(`${i.hash}:${scopeKey(i.scope)}`));
     // Alternate recent and stable hash order: leave room for discovery outside existing interests.
@@ -1277,9 +1438,10 @@ export class InformationService {
     const buffer = spec.subject.kind === 'Lead' && spec.session === spec.subject.id ? await this.org.turnBuffer.load(spec.project, spec.session) : null;
     const messages = buffer?.rounds.slice(-2).flatMap(r => r.messages).slice(-8).map(m => ({ id: m.id, role: m.role, seq: m.seq, clipped: m.clipped, ...(m.origin ? { origin: m.origin } : {}) })) ?? [];
     const frame = { dataRevision: state.revision, paused: state.config.paused, growth: recent.map(r => ({ id: r.id, revision: r.revision, kind: r.kind, native: r.native.map(n => ({ id: n.id, 类: n.类 })), instruction: '正文通过memory_query读取；人格连续性和专业知识沿现有召回机制提供' })),
-      pending: pending.length, discoveries: queue.map(({ item: i, reason }) => ({ id: i.id, title: i.title, chars: i.chars, reason })), conversationMessages: messages,
+      pending: pending.length, reviewPending: state.records.filter(r => r.state === 'needs-review' && r.reviewReason && this.recordVisible(state, r, spec)).length,
+      discoveries: queue.map(({ item: i, reason }) => ({ id: i.id, title: i.title, chars: i.chars, reason })), conversationMessages: messages,
       sourceToolReceipts: [...this.toolReceipts.values()].filter(r => r.session === spec.session && r.project === spec.project && this.clock.ms() - r.at <= 1800000).slice(-4).map(r => ({ id: r.id, tool: r.tool, preview: r.content.slice(0, 120) })),
-      candidates: records.filter(r => r.type === 'candidate').slice(-3).map(r => ({ id: r.id, title: r.title, stage: r.stage })) };
+      candidates };
     while (JSON.stringify(frame).length > INFORMATION_LIMITS.contextChars && frame.growth.length) frame.growth.pop();
     if ((await this.authorize(spec)) !== authorization) throw scopeChanged();
     return frame;

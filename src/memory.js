@@ -26,6 +26,7 @@ import { normalizeContinuity, applicableContinuity, continuityBlockedSources, LE
 import { normalizeCollaborationFeedback, checkCollaborationReferences } from './collaboration-feedback.js';
 import { lessonSearchText } from './lead-focus.js';
 import { memoryRecallText } from './memory-recall.js';
+import { sessionKeyRelationship, sessionRelationship } from './data-ownership.js';
 import { DIR, MEMORY_KINDS } from './paths.js';
 import { 记忆条目在读域, 取复核读域 } from './review-scope.js';
 // 「已被合法采纳」的唯一判据住在任务图（补修K 字段合同），晋升面直接复用、不另抄状态判断。
@@ -396,7 +397,7 @@ export class MemoryService {
     if (!barrier.归属会话 || subject?.kind === '主权者') return true;
     if (subject?.kind !== 'Lead' || !this.information) return false;
     const bindings = (await this.information.readState()).bindings;
-    return (bindings[barrier.归属会话] ?? barrier.归属会话) === (bindings[digest(subject.id)] ?? digest(subject.id));
+    return sessionKeyRelationship(barrier.归属会话, bindings) === sessionRelationship(subject.id, bindings);
   }
   async rememberIntake({ subject, record, generation, project, role, body, check }) {
     if (!['Lead', '主权者'].includes(subject?.kind) || typeof check !== 'function') throw new Denied('正式收录写入', '需要已核对来源的Lead或人侧入口。');
@@ -413,9 +414,11 @@ export class MemoryService {
       收录检查: check, 幂等键: `intake:${record.id}:${generation}:${role}`, [内部通道]: true, [收录提交]: true,
     });
   }
-  async intakeEntry(id, { subject, project, inspect = false, mutation = false } = {}) {
+  async intakeEntry(id, { subject, project, inspect = false, mutation = false, followReplacements = true } = {}) {
     let entry = await this.#folded(id); const seen = new Set();
-    for (let n = 0; entry?.状态 === '被推翻' && n < 16; n++) {
+    // Governance also needs the original lifecycle history: following a replacement
+    // alone would hide a human's correction on the original intake entry.
+    for (let n = 0; followReplacements && entry?.状态 === '被推翻' && n < 16; n++) {
       if (seen.has(entry.id)) throw new Fault('INTAKE_LINEAGE_INVALID', '正式记忆替代链循环。'); seen.add(entry.id);
       const replacement = entry.历史.filter(h => h.追加 === '推翻').at(-1)?.新条目;
       if (!replacement) break; entry = await this.#folded(replacement);

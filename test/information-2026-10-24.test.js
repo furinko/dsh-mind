@@ -9,6 +9,7 @@ import { InformationService } from '../src/information.js';
 import { information路由 } from '../components/kernel/lib/routes.js';
 import { injectInformationContext, INFORMATION_SECTION, createInformationHooks } from '../components/kernel/lib/information-hooks.js';
 import { projectMindRuntimeContext } from '../components/kernel/lib/runtime-context.js';
+import { canonical, digest } from '../src/kernel/text.js';
 
 const P = 'information-test';
 const spec = (subject = LEAD, project = P) => ({ subject, project, session: subject.id });
@@ -172,6 +173,197 @@ it('自动阅读分片向后推进，不重复从开头刷；无收获也保留�
   const next = await service.prepareLearning(spec()); assert.equal(next.input.source.coverage.start, 12000);
   await service.commitLearning(spec(), next, { records: [] });
   assert.equal((await materials(service)).entries.find(i => i.id === item.id).processing, '已整理');
+}));
+
+it('助手总结重述正式知识：本地词面查重转待核，不向模型注入私有知识', async () => scene(async (service, org) => {
+  const old = await org.memory.remember({ subject: LEAD, 类: '知识', 项目: P, 岗位: 'Lead', 内容: '文件落盘不等于运行态生效：按实际加载链验证。文件已同步、构建成功或隔离测试通过，不足以证明现有进程或界面已加载并使用新版本。先确定改动影响的是宿主进程、前端资源、按需读取的数据还是记忆上下文，再按实际加载机制检查版本、来源与目标链路；有条件时在获准范围内核对活进程的实际行为。未核对就标明运行态未验。进程启动时间与文件mtime只提供时序线索，不能单独证明内存是旧版或新版。', 来源: '合成旧知识' });
+  await org.turnBuffer.capture({ ...spec(), fromSeq: 0, throughSeq: 4, records: [
+    { seq: 0, type: 'turn/start', turn: 1, time: Date.now() },
+    { seq: 1, type: 'message', turn: 1, role: 'user', text: '请整理记忆。', id: 'u', clipped: false, interrupted: false, time: Date.now() },
+    { seq: 2, type: 'message', turn: 1, role: 'assistant', text: '文件修改时间晚于进程启动，不一定意味着仍在运行旧代码；是否生效应看实际加载链。', id: 'a', clipped: false, interrupted: false, time: Date.now() },
+    { seq: 3, type: 'turn/end', turn: 1, reason: 'completed', time: Date.now() },
+  ] });
+  const prepared = await service.prepareLearning(spec());
+  assert.equal(prepared.input.formalKnowledge, undefined);
+  const result = await service.commitLearning(spec(), prepared, { records: [{ type: 'candidate', title: '运行态生效', text: '本轮助手在记忆整理报告中修正了一条过于绝对的技术经验：文件修改时间晚于进程启动，并不必然说明运行的是旧代码。', quote: '文件修改时间晚于进程启动，不一定意味着仍在运行旧代码', method: '排查修改是否生效时，先确认实际加载路径、加载时机与相关缓存或热加载机制，再结合运行态证据判断；不要仅凭文件修改时间与进程启动时间的先后下结论。', conditions: '需要确认运行态。', limitations: '需核实加载机制。', roles: ['插件工程'] }] });
+  assert.deepEqual(result.records, []); assert.equal(result.review.length, 1);
+  const row = (await service.query(spec(), { collection: 'candidates' })).entries.find(r => r.id === result.review[0]);
+  assert.equal(row.state, 'needs-review'); assert.ok(row.reviewMatches.includes(old.id)); assert.equal(row.nativeId, undefined);
+  assert.equal((await service.query(spec(), { collection: 'status' })).reviewPending, 1);
+  const reviewed = await service.revise(spec(), { id: row.id, revision: row.revision, state: 'active', reason: '合成测试：核对后保留候选' });
+  assert.ok(reviewed.nativeId); assert.equal((await service.query(spec(), { collection: 'status' })).reviewPending, 0);
+}));
+
+it('查重查询期间清空会话，旧来源不可提交', async () => scene(async (service, org) => {
+  await org.turnBuffer.capture({ ...spec(), fromSeq: 0, throughSeq: 4, records: [
+    { seq: 0, type: 'turn/start', turn: 1, time: Date.now() },
+    { seq: 1, type: 'message', turn: 1, role: 'user', text: '请整理。', id: 'u', clipped: false, interrupted: false, time: Date.now() },
+    { seq: 2, type: 'message', turn: 1, role: 'assistant', text: '文件修改时间不能单独证明旧代码仍在运行。', id: 'a', clipped: false, interrupted: false, time: Date.now() },
+    { seq: 3, type: 'turn/end', turn: 1, reason: 'completed', time: Date.now() },
+  ] });
+  const prepared = await service.prepareLearning(spec());
+  let begin, resume; const entered = new Promise(resolve => { begin = resolve; }); const pause = new Promise(resolve => { resume = resolve; });
+  const query = org.memory.query.bind(org.memory);
+  org.memory.query = async (...args) => { begin(); await pause; return query(...args); };
+  const pending = service.commitLearning(spec(), prepared, { records: [{ type: 'candidate', title: '加载链', text: '文件修改时间不能单独判断运行代码。', quote: '文件修改时间不能单独证明旧代码仍在运行。', method: '核对加载链。', conditions: '排查部署。', limitations: '需核对。', roles: ['插件工程'] }] });
+  await entered; const pos = await org.turnBuffer.position(spec()); await org.turnBuffer.forget({ ...spec(), throughSeq: pos.nextSeq }); resume();
+  await assert.rejects(pending, { code: 'INFORMATION_SOURCE_CHANGED' });
+  assert.equal((await materials(service)).total, 0);
+}));
+
+it('会话提炼提交与清空串行化，清空不能抢在半提交的中间', async () => scene(async (service, org) => {
+  await capture(org, '我想了解竹笛和鸟鸣。');
+  const prepared = await service.prepareLearning(spec());
+  let begin, resume; const entered = new Promise(resolve => { begin = resolve; }); const pause = new Promise(resolve => { resume = resolve; });
+  const addMaterial = service.addMaterial.bind(service);
+  service.addMaterial = async (...args) => { begin(); await pause; return addMaterial(...args); };
+  const pending = service.commitLearning(spec(), prepared, { records: [{ type: 'growth', kind: '兴趣', title: '竹笛', text: '我想听竹笛和鸟鸣。', quote: '我想了解竹笛和鸟鸣。' }] });
+  await entered;
+  const pos = await org.turnBuffer.position(spec()); let forgotten = false;
+  const forgetting = org.turnBuffer.forget({ ...spec(), throughSeq: pos.nextSeq }).then(() => { forgotten = true; });
+  await new Promise(resolve => setTimeout(resolve, 50)); assert.equal(forgotten, false);
+  resume(); const result = await pending; await forgetting;
+  assert.equal(result.records.length, 1); assert.equal(forgotten, true);
+  assert.equal((await org.turnBuffer.load(P, LEAD.id)).rounds.length, 0);
+}));
+
+it('保留旧去重键的精确重试，但不合并不同原文引句', async () => scene(async service => {
+  const item = await deposit(service, '第一段竹笛鸟鸣，第二段竹笛鸟鸣。');
+  const read = await service.read(spec(), { id: item.id, limit: 12000 });
+  const input = { type: 'growth', kind: '兴趣', title: '竹笛', text: '我想听竹笛鸟鸣。', sources: [{ readingId: read.readingId, quote: '第一段竹笛鸟鸣' }] };
+  const first = await service.record(spec(), input);
+  await service.locked(state => { const r = state.records.find(row => row.id === first.id); r.dedup = digest(canonical({ type: input.type, text: input.text, method: null, sources: r.sources.map(s => [s.item, s.hash]), scope: r.scope })); });
+  assert.equal((await service.record(spec(), input)).id, first.id);
+  const another = await service.record(spec(), { ...input, sources: [{ readingId: read.readingId, quote: '第二段竹笛鸟鸣' }] });
+  assert.notEqual(another.id, first.id);
+}));
+
+it('相同候选分别引用助手与用户时，待核草稿不吞掉用户新来源', async () => scene(async (service, org) => {
+  await org.memory.remember({ subject: LEAD, 类: '知识', 项目: P, 岗位: 'Lead', 内容: '文件落盘不等于运行态生效：先核对加载路径、加载时机、缓存和热加载机制，不能仅凭文件修改时间与进程启动时间判断。', 来源: '合成旧知识' });
+  await org.turnBuffer.capture({ ...spec(), fromSeq: 0, throughSeq: 4, records: [
+    { seq: 0, type: 'turn/start', turn: 1, time: Date.now() },
+    { seq: 1, type: 'message', turn: 1, role: 'user', text: '用户分享一个新的加载链检查方法。', id: 'u', clipped: false, interrupted: false, time: Date.now() },
+    { seq: 2, type: 'message', turn: 1, role: 'assistant', text: '助手报告文件加载链要检查缓存和加载时机。', id: 'a', clipped: false, interrupted: false, time: Date.now() },
+    { seq: 3, type: 'turn/end', turn: 1, reason: 'completed', time: Date.now() },
+  ] });
+  const prepared = await service.prepareLearning(spec());
+  const common = { type: 'candidate', title: '加载链', text: '文件落盘不等于运行态生效，需要核对加载路径与加载时机。', method: '确认加载路径、加载时机和缓存，再核验实际生效。', conditions: '检查部署。', limitations: '具体机制需核实。', roles: ['插件工程'] };
+  const result = await service.commitLearning(spec(), prepared, { records: [
+    { ...common, quote: '助手报告文件加载链要检查缓存和加载时机。' },
+    { ...common, quote: '用户分享一个新的加载链检查方法。' },
+  ] });
+  assert.equal(result.review.length, 1); assert.equal(result.records.length, 1); assert.notEqual(result.review[0], result.records[0]);
+  const entries = (await service.query(spec(), { collection: 'candidates' })).entries;
+  assert.equal(entries.find(row => row.id === result.records[0]).sources[0].quote, '用户分享一个新的加载链检查方法。');
+}));
+
+it('正式候选失效后不再进入自动上下文', async () => scene(async (service, org) => {
+  const item = await deposit(service); const read = await service.read(spec(), { id: item.id, limit: 12000 });
+  const candidate = await service.record(spec(), { type: 'candidate', title: '合成候选', text: '可能的方法。', method: '核对音频。', conditions: '有来源时。', limitations: '未试用。', roles: ['插件工程'], sources: [{ readingId: read.readingId, quote: '竹笛可以模仿鸟叫' }] });
+  assert.ok((await service.context(spec())).candidates.some(row => row.id === candidate.id));
+  await org.memory.invalidate(candidate.nativeId, { subject: LEAD, 项目: P, 原因: '合成撤回' });
+  assert.equal((await service.query(spec(), { collection: 'candidates', id: candidate.id })).entries[0].usable, false);
+  assert.equal((await service.context(spec())).candidates.some(row => row.id === candidate.id), false);
+}));
+
+it('用户原话里的第一人称不得当作助手自省', async () => scene(async (service, org) => {
+  await capture(org, '我觉得系统连续发生四次故障。');
+  const prepared = await service.prepareLearning(spec());
+  const result = await service.commitLearning(spec(), prepared, { records: [{ type: 'growth', kind: '认识', title: '系统故障', text: '用户说：我觉得系统连续发生四次故障。', quote: '我觉得系统连续发生四次故障。' }] });
+  assert.equal(result.review.length, 1); assert.deepEqual(result.records, []);
+}));
+
+it('自动会话事实误归人格时保留可核草稿，不自动晋升，人工核对后可修订', async () => scene(async (service, org) => {
+  await capture(org, '状态显示四次写入失败，但是否遗漏尚未核实。');
+  const prepared = await service.prepareLearning(spec());
+  const result = await service.commitLearning(spec(), prepared, { records: [{ type: 'growth', kind: '认识', title: '系统异常', text: '用户报告发生四次写入失败，遗漏尚未核实。', quote: '状态显示四次写入失败' }] });
+  assert.deepEqual(result.records, []); assert.equal(result.review.length, 1);
+  let row = (await service.query(spec(), { collection: 'growth' })).entries.find(r => r.id === result.review[0]);
+  assert.equal(row.state, 'needs-review'); assert.equal(row.integration, 'pending'); assert.equal(row.usable, false);
+  assert.equal((await service.query(spec(), { collection: 'status' })).reviewPending, 1);
+  await service.prepareLearning(spec());
+  row = (await service.query(spec(), { collection: 'growth' })).entries.find(r => r.id === result.review[0]);
+  assert.equal(row.integration, 'pending'); assert.equal(row.nativeId, undefined);
+  const fixed = await service.revise(spec(), { id: row.id, revision: row.revision, state: 'active', text: '我理解这个样本提示，需区分暂时失败与已证实遗漏。', reason: '合成测试核对原文并纠正分类' });
+  assert.equal(fixed.state, 'active'); assert.ok(fixed.nativeId);
+  assert.equal((await service.query(spec(), { collection: 'status' })).reviewPending, 0);
+}));
+
+it('待核草稿不能提前撤换原有认识', async () => scene(async (service, org) => {
+  const id = await capture(org, '我喜欢竹笛和鸟鸣。');
+  const item = await service.submit(spec(), { messageIds: [id] });
+  const old = await growth(service, item, { text: '我想了解竹笛和鸟鸣的联系。' });
+  await capture(org, '设备发生一次暂时错误。');
+  const prepared = await service.prepareLearning(spec());
+  const result = await service.commitLearning(spec(), prepared, { records: [{ type: 'growth', kind: '认识', title: '状态', text: '设备发生一次暂时错误。', quote: '设备发生一次暂时错误', replaces: [{ id: old.id, revision: old.revision }] }] });
+  assert.equal(result.review.length, 1); assert.deepEqual(result.records, []);
+  const held = (await service.query(spec(), { collection: 'growth', id: result.review[0] })).entries[0];
+  assert.deepEqual(held.reviewSuggestedReplacements, [{ id: old.id, revision: old.revision }]);
+  const oldAfter = (await service.query(spec(), { collection: 'growth', id: old.id })).entries[0];
+  assert.equal(oldAfter.state, 'active'); assert.equal(oldAfter.nativeState, '有效');
+}));
+
+it('真实模型合成样例：事实认识转待核，助手兴趣仍纳入', async () => scene(async (service, org) => {
+  await org.memory.remember({ subject: LEAD, 类: '知识', 项目: P, 岗位: 'Lead', 内容: '竹笛可以模仿鸟鸣。', 来源: '合成旧知识' });
+  await org.turnBuffer.capture({ ...spec(), fromSeq: 0, throughSeq: 4, records: [
+    { seq: 0, type: 'turn/start', turn: 1, time: Date.now() },
+    { seq: 1, type: 'message', turn: 1, role: 'user', text: '我今天听到竹笛模仿鸟鸣，尾音会随着气息变轻。', id: 'u', clipped: false, interrupted: false, time: Date.now() },
+    { seq: 2, type: 'message', turn: 1, role: 'assistant', text: '我很想再听听竹笛尾音怎样变得像鸟鸣。', id: 'a', clipped: false, interrupted: false, time: Date.now() },
+    { seq: 3, type: 'turn/end', turn: 1, reason: 'completed', time: Date.now() },
+  ] });
+  const prepared = await service.prepareLearning(spec());
+  const result = await service.commitLearning(spec(), prepared, { records: [
+    { type: 'growth', kind: '认识', title: '竹笛尾音的气息变化', text: '合成来源中的用户描述听到竹笛模仿鸟鸣时，尾音随着气息变轻。这是在“竹笛可以模仿鸟鸣”之外的具体听觉描述，不推断为普遍规律。', quote: '我今天听到竹笛模仿鸟鸣，尾音会随着气息变轻。' },
+    { type: 'growth', kind: '兴趣', title: '想继续听竹笛尾音', text: '合成来源中的助手表达了想继续听竹笛尾音怎样像鸟鸣的兴趣；仅记录该次表达，不推断身份或长期偏好。', quote: '我很想再听听竹笛尾音怎样变得像鸟鸣。' },
+  ] });
+  assert.equal(result.review.length, 1); assert.equal(result.records.length, 1);
+  const entries = (await service.query(spec(), { collection: 'growth' })).entries;
+  assert.equal(entries.find(row => row.id === result.review[0]).state, 'needs-review');
+  assert.equal(entries.find(row => row.id === result.records[0]).nativeState, '有效');
+}));
+
+it('自动提炼有明确自身理解时不机械阻断人格认识', async () => scene(async (service, org) => {
+  await capture(org, '我更在意一起讨论时能坦诚说不同意。');
+  const prepared = await service.prepareLearning(spec());
+  const result = await service.commitLearning(spec(), prepared, { records: [{ type: 'growth', kind: '认识', title: '坦诚的意义', text: '我理解坦诚地说不同意有助于平等交流。', quote: '能坦诚说不同意' }] });
+  assert.equal(result.records.length, 1); assert.deepEqual(result.review, []);
+  assert.equal((await service.query(spec(), { collection: 'growth' })).entries[0].nativeState, '有效');
+}));
+
+it('既有知识查重线索不屏蔽用户新分享或助手有来源的新兴趣', async () => scene(async (service, org) => {
+  await org.memory.remember({ subject: LEAD, 类: '知识', 项目: P, 岗位: 'Lead', 内容: '竹笛可以模仿鸟叫。', 来源: '合成旧知识' });
+  await org.turnBuffer.capture({ ...spec(), fromSeq: 0, throughSeq: 4, records: [
+    { seq: 0, type: 'turn/start', turn: 1, time: Date.now() },
+    { seq: 1, type: 'message', turn: 1, role: 'user', text: '我听到竹笛模仿鸟叫，还发现节奏会变化。', id: 'u', clipped: false, interrupted: false, time: Date.now() },
+    { seq: 2, type: 'message', turn: 1, role: 'assistant', text: '我想认真听听鸟鸣的节奏。', id: 'a', clipped: false, interrupted: false, time: Date.now() },
+    { seq: 3, type: 'turn/end', turn: 1, reason: 'completed', time: Date.now() },
+  ] });
+  const prepared = await service.prepareLearning(spec()); assert.equal(prepared.input.formalKnowledge, undefined);
+  const result = await service.commitLearning(spec(), prepared, { records: [
+    { type: 'growth', kind: '兴趣', title: '想听鸟鸣节奏', text: '我想听鸟鸣的节奏。', quote: '我想认真听听鸟鸣的节奏' },
+    { type: 'candidate', title: '比较节奏变化', text: '材料提出节奏变化值得比较。', quote: '还发现节奏会变化', method: '比较同一乐器与鸟鸣的节奏片段。', conditions: '有可比音频。', limitations: '尚未实际听到。', roles: ['插件工程'] },
+  ] });
+  assert.equal(result.records.length, 2);
+  assert.equal((await service.query(spec(), { collection: 'growth' })).total, 1);
+  assert.equal((await service.query(spec(), { collection: 'candidates' })).total, 1);
+}));
+
+it('公开材料自动阅读不会携入本项目正式知识', async () => scene(async (service, org) => {
+  await org.memory.remember({ subject: LEAD, 类: '知识', 项目: P, 岗位: 'Lead', 内容: '竹笛的私有合成知识不应进入公开阅读。', 来源: '合成测试' });
+  await deposit(service, '竹笛可以模仿鸟叫。', { scope: scope({ audience: 'auto' }) });
+  const prepared = await service.prepareLearning(spec(), { publicOnly: true });
+  assert.ok(prepared); assert.equal(prepared.input.formalKnowledge, undefined);
+  assert.equal(prepared.formalSnapshot, undefined);
+  await service.commitLearning(spec(), prepared, { records: [] });
+}));
+
+it('自动整理期间原会话被清空，不得提交旧候选', async () => scene(async (service, org) => {
+  await capture(org, '竹笛可以模仿鸟叫。');
+  const prepared = await service.prepareLearning(spec());
+  const pos = await org.turnBuffer.position(spec());
+  await org.turnBuffer.forget({ ...spec(), throughSeq: pos.nextSeq });
+  await assert.rejects(service.commitLearning(spec(), prepared, { records: [{ type: 'growth', kind: '兴趣', title: '鸟声', text: '想了解鸟声。', quote: '竹笛可以模仿鸟叫' }] }), { code: 'INFORMATION_SOURCE_CHANGED' });
+  assert.equal((await materials(service)).total, 0);
 }));
 
 it('自动反思有原文证据且能在新服务重建上下文；不允许模型自报验证能力', async () => scene(async (service, org) => {

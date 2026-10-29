@@ -32,6 +32,8 @@ test('聊天开关先读真实状态，单次写入后回读确认，双击不�
     assert.equal(button(e).props['aria-checked'], false);
     assert.deepEqual(e.calls.map(r => r.method), ['GET', 'POST', 'GET']);
     assert.match(button(e).props.title, /不补记关闭期间/);
+    assert.match(button(e).props.title, /启用心智自主调度的项目.*暂停新委派/);
+    assert.match(button(e).props.title, /重新打开.*心智/);
   } finally { e.dispose(); }
 });
 

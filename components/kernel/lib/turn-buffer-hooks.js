@@ -1,4 +1,6 @@
 import { renderContextFrame } from './context-frame.js';
+import { resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 /** 宿主同步通知只投递去敏后的事件；检查点和上下文装配等待本会话持久化。 */
 import { agentSubject } from '../../../src/subject.js';
 import { projectTurnEvent, projectTurnSurfaceEvent, foldTurnRecords, TURN_BUFFER_LIMITS } from '../../../src/turn-buffer.js';
@@ -19,10 +21,15 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
   const surfaces = new WeakMap();
   let stopped = false; let attached = false; let pending = 0;
   let failedWrites = 0; let dropped = 0; let recoveryUnavailable = 0;
+  let retryAttempts = 0; let retryRecovered = 0; let lastFailure = null;
   const report = error => {
     failedWrites++;
+    const raw = String(error?.code ?? error?.name ?? 'unknown');
+    const code = /^[A-Za-z0-9_]{1,64}$/.test(raw) ? raw : 'unknown';
+    let at = null; try { at = org.clock?.iso?.() ?? null; } catch { /* Telemetry cannot disrupt recovery. */ }
+    lastFailure = { code, operation: error?.syscall === 'rename' ? 'rename' : 'other', at };
     try {
-      if (failedWrites === 1) logger.warn?.(`[dsh-mind] 轮级缓冲暂不可用：${error?.code ?? error?.name ?? 'unknown'}；保留旧文件，后续通过宿主历史补齐。`);
+      if (failedWrites === 1) logger.warn?.(`[dsh-mind] 轮级缓冲暂不可用：${code}；保留旧文件，后续通过宿主历史补齐。`);
     } catch { /* 告警输出不影响后续补读。 */ }
   };
   const scope = session => {
@@ -178,6 +185,35 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
     }
     if (cursor < end) throw Object.assign(new Error('轮级缓冲表面历史尚未补齐，下一检查点继续。'), { code: 'TURN_BUFFER_RECOVERY_PENDING' });
   }
+  // Windows may deny an otherwise atomic replacement while another process holds
+  // the target without FILE_SHARE_DELETE. Retry only this exact staging->buffer
+  // rename, not general EPERM/EACCES, policy denial or another data file.
+  const shareRetryDelays = [40, 80, 160, 320];
+  function isBufferSharingError(error, spec) {
+    if (process.platform !== 'win32' || error?.code !== 'EPERM' || error.syscall !== 'rename'
+        || typeof error.path !== 'string' || typeof error.dest !== 'string') return false;
+    const target = resolve(org.turnBuffer.file(spec.project, spec.session)).toLowerCase();
+    const source = resolve(error.path).toLowerCase();
+    return resolve(error.dest).toLowerCase() === target
+      && source.startsWith(`${target}.tmp-`) && /^[a-f0-9-]+$/.test(source.slice(target.length + 5));
+  }
+  async function runWithSharingRetry(session, hint, expected) {
+    let retries = 0;
+    for (;;) {
+      try {
+        await run(session, hint, expected);
+        if (retries && sameChat(org, session, expected) && scope(session)?.project === expected.project) retryRecovered++;
+        return;
+      } catch (error) {
+        if (!isBufferSharingError(error, expected) || retries >= shareRetryDelays.length) throw error;
+        retryAttempts++;
+        await delay(shareRetryDelays[retries++]);
+        // Re-run the whole authorized transaction against the latest source; never
+        // blindly replay a saved state after revocation, reset, or project change.
+        if (!sameChat(org, session, expected) || scope(session)?.project !== expected.project) return;
+      }
+    }
+  }
   function enqueue(session, hint) {
     const expected = scope(session);
     if (!expected) return Promise.resolve();
@@ -189,7 +225,7 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
     const previous = queues.get(session) ?? Promise.resolve();
     pending++;
     const work = previous.then(async () => {
-      await run(session, hint, expected);
+      await runWithSharingRetry(session, hint, expected);
       if (sameChat(org, session, expected) && scope(session)?.project === expected.project && onPersist) {
         try { await onPersist(session, { summarize: !hint || hint.type === 'turn/end' }); }
         catch (error) { logger.warn?.(`[dsh-mind] 项目接续来源登记失败：${error?.code ?? error?.name ?? 'unknown'}；轮缓冲仍保留，后续重试。`); }
@@ -215,7 +251,7 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
     },
     sync(session) { return enqueue(session); },
     async flush() { while (queues.size) await Promise.all([...queues.values()]); },
-    health() { return { enabled, attached, stopped, pending, failedWrites, dropped, recoveryUnavailable }; },
+    health() { return { enabled, attached, stopped, pending, failedWrites, dropped, recoveryUnavailable, retryAttempts, retryRecovered, lastFailure }; },
     attach(ctx) {
       if (!enabled) return () => { stopped = true; };
       const disposers = [];

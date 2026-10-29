@@ -6007,7 +6007,7 @@ window.__ModuleLoader__.load({
         });
       }
       useEffect(function () { life.active = true; request(false); return function () { life.active = false; life.epoch++; life.busy = false; }; }, [sessionId]);
-      var title = '仅影响当前聊天，从下一轮生效。关闭后不带入心智资料、不记录新的心智内容；重新打开不补记关闭期间的消息。旧记忆和聊天记录保留，已有任务的安全限制继续生效。';
+      var title = '仅影响当前聊天，从下一轮生效。关闭后不带入心智资料、不记录新的心智内容；重新打开不补记关闭期间的消息。旧记忆和聊天记录保留，已有任务的安全限制继续生效。启用心智自主调度的项目，关闭期间也暂停新委派；请重新打开“接入心智”后再委派。';
       return h('span', { 'data-dshmind': 'chat-connection', style: { display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12 } }, [
         h('button', Object.assign({ key: 'switch', type: 'button', disabled: !sessionId || snap.busy,
           title: title, onClick: function () { request(!!snap.value); },
