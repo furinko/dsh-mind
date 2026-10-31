@@ -46,6 +46,7 @@ export const 端点表 = Object.freeze({
   informationMaterial: `${路由前缀}/information-material`,
   informationDeposit: `${路由前缀}/information-deposit`,
   leadSpace: `${路由前缀}/lead-space`,
+  leadAffect: `${路由前缀}/lead-affect`,
   memoryUse: `${路由前缀}/memory-use`,
   memory: `${路由前缀}/memory`,
   audit: `${路由前缀}/audit`,
@@ -661,6 +662,35 @@ export function information路由({ ctx, org, 项目, mode = 'settings' }) {
   };
 }
 
+/** Human inspection/correction of model self-reports; no model action proxy. */
+export function leadAffect路由({ ctx, org, 项目 }) {
+  return async function leadAffect端点(req, res) {
+    const method = String(req?.method ?? 'GET').toUpperCase();
+    if (!['GET', 'POST'].includes(method)) return 回方法不对(res, method, 'GET 或 POST');
+    try {
+      const connection = ctx?.get?.('connection');
+      if (typeof connection?.requestRejection !== 'function') return 回JSON(res, 503, { 成功: false, 理由: '情绪维护需要宿主Connection认证。' });
+      const rejection = connection.requestRejection(req);
+      if (rejection !== undefined) return 回JSON(res, rejection === 401 ? 401 : 403, { 成功: false, 理由: '需要已认证的同源人侧入口。' });
+      if (!(method === 'GET' ? 读栅栏(req) : 写栅栏(req)).ok) return 回JSON(res, 403, { 成功: false, 理由: '情绪维护同源请求被拒绝。' });
+      const spec = { subject: { id: '情绪维护人侧', kind: '主权者' }, project: 取项目(req, 项目), session: null };
+      if (method === 'GET') {
+        const params = new URL(req.url, 'http://localhost').searchParams; const input = {};
+        for (const key of ['id', 'offset', 'limit']) if (params.has(key)) input[key] = key === 'id' ? params.get(key) : Number(params.get(key));
+        return 回JSON(res, 200, { 成功: true, 数据: await org.leadAffect.query(spec, input) });
+      }
+      if (取头(req, 'content-type').split(';')[0].trim().toLowerCase() !== 'application/json') return 回JSON(res, 415, { 成功: false, 理由: '只接受application/json。' });
+      let raw; try { raw = await 读请求体(req); } catch { return 回JSON(res, 413, { 成功: false, 理由: '请求体超过64KiB。' }); }
+      let input; try { input = JSON.parse(raw); } catch { return 回JSON(res, 400, { 成功: false, 理由: '请求体不是合法JSON。' }); }
+      if (!['revise', 'remove', 'clear', 'configure'].includes(input?.op)) throw new InvalidBody('人侧入口仅修正、删除、清空或开关，不代模型生成事件。');
+      return 回JSON(res, 200, { 成功: true, 数据: await org.leadAffect.update(spec, input) });
+    } catch (error) {
+      return 回JSON(res, error.code === 'LEAD_AFFECT_CONFLICT' ? 409 : error.code === 'INVALID_BODY' ? 400 : ['DENIED', 'NEEDS_APPROVAL'].includes(error.code) ? 403 : 503,
+        { 成功: false, ...describeFailure(error) });
+    }
+  };
+}
+
 /** Human-only free-time configuration and draft inspection; no arbitrary action proxy. */
 export function leadSpace路由({ ctx, org, 项目 }) {
   return async function leadSpace端点(req, res) {
@@ -838,6 +868,7 @@ export function 挂同源路由(spec) {
         新挂.push(ws.register({ kind: 'exact', path: 端点表.informationMaterial, handler: information路由({ ctx, org, 项目, mode: 'preview' }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.informationDeposit, handler: information路由({ ctx, org, 项目, mode: 'deposit' }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.leadSpace, handler: leadSpace路由({ ctx, org, 项目 }) }));
+        新挂.push(ws.register({ kind: 'exact', path: 端点表.leadAffect, handler: leadAffect路由({ ctx, org, 项目 }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.memoryUse, handler: memoryUse路由({ ctx, org, 项目 }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.memory, handler: history路由({ ctx, org, 项目, mode: 'memory' }) }));
         新挂.push(ws.register({ kind: 'exact', path: 端点表.audit, handler: history路由({ ctx, org, 项目, mode: 'audit' }) }));

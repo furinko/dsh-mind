@@ -122,6 +122,9 @@ const 冻结动作表 = [
   'information_update',
   'lead_space_query',
   'lead_space_update',
+  // 只维护Lead自述，不开放情绪开关或人侧清空。
+  'lead_affect_query',
+  'lead_affect_update',
   'memory_query',
   'turn_buffer_query',
   'project_brief_query',

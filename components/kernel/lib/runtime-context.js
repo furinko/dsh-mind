@@ -8,6 +8,7 @@ import { PENDING_CONTINUITY_GUIDANCE, PENDING_CONTINUITY_SECTION } from './conti
 import { PROJECT_BRIEF_GUIDANCE, PROJECT_BRIEF_SECTION } from './project-brief-hooks.js';
 import { INFORMATION_GUIDANCE, INFORMATION_SECTION } from './information-hooks.js';
 import { LEAD_SPACE_GUIDANCE, LEAD_SPACE_SECTION } from './lead-space-hooks.js';
+import { LEAD_AFFECT_GUIDANCE, LEAD_AFFECT_SECTION } from './lead-affect.js';
 import { contextPayload } from './context-frame.js';
 import { canonical } from '../../../src/kernel/text.js';
 import { PERSONA_CORE_SECTION } from './persona-core.js';
@@ -18,6 +19,7 @@ const GUIDANCE = new Map([
   [PENDING_CONTINUITY_SECTION, PENDING_CONTINUITY_GUIDANCE], [LEAD_CONTEXT_SECTION, LEAD_GUIDANCE],
   [PROJECT_BRIEF_SECTION, PROJECT_BRIEF_GUIDANCE], [INFORMATION_SECTION, INFORMATION_GUIDANCE],
   [LEAD_SPACE_SECTION, LEAD_SPACE_GUIDANCE],
+  [LEAD_AFFECT_SECTION, LEAD_AFFECT_GUIDANCE],
 ]);
 
 /** A changed intake scope invalidates the assembled view, including earlier sections. */
@@ -88,6 +90,9 @@ export function retireMindRuntimeSnapshots(assembly, agent, { disconnected = fal
       if (!next) return true;
       const previous = frameOf(section);
       if (!previous) return true;
+      // A corrected cause, withdrawal or decayed mood must not survive as an old
+      // emotional account in the host surface, even in another root window.
+      if (section.name === LEAD_AFFECT_SECTION) return canonical(previous) !== canonical(next);
       if (previous.项目 !== next.项目 || previous.岗位 !== next.岗位) return true;
       try {
         const rows = protectedRows(section.name, previous);

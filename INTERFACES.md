@@ -1,5 +1,11 @@
 # dsh-mind 内核接口（现行v2，保留历史注记）
 
+## 2026-10-31 Lead共享情绪与动机
+
+`src/lead-affect.js` 的 `LeadAffectService` 提供同一Lead跨根窗口共享的整体心情，按原项目和关系读取具体缘由。`lead_affect_query` 的 `情绪={id?,offset?,limit?}` 默认20、最大50；`lead_affect_update` 支持 `record={op,epoch,key,account}`、`revise={op,epoch,id,revision,reason,account}`、`remove={op,epoch,id,revision,reason}`。account为 `{event,appraisal,feelings:[],desires:[],affect:{valence,arousal},halfLifeHours?}`，事件转述与自身理解分开，不认证用户意图或事实。两项影响范围-1至1，默认6小时半衰期、可选1至24小时，14天后影响为0；同事件重试不叠加，修正替换旧影响。
+
+`/plugins/dsh-mind/lead-affect` 的GET及POST均要求宿主Connection认证和同源；GET分页查看所有范围，POST仅revise/remove、`{op:clear,expectedRevision}`、`{op:configure,expectedRevision,enabled}`。人侧修正不可由模型覆盖，清空增加epoch拒绝旧提交；模型不提供清空和开关动作。唯一短期状态位于核心人设同目录的 `情绪与动机/状态.json`，最多128事件和1024不含正文的撤回屏障；不是另一个正式记忆库。`mind:lead-affect`自动段最多3条可读缘由、6500字符JSON，整体心情按全部事件计算；旧情绪快照在更正或撤回后的下一次装配退出。自由活动只取得整体mood，不附私人缘由，不增加模型请求。详细合同与待验证范围见[共享情绪与动机](docs/design/Lead共享情绪与动机-2026-10-31.md)。
+
 > **2026-10-21 当前入口**：[架构](ARCHITECTURE.md)区分产品主路径、授权与证据约束、工作流策略和界面；[路线](docs/ROADMAP.md)区分已实现与设计中能力。本文的日期批次和“未部署”描述属于相应历史时点，当前代码、客户端同步与待验收范围统一见[当前状态](docs/STATUS.md)。
 >
 > **状态**：公开签名与实际接线以当前源码和已确认设计为准，历史段落已注明退役/变更；维护本文不能代替实现、测试或权限判定。
