@@ -119,7 +119,11 @@ export class LeadSpaceService {
       config: state.config, revision: state.revision, usage: state.usage[new Date(this.clock.ms()).toISOString().slice(0, 10)] ?? { calls: 0 }, wakes: state.wakes.slice(-10).reverse(),
       claim: '自由草稿，不是正式记忆、任务交付或能力认证；不自动收录，不设产量指标。' };
   }
-  async update(spec, input, { global = false, check = async () => {} } = {}) {
+  operationNoteId(key) {
+    if (!text(key, 200)) throw new InvalidBody('活动写入标记无效。');
+    const h = digest(key).slice(0, 32); return `note-${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  }
+  async update(spec, input, { global = false, check = async () => {}, operationKey = null } = {}) {
     own(input, ['op', 'id', 'revision', 'hash', 'title', 'text', 'share']);
     if (!['write', 'remove'].includes(input.op)) throw new InvalidBody('自由空间操作为write/remove。');
     await this.authorize(spec, true);
@@ -127,6 +131,16 @@ export class LeadSpaceService {
     return this.locked(async () => {
       await check(); await this.authorize(spec, true);
       if (stamp !== await this.org.dataOwnership.stamp(spec.subject.id)) throw conflict();
+      if (operationKey !== null) {
+        if (input.op !== 'write' || input.id !== undefined) throw new InvalidBody('活动幂等标记只用于新随笔。');
+        const planned = this.operationNoteId(operationKey); let existing;
+        try { existing = await this.noteFile(planned); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+        if (existing) {
+          if (!await this.org.dataOwnership.allows(existing.scope, spec.subject, spec.project)) throw new Denied('活动随笔范围', '这个活动随笔不在当前范围。');
+          if (existing.operation !== digest(operationKey) || existing.humanEdited || existing.title !== input.title || existing.text !== input.text || existing.share !== (input.share ?? false)) throw conflict();
+          return { ...existing, recovered: true };
+        }
+      }
       let prior = null;
       if (input.id !== undefined) {
         prior = (await this.notes(spec)).find(n => n.id === input.id);
@@ -141,11 +155,11 @@ export class LeadSpaceService {
       }
       if (!text(input.title, 160) || !text(input.text, LEAD_SPACE_LIMITS.text) || input.share !== undefined && typeof input.share !== 'boolean') throw new InvalidBody('随笔需要标题与最多6000字符的正文，可用share标记下次交谈时的分享候选。');
       if (!prior && (await this.notes({ ...spec, subject: { id: '容量核对', kind: '主权者' } })).length >= LEAD_SPACE_LIMITS.notes) throw new Fault('LEAD_SPACE_FULL', '随笔已满128篇，请先整理。');
-      const id = prior?.id ?? `note-${randomUUID()}`;
+      const id = prior?.id ?? (operationKey === null ? `note-${randomUUID()}` : this.operationNoteId(operationKey));
       const note = { version: 1, id, title: input.title, revision: (prior?.revision ?? 0) + 1, updatedAt: this.clock.iso(),
         humanEdited: spec.subject.kind === '主权者', share: input.share ?? prior?.share ?? false,
         scope: prior?.scope ?? { project: global ? null : spec.project, audience: 'lead', roles: [], relationship: global ? null : await this.org.dataOwnership.relationship(spec.session) },
-        claim: '创作/自省草稿，未经事实验证，不构成用户表达或授权' };
+        claim: '创作/自省草稿，未经事实验证，不构成用户表达或授权', ...(operationKey === null ? {} : { operation: digest(operationKey) }) };
       const raw = `<!-- mind-note ${JSON.stringify(note)} -->\n${input.text}`;
       if (Buffer.byteLength(raw) > LEAD_SPACE_LIMITS.fileBytes) throw new InvalidBody('随笔文件过大。');
       await mkdir(this.notesRoot, { recursive: true, mode: 0o700 });

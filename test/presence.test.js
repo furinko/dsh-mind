@@ -125,6 +125,8 @@ const 冻结动作表 = [
   // 只维护Lead自述，不开放情绪开关或人侧清空。
   'lead_affect_query',
   'lead_affect_update',
+  'lead_desire_query',
+  'lead_desire_update',
   'memory_query',
   'turn_buffer_query',
   'project_brief_query',

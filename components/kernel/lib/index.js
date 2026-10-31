@@ -60,6 +60,7 @@ import { collaborationFeedbackSchema } from '../../../src/collaboration-feedback
 import { createInformationHooks, injectInformationContext } from './information-hooks.js';
 import { createLeadSpaceHooks, injectLeadSpace } from './lead-space-hooks.js';
 import { injectLeadAffect } from './lead-affect.js';
+import { injectLeadDesires } from './lead-desires.js';
 import { ChatConnection, chatConnected, chatRevision } from './chat-connection.js';
 
 export const name = 'dsh-mind-kernel';
@@ -321,7 +322,8 @@ export async function apply(ctx, config = {}) {
           const 见闻与成长 = await injectInformationContext(项目接续, { agent: context?.agent, org, projectOf: 当前项目键, logger, active });
           const 自由空间 = await injectLeadSpace(见闻与成长, { agent: context?.agent, org, hooks: leadSpaceHooks, projectOf: 当前项目键, logger });
           const 情绪 = await injectLeadAffect(自由空间, { agent: context?.agent, org, projectOf: 当前项目键, logger, active });
-          const 人格 = await injectPersonaCore(情绪, { agent: context?.agent, org,
+          const 追求 = await injectLeadDesires(情绪, { agent: context?.agent, org, projectOf: 当前项目键, logger, active });
+          const 人格 = await injectPersonaCore(追求, { agent: context?.agent, org,
             projectOf: 当前项目键, logger, active });
           if (!active()) return disconnected();
           return projectMindRuntimeContext(人格);
@@ -516,6 +518,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations, 
     parameters: {
       type: 'object',
       properties: {
+        欲望: { type: 'object', description: 'lead_desire_query={id?,offset?,limit?,includeInactive?}；lead_desire_update create={op,epoch,key,scope:project/relationship,content:{title,reason,criterion,kind:finite/ongoing,importance,commitment,activities:[read/write/rest],nextStep,renewalHours?}}；revise需epoch,id,revision,reason,完整content；state需epoch,id,revision,reason,status:active/paused/released；feedback需epoch,id,revision,evaluation:{outcome:progress/fulfilled/setback/no-change,satisfaction,progress,reflection,nextStep},evidence:{kind:conversation}或note的id/revision/hash或activity的id。权重与满足度0至1；fulfilled进度/满足度为1。remove需版本和原因。个人追求不等于用户任务，模型不能改整体开关或清空。' },
         情绪: { type: 'object', description: 'lead_affect_query={id?,offset?,limit?}；lead_affect_update={op:record,epoch,key,account:{event,appraisal,feelings:[],desires:[],affect:{valence,arousal},halfLifeHours?}}；revise需epoch,id,revision,reason,完整account；remove需epoch,id,revision,reason。心情跨窗口延续，具体缘由按当前项目/关系读取；事件为转述，理解/情绪/动机为自述，不认证用户态度或事实。愉悦/激活变化为-1至1，半衰期1至24小时，默认6小时。人侧清空和停用不能由模型操作。' },
         自由空间: { type: 'object', description: 'lead_space_query={id?,offset?,limit?}；lead_space_update={op:write/remove,id?,revision?,hash?,title?,text?,share?}。随笔为非任务草稿，不自动写正式记忆；更新/删除需当前revision和hash；不能配置自由活动或扩大关系边界。' },
         信息: { type: 'object', description: 'information_query: {collection:status/materials/growth/interests/candidates,id?,query?,offset?,limit?}; information_read: {id,hash?,version?,offset?,limit?}; information_update: {op,data}。submit={messageIds:[真实消息ID],title?,note?}；submit_tool={receiptId,title,note?}；record={type:growth/candidate,kind?,title,text,sources:[{readingId,quote}],expiresAt?,method?,conditions?,limitations?,roles?,replaces?:[{id,revision}]}，经原记忆服务写成pref-/exp-/know-；distribute={id:收录回执id,revision,roles,reason}，Lead自治调整正式知识的适用岗位；revise={id,revision,reason,state?,text?,stage?,trial?:{task,outcome,detail},expiresAt?}；finish={readingIds:[]}；publish={id,revision}。正式正文与生命周期可用memory_query/memory_lifecycle。模型不配置目录、预算或扩大私人来源范围。', additionalProperties: true },

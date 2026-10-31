@@ -43,6 +43,7 @@ import { PersonaCoreService } from './persona-core.js';
 import { InformationService } from './information.js';
 import { LeadSpaceService } from './lead-space.js';
 import { LeadAffectService } from './lead-affect.js';
+import { LeadDesireService } from './lead-desires.js';
 import { MemoryUseService } from './memory-use.js';
 
 /** 默认项目键。名字即目录名（§14.4-5）。 */
@@ -157,6 +158,7 @@ export class Org {
     org.information = new InformationService({ org, layout, clock });
     org.leadSpace = new LeadSpaceService({ org, clock });
     org.leadAffect = new LeadAffectService({ org, clock });
+    org.leadDesires = new LeadDesireService({ org, clock });
     const { DataOwnershipService } = await import('./data-ownership.js');
     org.dataOwnership = new DataOwnershipService(org);
     org.memoryUse = new MemoryUseService({ org, layout, clock });

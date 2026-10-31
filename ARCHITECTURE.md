@@ -76,6 +76,7 @@ LLM 负责难以穷举的语义判断；机器检查可观测的身份、版本�
 | 专业默认上下文 | `src/professional-context.js`、`components/kernel/lib/professional-context.js` | 当前真实岗位、卡、任务绑定、项目与复核读域；有界知识摘要每次替换装配，不缓存许可或改写记忆 |
 | Lead连续性 | `src/lead-continuity.js`、`src/lead-context.js`、`components/kernel/lib/lead-context.js` | 私有偏好账本中的人格、用户偏好与教训；按声明范围自动装配，支持替代、停用及已引用来源撤回 |
 | Lead共享情绪与动机 | `src/lead-affect.js`、`components/kernel/lib/lead-affect.js` | 整体心情跨窗口延续，具体缘由按项目/关系读取；短期自述有界保存、自然平复、幂等记录和更正，不改核心人设或正式记忆；[合同](docs/design/Lead共享情绪与动机-2026-10-31.md) |
+| 独立欲望与长期追求 | `src/lead-desires.js`、`components/kernel/lib/lead-desires.js`、原自由活动与设置 | 重要性/投入/未满足/等待/受挫排序，实际回执与评价分开，有限结束/持续恢复；空闲接续、未知操作恢复、人侧管理与清空屏障，[合同](docs/design/Lead欲望优先级与长期追求-2026-10-31.md) |
 | Lead会话目标与教训选择 | `src/lead-focus.js`、`src/goals.js`、`components/kernel/lib/accepted-expression.js`、工作与连续性装配 | 工作概览优先本会话目标；教训优先本轮已接纳且仍可见的用户来源文本，再用目标线索；只读选材不另存聊天或认证当前意图，公开记忆查询口径不变 |
 | 协作反馈与后续案例 | `src/collaboration-feedback.js`、记忆与Lead连续性装配 | 教训复盘及后续结果声明共用私有账本；核对真实目标历史引用，保留失败和未知，有界计数不认证成长 |
 | 需求理解与当前工作 | `src/demand-understanding.js`、`src/work-context.js`、`components/kernel/lib/work-context.js` | 需求解释随目标事件追加；Lead看未收尾目标及交付进展，成员只看当前绑定任务简报，沿用原整体证据核对 |

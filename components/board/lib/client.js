@@ -5389,6 +5389,86 @@ window.__ModuleLoader__.load({
       ]);
     }
 
+    function 长期追求设置() {
+      var pageState = useState(null); var page = pageState[0]; var setPage = pageState[1];
+      var busyState = useState(false); var busy = busyState[0]; var setBusy = busyState[1];
+      var noticeState = useState(''); var notice = noticeState[0]; var setNotice = noticeState[1];
+      var editState = useState(null); var edit = editState[0]; var setEdit = editState[1];
+      var clearState = useState(false); var clearing = clearState[0]; var setClearing = clearState[1];
+      var lock = useState(function () { return { alive: true, request: 0, saving: false }; })[0];
+      function read() {
+        var ticket = ++lock.request;
+        return runCommand(activeCtx, '', { method: 'GET', path: '/plugins/dsh-mind/lead-desires?limit=64' }).then(function (out) {
+          if (!lock.alive || ticket !== lock.request) return null;
+          var next = out.ok && out.value.数据;
+          if (!next || !Array.isArray(next.entries) || typeof next.enabled !== 'boolean' || typeof next.revision !== 'number' || typeof next.epoch !== 'number'
+            || !next.entries.every(function (r) { return r && typeof r.id === 'string' && obj(r.content) && typeof r.content.title === 'string'
+              && obj(r.priority) && typeof r.priority.score === 'number' && typeof r.priority.satisfaction === 'number' && typeof r.priority.need === 'number'
+              && typeof r.progress === 'number' && typeof r.frustration === 'number' && Array.isArray(r.history)
+              && r.history.every(function (entry) { return entry && (entry.kind === 'activity' || entry.kind === 'feedback' && obj(entry.evaluation) && typeof entry.evaluation.reflection === 'string'); }); })) {
+            setPage(null); setNotice(out.error || '长期追求暂不可读，请重新读取。'); return null;
+          }
+          setPage(next); return next;
+        });
+      }
+      useEffect(function () { lock.alive = true; read(); return function () { lock.alive = false; lock.request++; }; }, []);
+      function save(input) {
+        if (lock.saving || !page) return; lock.saving = true; setBusy(true); setNotice('');
+        return runCommand(activeCtx, '', { method: 'POST', path: '/plugins/dsh-mind/lead-desires', body: input }).then(function (out) {
+          if (!lock.alive) return;
+          if (!out.ok) { setNotice(out.error || '保存未完成；草稿已保留，请先重新读取。'); return read(); }
+          var receipt = out.value.数据;
+          return read().then(function (back) {
+            if (!lock.alive || !back) return;
+            var row = back.entries.find(function (r) { return r.id === input.id; });
+            var ok = receipt && back.revision >= receipt.stateRevision;
+            if (input.op === 'configure') ok = ok && back.enabled === input.enabled;
+            if (input.op === 'clear') ok = ok && back.epoch > page.epoch && back.entries.length === 0;
+            if (input.op === 'remove') ok = ok && !row;
+            if (input.op === 'state') ok = ok && row && row.status === input.status && row.revision === receipt.revision;
+            if (input.op === 'revise') ok = ok && row && row.revision === receipt.revision && Object.keys(input.content).every(function (key) { return JSON.stringify(row.content[key]) === JSON.stringify(input.content[key]); });
+            if (ok) { setNotice('已保存并回读核对。'); setEdit(null); setClearing(false); }
+            else setNotice('回读结果与本次修改不一致，请重新读取；草稿已保留。');
+          });
+        }).finally(function () { lock.saving = false; if (lock.alive) setBusy(false); });
+      }
+      function state(row, value) { save({ op: 'state', epoch: page.epoch, id: row.id, revision: row.revision, reason: '人侧调整追求状态', status: value }); }
+      function patch(key, value) { var body = Object.assign({}, edit.content); body[key] = value; setEdit(Object.assign({}, edit, { content: body })); }
+      var labels = { active: '持续中', paused: '已暂停', fulfilled: '已满足', released: '已放下' };
+      var reasons = { cooldown: '先缓一缓', satisfied: '当前已较满足', 'in-flight': '正在自由活动中', disabled: '延续已关闭', paused: '已暂停', released: '已放下', fulfilled: '已满足', 'human-stopped': '人侧已停止', 'no-current-interest': '当前意愿较低' };
+      function button(label, fn, disabled) { return h('button', { type: 'button', className: 'dshmind-set__btn', disabled: busy || !!disabled, onClick: fn }, label); }
+      return h('section', { className: 'dshmind-set__section', 'data-dshmind': 'lead-desires-settings', 'aria-label': '愿望与长期追求', 'aria-busy': busy }, [
+        h('h3', { className: 'dshmind-set__subtitle' }, '愿望与长期追求'),
+        h('p', { className: 'dshmind-set__hint' }, '看看它更想做什么、最近得到多少满足，以及下次想接着做哪一步。后台接续沿用「自由时光」的开关、时间和预算，当前工作优先。'),
+        h('div', { className: 'dshmind-set__compactActions' }, [button('重新读取追求', read), page ? button(page.enabled ? '暂停追求延续' : '开启追求延续', function () { save({ op: 'configure', expectedRevision: page.revision, enabled: !page.enabled }); }) : null]),
+        notice ? h('p', { role: 'status', className: 'dshmind-set__hint' }, notice) : null,
+        page && !page.entries.length ? h('p', { className: 'dshmind-set__hint' }, '还没有保留的长期追求。新的愿望可以从后续交流与自由活动中逐步形成。') : null,
+        page ? page.entries.map(function (row) { return h('article', { key: row.id, className: 'dshmind-set__details' }, [
+          h('h4', null, row.content.title),
+          h('p', null, labels[row.status] + ' · 当前优先度 ' + Math.round(row.priority.score * 100) + ' · 满足 ' + Math.round(row.priority.satisfaction * 100) + '% · 进展 ' + Math.round(row.progress * 100) + '%'),
+          h('p', null, '想做的原因：' + row.content.reason), h('p', null, '何时会满足：' + row.content.criterion), h('p', null, '下一步：' + row.content.nextStep),
+          h('p', { className: 'dshmind-set__hint' }, (reasons[row.priority.blocked] || '可在合适的空闲机会接续') + '；重要性 ' + Math.round(row.content.importance * 100) + '，投入意愿 ' + Math.round(row.content.commitment * 100) + '，未满足 ' + Math.round(row.priority.need * 100) + '%，受阻 ' + Math.round(row.frustration * 100) + '%。'),
+          row.history.length ? h('details', null, [h('summary', null, '最近的活动与认识'), row.history.slice(-3).reverse().map(function (entry) { return h('p', { key: entry.id }, entry.kind === 'feedback' ? entry.evaluation.reflection : ({ completed: '已留下实际活动回执', rested: '选择休息', deferred: '本次暂缓', failed: '本次活动未完成', interrupted: '已为当前工作让路' }[entry.outcome] || '活动状态待核对')); })]) : null,
+          h('div', { className: 'dshmind-set__compactActions' }, [
+            button('调整「' + row.content.title + '」', function () { setEdit({ id: row.id, revision: row.revision, content: Object.assign({}, row.content) }); }),
+            row.status === 'active' ? button('暂停「' + row.content.title + '」', function () { state(row, 'paused'); }) : button('恢复「' + row.content.title + '」', function () { state(row, 'active'); }),
+            row.status !== 'released' ? button('放下「' + row.content.title + '」', function () { state(row, 'released'); }) : button('删除「' + row.content.title + '」', function () { save({ op: 'remove', epoch: page.epoch, id: row.id, revision: row.revision, reason: '人侧删除已放下的追求' }); }),
+          ]),
+        ]); }) : null,
+        edit ? h('div', { className: 'dshmind-set__details', role: 'group', 'aria-label': '调整追求' }, [
+          ['title', 'reason', 'criterion', 'nextStep'].map(function (key) { var label = { title: '追求名称', reason: '追求理由', criterion: '满足判据', nextStep: '追求下一步' }[key]; return 设置行('desire-' + key, label, '', h('input', { className: 'dshmind-set__input', 'aria-label': label, value: edit.content[key], disabled: busy, onChange: function (e) { patch(key, e.target.value); } }), 'field'); }),
+          ['importance', 'commitment'].map(function (key) { var label = key === 'importance' ? '追求重要性' : '追求投入意愿'; return 设置行('desire-' + key, label, '', h('input', { type: 'number', min: 0, max: 1, step: 0.1, className: 'dshmind-set__input', 'aria-label': label, value: edit.content[key], disabled: busy, onChange: function (e) { patch(key, Number(e.target.value)); } })); }),
+          h('p', { className: 'dshmind-set__hint' }, '名称、满足判据和取舍会受人侧修订保护；下一步与进展仍可随实际活动更新。'),
+          button('保存追求调整', function () { save({ op: 'revise', epoch: page.epoch, id: edit.id, revision: edit.revision, reason: '人侧调整描述与取舍', content: edit.content }); }),
+          button('采用当前追求内容', function () { var row = page.entries.find(function (r) { return r.id === edit.id; }); if (row) setEdit({ id: row.id, revision: row.revision, content: Object.assign({}, row.content) }); }),
+          button('取消追求调整', function () { setEdit(null); }),
+        ]) : null,
+        page ? h('details', null, [h('summary', null, '清理全部追求'), h('p', null, '清空后不从旧活动恢复；不会清除核心人设、正式记忆或随笔。'),
+          clearing ? h('div', null, [button('确认清空全部追求', function () { save({ op: 'clear', expectedRevision: page.revision }); }), button('保留追求', function () { setClearing(false); })])
+            : button('准备清空追求', function () { setClearing(true); })]) : null,
+      ]);
+    }
+
     function 心智设置(props) {
       var close = props && typeof props.close === 'function' ? props.close : null;
       var 页面状态 = useState('personality'); var 当前页面 = 页面状态[0]; var 设置页面 = 页面状态[1];
@@ -5934,7 +6014,7 @@ window.__ModuleLoader__.load({
           var changed = entry[0] === 'personality' ? 人设有修改 : entry[0] === 'policy' ? 策略有修改 : 调度有修改;
           return h('button', { key: entry[0], type: 'button', role: 'tab', id: 'dshmind-tab-' + entry[0], className: 'dshmind-set__tab', 'aria-label': entry[1], 'aria-selected': 当前页面 === entry[0], 'aria-controls': 'dshmind-panel-' + entry[0], tabIndex: 当前页面 === entry[0] ? 0 : -1, title: changed ? entry[1] + ' · 有未保存的修改' : entry[1], onClick: function () { 设置页面(entry[0]); }, onKeyDown: function (event) { 分区键盘(event, index); } }, [entry[1], changed ? h('span', { key: 'dirty', className: 'dshmind-set__unsaved', 'aria-hidden': true }) : null]);
         })),
-        h('div', { key: 'personality-panel', role: 'tabpanel', id: 'dshmind-panel-personality', 'aria-labelledby': 'dshmind-tab-personality', hidden: 当前页面 !== 'personality' }, [人设块, h(信息成长设置, { key: 'information' }), h(自由空间设置, { key: 'free-space' })]),
+        h('div', { key: 'personality-panel', role: 'tabpanel', id: 'dshmind-panel-personality', 'aria-labelledby': 'dshmind-tab-personality', hidden: 当前页面 !== 'personality' }, [人设块, h(信息成长设置, { key: 'information' }), h(长期追求设置, { key: 'desires' }), h(自由空间设置, { key: 'free-space' })]),
         h('div', { key: 'policy-panel', role: 'tabpanel', id: 'dshmind-panel-policy', 'aria-labelledby': 'dshmind-tab-policy', hidden: 当前页面 !== 'policy' }, [
         h('section', { key: 'policy', className: 'dshmind-set__section', 'data-dshmind': 'policy-settings', 'aria-labelledby': 'dshmind-policy-title', 'aria-busy': 提示.保存中 }, [
           h('h3', { key: 'title', id: 'dshmind-policy-title', className: 'dshmind-set__subtitle' }, '运行与审批'),

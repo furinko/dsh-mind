@@ -1,5 +1,13 @@
 # dsh-mind 内核接口（现行v2，保留历史注记）
 
+## 2026-10-31 独立欲望优先级与长期追求
+
+`src/lead-desires.js` 提供 `LeadDesireService`，持久状态为原核心人设同目录的 `情绪与动机/追求.json`（独立版本1，旧情绪文件不迁移）。`lead_desire_query` 的 `欲望={id?,offset?,limit?,includeInactive?}` 默认20、最多64，按当前项目/显式关系过滤后独立排序。`lead_desire_update` 的 create 接受 `epoch,key,scope:project/relationship,content`；revise接受 `epoch,id,revision,reason,content`；state接受当前版本、原因及active/paused/released；feedback接受当前版本、evaluation及真实evidence；remove接受当前版本与原因。content与反馈的完整字段见[设计合同](docs/design/Lead欲望优先级与长期追求-2026-10-31.md)。重要性、投入、未满足程度、等待和受挫影响排序，有限满足后结束，持续兴趣满足后按默认72小时（可选6至720小时）恢复需求，受挫退避而非无限加码。
+
+`/plugins/dsh-mind/lead-desires` 的GET及POST均要求Connection认证和同源；POST只维护已有追求，另允许人侧 `{op:configure,expectedRevision,enabled}` 和 `{op:clear,expectedRevision}`，不代模型创建愿望或代理任意动作。心智设置提供「愿望与长期追求」管理，冲突保留草稿、写后回读。原 `mind:lead-desires` 自动段最多4项当前追求、2项近七天已满足回顾及8000字符JSON，更正/删除撤回旧快照。
+
+原自由活动选择请求可选 `aspiration={key,content}`，按来源范围形成新的自身追求；有当前追求时另可选 `review={checkpoint,evaluation}`，只评价本次实际提供的上次活动。按最高可执行优先级接续原read/write/rest，不增加原请求和时段预算；任何前台工作优先。随笔内部 `operationKey` 确保同一活动写入幂等，认领中保存待核随笔/阅读回执；中断后只核实实际产物，未知不猜成功。模型工具不接受operationKey、认领令牌、活动完成或清零参数。
+
 ## 2026-10-31 Lead共享情绪与动机
 
 `src/lead-affect.js` 的 `LeadAffectService` 提供同一Lead跨根窗口共享的整体心情，按原项目和关系读取具体缘由。`lead_affect_query` 的 `情绪={id?,offset?,limit?}` 默认20、最大50；`lead_affect_update` 支持 `record={op,epoch,key,account}`、`revise={op,epoch,id,revision,reason,account}`、`remove={op,epoch,id,revision,reason}`。account为 `{event,appraisal,feelings:[],desires:[],affect:{valence,arousal},halfLifeHours?}`，事件转述与自身理解分开，不认证用户意图或事实。两项影响范围-1至1，默认6小时半衰期、可选1至24小时，14天后影响为0；同事件重试不叠加，修正替换旧影响。

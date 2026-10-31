@@ -12,6 +12,7 @@ export async function settingsScene(options={}) {
      const call={url,method:init.method,body:init.body?JSON.parse(init.body):undefined};calls.push(call);
       if(options.informationRequest && url.startsWith('/plugins/dsh-mind/information')) return options.informationRequest(url,init);
       if(options.leadSpaceRequest && url.startsWith('/plugins/dsh-mind/lead-space')) return options.leadSpaceRequest(url,init);
+      if(options.desireRequest && url.startsWith('/plugins/dsh-mind/lead-desires')) return options.desireRequest(url,init);
     if(state.fail&&url!=='/plugins/dsh-mind/workbench')return jsonResponse({成功:false,理由:'读取暂不可用'},503);
     if(init.method==='POST'&&state.hold===url){state.hold='';await new Promise(resolve=>{state.release=resolve;});}
     if(url==='/plugins/dsh-mind/persona-core'){
@@ -52,6 +53,7 @@ export async function settingsScene(options={}) {
   // The minimal renderer does not expand React child components; render the actual registered child in isolation.
    if(options.informationOnly){const child=collect(r.tree).elements.find(e=>typeof e.type==='function'&&e.type.name==='信息成长设置');if(!child)throw Error('Information settings child missing');r.unmount();r=createRenderer(child.type,child.props);r.flush();await settle(10);r.flush();if(!options.informationClosed){collect(r.tree).elements.find(e=>e.type==='button'&&textOf(e)==='管理信息来源').props.onClick();r.flush();await settle(10);r.flush();}}
    if(options.spaceOnly){const child=collect(r.tree).elements.find(e=>typeof e.type==='function'&&e.type.name==='自由空间设置');if(!child)throw Error('Lead space settings child missing');r.unmount();r=createRenderer(child.type,child.props);r.flush();await settle(10);r.flush();}
+   if(options.desiresOnly){const child=collect(r.tree).elements.find(e=>typeof e.type==='function'&&e.type.name==='长期追求设置');if(!child)throw Error('Desire settings child missing');r.unmount();r=createRenderer(child.type,child.props);r.flush();await settle(10);r.flush();}
    const elements=()=>collect(r.tree,{skipStyle:true}).elements;
   const field=label=>elements().find(x=>x.props['aria-label']===label);
   const button=label=>elements().find(x=>x.type==='button'&&(textOf(x)===label||x.props['aria-label']===label));
