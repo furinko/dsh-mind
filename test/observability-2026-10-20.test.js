@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { makeFixture, LEAD, MEMBER } from './helpers.mjs';
 import { fakeHost } from './host-harness.mjs';
+import { attachFileParent } from './file-parent.mjs';
 import { apply } from '../components/kernel/lib/index.js';
 import { shareOrg, forgetSharedOrg, shareKey } from '../src/runtime.js';
 import { runAction } from '../lib/actions.js';
@@ -17,7 +18,7 @@ const P = 'monitor-project';
 async function setup(config = {}) {
   const f = await makeFixture(); const cwd = join(f.home, 'work'); await mkdir(cwd);
   const input = join(cwd, 'file.txt'); await writeFile(input, 'unchanged');
-  const host = fakeHost();
+  const host = fakeHost(); attachFileParent(host,cwd);
   await apply(host.ctx, { home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P,
     projectBindings: [{ path: cwd, project: P }], memberFileAccess: { read: [cwd], write: [cwd] }, ...config });
   const org = await shareOrg({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });

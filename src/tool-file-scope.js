@@ -1,5 +1,5 @@
 /**
- * 通用文件工具的权限边界。部署者给出 Lead 可授上限，Lead 在派发时取其子集；
+ * 通用文件工具的权限边界。宿主现行父权限给出上限，显式部署配置可进一步收紧；Lead 按任务取子集。
  * 工作目录只解析相对路径，不构成权限。shell/未知工具没有可证明的文件沙箱，不能靠路径授权。
  */
 import { lstatSync, readdirSync, realpathSync } from 'node:fs';
@@ -70,11 +70,16 @@ export class ToolFileAuthority {
   #layout;
   #policy;
   #goals;
-  constructor({ layout, config, policy, goals } = {}) {
+  #configured;
+  #hostCeiling;
+  constructor({ layout, config, policy, goals, hostCeiling } = {}) {
     this.#layout = layout;
     this.#policy = policy;
     this.#goals = goals;
-    if (config === undefined) return; // 没有部署者上限 ⇒ 不能向成员授任何通用文件权限。
+    if (hostCeiling !== undefined && typeof hostCeiling !== 'function') throw new InvalidBody('宿主文件权限桥必须由装配面提供同步函数。');
+    this.#hostCeiling = hostCeiling;
+    this.#configured = config !== undefined;
+    if (!this.#configured) return; // 未配置静态表：使用可信宿主桥；两者皆无仍拒绝。
     if (!config || typeof config !== 'object' || Array.isArray(config) || Object.keys(config).some((x) => !['read', 'write'].includes(x))) throw new InvalidBody('memberFileAccess 只接受 read / write 数组（部署者配置，不接受模型自报）。');
     this.#read = roots(config.read ?? [], 'memberFileAccess.read');
     this.#write = roots(config.write ?? [], 'memberFileAccess.write');
@@ -93,16 +98,24 @@ export class ToolFileAuthority {
     if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((x) => !['读', '写'].includes(x))) throw new InvalidBody('工具文件范围只接受 读 / 写 绝对路径数组。');
     const read = roots(input.读 ?? [], '工具文件范围.读');
     const write = roots(input.写 ?? [], '工具文件范围.写');
-    for (const [list, ceiling, name] of [[read, this.#read, '读'], [write, this.#write, '写']]) {
+    for (const [list, writing, name] of [[read, false, '读'], [write, true, '写']]) {
       for (const root of list) {
         this.#assertUnprotected(root, true);
-        if (!ceiling.some((x) => this.#rootStillValid(x) && insideFileRoot(root, x))) throw new Denied('通用文件工具 · 不越授', `${name}根 ${root} 不在部署者给 Lead 的 memberFileAccess.${name === '读' ? 'read' : 'write'} 可授上限内；默认空集，不从工作目录推导权限。`);
+        if (!this.#withinCeiling(root, writing, subject.id)) throw new Denied('通用文件工具 · 不越授', `${name}根 ${root} 不在真实宿主父会话现行权限与显式 memberFileAccess 配置的交集内；无可信来源仍拒绝，不从工作目录推导权限。`);
       }
     }
     return { 版本: 1, 授予者: String(subject.id), 读: read, 写: write };
   }
   #rootStillValid(root) {
     try { return lower(realpathSync(root)) === root; } catch { return false; }
+  }
+  #withinCeiling(root, writing, parent) {
+    const ceiling = writing ? this.#write : this.#read;
+    if (this.#configured && !ceiling.some(up => this.#rootStillValid(up) && insideFileRoot(root, up))) return false;
+    if (this.#hostCeiling) return this.#hostCeiling(parent, root, writing) === true;
+    // Standalone service callers may explicitly install a static deployment
+    // ceiling. The production kernel ALWAYS installs the live host bridge.
+    return this.#configured;
   }
   /** 服务层交卷只允许为本人当前仍有权读取/产出的文件计算摘要，不能借提交绕过撤权。 */
   canCapture(path, task, subject) {
@@ -123,9 +136,11 @@ export class ToolFileAuthority {
     }
     if (grant?.版本 !== 1 || grant.授予者 !== member.委派者id) return false;
     if (this.#decision(subject, task, 'write').verdict !== 'allow') return false;
-    return [[grant.读, this.#read], [grant.写, this.#write]].some(([list, ceiling]) => Array.isArray(list)
-      && list.some((root) => typeof root === 'string' && this.#rootStillValid(root) && insideFileRoot(path, root)
-        && ceiling.some((up) => this.#rootStillValid(up) && insideFileRoot(root, up))));
+    try {
+      return [[grant.读, false], [grant.写, true]].some(([list, writing]) => Array.isArray(list)
+        && list.some(root => typeof root === 'string' && this.#rootStillValid(root) && insideFileRoot(path, root)
+          && this.#withinCeiling(root, writing, member.委派者id)));
+    } catch { return false; }
   }
   #decision(subject, task, action, operation = 'tool_file') {
     return this.#policy?.decideCurrentSync?.({ subject, action,
@@ -142,19 +157,20 @@ export class ToolFileAuthority {
     const target = canonicalFileTarget(isAbsolute(path) ? path : resolve(cwd, path));
     this.#assertUnprotected(target, recursive);
     const key = writing ? '写' : '读';
-    const ceiling = writing ? this.#write : this.#read;
     const grants = nodes.filter((n) => ['已派发', '执行中'].includes(n.状态)
       && (n.绑定 ?? []).some((b) => matchingBinding(b, instance, member))
       && n.工具文件范围?.版本 === 1 && n.工具文件范围.授予者 === parent);
-    const matches = (task, intersect = false) => Array.isArray(task.工具文件范围[key]) && task.工具文件范围[key].some((root) => typeof root === 'string'
-      && this.#rootStillValid(root) && (insideFileRoot(target, root) || (intersect && insideFileRoot(root, target)))
-      && ceiling.some((up) => this.#rootStillValid(up) && insideFileRoot(root, up)));
-    const scoped = grants.filter(task => matches(task));
+    const overlaps = (root, intersect = false) => typeof root === 'string' && this.#rootStillValid(root)
+      && (insideFileRoot(target, root) || (intersect && insideFileRoot(root, target)));
+    const scoped = grants.filter(task => Array.isArray(task.工具文件范围[key])
+      && task.工具文件范围[key].some(root => overlaps(root) && this.#withinCeiling(root, writing, parent)));
     if (!scoped.length) throw new Denied('成员通用工具 · 任务文件范围', `目标不在本人真实绑定的活动任务所冻结的${key}根内，或绑定岗位/实例凭证已变化、父 Lead 可授上限已撤回；工作目录、负责人岗位名和产物引用不构成授权。`);
     // 宿主没有可信的本次任务归因。命中同一路径的任务不能借另一条重叠授权
     // 洗掉目标限制；不相关路径的独立工作仍按各自范围判定。
     // 递归搜索还会触及目标目录下的更窄任务根：反向包含只用于附加限制，绝不授予搜索权限。
-    const constrained = recursive ? grants.filter(task => matches(task, true)) : scoped;
+    // 上限变窄只撤销授权，不能让仍活动的重叠任务限制消失。
+    const constrained = grants.filter(task => Array.isArray(task.工具文件范围[key])
+      && task.工具文件范围[key].some(root => overlaps(root, recursive)));
     return { writing, recursive, target, scoped, constrained };
   }
   check(input) {

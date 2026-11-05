@@ -4,6 +4,7 @@ import { link, mkdir, readFile, stat, symlink, utimes, writeFile } from 'node:fs
 import { join } from 'node:path';
 import { makeFixture, LEAD, MEMBER } from './helpers.mjs';
 import { fakeHost } from './host-harness.mjs';
+import { attachFileParent } from './file-parent.mjs';
 import { shareOrg, forgetSharedOrg, shareKey } from '../src/runtime.js';
 import { apply } from '../components/kernel/lib/index.js';
 import { ToolFileAuthority } from '../src/tool-file-scope.js';
@@ -17,10 +18,10 @@ async function setup({ configured = true } = {}) {
   await mkdir(cwd); await mkdir(outside);
   const input = join(cwd, 'input.txt');
   await writeFile(input, 'trusted task input');
-  const host = fakeHost();
+  const host = fakeHost(); attachFileParent(host,cwd);
   await apply(host.ctx, { home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P,
     projectBindings: [{ path: cwd, project: P }],
-    ...(configured ? { memberFileAccess: { read: [cwd], write: [cwd] } } : {}),
+    ...(configured === 'host' ? {} : { memberFileAccess: configured ? { read: [cwd], write: [cwd] } : {} }),
     audit工具调用: false });
   const org = await shareOrg({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
   const exec = (name, args = {}, id = 'member-a', directory = cwd) => ({ name, arguments: args,
@@ -35,6 +36,17 @@ async function setup({ configured = true } = {}) {
 }
 
 describe('普通成员通用工具文件边界', () => {
+  it('内核未配置静态白名单时真实接入父权限，逐次撤权且不放开shell',async()=>{
+    const s=await setup({configured:'host'});try{
+      await s.dispatch();assert.equal(s.guard('write',{file_path:s.input}),undefined);
+      assert.match(s.guard('write',{file_path:join(s.outside,'no.txt')}),/本人真实绑定/);
+      assert.match(s.guard('bash',{command:'echo no'}),/闭名单/);
+      const policy=s.host.ctx.get('sandboxPolicy');policy.resolve=()=>({mode:'read-only',workspaceRoot:s.cwd,sessionId:LEAD.id});
+      assert.match(s.guard('write',{file_path:s.input}),/上限已撤回/);
+      assert.equal(s.guard('read',{file_path:s.input}),undefined);
+      s.host.ctx.agents.delete(LEAD.id);assert.match(s.guard('read',{file_path:s.input}),/根 Agent/);
+    }finally{await s.cleanup();}
+  });
   it('终止立即撤回旧任务文件许可，后继须重新绑定并显式授范围', async () => {
     const s = await setup();
     try {
@@ -92,12 +104,12 @@ describe('普通成员通用工具文件边界', () => {
     } finally { await s.cleanup(); }
   });
 
-  it('没有部署者上限、越授或自授均拒；cwd 变化与同名前缀目录不会扩大授权', async () => {
+  it('显式空部署上限、越授或自授均拒；cwd 变化与同名前缀目录不会扩大授权', async () => {
     const s = await setup({ configured: false });
     try {
-      await assert.rejects(() => s.dispatch(), /不在部署者给 Lead/);
+      await assert.rejects(() => s.dispatch(), /不在真实宿主/);
       s.org.tasks.configureToolFiles({ read: [s.cwd], write: [] });
-      await assert.rejects(() => s.dispatch({ 读: [s.outside] }), /不在部署者给 Lead/);
+      await assert.rejects(() => s.dispatch({ 读: [s.outside] }), /不在真实宿主/);
       const authority = s.org.tasks.toolFileAuthority();
       assert.throws(() => authority.grant({ 读: [s.cwd] }, MEMBER), /成员不能给自己/);
       await s.dispatch({ 读: [s.cwd] });
@@ -133,7 +145,7 @@ describe('普通成员通用工具文件边界', () => {
         delegation: { authorize: () => ({ fingerprint: 'fixture' }) },
         subagents: { async startContinuable() { calls += 1; throw new Error('must not be called'); } } };
       await assert.rejects(() => runAction({ org: s.org, 项目: P, 主体: LEAD, 面: 'tool', 宿主: host,
-        args: { action: 'member_spawn', 方式: 'subagent', 岗位: '插件工程', 节点: node.id, 任务书: 'no side effect', 工具文件范围: { 写: [s.outside] } } }), /不在部署者给 Lead/);
+        args: { action: 'member_spawn', 方式: 'subagent', 岗位: '插件工程', 节点: node.id, 任务书: 'no side effect', 工具文件范围: { 写: [s.outside] } } }), /不在真实宿主/);
       assert.equal(calls, 0);
       assert.equal((await s.org.tasks.get(node.id, { 项目: P })).状态, '待派发');
     } finally { await s.cleanup(); }

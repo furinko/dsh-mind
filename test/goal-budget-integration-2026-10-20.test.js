@@ -5,6 +5,7 @@ import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeFixture, LEAD, SOVEREIGN } from './helpers.mjs';
 import { fakeHost } from './host-harness.mjs';
+import { attachFileParent } from './file-parent.mjs';
 import { apply } from '../components/kernel/lib/index.js';
 import { shareOrg, forgetSharedOrg, shareKey } from '../src/runtime.js';
 import { runAction } from '../lib/actions.js';
@@ -19,9 +20,10 @@ async function scene(run, audit = true) {
     const input = join(cwd, 'input.txt'); await writeFile(input, 'fixture data');
     const config = { home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P,
       projectBindings: [{ path: cwd, project: P }], memberFileAccess: { read: [cwd], write: [cwd] }, audit工具调用: audit };
+    attachFileParent(host,cwd);
     await apply(host.ctx, config); org = await shareOrg(config);
     const goal = await org.goals.create({ subject: LEAD, 项目: P, 期望结果: '共享受管准入额度', 完成依据: ['当前交付通过'], 来源: '明确用户意图的转述', 下一步: '创建成员并完成文件调查' });
-    const parent = { session: { id: LEAD.id, header: { cwd } } };
+    const parent = host.ctx.agents.get(LEAD.id);
     let creates = 0; let body = 0; let serial = 0;
     const runtime = { agent: parent, signal: new AbortController().signal, project: P,
       delegation: { authorize: () => ({ fingerprint: 'budget-test-delegation' }) },

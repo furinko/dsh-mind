@@ -21,6 +21,7 @@ import { agentSubject } from '../../../src/subject.js';
 import { readInstanceSnapshot } from '../../../src/instance-snapshot.js';
 import { readTaskLedgerSync } from '../../../src/task-ledger.js';
 import { assertFileSearchTree, assertSingleLinkTarget } from '../../../src/tool-file-scope.js';
+import { createHostFileCeiling } from '../../../src/host-file-ceiling.js';
 import { createProjectResolver } from '../../../src/project-identity.js';
 import { serializeMemoryEnvelope } from '../../../src/memory-response.js';
 import { describeFailure, Denied, Fault, InvalidBody } from '../../../src/kernel/errors.js';
@@ -97,7 +98,7 @@ export async function apply(ctx, config = {}) {
       project: config.project ?? DEFAULT_PROJECT,
       logger,
     });
-    org.tasks.configureToolFiles(config.memberFileAccess);
+    org.tasks.configureToolFiles(config.memberFileAccess, createHostFileCeiling({ services: () => ({ agents: 取服务(ctx, 'agents') }) }));
   } catch (error) {
     启动范围闸.degrade(error);
     // 装配失败必须响亮，但**不许**让宿主起不来：注册一个把原因说清楚的自述工具。
@@ -526,7 +527,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations, 
         project: { type: 'string', description: '项目键；省略则用当前项目' },
         role: { type: 'string', description: '兼容字段，不授予身份或岗位权限；实际主体由宿主会话与身份档案确定，自报 Lead 会被拒绝' },
         实例: { type: 'string', description: 'registry_assign / task_bind 的实例 id（必填；省略会被拒，不再按岗位推断）' },
-        工具文件范围: { type: 'object', properties: { 读: { type: 'array', items: { type: 'string' } }, 写: { type: 'array', items: { type: 'string' } } }, additionalProperties: false, description: 'task_dispatch / member_spawn：派发时冻结的通用文件读写绝对根。须在部署者 memberFileAccess 可授上限内；不从 cwd 授权，不允许 shell/未知执行类。' },
+        工具文件范围: { type: 'object', properties: { 读: { type: 'array', items: { type: 'string' } }, 写: { type: 'array', items: { type: 'string' } } }, additionalProperties: false, description: 'task_dispatch / member_spawn：派发时冻结的通用文件读写绝对根。Lead在真实宿主父会话现行文件权限内划分；显式 memberFileAccess 配置仅进一步收紧。缺宿主事实拒绝，不从 cwd 授权，不允许 shell/未知执行类。' },
         id: { type: 'string', description: '对象 id（持久目标 / 任务节点 / 记忆条目 / 挂起项 / 能力名——capability_read 按 id 读，不读 名）；budget_query及人侧budget_decide必填目标id。usage_query可选同项目精确目标id。operation_query可选操作UUID。turn_buffer_query可按消息id读取本会话已缓冲文本；project_brief_query按条目id核对来源片段' },
         协作反馈: collaborationFeedbackSchema(),
         需求理解: { type: 'object', properties: { 原始表达: { type: 'string', minLength: 1, maxLength: 1000 }, 当前理解: { type: 'string', minLength: 1, maxLength: 1000 }, 来源: { type: 'string', minLength: 1, maxLength: 500 }, 待验证: { type: 'array', maxItems: 6, items: { type: 'string', minLength: 1, maxLength: 240 } }, 关键问题: { type: 'array', maxItems: 3, items: { type: 'string', minLength: 1, maxLength: 240 } }, 分工: { type: 'array', maxItems: 6, items: { type: 'object', properties: { 岗位: { type: 'string', minLength: 1, maxLength: 80 }, 工作: { type: 'string', minLength: 1, maxLength: 500 }, 理由: { type: 'string', minLength: 1, maxLength: 240 } }, required: ['岗位', '工作', '理由'], additionalProperties: false } } }, required: ['原始表达', '当前理解', '来源'], additionalProperties: false, description: '仅goal_create或goal_progress可选；Lead可修正解释，不认证用户表达，不改目标本意、约束或判据，也不创建执行实例。修改目标约束后旧解释退出默认上下文，需按新目标重新记录；命令可传JSON对象。' },

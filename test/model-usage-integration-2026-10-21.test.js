@@ -5,6 +5,7 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeFixture, LEAD, SOVEREIGN } from './helpers.mjs';
 import { fakeHost } from './host-harness.mjs';
+import { attachFileParent } from './file-parent.mjs';
 import { apply } from '../components/kernel/lib/index.js';
 import { shareOrg, forgetSharedOrg, shareKey } from '../src/runtime.js';
 import { runAction } from '../lib/actions.js';
@@ -17,6 +18,7 @@ async function scene(run, enabled = true) {
     const input = join(cwd, 'input.txt'); await writeFile(input, 'fixture input');
     const config = { home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P,
       projectBindings: [{ path: cwd, project: P }], memberFileAccess: { read: [cwd], write: [cwd] }, 观测模型用量: enabled };
+    attachFileParent(host,cwd);
     await apply(host.ctx, config); org = await shareOrg(config);
     const goal = await org.goals.create({ subject: LEAD, 项目: P, 期望结果: '观察真实模型用量', 完成依据: ['取得可核对观察'], 来源: '用户意图转述', 下一步: '调查当前文件' });
     const task = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '调查输入', 负责人: '插件工程', 判据: ['调查有来源'] });

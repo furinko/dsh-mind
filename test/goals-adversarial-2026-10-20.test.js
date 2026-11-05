@@ -5,6 +5,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeFixture, LEAD, MEMBER, SOVEREIGN } from './helpers.mjs';
 import { fakeHost } from './host-harness.mjs';
+import { attachFileParent } from './file-parent.mjs';
 import { shareOrg, forgetSharedOrg, shareKey } from '../src/runtime.js';
 import { apply } from '../components/kernel/lib/index.js';
 import { runAction } from '../lib/actions.js';
@@ -24,6 +25,7 @@ async function scene(body) {
   const independent = join(other, 'result.txt');
   await writeFile(input, 'original result');
   await writeFile(independent, 'independent result');
+  attachFileParent(host,cwd);
   try {
     await apply(host.ctx, { ...options, projectBindings: [{ path: cwd, project: P }],
       memberFileAccess: { read: [cwd, other], write: [cwd, other] }, audit工具调用: false });

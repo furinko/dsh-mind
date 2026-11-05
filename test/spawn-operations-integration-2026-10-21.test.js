@@ -5,6 +5,7 @@ import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeFixture, LEAD, SOVEREIGN } from './helpers.mjs';
 import { fakeHost } from './host-harness.mjs';
+import { attachFileParent } from './file-parent.mjs';
 import { apply } from '../components/kernel/lib/index.js';
 import { Org } from '../src/org.js';
 import { shareOrg, forgetSharedOrg, shareKey } from '../src/runtime.js';
@@ -17,10 +18,11 @@ async function scene(body) {
     const cwd = join(f.home, 'work'); await mkdir(cwd); const input = join(cwd, 'input.txt'); await writeFile(input, 'fixture input');
     const config = { home: f.home, privateRoot: f.privateRoot, factoryRoot: f.factoryRoot, project: P,
       projectBindings: [{ path: cwd, project: P }], memberFileAccess: { read: [cwd], write: [cwd] } };
+    attachFileParent(host,cwd);
     await apply(host.ctx, config); org = await shareOrg(config);
     const goal = await org.goals.create({ subject: LEAD, 项目: P, 期望结果: '创建可恢复的成员', 完成依据: ['当前工作可核对'], 来源: '明确用户意图的转述', 下一步: '创建成员调查文件' });
     const counts = { creates: 0, sends: 0, releases: 0, requested: [] };
-    const agent = { session: { id: LEAD.id, header: { cwd } } };
+    const agent = host.ctx.agents.get(LEAD.id);
     const runtime = { agent, signal: new AbortController().signal, project: P, delegation: { authorize: () => ({ fingerprint: 'operations-fixture' }) },
       subagents: { startContinuable: async spec => { counts.creates++; counts.requested.push(spec.childId); return { childId: spec.childId, messageId: `initial-${counts.creates}` }; },
         sendMessage: async () => `work-${++counts.sends}`, drainContinuableChildren: async () => { counts.releases++; } } };
