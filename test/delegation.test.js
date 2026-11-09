@@ -1,8 +1,8 @@
 /**
  * Lead 自主调度（2026-10-15 主权者授权「由 lead 根据需求判断使用团队或子智能体或都不使用」）：
  *  三层判据——①授权真源 DelegationPolicy（配置非法=未授权，fail-closed）；
- *  ②统一入口 member_spawn/message/stop/list（适配器直调服务不过 tools 管线 ⇒ 每个入口
- *    显式过同一道授权闸；半途失败如实报阶段，不把半成品报成就绪）；
+ *  ②统一入口 member_spawn/message/stop/list；本文件的创建能力是明确的领域测试桩，
+ *    不认证SDK准入，真实官方工具接线另由两个SDK测试文件验证；半途失败如实报阶段；
  *  ③内核接线（提示词唯一改动点 + 创建闸 + 宿主服务束）。
  * 官方契约依据：成员研究简表（host-contract-reader，2026-10-15）——waterfall 须 await next()
  * 改返回值、team:policy 是 Team 成员唯一段而普通子会话为零段、Team 成员必须走 Team 邮箱。
@@ -10,6 +10,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeFixture, LEAD, MEMBER } from './helpers.mjs';
+import { fakeCreationCapability } from './host-creation-fixture.mjs';
+import { randomUUID } from 'node:crypto';
 import { Org } from '../src/org.js';
 import { DelegationPolicy } from '../src/delegation-policy.js';
 import { projectKeyForPath } from '../src/project-identity.js';
@@ -35,7 +37,7 @@ const 授权配置 = { mode: 'lead-discretion', projects: [P], authorizationRef:
 function 假宿主({ delegation = new DelegationPolicy(授权配置), agent = { id: LEAD.id, session: { id: LEAD.id, header: { id: LEAD.id } } }, team = [], kids = [] } = {}) {
   const calls = { spawn: [], teamSend: [], subSend: [], interrupts: [] };
   const agentTeams = {
-    spawnTeammate: async (_caller, req) => { calls.spawn.push(req); return { member: { id: `team-${calls.spawn.length}`, name: req.name } }; },
+    spawnTeammate: async (_caller, req) => { calls.spawn.push(req); const member = { id: `team-${calls.spawn.length}`, name: req.name, role: 'teammate', status: 'inactive' }; team.push(member); return { member }; },
     sendMessage: async (_caller, req) => { calls.teamSend.push(req); return { messageId: `tm-${calls.teamSend.length}` }; },
     listMembers: () => team,
     interrupt: (_caller, name) => { calls.interrupts.push(name); return { previousStatus: 'running' }; },
@@ -45,14 +47,19 @@ function 假宿主({ delegation = new DelegationPolicy(授权配置), agent = { 
     startContinuable: async (spec) => {
       if (!(spec?.signal instanceof AbortSignal)) throw new Error('contract: spec.signal required');
       assert.equal(Object.hasOwn(spec.request, 'signal'), false, 'continuable signal belongs to outer spec');
-      calls.spawn.push(spec); return { childId: spec.childId ?? `sub-${calls.spawn.length}`, messageId: 'm0' };
+      assert.equal(spec.childId, undefined, 'Host allocates ids; Mind does not reserve one');
+      const childId = randomUUID(); calls.spawn.push({ ...spec, createdId: childId }); kids.push({ id: childId, mode: 'continuable' }); return { childId };
     },
     sendMessage: async (_sender, id, content) => { calls.subSend.push({ id, content }); return `sm-${calls.subSend.length}`; },
     interrupt: (id) => { calls.interrupts.push(id); },
     drainContinuableChildren: async (_parent, ids) => { calls.interrupts.push(...ids); },
     listChildren: async () => kids,
   };
-  return { 宿主: { project: P, agent, agents: { get: id => id === agent.id ? agent : undefined }, agentTeams, subagents, delegation }, calls };
+  const 宿主 = { project: P, agent, agents: { get: id => id === agent.id ? agent : undefined }, agentTeams, subagents, delegation };
+  宿主.hostCreation = fakeCreationCapability(宿主);
+  // Synthetic capability only; actual SDK suite covers official interrupt admission.
+  宿主.hostMaintenance = { prepare: ({ target, beforeDispatch }) => ({ tool: 'interrupt_agent', callId: 'fake-team-stop', async execute() { await beforeDispatch(); return { value: await agentTeams.interrupt(agent, target) }; } }) };
+  return { 宿主, calls };
 }
 
 describe('DelegationPolicy · 授权真源', () => {
@@ -137,7 +144,7 @@ describe('member_* 动作 · 统一治理入口', () => {
       // 修前这里 reassign 成 ['team-1']，等于把一岗收成一人的记录。
       assert.deepEqual(after.负责人, ['插件工程'], '负责人仍是岗位名');
       assert.deepEqual(after.绑定.map((b) => b.实例), ['team-1'], '实例绑到节点上');
-      assert.equal(calls.spawn[0].prompt[0].text, calls.spawn[0].prompt[0].text);
+      assert.equal(Array.isArray(calls.spawn[0].prompt), true);
       assert.match(calls.spawn[0].prompt[0].text, /启动自检/);
       assert.equal(calls.teamSend[0].target, r.名, '开工消息按 Team 名发送');
       assert.match(calls.teamSend[0].content[0].text, /判据甲/);
@@ -203,10 +210,10 @@ describe('member_* 动作 · 统一治理入口', () => {
       const { 宿主, calls } = 假宿主();
       const 节点 = await 建待发节点(org);
       const r = await 执行(org, 宿主, { action: 'member_spawn', 方式: 'subagent', 岗位: '插件工程', 节点: 节点.id, 任务书: '做乙事' });
-      assert.equal(r.实例, calls.spawn[0].childId);
-      assert.match(r.实例, /^[a-f0-9-]{36}$/i, '正式成员使用服务端预留的UUID');
+      assert.equal(r.实例, calls.spawn[0].createdId);
+      assert.match(r.实例, /^[a-f0-9-]{36}$/i, '假宿主分配UUID，不接受Mind预留ID');
       assert.equal(calls.spawn[0].request.parent, 宿主.agent, '必须传原始 exec.agent，不能传组织主体');
-      assert.equal(calls.subSend[0].id, calls.spawn[0].childId);
+      assert.equal(calls.subSend[0].id, calls.spawn[0].createdId);
     } finally { await f.cleanup(); }
   });
 
@@ -273,9 +280,9 @@ describe('member_* 动作 · 统一治理入口', () => {
       const 节点 = await 建待发节点(org);
       await assert.rejects(
         () => 执行(org, 宿主, { action: 'member_spawn', 方式: 'subagent', 岗位: '插件工程', 节点: 节点.id, 任务书: 'x' }),
-        (e) => e.code === 'MEMBER_SPAWN_DISPATCH_FAILED' && e.detail.已登记 === true && e.detail.实例 === calls.spawn[0].childId,
+        (e) => e.code === 'MEMBER_SPAWN_DISPATCH_FAILED' && e.detail.已登记 === true && e.detail.实例 === calls.spawn[0].createdId,
       );
-      assert.equal((await org.registry.identity()).members[calls.spawn[0].childId].status, '在岗', '登记是既成事实，报阶段而非静默回滚');
+      assert.equal((await org.registry.identity()).members[calls.spawn[0].createdId].status, '在岗', '登记是既成事实，报阶段而非静默回滚');
     } finally { await f.cleanup(); }
   });
 
@@ -283,7 +290,7 @@ describe('member_* 动作 · 统一治理入口', () => {
     const { f, org } = await 现场Org();
     try {
       const 节点 = await 建待发节点(org);
-      const 未授权 = 假宿主({ delegation: new DelegationPolicy({}) });
+      const 未授权 = 假宿主({ delegation: new DelegationPolicy({ mode: 'explicit-user' }) });
       await assert.rejects(() => 执行(org, 未授权.宿主, { action: 'member_spawn', 方式: 'team', 岗位: '插件工程', 节点: 节点.id, 任务书: 'x' }), (e) => /没有有效.*Lead 自主调度/.test(e.message));
       const 无策略 = 假宿主({ delegation: null });
       await assert.rejects(() => 执行(org, 无策略.宿主, { action: 'member_spawn', 方式: 'team', 岗位: '插件工程', 节点: 节点.id, 任务书: 'x' }), (e) => e.code === 'DELEGATION_NOT_WIRED');
@@ -379,12 +386,12 @@ describe('内核接线 · 提示词与创建闸', () => {
     }
   });
 
-  it('坏配置：响亮告警并按未授权降级（闸不拦、waterfall 不改写）', async () => {
+  it('坏配置：响亮告警并拒绝新建，waterfall 不冒充有效策略', async () => {
     const { home, host } = await 起内核({ mode: 'always' });
     try {
       assert.ok(host.日志.some((l) => l.startsWith('error') && /delegation 配置非法/.test(l)), '坏配置必须留下 error 级告警');
       const exec = fakeExec({ name: 'spawn_teammate' });
-      assert.deepEqual(host.闸.map((g) => g(exec)).filter(Boolean), [], '未授权 ⇒ 官方默认行为不动');
+      assert.ok(host.闸.map((g) => g(exec)).filter(Boolean).some(reason => /配置非法/.test(reason)), '非法配置必须阻止裸创建，不能退成 Host 默认');
       const listeners = host.钩子.get('system-prompt/assemble') ?? [];
       const assembly = { sections: [{ name: 'team:policy', text: OFFICIAL }], tools: [], contexts: [] };
       const out = await listeners[0](assembly, { agent: { session: { header: { cwd: process.cwd() } } } }, async () => assembly);

@@ -61,7 +61,7 @@ it('已装配段不恢复撤回的创建权，也不绕过缺段、重段和组�
   const policy = new DelegationPolicy(config);
   const original = policyAssembly(officialTeamPolicy(true));
   const accepted = policy.assemble(original, scope);
-  const ungranted = new DelegationPolicy();
+  const ungranted = new DelegationPolicy({ mode: 'explicit-user' });
   assert.equal(ungranted.assemble(accepted, scope), accepted);
   assert.throws(() => ungranted.authorize({ subject: { kind: 'Lead' }, project }), error => error.code === 'DENIED');
   assert.throws(() => policy.assemble({ sections: [] }, scope), error => error.code === 'DELEGATION_TEAM_POLICY');

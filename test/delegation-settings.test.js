@@ -110,6 +110,28 @@ function fixture(options = {}) {
 const input = (delegation = NEXT) => ({ delegation, expectedFingerprint: fingerprint(INITIAL) });
 
 describe('调度设置：正式 editor、认证、锁内 CAS 与分面回执', () => {
+  for (const [raw, eligible] of [[{}, true], [{ delegation: {} }, true], [{ delegation: { projects: [] } }, false]]) it(`GET retains default versus partial restriction: ${JSON.stringify(raw)}`, async () => {
+    const t = fixture({ initialRaw: raw });
+    const out = await t.request(); assert.equal(out.status, 200);
+    assert.equal(out.body.数据.runtime.canAttempt, eligible);
+    assert.equal(out.body.数据.runtime.authorized, false);
+    assert.equal(out.body.数据.runtime.hostAdmission, 'not-evaluated');
+    assert.equal(t.edits, 0);
+  });
+
+  it('旧 explicit-user 与空 config 继承歧义不当成默认；无盘面确认不得写', async () => {
+    const t = fixture({ initialRaw: {}, inherited: { delegation: { mode: 'explicit-user' } } });
+    const out = await t.request(); assert.equal(out.status, 503); assert.match(out.body.理由, /无法区分/); assert.equal(t.edits, 0);
+  });
+
+  it('Host 配置不要求依据；最新 GET 仍只认证配置同步，保留无关字段', async () => {
+    const t = fixture(); const out = await t.request('POST', input({ mode: 'host', projects: [], authorizationRef: '' }));
+    assert.equal(out.status, 200); assert.deepEqual(t.disk.unrelated, { retained: 7 });
+    const fresh = (await t.request()).body.数据;
+    assert.equal(fresh.application.state, 'confirmed'); assert.equal(fresh.runtime.authorized, false);
+    assert.equal(fresh.runtime.canAttempt, true); assert.equal(fresh.runtime.hostAdmission, 'not-evaluated');
+  });
+
   it('GET 分开返回盘面和真实策略，不把 ACTIVE 当生效；服务读取保持 this', async () => {
     const t = fixture();
     const out = await t.request();
@@ -208,7 +230,7 @@ describe('调度设置：正式 editor、认证、锁内 CAS 与分面回执', (
     const inherited = { delegation: INITIAL, otherInherited: 1 };
     const t = fixture({ initialRaw: { onlyOverride: true }, inherited });
     const get = (await t.request()).body.数据;
-    assert.equal(get.persistence.config.mode, 'explicit-user');
+    assert.equal(get.persistence.config.mode, 'host', '整 config 替换后确实缺席 delegation，不猜补下层旧限制');
     assert.equal(get.persistence.fingerprint, fingerprint({}));
     assert.equal(get.runtime.fingerprint, fingerprint({}));
     const partial = fixture({ initialRaw: { delegation: { mode: 'explicit-user' } }, inherited });

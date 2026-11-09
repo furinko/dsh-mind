@@ -22,6 +22,8 @@ import { readInstanceSnapshot } from '../../../src/instance-snapshot.js';
 import { readTaskLedgerSync } from '../../../src/task-ledger.js';
 import { assertFileSearchTree, assertSingleLinkTarget } from '../../../src/tool-file-scope.js';
 import { createHostFileCeiling } from '../../../src/host-file-ceiling.js';
+import { createHostCreationBridge } from '../../../src/host-creation-bridge.js';
+import { requireLiveActor } from '../../../src/runtime-actor.js';
 import { createProjectResolver } from '../../../src/project-identity.js';
 import { serializeMemoryEnvelope } from '../../../src/memory-response.js';
 import { describeFailure, Denied, Fault, InvalidBody } from '../../../src/kernel/errors.js';
@@ -194,15 +196,30 @@ export async function apply(ctx, config = {}) {
   // 留下裸创建窗口。接线状态只取本次内存注册事实，磁盘回执仅供诊断。
   const delegation = 建调度策略(config.delegation, logger);
   const 调度接线回执 = { promptRegistered: false, creationGuardRegistered: false };
+  const creationBridge = createHostCreationBridge({ tools: ctx.tools, contextOf(exec, { maintenance = false } = {}) {
+    if (调度接线回执.creationGuardRegistered !== true) throw new Fault('HOST_CREATION_UNAVAILABLE', '本次内核创建闸尚未确认接线，不能签发受管创建调用。');
+    const subject = agentSubject(exec), project = 当前项目键(exec);
+    if (!chatConnected(org, exec?.agent?.session)) throw new Fault('MIND_CONNECTION_CHANGED', '当前聊天已断开心智，不接受旧派工调用。');
+    requireLiveActor({ host: { agent: exec.agent, agents: 取服务(ctx, 'agents'), project }, subject, project });
+    const state = maintenance ? delegation.authorizeMaintenance({ subject, project }) : delegation.authorize({ subject, project });
+    return { project, revision: chatRevision(org, exec.agent.session), fingerprint: state.fingerprint };
+  } });
+  // The real tool waterfall supplies the unforgeable outer execution token.
+  // Missing support leaves ordinary Mind reads usable, but creation unavailable.
+  ctx.on?.('tools/execute', (exec, next) => creationBridge.around(exec, next), { prepend: true });
   const 创建判定 = (exec) => observations.guard(exec, 'kernel.delegation', () => {
     if (!isCreationTool(exec?.name)) return undefined;
-    try { return delegation.creationGuard(exec, { subject: agentSubject(exec), project: 当前项目键(exec), connected: chatConnected(org, exec?.agent?.session) }); }
+    try {
+      if (creationBridge.allows(exec)) return undefined;
+      return delegation.creationGuard(exec, { subject: agentSubject(exec), project: 当前项目键(exec), connected: chatConnected(org, exec?.agent?.session) });
+    }
     catch (error) { return `[dsh-mind] 调度项目身份不可判定，按 fail-closed 拒绝：${错误消息(error)}`; }
   });
   const 关闭调度接线 = () => {
     // 必须先恢复首闸兜底并关闭判据，再移除专用创建闸；撤销器本身也可能触发工具调用。
     调度接线回执.creationGuardRegistered = false;
     调度接线回执.promptRegistered = false;
+    creationBridge.close();
     delegation.close();
   };
   // 单独承接整个组件的生命周期，包含创建 effect 尚未执行就卸载的情况。
@@ -352,7 +369,7 @@ export async function apply(ctx, config = {}) {
       闸回执.调度创建闸 = { registered: false, error: 错误消息(error) };
       落闸回执(1);
       logger.error?.(`[dsh-mind] 调度创建闸注册失败（闸在位探针将见红）：${闸回执.调度创建闸.error}`);
-      if (delegation.config.mode === 'lead-discretion') {
+      if (delegation.config.mode !== 'explicit-user' || !delegation.configurationValid) {
         拒绝激活 = `调度创建闸注册失败：${闸回执.调度创建闸.error}。调度授权已生效而创建闸缺席 = 授权面无闸，按 fail-closed 拒绝激活（R06）。`;
       }
     }
@@ -400,6 +417,8 @@ export async function apply(ctx, config = {}) {
     subagents: 取服务(ctx, 'subagents'),
     agents: 取服务(ctx, 'agents'), // 既有委派维护须核对 exact live Agent，不能只相信同 id 对象。
     delegation,
+    hostCreation: creationBridge.forExecution(exec),
+    hostMaintenance: creationBridge.forExecution(exec, true),
     reviewExperiments,
   });
 
@@ -1285,7 +1304,7 @@ function 建调度策略(config, logger) {
     return new DelegationPolicy(config);
   } catch (error) {
     logger.error?.(`[dsh-mind] delegation 配置非法，已按未授权（explicit-user）处理：${错误消息(error)}`);
-    return new DelegationPolicy({});
+    return DelegationPolicy.invalidConfiguration();
   }
 }
 

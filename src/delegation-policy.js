@@ -1,5 +1,5 @@
 /**
- * 部署者授予的调度权限：提示词与实际创建入口共用，不从模型参数或记忆条目推导授权。
+ * Mind 调度资格与部署收紧：默认仍须真实 Host 准入，不把资格、配置或适配器存在当成宿主授权。
  */
 import { createHash } from 'node:crypto';
 import { Denied, Fault, InvalidBody } from './kernel/errors.js';
@@ -23,7 +23,7 @@ export class DelegationPolicy {
   static generation = 'mind-delegation-v2';
 
   /**
-   * @param {{mode?: 'explicit-user'|'lead-discretion', projects?: string[], authorizationRef?: string}} [config]
+   * @param {{mode?: 'host'|'explicit-user'|'lead-discretion', projects?: string[], authorizationRef?: string}} [config]
    * @throws {InvalidBody} 配置形状、范围或授权引用不合法时拒绝加载。
    */
   constructor(config = {}) {
@@ -32,8 +32,10 @@ export class DelegationPolicy {
     for (const key of Object.keys(config)) {
       if (!keys.has(key)) throw new InvalidBody(`delegation 未知配置键：${key}`);
     }
-    const mode = config.mode ?? 'explicit-user';
-    if (!['explicit-user', 'lead-discretion'].includes(mode)) throw new InvalidBody('delegation.mode 只认 explicit-user 或 lead-discretion。');
+    // Only true absence/{} uses Host admission by default. A legacy partial
+    // object may encode a restriction; never infer consent from missing mode.
+    const mode = Object.hasOwn(config, 'mode') ? config.mode : Object.keys(config).length === 0 ? 'host' : 'explicit-user';
+    if (!['host', 'explicit-user', 'lead-discretion'].includes(mode)) throw new InvalidBody('delegation.mode 只认 host、explicit-user 或 lead-discretion。');
     if (config.projects !== undefined && !Array.isArray(config.projects)) throw new InvalidBody('delegation.projects 必须是项目键数组。');
     const projects = [...new Set((config.projects ?? []).map((project) => {
       if (typeof project !== 'string') throw new InvalidBody('delegation.projects 的每项必须是字符串。');
@@ -47,6 +49,14 @@ export class DelegationPolicy {
     this.config = Object.freeze({ mode, projects: Object.freeze(projects), authorizationRef });
     this.fingerprint = createHash('sha256').update(JSON.stringify(this.config)).digest('hex');
     this.closed = false;
+    this.configurationValid = true;
+  }
+
+  /** Kernel-only fallback; a malformed config must never become the new default. */
+  static invalidConfiguration() {
+    const policy = new DelegationPolicy({ mode: 'explicit-user' });
+    policy.configurationValid = false;
+    return policy;
   }
 
   /**
@@ -55,11 +65,18 @@ export class DelegationPolicy {
    * @returns {object} 当前范围、授权来源与版本指纹。
    */
   status(project) {
+    const scoped = this.config.projects.includes(project) || this.config.projects.includes('*');
+    const authorized = !this.closed && this.configurationValid && this.config.mode === 'lead-discretion' && scoped;
+    const canAttempt = !this.closed && this.configurationValid && (authorized || this.config.mode === 'host' && (this.config.projects.length === 0 || scoped));
     return {
       generation: DelegationPolicy.generation,
       mode: this.config.mode,
       project,
-      authorized: !this.closed && this.config.mode === 'lead-discretion' && (this.config.projects.includes(project) || this.config.projects.includes('*')),
+      authorized, // Legacy explicit deployment grant only; NEVER a Host verdict.
+      canAttempt,
+      configurationValid: this.configurationValid,
+      admission: !this.configurationValid ? 'invalid' : this.closed ? 'unavailable' : canAttempt ? 'host-required' : 'restricted',
+      hostAdmission: 'not-evaluated',
       projects: [...this.config.projects],
       authorizationRef: this.config.authorizationRef || null,
       source: 'profile:dsh-mind-kernel.delegation',
@@ -80,10 +97,11 @@ export class DelegationPolicy {
       throw new Denied('组织调度 · 仅 Lead', '成员与复核者不得自行再起成员或扩大调度权限。', { howToChange: '把需求交回 Lead；身份只认宿主会话事实。' });
     }
     const state = this.status(assertPathSegment(project, '授权项目'));
-    if (!state.authorized) {
+    if (!this.configurationValid) throw new Fault('DELEGATION_CONFIG_INVALID', '调度配置非法，已拒绝新建；请由部署者修正配置，不按空配置放行。');
+    if (!state.canAttempt) {
       throw new Denied('部署授权 · Lead 自主调度', `项目 ${project} 没有有效的 Lead 自主调度授权。`, {
         requireAuthority: '主权者',
-        howToChange: '由部署者在 dsh-mind-kernel.delegation 配置中明确授权项目与授权依据；模型参数和记忆条目不能代替该配置。',
+        howToChange: '当前保留了显式或旧配置限制；如需变更，由部署者核对 dsh-mind-kernel.delegation 的模式与项目范围。聊天点名和模型参数不能覆盖配置；放开 Mind 限制也仍需每次真实 Host 准入。',
       });
     }
     return state;
@@ -112,7 +130,10 @@ export class DelegationPolicy {
     if (!CREATION_TOOLS.has(exec?.name)) return undefined;
     if (this.closed) return '调度组件已卸载或授权正在重载，暂不接受创建成员。';
     if (subject?.kind !== 'Lead') return '组织调度仅允许 Lead 发起；成员与复核者不能再起成员。';
-    if (this.status(project).authorized) return connected === false
+    if (!this.configurationValid) return '调度配置非法，暂停新建；不能把坏配置当作默认 Host 准入。';
+    const state = this.status(project);
+    if (this.config.mode === 'host' && !state.canAttempt) return '本项目受到调度项目范围限制，不能绕过 Mind 创建。';
+    if (state.canAttempt) return connected === false
       ? '本项目已启用心智自主调度，但当前聊天未接入心智，暂停新委派。请在聊天框重新打开“接入心智”后再委派；也可由 Lead 直接执行。'
       : '本项目已启用组织调度：创建团队或子智能体请走 mind member_spawn，先定任务判据再登记、装载并开工；也可由 Lead 直接执行。';
     return undefined;
@@ -126,14 +147,16 @@ export class DelegationPolicy {
    * @throws {Fault} 已授权的 Team 缺段、重段或上游策略形状漂移时拒绝组装。
    */
   assemble(assembly, { project, isTeam }) {
-    if (!this.status(project).authorized || !isTeam) return assembly;
+    if (!this.status(project).canAttempt || !isTeam) return assembly;
     const sections = assembly?.sections;
     if (!Array.isArray(sections)) throw new Fault('DELEGATION_PROMPT_SHAPE', '宿主提示词装配没有 sections，不能确认唯一策略落点。');
     const team = sections.filter((section) => section.name === 'team:policy');
     if (team.length !== 1) throw new Fault('DELEGATION_TEAM_POLICY', `授权范围内要求唯一 team:policy，实际 ${team.length} 段。`);
     const original = team[0].text;
     const header = [
-      `[${DelegationPolicy.generation}] The deployment owner explicitly authorizes the Team Lead to choose direct execution, ordinary subagents, or Agent Teams according to task needs in project ${JSON.stringify(project)}.`,
+      this.config.mode === 'host'
+        ? `[${DelegationPolicy.generation}] Mind adds no separate delegation grant requirement in project ${JSON.stringify(project)}. Every creation still requires the current Host tool executor, policy and admission; availability is not approval.`
+        : `[${DelegationPolicy.generation}] The deployment owner explicitly authorizes the Team Lead to choose direct execution, ordinary subagents, or Agent Teams according to task needs in project ${JSON.stringify(project)}. Host admission is still required for every creation.`,
       'Delegation is optional: do not create agents merely to parallelize. Use mind member_spawn for governed delegation; it registers the actual instance, binds a task with acceptance criteria, loads role instructions, and only then sends the work.',
       // v2（口述收敛 2026-10-18 条目1/3）：复核员是**普通岗位卡**，不再需要主权者任命授权——
       // Lead 按任务用 member_spawn 起复核实例即完成就位，独立性由复核时的冲突排除

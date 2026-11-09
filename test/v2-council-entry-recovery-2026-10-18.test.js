@@ -1,4 +1,5 @@
-/** 真模块 apply + 同步 guard + 动作入口；全部使用临时双区，不碰运行态组织账本。 */
+/** 真模块apply/同步guard/非创建工具入口。创建显式走runAction+领域能力桩，
+ * 不冒充真实ToolRuntime准入；原生SDK证据另见mind-flow-kernel-sdk.mjs。全用临时双区。 */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
@@ -8,7 +9,8 @@ import { makeFixture, LEAD } from './helpers.mjs';
 import { fakeHost } from './host-harness.mjs';
 import { shareOrg } from '../src/runtime.js';
 import { runAction } from '../lib/actions.js';
-import { NeedsApproval, Fault } from '../src/kernel/errors.js';
+import { NeedsApproval, Fault, describeFailure } from '../src/kernel/errors.js';
+import { fakeCreationCapability } from './host-creation-fixture.mjs';
 import * as plugin from '../components/kernel/lib/index.js';
 
 const P = 'council-entry';
@@ -21,7 +23,7 @@ async function setup() {
   await mkdir(materials, { recursive: true });
   const brief = join(materials, 'brief.md');
   await writeFile(brief, '资料正文\n', 'utf8');
-  const calls = { spawn: [], send: [], stop: [], drain: [] };
+  const calls = { spawn: [], send: [], stop: [], drain: [] }, children = [];
   const agent = { session: { id: 'lead', header: { cwd } } };
   const subagents = {
     async startContinuable(spec) {
@@ -29,8 +31,10 @@ async function setup() {
       assert.equal(spec.request.parent, agent);
       assert.ok(spec.signal instanceof AbortSignal);
       assert.equal(Object.hasOwn(spec.request, 'signal'), false, 'continuable request omits signal');
+      assert.equal(Object.hasOwn(spec, 'childId'), false);
       calls.spawn.push(spec);
-      return { childId: `consult-${calls.spawn.length}`, messageId: 'started' };
+      const childId = `consult-${calls.spawn.length}`; children.push({ id: childId, mode: 'continuable' });
+      return { childId };
     },
     async sendMessage(parent, id, content, options) {
       assert.equal(this, subagents);
@@ -41,6 +45,7 @@ async function setup() {
     },
     interrupt(id, owner) { assert.equal(this, subagents); assert.equal(owner.agent, agent); calls.stop.push(id); },
     async drainContinuableChildren(parent, ids) { assert.equal(this, subagents); assert.equal(parent, agent); calls.drain.push(...ids); },
+    async listChildren() { return children; },
   };
   const host = fakeHost({ 提供服务: ['tools', 'commands', 'systemPrompt', 'subagents'], 服务: { subagents } });
   const config = { home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P, projectBindings: [{ path: cwd, project: P }],
@@ -61,10 +66,16 @@ async function setup() {
   };
   const invoke = async (id, args) => {
     const e = exec(id, 'mind', args);
-    assert.equal(guard(e), undefined, '正例必须真正走到 mind execute');
+    assert.equal(guard(e), undefined, '正例必须通过当前工具闸');
+    // This older host harness has no genuine SDK execution token. Only the
+    // creation DOMAIN cases use an explicit double; do not forge such a token.
+    if (id === 'lead' && args.action === 'debate_open' && args.参与岗位) {
+      try { return { 成功: true, ...await action(args) }; } catch (error) { return describeFailure(error); }
+    }
     return JSON.parse(await tool.execute(args, e));
   };
   const hostServices = { agent, subagents, delegation: { authorize: () => ({ fingerprint: 'test' }) } };
+  hostServices.hostCreation = fakeCreationCapability(hostServices);
   const action = (args, services = hostServices) => runAction({ org, 项目: P, 主体: LEAD, subject: LEAD, 面: 'tool', 宿主: services, args });
   const openArgs = { action: 'debate_open', 问题: '隔离咨询问题', 参与岗位: '插件工程,插件工程', 方式: 'subagent', 资料: materials, ...模型路由 };
   const open = async () => {
@@ -243,7 +254,7 @@ describe('恢复入口：真作用域、工具闸、审批计划', () => {
   it('必要宿主接口缺失在 open/converge 副作用前拒；不假报停机成功', async () => {
     const s = await setup();
     try {
-      for (const key of ['startContinuable', 'sendMessage', 'drainContinuableChildren']) {
+      for (const key of ['listChildren', 'sendMessage', 'drainContinuableChildren']) {
         const fn = s.subagents[key]; delete s.subagents[key];
         await assert.rejects(() => s.action(s.openArgs), (e) => e instanceof Fault && e.code === 'MEMBER_SPAWN_CONTRACT');
         s.subagents[key] = fn;
@@ -267,7 +278,10 @@ describe('恢复入口：真作用域、工具闸、审批计划', () => {
       assert.deepEqual(s.calls.drain, ['consult-1']);
       assert.equal((await s.org.registry.identity()).members['consult-1'].status, '封存');
       assert.equal((await s.org.registry.identity()).members['member-a'].status, '在岗');
-      assert.equal((await s.org.council.list({ 项目: P })).length, 0);
+      const [pending] = await s.org.council.list({ 项目: P });
+      assert.equal(pending.状态, '创建未完成');
+      assert.equal(pending.创建调用[0].实例, 'consult-1');
+      assert.deepEqual(pending.创建实例, [], 'opened 未落，不能把返回观察当作已开场');
     } finally { await s.close(); }
   });
 

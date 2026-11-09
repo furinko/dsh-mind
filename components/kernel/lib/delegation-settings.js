@@ -58,14 +58,14 @@ export function createDelegationSettings({ ctx, org, delegation, project, readin
           persistence: disk,
           runtime,
           application: {
-            state: !runtime.disposed && runtime.fingerprint === disk.fingerprint ? 'confirmed' : 'unconfirmed',
+            state: !runtime.disposed && runtime.configurationValid && runtime.fingerprint === disk.fingerprint ? 'confirmed' : 'unconfirmed',
             fingerprint: runtime.fingerprint,
             disposed: runtime.disposed,
           },
           readiness: { ...readiness },
           adapters: { agentTeams: Boolean(ctx.get('agentTeams')), subagents: Boolean(ctx.get('subagents')) },
           documentPath: editor.documentPath,
-          effect: '仅影响以后新派工的准入与后续提示词装配；撤回不会终止已有成员。提示词实际应用仍待下一轮验证。',
+          effect: '仅影响 Mind 新派工资格与后续提示词装配；撤回不会终止已有成员。配置同步、canAttempt 或适配器存在都不代表 Host 已批准；每次仍走宿主执行器、政策及审批。提示词实际应用仍待下一轮验证。',
         },
       };
     },

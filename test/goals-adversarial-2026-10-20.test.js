@@ -9,6 +9,7 @@ import { attachFileParent } from './file-parent.mjs';
 import { shareOrg, forgetSharedOrg, shareKey } from '../src/runtime.js';
 import { apply } from '../components/kernel/lib/index.js';
 import { runAction } from '../lib/actions.js';
+import { fakeCreationCapability } from './host-creation-fixture.mjs';
 import { prepareMemberSpawn, runMemberSpawnStages } from '../lib/member-spawn-plan.js';
 
 const P = 'goals-independent-adversarial';
@@ -51,8 +52,9 @@ async function scene(body) {
     const act = args => runAction({ org, 项目: P, 主体: LEAD, 面: 'tool', args });
     const executionHost = { agent: { session: { id: LEAD.id } },
       delegation: { authorize: () => ({ fingerprint: 'independent-authorized' }) },
-      subagents: { startContinuable: async () => { throw new Error('unexpected live spawn'); },
+      subagents: { startContinuable: async () => { throw new Error('unexpected live spawn'); }, listChildren: async () => [],
         sendMessage: async () => ({ messageId: 'unused' }), drainContinuableChildren: async () => {} } };
+    executionHost.hostCreation = fakeCreationCapability(executionHost);
     await body({ f, host, org, cwd, input, other, independent, get, goal, task, link, pause, dispatch, guard, act, executionHost });
   } finally {
     host.清理();

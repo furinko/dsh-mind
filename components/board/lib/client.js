@@ -5921,23 +5921,23 @@ window.__ModuleLoader__.load({
 
       var 调度块 = h('section', { key: 'delegation', 'data-dshmind': 'delegation-settings', className: 'dshmind-set__section', 'aria-labelledby': 'dshmind-delegation-title', 'aria-busy': 调度提示.saving }, [
         h('h3', { key: 'h', id: 'dshmind-delegation-title', className: 'dshmind-set__subtitle' }, 'Lead 调度授权'),
-        h('p', { key: 'scope', className: 'dshmind-set__lede' }, '决定 Lead 是否可自行创建成员；撤回不会终止已有成员。'),
+        h('p', { key: 'scope', className: 'dshmind-set__lede' }, '仅调整 Mind 新建限制；每次仍须 DSH 宿主准入，配置同步不代表已获批准。撤回不会终止已有成员。'),
         !调度读数 ? h('div', { key: 'error', role: 调度快照.phase === 'reading' ? 'status' : 'alert', className: 'dshmind-set__notice' }, 调度快照.phase === 'reading' ? '正在读取调度授权…' : '调度设置未接入：' + 调度快照.error) : null,
-        调度读数 ? h('p', { key: 'runtime', className: 'dshmind-set__hint' }, '当前运行：' + (调度读数.runtime.mode === 'lead-discretion' ? 'Lead 按需选择' : '仅用户点名') + ' · ' + (调度读数.runtime.disposed ? '插件已卸载' : 调度读数.application && 调度读数.application.state === 'confirmed' ? '运行配置已同步' : '等待运行端确认')) : null,
+        调度读数 ? h('p', { key: 'runtime', className: 'dshmind-set__hint' }, '当前运行：' + (调度读数.runtime.mode === 'host' ? '沿宿主准入' : 调度读数.runtime.mode === 'lead-discretion' ? '保留显式项目授权' : '限制新建（旧模式）') + ' · ' + (调度读数.runtime.disposed ? '插件已卸载' : 调度读数.application && 调度读数.application.state === 'confirmed' ? '运行配置已同步' : '等待运行端确认')) : null,
         h('div', { key: 'fields', className: 'dshmind-set__rows' }, [
-          设置行('delegation-mode', '调度模式', !调度读数 ? '读取后可选择成员派工方式。' : 调度表.mode === 'lead-discretion' ? '在授权项目内按需要派工。' : '按用户的明确指令派工。', h('select', {
+          设置行('delegation-mode', '调度模式', !调度读数 ? '读取后可选择成员派工方式。' : 调度表.mode === 'host' ? '不另要求项目授权依据，实际创建仍由宿主逐次裁决。' : 调度表.mode === 'lead-discretion' ? '保留旧项目授权限制；仍须宿主准入。' : '保留旧配置限制，聊天点名不会自动解除。', h('select', {
             className: 'dshmind-set__select', 'aria-label': '调度模式', value: 调度读数 ? 调度表.mode : '', disabled: 调度提示.saving || !调度读数,
             onChange: function (event) { 改调度表('mode', event.target.value); },
-          }, [!调度读数 ? h('option', { value: '' }, '未读到（未接入）') : null, h('option', { value: 'explicit-user' }, '仅用户点名'), h('option', { value: 'lead-discretion' }, 'Lead 按需选择')])),
-          h('details', { key: 'scope-fields', className: 'dshmind-set__details', open: !!调度读数 && 调度表.mode === 'lead-discretion' }, [
+          }, [!调度读数 ? h('option', { value: '' }, '未读到（未接入）') : null, h('option', { value: 'host' }, '沿宿主准入（默认）'), h('option', { value: 'explicit-user' }, '限制新建（旧模式）'), h('option', { value: 'lead-discretion' }, '保留显式项目授权')])),
+          h('details', { key: 'scope-fields', className: 'dshmind-set__details', open: !!调度读数 && 调度表.mode !== 'explicit-user' }, [
             h('summary', { key: 'label' }, '项目范围与授权依据'),
-            设置行('delegation-projects', '授权项目', '项目键用逗号分隔；* 表示所有项目。', h('input', {
+            设置行('delegation-projects', '授权项目', 调度表.mode === 'host' ? '可选收紧项目；留空不增加项目限制，* 表示所有项目。' : '项目键用逗号分隔；显式授权模式必填，* 表示所有项目。', h('input', {
               type: 'text', className: 'dshmind-set__number dshmind-set__text', 'aria-label': '授权项目', placeholder: '例如 plugins, my-project',
               value: 调度读数 ? 调度表.projects : '', disabled: 调度提示.saving || !调度读数,
               onChange: function (event) { 改调度表('projects', event.target.value); },
               onKeyDown: function (event) { if (event && event.key === 'Enter') 保存调度(false); },
             }), 'field'),
-            设置行('delegation-ref', '授权依据', '填写本次授权的来源或说明。', h('input', {
+            设置行('delegation-ref', '授权依据', 调度表.mode === 'host' ? '沿宿主准入无需补填依据；旧说明不代表本次宿主批准。' : '显式授权模式填写来源或说明；不是宿主准入回执。', h('input', {
               type: 'text', className: 'dshmind-set__number dshmind-set__text', 'aria-label': '授权依据', placeholder: '例如：本次对话中确认的授权',
               value: 调度读数 ? 调度表.authorizationRef : '', disabled: 调度提示.saving || !调度读数,
               onChange: function (event) { 改调度表('authorizationRef', event.target.value); },
@@ -5958,12 +5958,14 @@ window.__ModuleLoader__.load({
         ]) : null,
         h('details', { key: 'diagnostics', className: 'dshmind-set__details' }, [
           h('summary', { key: 'label' }, '授权详情与更多操作'),
-          h('p', { key: 'boundary' }, '仅人侧设置入口提供写入，模型工具不提供改授权动作；仅用户点名不终止或禁用已有成员。本机 shell 与凭据的隔离由宿主权限负责。'),
+          h('p', { key: 'boundary' }, '仅人侧设置入口提供写入，模型工具不提供改授权动作；限制新建不终止或禁用已有成员。服务存在不是创建许可；本机 shell 与凭据的隔离由宿主权限负责。'),
           调度读数 ? h('div', { key: 'readings', className: 'dshmind-set__rows' }, [
             设置读数行('delegation-source', '配置位置', '预览项目 ' + line(调度读数.runtime.project, '未知'), 调度读数.persistence.source),
+            设置读数行('delegation-eligibility', 'Mind 新建资格', '不代表 Host 已批准', 调度读数.runtime.admission === 'invalid' ? '配置非法' : 调度读数.runtime.disposed ? '不可用' : 调度读数.runtime.canAttempt === true ? '可按宿主尝试' : 调度读数.runtime.canAttempt === false ? '受配置限制' : '未知'),
+            设置读数行('delegation-host', 'Host 准入', '由当前会话的执行器、政策和审批逐次裁决', '尚未评估'),
             设置读数行('delegation-fingerprint', '盘面 / 运行指纹', '提示词实际应用仍待下一轮验证', 调度读数.persistence.fingerprint.slice(0, 12) + ' / ' + 调度读数.runtime.fingerprint.slice(0, 12)),
           ]) : null,
-          h('button', { key: 'revoke', type: 'button', className: 'dshmind-set__btn', disabled: 调度提示.saving || !调度读数 || 调度读数.persistence.config.mode !== 'lead-discretion', onClick: function () { 保存调度(true); } }, '撤回自主调度'),
+          h('button', { key: 'revoke', type: 'button', className: 'dshmind-set__btn', disabled: 调度提示.saving || !调度读数 || 调度读数.persistence.config.mode === 'explicit-user', onClick: function () { 保存调度(true); } }, '撤回自主调度'),
         ]),
       ]);
 

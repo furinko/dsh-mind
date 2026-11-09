@@ -1,6 +1,7 @@
 /** 预算只有读入口与人侧配置；真实派活准入消费在宿主之前发生，失败也不退还尝试。 */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { fakeCreationCapability } from './host-creation-fixture.mjs';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeFixture, LEAD, MEMBER, REVIEWER, SOVEREIGN } from './helpers.mjs';
@@ -33,11 +34,14 @@ async function scene(run) {
   try {
     const org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
     const calls = { spawn: 0, send: 0, release: 0 };
+    const children = [];
     const host = { agent: { session: { id: 'lead' } }, delegation: { authorize: () => ({ fingerprint: 'budget-entry-authorized' }) }, subagents: {
-      startContinuable: async (spec) => { calls.spawn++; return { childId: spec.childId ?? `budget-child-${calls.spawn}`, messageId: 'started' }; },
+      startContinuable: async (spec) => { assert.equal(Object.hasOwn(spec, 'childId'), false); calls.spawn++; const childId = `budget-child-${calls.spawn}`; children.push({ id: childId, mode: 'continuable' }); return { childId }; },
+      listChildren: async () => children,
       sendMessage: async () => ({ messageId: `work-${++calls.send}` }),
       drainContinuableChildren: async () => { calls.release += 1; },
     } };
+    host.hostCreation = fakeCreationCapability(host);
     const act = (args, subject = LEAD, 面 = 'tool') => runAction({ org, 项目: P, 主体: subject, subject, 面, 宿主: host, args });
     const goal = (await act(goalArgs('budget-entry'))).目标;
     const configure = (rev, limit, extra = {}) => act({ ...budgetArgs(goal.id, rev, limit), ...extra }, LEAD, 'command');

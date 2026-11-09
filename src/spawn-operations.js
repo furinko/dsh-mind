@@ -3,12 +3,12 @@ import { randomUUID } from 'node:crypto';
 import { appendLines, serializeByKey, withLock } from './kernel/fsx.js';
 import { canonical } from './kernel/text.js';
 import { Denied, Fault, InvalidBody } from './kernel/errors.js';
-import { SPAWN_OPERATION_STAGES, SPAWN_OPERATION_RECORDER, spawnOperationText, spawnOperationUUID, spawnOperationLogPath, spawnOperationLockPath, validateSpawnOperationReceipt, validateSpawnOperationIssue, foldSpawnOperationLedger, readSpawnOperationLedger, readSpawnOperationLedgerSync } from './spawn-operation-ledger.js';
+import { SPAWN_OPERATION_STAGES, SPAWN_OPERATION_RECORDER, spawnOperationText, spawnOperationUUID, spawnOperationLogPath, spawnOperationLockPath, validateSpawnOperationReceipt, validateSpawnOperationIssue, validateHostCreationCall, spawnHostReceiptMatches, foldSpawnOperationLedger, readSpawnOperationLedger, readSpawnOperationLedgerSync } from './spawn-operation-ledger.js';
 export { SPAWN_OPERATION_ISSUE_CODES } from './spawn-operation-ledger.js';
 
 export const SPAWN_OPERATION_COVERAGE = Object.freeze({ 来源: '本组件受管成员创建入口的意图及内部观察到的阶段回执',
   范围: '仅覆盖已落线记录；历史、未接入入口、崩溃及缺失回执未完整覆盖。没有记录不证明宿主没有创建。',
-  预留: '拟用实例仅为服务器预留标识，不证明宿主已创建；重复意图不重新签发创建许可。',
+  预留: '旧协议的拟用实例只是服务器预留标识；宿主工具协议只预先关联本次调用id，实际实例由宿主分配。两者均不证明宿主已创建；重复意图不重新签发创建许可。',
   阶段: 'audited仅表示创建宏审计完成，不表示成员执行、任务或目标完成。缺失阶段保持未知，不补签、不推断停止。',
   问题: '问题是内部模块报告，不认证底层事实；操作页仅返回最近5条问题，并给出总数与截断标记。',
   持久性: '采用本地文件追加和互斥锁，不声称fsync、掉电恰好一次或检测合法删除与回滚；不提供自动重放或清零。' });
@@ -18,7 +18,8 @@ export class SpawnOperationService {
 
   /** 内部首次许可；模型动作没有begin入口，也不能用查询回执充当宿主执行许可。 */
   async begin(spec) {
-    input(spec, ['项目', 'subject', '任务', '方式', '请求摘要']);
+    input(spec, ['项目', 'subject', '任务', '方式', '请求摘要', '宿主调用'], ['项目', 'subject', '任务', '方式', '请求摘要']);
+    if (Object.hasOwn(spec, '宿主调用')) validateHostCreationCall(spec.宿主调用, spec.方式);
     preciseText(spec.项目, '项目'); preciseText(spec.任务, '任务');
     if (!['subagent', 'team'].includes(spec.方式) || typeof spec.请求摘要 !== 'string' || !/^[a-f0-9]{64}$/.test(spec.请求摘要)) throw new InvalidBody('创建意图只接受subagent/team与精确SHA-256请求摘要。');
     // 排队前固定主体和请求；排队期间调用者修改对象不能迁移已准备的意图。
@@ -33,7 +34,8 @@ export class SpawnOperationService {
         if (canonical(prior.发起主体) !== canonical(actor) || prior.方式 !== args.方式 || prior.请求摘要 !== args.请求摘要) throw new Denied('成员创建操作 · 同任务已有意图', '该任务已有不同主体或请求的创建意图；不能再次创建、覆盖或自动重放。', { detail: { 操作id: prior.操作id, 项目: prior.项目, 任务: prior.任务, 状态: prior.状态, 可创建: false }, howToChange: '先按操作id查询并核对宿主和任务事实；本组件不提供清零或人工补签。' });
         return beginReceipt(prior, false, true);
       }
-      const event = { seq: rows.length + 1, at: this.clock.iso(), by: actor, kind: 'intent', 项目: args.项目, 操作id: randomUUID(), 任务: args.任务, 方式: args.方式, 请求摘要: args.请求摘要, 拟用实例: args.方式 === 'subagent' ? randomUUID() : null };
+      const event = { seq: rows.length + 1, at: this.clock.iso(), by: actor, kind: 'intent', 项目: args.项目, 操作id: randomUUID(), 任务: args.任务, 方式: args.方式, 请求摘要: args.请求摘要,
+        拟用实例: !args.宿主调用 && args.方式 === 'subagent' ? randomUUID() : null, ...(args.宿主调用 ? { 宿主调用: args.宿主调用 } : {}) };
       const next = foldSpawnOperationLedger([...rows, event], args.项目, file).get(event.操作id);
       await this.#append(file, event);
       return beginReceipt(next, true, false);
@@ -80,7 +82,7 @@ export class SpawnOperationService {
       }
       if (SPAWN_OPERATION_STAGES[current.阶段.length - 1] !== args.阶段) throw new Denied('成员创建操作 · 阶段顺序', '阶段必须按宿主返回、登记、绑定、派发、消息接收、宏审计顺序记录；未知阶段不得推断。');
       const host = current.阶段.find((item) => item.阶段 === 'host_returned')?.回执;
-      if ((args.阶段 === 'host_returned' ? current.方式 === 'subagent' && args.回执.实例 !== current.拟用实例 : Object.hasOwn(args.回执, '实例') && args.回执.实例 !== host?.实例) || (Object.hasOwn(args.回执, '任务') && args.回执.任务 !== current.任务)) throw new Denied('成员创建操作 · 阶段归属冲突', '宿主实例必须匹配预留标识，后续实例和任务须与已有意图及宿主回执一致。');
+      if ((args.阶段 === 'host_returned' ? !spawnHostReceiptMatches(current, args.回执) : Object.hasOwn(args.回执, '实例') && args.回执.实例 !== host?.实例) || (Object.hasOwn(args.回执, '任务') && args.回执.任务 !== current.任务)) throw new Denied('成员创建操作 · 阶段归属冲突', '宿主调用或旧预留实例须与意图一致，后续实例及任务须匹配真实宿主回执。');
       const event = { seq: rows.length + 1, at: this.clock.iso(), by: { ...SPAWN_OPERATION_RECORDER }, kind: 'stage', 项目: args.项目, 操作id: args.操作id, 阶段: args.阶段, 回执: args.回执 };
       const next = foldSpawnOperationLedger([...rows, event], args.项目, file).get(args.操作id);
       await this.#append(file, event);
@@ -160,7 +162,7 @@ export class SpawnOperationService {
 function input(value, allowed, required = allowed) { if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some((key) => !allowed.includes(key)) || required.some((key) => !Object.hasOwn(value, key))) throw new InvalidBody('成员创建操作参数缺失或含未知字段；不接受模型声明阶段、认证、任务书或重放许可。'); }
 function preciseText(value, name) { if (!spawnOperationText(value)) throw new InvalidBody(`${name}必须为1至256字符的精确标识。`); }
 function operationId(value) { if (!spawnOperationUUID(value)) throw new InvalidBody('操作id必须是规范UUID。'); }
-function beginReceipt(operation, allow, repeated) { return { 操作id: operation.操作id, 项目: operation.项目, 任务: operation.任务, 方式: operation.方式, 拟用实例: operation.拟用实例, 状态: operation.状态, 可创建: allow, 幂等: repeated }; }
+function beginReceipt(operation, allow, repeated) { return { 操作id: operation.操作id, 项目: operation.项目, 任务: operation.任务, 方式: operation.方式, 拟用实例: operation.拟用实例, ...(operation.宿主调用 ? { 宿主调用: structuredClone(operation.宿主调用) } : {}), 状态: operation.状态, 可创建: allow, 幂等: repeated }; }
 function recordReceipt(operation, stage, seq, repeated) { return { 操作id: operation.操作id, 任务: operation.任务, 拟用实例: operation.拟用实例, 状态: operation.状态, 已记录阶段: stage, 事件序号: seq, 幂等: repeated }; }
 function operationView(item) { return { ...item, 问题: item.问题.slice(-5), 问题总数: item.问题.length, 问题截断: item.问题.length > 5 }; }
 function aggregate(all) { return { 操作: all.length, 未收尾: all.filter((item) => item.状态 !== 'audited').length, 已审计: all.filter((item) => item.状态 === 'audited').length, 已见宿主回执: all.filter((item) => item.状态 !== 'intent').length, 仅有意图: all.filter((item) => item.状态 === 'intent').length, 有问题操作: all.filter((item) => item.问题.length > 0).length, 问题记录: all.reduce((sum, item) => sum + item.问题.length, 0) }; }
