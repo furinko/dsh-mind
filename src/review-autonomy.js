@@ -6,8 +6,13 @@ import {EXPERIMENT_HARD_LIMITS,EXPERIMENT_RECIPES,experimentDigest,experimentKey
 
 export const AUTONOMOUS_EXPERIMENT_BOUNDARY='lead-task-native-policy';
 const MODES=['read-only','workspace-write','danger-full-access'];
-let runtimeNode;
-const nativeNode=()=>{runtimeNode??=Object.freeze(interpreter(process.execPath));return {...runtimeNode};};
+// Resolve the default only when a recipe actually needs it. Electron's execPath
+// is its application executable, not an implicitly usable standalone Node.
+const nativeNode=()=>{
+  if(process.release?.name!=='node'||typeof process.versions?.node!=='string'||process.versions.electron!==undefined||process.versions.bun!==undefined)
+    throw fail('当前宿主不能确认为独立Node；请由Lead在命名实验配方中显式指定可执行文件。');
+  return interpreter(process.execPath);
+};
 const fail=message=>new Denied('任务复核实验 · Lead委派',message,{howToChange:'由实际派发Lead在复核任务正式读根内冻结候选根、命名配方和预算；不需要主权者逐项登记，不得超出当前宿主权限。'});
 function interpreter(file){
   if(typeof file!=='string'||!path.isAbsolute(file)||file.includes('\0'))throw new InvalidBody('可执行文件须为当前宿主的绝对路径。');
@@ -23,7 +28,7 @@ export function autonomousExperimentConfig(raw={}){
   const limits={maxRuns:4,ttlMs:3600000,timeoutMs:300000,outputBytes:524288,closeMs:10000,maxFiles:2000,maxFileBytes:16777216,maxPackageBytes:134217728,...raw.limits};
   experimentKeys(limits,Object.keys(EXPERIMENT_HARD_LIMITS),'实验预算');
   for(const [key,value]of Object.entries(limits))if(!Number.isSafeInteger(value)||value<1||value>EXPERIMENT_HARD_LIMITS[key])throw fail('实验预算越界：'+key);
-  const normalized={enabled:true,mode:'autonomous',boundary:AUTONOMOUS_EXPERIMENT_BOUNDARY,node:nativeNode(),limits};
+  const normalized={enabled:true,mode:'autonomous',boundary:AUTONOMOUS_EXPERIMENT_BOUNDARY,node:null,interpreterSelection:'per-recipe-v2',limits};
   return Object.freeze({...normalized,digest:experimentDigest(normalized)});
 }
 /** 配方名到固定可执行文件/argv的单一映射；运行者只能选择名字。 */
@@ -38,11 +43,12 @@ export function prepareAutonomousCandidate(args,config){
       experimentKeys(recipe,['id','可执行文件','参数'],'实验配方');experimentId(recipe.id,'配方名');
       if(Object.hasOwn(recipes,recipe.id)||['__proto__','constructor','prototype'].includes(recipe.id))throw new InvalidBody('配方名重复或保留。');
       if(!Array.isArray(recipe.参数)||recipe.参数.length>64||recipe.参数.some(s=>typeof s!=='string'||s.length>4096||s.includes('\0'))||recipe.参数.join('').length>16384)throw new InvalidBody('配方参数须为有界字符串数组。');
-      recipes[recipe.id]={interpreter:interpreter(recipe.可执行文件??config.node.path),args:[...recipe.参数]};
+      recipes[recipe.id]={interpreter:recipe.可执行文件===undefined?nativeNode():interpreter(recipe.可执行文件),args:[...recipe.参数]};
     }
   }else{
     if(!Array.isArray(args.配方列表)||!args.配方列表.length||new Set(args.配方列表).size!==args.配方列表.length||args.配方列表.some(name=>!Object.hasOwn(EXPERIMENT_RECIPES,name)))throw new InvalidBody('需要Lead命名的实验配方，或兼容的内建配方列表。');
-    for(const name of args.配方列表)recipes[name]={interpreter:{...config.node},args:[...EXPERIMENT_RECIPES[name]]};
+    const node=nativeNode();
+    for(const name of args.配方列表)recipes[name]={interpreter:{...node},args:[...EXPERIMENT_RECIPES[name]]};
   }
   const root=fs.realpathSync(args.候选根);
   if(path.resolve(args.候选根)!==root&&process.platform!=='win32')throw fail('候选根包含路径跳转，请使用真实路径。');
