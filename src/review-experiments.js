@@ -196,7 +196,7 @@ export class ReviewExperimentService {
         return {...this.#summary(d.grant),撤回:true};
       }
       const permit={id:'rexp-'+randomUUID(),project:spec.project,owner:spec.subject.id,holder:d.ctx.holder.id,task:d.ctx.node.id,generation:d.ctx.node.代??1,holderStamp:stamp(d.ctx.holder),ownerStamp:stamp(d.ctx.ownerMember),targets:d.ctx.targets,credentialEpoch:d.ctx.credentialEpoch,
-        candidate:d.candidate.id,manifest:d.candidate.manifestHash,sourceRoot:d.candidate.root,nodeSnapshot:{...this.#config.node},boundary:this.#config.boundary,config:this.#config.digest,...(this.#config.mode==='autonomous'?{candidateSnapshot:d.candidate,nativePolicy:d.nativePolicy}:{}),recipes:d.recipes,limits:d.limits,expiresAt:clockMs(this.#org)+d.limits.ttlMs};
+        candidate:d.candidate.id,manifest:d.candidate.manifestHash,sourceRoot:d.candidate.root,nodeSnapshot:this.#config.node?{...this.#config.node}:null,boundary:this.#config.boundary,config:this.#config.digest,...(this.#config.mode==='autonomous'?{candidateSnapshot:d.candidate,nativePolicy:d.nativePolicy}:{}),recipes:d.recipes,limits:d.limits,expiresAt:clockMs(this.#org)+d.limits.ttlMs};
       await this.#append(spec.project,spec.subject,{type:'granted',permit});return this.#summary({...permit,runs:[],revoked:false,confirmed:true});
     }));
   }
