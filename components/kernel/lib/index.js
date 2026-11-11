@@ -396,7 +396,7 @@ export async function apply(ctx, config = {}) {
   try {
     reviewExperiments = new ReviewExperimentService({
       org, config: config.reviewExperiments ?? {},
-      services: () => ({ sandbox: 取服务(ctx, 'sandbox'), subprocess: 取服务(ctx, 'subprocess'), sandboxPolicy: 取服务(ctx, 'sandboxPolicy'), sessionQuery: 取服务(ctx, 'sessionQuery') }),
+      services: () => ({ sandbox: 取服务(ctx, 'sandbox'), subprocess: 取服务(ctx, 'subprocess'), sandboxPolicy: 取服务(ctx, 'sandboxPolicy'), sessionQuery: 取服务(ctx, 'sessionQuery'), reviewCleanupOwnership: 取服务(ctx, 'reviewCleanupOwnership') }),
     });
     if (reviewExperiments.status().enabled && typeof ctx.effect !== 'function') throw Object.assign(new Error('实验生命周期未接线'), { code: 'EXPERIMENT_LIFECYCLE_UNAVAILABLE' });
     const lifetime = reviewExperiments;
@@ -647,6 +647,10 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations, 
         运行id: { type: 'string', description: '许可内已生成的实验运行id，不接受任意文件路径' },
         输出流: { type: 'string', enum: ['stdout','stderr'] },
         输出偏移: { type: 'integer', minimum: 0, maximum: 4194304, description: '按原字节分页的起点' },
+        原记录: { type: 'boolean', description: 'task_criteria的原提交/原票只读模式；默认仍仅返回冻结判据。按任务列元数据，按提交序或票读完整分页' },
+        提交序: { type: 'integer', minimum: 1, description: 'task_criteria(原记录=true)精确读取本项目原submitted事件；不能同时给票' },
+        记录偏移: { type: 'integer', minimum: 0, description: '原事件规范JSON的字节起点' },
+        记录长度: { type: 'integer', minimum: 1, maximum: 32768, description: '每页原字节长度，须读至完整并核SHA256' },
         输出长度: { type: 'integer', minimum: 1, maximum: 32768 },
         线程: { type: 'string', description: '线程名（bus_send / bus_read）' },
         发件: { type: 'string', description: '已忽略（W2 安全修复）：发件人恒为真实主体 id，自报无效——冒充发件人是伪造轮边界的第一步' },

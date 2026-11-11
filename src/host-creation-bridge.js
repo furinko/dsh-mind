@@ -65,9 +65,26 @@ export function createHostCreationBridge({ tools, contextOf }) {
       await call.beforeDispatch();
       if (matching(exec) !== call) throw fail('异步核对期间作用域变化，拒绝旧调用。');
       call.entered = true;
-      const result = await next();
-      call.dispatchedValue = result?.isError === false ? canonical(result.value) : null;
-      return result;
+      // Official bodies may wait for route resolution before entering creation.
+      // Cancel their existing signal when our live plan becomes invalid. This
+      // observes waits; it is NOT an atomic Host creation-commit contract.
+      let checking = false, finished = false;
+      const check = async () => {
+        if (finished || checking || call.controller.signal.aborted) return;
+        checking = true;
+        try {
+          if (matching(exec) !== call) throw fail('官方工具等待期间当前准入已变化。');
+          await call.whilePending?.();
+          if (matching(exec) !== call) throw fail('等待复判期间当前准入已变化。');
+        } catch (error) { if (!finished) call.controller.abort(error); }
+        finally { checking = false; }
+      };
+      const timer = !call.maintenance ? setInterval(check, 25) : null;
+      try {
+        const result = await next();
+        call.dispatchedValue = result?.isError === false ? canonical(result.value) : null;
+        return result;
+      } finally { finished = true; if (timer) clearInterval(timer); }
     },
     allows(exec) {
       try { return matching(exec) !== null; }
@@ -79,7 +96,7 @@ export function createHostCreationBridge({ tools, contextOf }) {
       const noun = maintenance ? '中断' : '创建', prefix = maintenance ? 'HOST_MAINTENANCE' : 'HOST_CREATION';
       const unavailable = message => new Fault(`${prefix}_UNAVAILABLE`, message);
       const toolOf = mode => maintenance ? (mode === 'team' ? 'interrupt_agent' : null) : names[mode];
-      const prepare = ({ mode, name, description, standby, modelRoute, beforeDispatch, target }) => {
+      const prepare = ({ mode, name, description, standby, modelRoute, beforeDispatch, whilePending, target }) => {
         const context = requireOuter(outer, maintenance), toolName = toolOf(mode);
         if (!toolName || typeof beforeDispatch !== 'function') throw unavailable(`${noun}方式或本次归属复判未接线。`);
         const definition = definitionOf(toolName, outer);
@@ -97,7 +114,7 @@ export function createHostCreationBridge({ tools, contextOf }) {
         const executor = executorOf(outer);
         const call = { outer, maintenance, context, definition, executor, name: toolName, arguments: canonical(args),
           parent: batchApi ? undefined : outer.token, rootCallId: batchApi ? callId : outer.rootCallId ?? outer.callId,
-          controller, beforeDispatch, token: null, entered: false };
+          controller, beforeDispatch, whilePending, token: null, entered: false };
         let used = false;
         return Object.freeze({ tool: toolName, callId, async execute() {
           if (used) throw unavailable(`本次${noun}句柄已经执行过，不能再次调用宿主。`);

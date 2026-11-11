@@ -69,7 +69,8 @@ async function fixture(t, mode = 'subagent', purpose = 'member', options = {}) {
     interrupt(id, authority) { assert.equal(authority.kind, 'ancestor'); assert.equal(authority.agent, parent); interrupts.push(id); },
   };
   ctx.reflect.provide('subagents', service);
-  await native.apply(ctx, { provider: 'spawn', maxDepth: 2 });
+  if (options.route) ctx.reflect.provide('llm', { resolveCallConfig: (route, signal) => api.onRoute(route, signal) });
+  await native.apply(ctx, { provider: 'spawn', maxDepth: 2, ...(options.route ? { agentOptions: { provider: 'fixture', model: 'no-network' } } : {}) });
   const teamService = {
     tryMembership: agent => agent === parent && mode === 'team' ? { role: 'lead', name: 'lead' } : undefined,
     membership: () => ({ role: 'lead', name: 'lead' }),
@@ -104,6 +105,37 @@ async function fixture(t, mode = 'subagent', purpose = 'member', options = {}) {
   };
   return api;
 }
+
+for (const mutation of ['task', 'permission', 'parent']) test(`route-preflight wait revocation prevents service entry: ${mutation}`, async t => {
+  const f = await fixture(t, 'subagent', 'member', { route: true });
+  let reached, release;
+  const entered = new Promise(r => { reached = r; }), held = new Promise(r => { release = r; });
+  let routeSignal;
+  f.onRoute = async (_route, signal) => { routeSignal = signal; reached(); await held; };
+  const running = f.invoke();
+  await Promise.race([entered, running.then(r => { throw Error('never reached actual SDK route preflight: ' + JSON.stringify(r)); })]);
+  assert.equal(f.calls.length, 0, 'SDK has not entered the creation service');
+  if (mutation === 'task') await f.org.tasks.close(f.task.id, { subject: LEAD, 项目: P, 原因: 'withdraw while actual SDK route resolver is suspended' });
+  if (mutation === 'permission') await f.f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '审批' })), await f.org.policy.reload();
+  if (mutation === 'parent') f.agents.set(f.parent.id, { ...f.parent });
+  // Bounded observation, no resampling; SDK resolver remains held until cancellation.
+  let timer;
+  try { await Promise.race([new Promise(r => { if (routeSignal.aborted) r(); else routeSignal.addEventListener('abort', r, { once: true }); }), new Promise((_, reject) => { timer = setTimeout(() => reject(Error('stale plan signal was not cancelled during route wait')), 2500); })]); }
+  finally { clearTimeout(timer); release(); }
+  const result = await running;
+  assert.equal(result.成功, false); assert.equal(f.calls.length, 0); assert.equal(f.children.length, 0); assert.equal(f.sends.length, 0); assert.equal(f.interrupts.length, 0);
+  if (mutation === 'task') await assertTaskClosed(f);
+  assert.equal(f.operation().状态, 'intent');
+});
+
+test('route-preflight held current plan can release and create through the official body once',async t=>{
+  const f=await fixture(t,'subagent','member',{route:true});let release,reached;
+  const wait=new Promise(r=>{release=r;}),entered=new Promise(r=>{reached=r;});
+  f.onRoute=async()=>{reached();await wait;};
+  const running=f.invoke();await Promise.race([entered,running.then(()=>{throw Error('route was not entered');})]);
+  assert.equal(f.calls.length,0);release();const r=await running;
+  assert.equal(r.成功,true,JSON.stringify(r));assert.equal(f.calls.length,1);assert.equal(f.sends.length,1);assert.equal(f.interrupts.length,0);
+});
 
 for (const mode of ['team', 'subagent']) {
   for (const [label, delegation, allow] of [

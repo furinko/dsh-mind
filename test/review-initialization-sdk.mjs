@@ -91,3 +91,15 @@ test('SDK reviewer cannot self-grant and explicit input cannot expand roots or i
   const injected=await s.invoke({...s.args,env:{NODE_OPTIONS:'not-used'}});assert.equal(injected.成功,false,JSON.stringify(injected));assert.match(injected.理由,/未知字段/);
   assert.equal(s.calls.spawn.length,0);
 }));
+
+test('SDK full kernel exposes original report and failed ticket through scoped read schema',()=>fixture(async s=>{
+  const project=REVIEW_PROJECT,subject=s.reviewer;
+  await s.org.tasks.submit(s.task.id,{subject,项目:project,结论:'original report full text',结论层:'不过',反例面:['zero creation criterion unmet']});
+  const voted=await s.org.tasks.review(s.task.id,{subject:s.parent('x').subject,项目:project,三态:'不过',分歧清单:['retain failure'],反例面:[]});
+  const list=await s.invoke({action:'task_criteria',原记录:true,id:s.task.id},true);assert.equal(list.成功,true,JSON.stringify(list));assert.equal(list.总数,2);
+  const ticket=voted.复核经过.at(-1).票,page=await s.invoke({action:'task_criteria',原记录:true,票:ticket});
+  assert.equal(page.成功,true,JSON.stringify(page));assert.equal(JSON.parse(Buffer.from(page.字节Base64,'base64')).三态,'不过');
+  const outside=await s.org.tasks.create({subject:s.parent('x').subject,项目:project,描述:'outside read domain',负责人:['插件工程'],判据:['outside']});
+  assert.equal((await s.invoke({action:'task_criteria',原记录:true,id:outside.id},true)).成功,false);
+  assert.equal((await s.invoke({action:'review_experiment_cleanup',许可id:'not-a-permit',运行id:'not-a-run'})).成功,false);
+}));

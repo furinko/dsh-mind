@@ -1128,6 +1128,12 @@ await runAction({ org, 项目, subject, 主体, args: { action, ...args }, 面: 
 
 验收运行`npm test`覆盖preflight、根测试、board测试与client harness，另跑安装selftest，合计五道门；拒绝路径与独立副本变异必能证伪，测试池不缩小，源码与日志哈希对应。另分开记录真实运行态、尚未实测边界与当前探针历史；没有独立过票不得采纳本次恢复目标。
 
+## 调度复核修订（2026-11-11，源码候选）
+
+- `task_criteria` 默认仍只读冻结判据。显式 `原记录=true` 可按同项目 `id` 分页列原提交/原票元数据（`偏移/limit`），按 `提交序` 或 `票=rv-N` 读取选定原事件的完整规范 JSON 字节（`记录偏移/记录长度`）。两种精确选择器互斥。后续页带 `数据版本`；逐页拼接 `字节Base64` 至 `完整=true`，核总字节及 SHA256。列表不是全文。Lead/人侧按真实项目读取；复核员仍仅当前凭证匹配的本人任务和显式复核对象，不新增模型动作，不开放总线写或复活绑定。
+- 人侧命令 `/mind review_experiment_cleanup {"许可id":"rexp-...","运行id":"rrun-..."}` 只处理同一服务仍持有原受管句柄和实体观察的安全残留；必须重新确认退出、身份历史、目录及内容，过现行 `delete` 策略。模型工具不可达，Lead 不能自行删除。成功追加关联原 finished 哈希的 `cleanup_recovered` 事实；不改原 finished、不恢复许可或额度。原树变化、审计未知、身份变化、未知进程、重启后缺句柄、缺归属证明、路径替换/链接/硬链接或目录已被外部删除均拒绝。
+- Windows 恢复另需可信宿主 `reviewCleanupOwnership.observe(root)` 同步提供 `{version:1,owner,securityDigest}`（实际所有者 SID 及安全描述符的 SHA256），不得用 Node 的 uid/gid 或模型声明冒充。当前公开 SDK 未提供此服务，本修订没有安装提供者，因此真实 Windows 恢复保持关闭；夹具替身仅验证协议。旧残留没有可追认的原实体/句柄事实，不能靠此命令补签。详见[修订报告](docs/MIND-FLOW-REPAIR-2026-11-11.md)。
+
 
 ## 信息收录与成长（2026-10-24）
 

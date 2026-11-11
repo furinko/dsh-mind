@@ -36,7 +36,7 @@ export async function executeReviewProcess({services,scope,argv,env,limits,signa
     const native=nativePolicy?.();
     if(nativePolicy&&!['read-only','workspace-write','danger-full-access'].includes(native?.mode))throw new Fault('EXPERIMENT_HOST_POLICY_INVALID','原生权限不可核对。');
     const full=native?.mode==='danger-full-access';
-    const attempt=Promise.resolve().then(()=>full?{argv:[...argv],enforcement:'none',denialSignatures:[],runnerFailureRules:[]}:services.sandbox.confine(argv,{mode:native?.mode??'workspace-write',workspaceRoot:scope.workspace},controller.signal));
+    const attempt=Promise.resolve().then(()=>full?{argv:[...argv],enforcement:'none',denialSignatures:[],runnerFailureRules:[]}:services.sandbox.confine(argv,{mode:native?.mode??'workspace-write',workspaceRoot:scope.root??scope.workspace},controller.signal));
     const wrapped=await Promise.race([attempt,stopped]);
     if(wrapped?.stopped)return finish('sandbox-setup-unknown',false);
     confined=wrapped;
