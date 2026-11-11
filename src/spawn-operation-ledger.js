@@ -6,7 +6,7 @@ import { Fault, InvalidBody, OUTCOME_RECEIPT_KEYS } from './kernel/errors.js';
 
 export const SPAWN_OPERATION_STAGES = Object.freeze(['host_returned', 'registered', 'bound', 'dispatched', 'message_received', 'audited']);
 export const SPAWN_OPERATION_RECORDER = Object.freeze({ id: 'spawn-operation-journal', kind: '系统' });
-export const SPAWN_OPERATION_ISSUE_CODES = Object.freeze(['MEMBER_SPAWN_RESULT_UNKNOWN', 'MEMBER_SPAWN_RESERVED_ID_MISMATCH', 'MEMBER_SPAWN_RECEIPT_UNKNOWN', 'MEMBER_SPAWN_NO_ID', 'MEMBER_SPAWN_NO_AGENT', 'MEMBER_SPAWN_ASSIGN_FAILED', 'MEMBER_SPAWN_CARD_NOT_READY', 'MEMBER_SPAWN_DISPATCH_FAILED', 'MEMBER_SPAWN_MESSAGE_FAILED', 'MEMBER_SPAWN_FAILED_AFTER_BUDGET', 'MEMBER_SPAWN_CONTRACT', 'MEMBER_SPAWN_FAILED', 'MEMBER_SPAWN_INCOMPLETE', 'MEMBER_MESSAGE_RESULT_UNKNOWN', 'MEMBER_MESSAGE_RECEIPT_UNKNOWN', 'MEMBER_RELEASE_UNKNOWN', 'AUDIT_APPEND_FAILED_AFTER_EVENT', 'GOAL_BUDGET_AUDIT_APPEND_FAILED_AFTER_EVENT', 'SPAWN_OPERATION_APPEND_FAILED', 'DENIED', 'INVALID_BODY']);
+export const SPAWN_OPERATION_ISSUE_CODES = Object.freeze(['HOST_CREATION_UNAVAILABLE', 'HOST_CREATION_DENIED', 'HOST_CREATION_RESULT_UNKNOWN', 'MEMBER_SPAWN_RESULT_UNKNOWN', 'MEMBER_SPAWN_RESERVED_ID_MISMATCH', 'MEMBER_SPAWN_RECEIPT_UNKNOWN', 'MEMBER_SPAWN_NO_ID', 'MEMBER_SPAWN_NO_AGENT', 'MEMBER_SPAWN_ASSIGN_FAILED', 'MEMBER_SPAWN_CARD_NOT_READY', 'MEMBER_SPAWN_DISPATCH_FAILED', 'MEMBER_SPAWN_MESSAGE_FAILED', 'MEMBER_SPAWN_FAILED_AFTER_BUDGET', 'MEMBER_SPAWN_CONTRACT', 'MEMBER_SPAWN_FAILED', 'MEMBER_SPAWN_INCOMPLETE', 'MEMBER_MESSAGE_RESULT_UNKNOWN', 'MEMBER_MESSAGE_RECEIPT_UNKNOWN', 'MEMBER_RELEASE_UNKNOWN', 'AUDIT_APPEND_FAILED_AFTER_EVENT', 'GOAL_BUDGET_AUDIT_APPEND_FAILED_AFTER_EVENT', 'SPAWN_OPERATION_APPEND_FAILED', 'DENIED', 'INVALID_BODY']);
 const ISSUE_BOOLEANS = Object.freeze(['已请求', '已接收', '已停止', '已封存', '当前驻留已释放']);
 const RECEIPT_FIELDS = Object.freeze({ host_returned: ['实例', '初始消息id', '团队名'], registered: ['实例'], bound: ['实例', '任务'], dispatched: ['任务'], message_received: ['实例', '任务', '消息id'], audited: ['实例', '任务'] });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -21,7 +21,8 @@ export function spawnOperationLogPath(layout, project) { return typeof layout.sp
 export function spawnOperationLockPath(layout, project) { return typeof layout.spawnOperationLock === 'function' ? layout.spawnOperationLock(project) : join(dirname(layout.taskLog(project)), 'spawn-operations.lock'); }
 
 export function validateSpawnOperationReceipt(stage, receipt) {
-  const fields = Object.hasOwn(RECEIPT_FIELDS, stage) ? RECEIPT_FIELDS[stage] : null;
+  let fields = Object.hasOwn(RECEIPT_FIELDS, stage) ? RECEIPT_FIELDS[stage] : null;
+  if (fields && stage === 'host_returned' && Object.hasOwn(receipt ?? {}, '宿主调用id')) fields = [...fields, '宿主调用id'];
   if (!fields || !exact(receipt, fields) || fields.some((key) => ['初始消息id', '团队名'].includes(key) ? receipt[key] !== null && !spawnOperationText(receipt[key]) : !spawnOperationText(receipt[key]))) throw new InvalidBody('成员创建阶段或精确回执字段无效；只记录标识，不接收任务书、错误正文或自报完成。');
   return receipt;
 }
@@ -38,11 +39,25 @@ export function validateSpawnOperationIssue(code, receipts) {
   return receipts;
 }
 
+export function validateHostCreationCall(call, mode) {
+  if (!exact(call, ['版本', '工具', '调用id']) || call.版本 !== 1 || call.工具 !== ({ subagent: 'subagent', team: 'spawn_teammate' })[mode]
+    || typeof call.调用id !== 'string' || !call.调用id.startsWith('mind-create-') || !spawnOperationUUID(call.调用id.slice(12))) throw new InvalidBody('宿主创建关联必须是本次官方工具、版本1与服务器生成的调用id；不是创建或消息接收证明。');
+  return call;
+}
+
+export function spawnHostReceiptMatches(intent, receipt) {
+  return intent.宿主调用
+    ? receipt.宿主调用id === intent.宿主调用.调用id
+    : !Object.hasOwn(receipt, '宿主调用id') && (intent.方式 !== 'subagent' || receipt.实例 === intent.拟用实例);
+}
+
 export function validateSpawnOperationEvent(row) {
-  const keys = row?.kind === 'intent' ? ['seq', 'at', 'by', 'kind', '项目', '操作id', '任务', '方式', '请求摘要', '拟用实例'] : row?.kind === 'stage' ? ['seq', 'at', 'by', 'kind', '项目', '操作id', '阶段', '回执'] : row?.kind === 'issue' ? ['seq', 'at', 'by', 'kind', '项目', '操作id', '故障码', '已确认阶段'] : null;
+  const keys = row?.kind === 'intent' ? ['seq', 'at', 'by', 'kind', '项目', '操作id', '任务', '方式', '请求摘要', '拟用实例', ...(Object.hasOwn(row, '宿主调用') ? ['宿主调用'] : [])] : row?.kind === 'stage' ? ['seq', 'at', 'by', 'kind', '项目', '操作id', '阶段', '回执'] : row?.kind === 'issue' ? ['seq', 'at', 'by', 'kind', '项目', '操作id', '故障码', '已确认阶段'] : null;
   if (!keys || !exact(row, keys) || !positive(row.seq) || !spawnOperationText(row.at) || Number.isNaN(Date.parse(row.at)) || !spawnOperationText(row.项目) || !spawnOperationUUID(row.操作id)) throw new InvalidBody('成员创建事件的种类、信封、项目、UUID或字段集合无效。');
   if (row.kind === 'intent') {
-    if (!actor(row.by, 'Lead') || !spawnOperationText(row.任务) || !['subagent', 'team'].includes(row.方式) || typeof row.请求摘要 !== 'string' || !/^[a-f0-9]{64}$/.test(row.请求摘要) || (row.方式 === 'subagent' ? !spawnOperationUUID(row.拟用实例) : row.拟用实例 !== null)) throw new InvalidBody('创建意图必须保存真实Lead、任务、方式、请求摘要及服务器预留实例；预留不代表已创建。');
+    const hostAllocated = Object.hasOwn(row, '宿主调用');
+    if (hostAllocated) validateHostCreationCall(row.宿主调用, row.方式);
+    if (!actor(row.by, 'Lead') || !spawnOperationText(row.任务) || !['subagent', 'team'].includes(row.方式) || typeof row.请求摘要 !== 'string' || !/^[a-f0-9]{64}$/.test(row.请求摘要) || (hostAllocated || row.方式 === 'team' ? row.拟用实例 !== null : !spawnOperationUUID(row.拟用实例))) throw new InvalidBody('创建意图必须保存真实Lead、任务、方式、摘要，以及旧预留实例或明确宿主分配协议；意图不代表已创建。');
   } else {
     if (!actor(row.by, '系统') || row.by.id !== SPAWN_OPERATION_RECORDER.id) throw new InvalidBody('阶段事实只能标记内部记录来源，不能伪签为旧Lead的本人动作。');
     if (row.kind === 'stage') validateSpawnOperationReceipt(row.阶段, row.回执);
@@ -55,7 +70,7 @@ export function validateSpawnOperationEvent(row) {
 export function foldSpawnOperationLedger(rows, project = null, file = 'spawn-operations.jsonl') {
   const operations = new Map();
   const tasks = new Set();
-  const candidates = new Set();
+  const candidates = new Set(), hostCalls = new Set();
   let ledgerProject = project;
   const fail = (index, reason) => { throw new Fault('SPAWN_OPERATION_LEDGER_INVALID', `成员创建账本第 ${index + 1} 行${reason}；不能跳行、猜测未创建或重新放行宿主。`, { detail: { file, line: index + 1, reason } }); };
   for (const [index, row] of rows.entries()) {
@@ -67,9 +82,12 @@ export function foldSpawnOperationLedger(rows, project = null, file = 'spawn-ope
       if (prior || tasks.has(row.任务) || (row.拟用实例 !== null && candidates.has(row.拟用实例))) fail(index, '重复操作、同任务重复意图或重复预留实例');
       tasks.add(row.任务);
       if (row.拟用实例 !== null) candidates.add(row.拟用实例);
-      operations.set(row.操作id, { 操作id: row.操作id, 项目: row.项目, 任务: row.任务, 方式: row.方式, 发起主体: structuredClone(row.by), 请求摘要: row.请求摘要, 拟用实例: row.拟用实例,
+      if (row.宿主调用 && hostCalls.has(row.宿主调用.调用id)) fail(index, '重复宿主调用关联');
+      if (row.宿主调用) hostCalls.add(row.宿主调用.调用id);
+      const allocation = row.宿主调用 ? { 宿主调用: structuredClone(row.宿主调用) } : {};
+      operations.set(row.操作id, { 操作id: row.操作id, 项目: row.项目, 任务: row.任务, 方式: row.方式, 发起主体: structuredClone(row.by), 请求摘要: row.请求摘要, 拟用实例: row.拟用实例, ...allocation,
         状态: 'intent', 起始于: row.at, 起始事件序号: row.seq, 最新事件序号: row.seq,
-        阶段: [{ 阶段: 'intent', 回执: { 拟用实例: row.拟用实例 }, 于: row.at, 事件序号: row.seq }], 问题: [] });
+        阶段: [{ 阶段: 'intent', 回执: { 拟用实例: row.拟用实例, ...allocation }, 于: row.at, 事件序号: row.seq }], 问题: [] });
       continue;
     }
     if (row.kind === 'issue') {
@@ -82,7 +100,7 @@ export function foldSpawnOperationLedger(rows, project = null, file = 'spawn-ope
     if (!prior || prior.项目 !== row.项目 || row.阶段 !== SPAWN_OPERATION_STAGES[prior.阶段.length - 1]) fail(index, '缺少同源意图、阶段乱序或终态后新增阶段');
     const receipt = row.回执;
     const host = prior.阶段.find((item) => item.阶段 === 'host_returned')?.回执;
-    if (row.阶段 === 'host_returned' ? prior.方式 === 'subagent' && receipt.实例 !== prior.拟用实例 : Object.hasOwn(receipt, '实例') && receipt.实例 !== host?.实例) fail(index, '宿主实例与预留或已有回执不一致');
+    if (row.阶段 === 'host_returned' ? !spawnHostReceiptMatches(prior, receipt) : Object.hasOwn(receipt, '实例') && receipt.实例 !== host?.实例) fail(index, '宿主调用、预留实例或已有回执不一致');
     if (Object.hasOwn(receipt, '任务') && receipt.任务 !== prior.任务) fail(index, '阶段任务与创建意图不一致');
     prior.阶段.push({ 阶段: row.阶段, 回执: structuredClone(receipt), 于: row.at, 事件序号: row.seq });
     prior.状态 = row.阶段;

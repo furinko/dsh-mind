@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { makeFixture, LEAD } from './helpers.mjs';
 import { Org } from '../src/org.js';
 import { runAction } from '../lib/actions.js';
+import { fakeCreationCapability } from './host-creation-fixture.mjs';
 import { readTaskLedger } from '../src/task-ledger.js';
 import { Fault, NeedsApproval, Denied, describeFailure } from '../src/kernel/errors.js';
 
@@ -22,9 +23,10 @@ async function scene(run) {
       subagents: {
         startContinuable: async (spec) => {
           calls.spawn++;
-          const childId = spec.childId ?? `outcome-child-${calls.spawn}`;
-          created.push({ id: childId, spec });
-          return { childId, messageId: 'initial-received' };
+          assert.equal(Object.hasOwn(spec, 'childId'), false);
+          const childId = `outcome-child-${calls.spawn}`;
+          created.push({ id: childId, spec, mode: 'continuable' });
+          return { childId };
         },
         sendMessage: async (_parent, id, content) => {
           calls.send += 1;
@@ -32,9 +34,11 @@ async function scene(run) {
           inbox.push({ id, content, ...receipt });
           return receipt;
         },
+        listChildren: async () => created,
         drainContinuableChildren: async () => { calls.release += 1; },
       },
     };
+    host.hostCreation = fakeCreationCapability(host);
     const act = (args) => runAction({ org, 项目: P, subject: LEAD, 主体: LEAD, 面: 'tool', 宿主: host, args });
     const create = () => org.tasks.create({ subject: LEAD, 项目: P, 描述: '部分回执验收', 负责人: '插件工程', 判据: ['交付可核对'] });
     const approvalLevel = async () => {

@@ -1,10 +1,12 @@
 /** 真实内核装配路径：pre→guard→body、跨入口共用额度、观测与只读摘要。 */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { fakeCreationCapability } from './host-creation-fixture.mjs';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeFixture, LEAD, SOVEREIGN } from './helpers.mjs';
 import { fakeHost } from './host-harness.mjs';
+import { attachFileParent } from './file-parent.mjs';
 import { apply } from '../components/kernel/lib/index.js';
 import { shareOrg, forgetSharedOrg, shareKey } from '../src/runtime.js';
 import { runAction } from '../lib/actions.js';
@@ -19,13 +21,17 @@ async function scene(run, audit = true) {
     const input = join(cwd, 'input.txt'); await writeFile(input, 'fixture data');
     const config = { home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P,
       projectBindings: [{ path: cwd, project: P }], memberFileAccess: { read: [cwd], write: [cwd] }, audit工具调用: audit };
+    attachFileParent(host,cwd);
     await apply(host.ctx, config); org = await shareOrg(config);
     const goal = await org.goals.create({ subject: LEAD, 项目: P, 期望结果: '共享受管准入额度', 完成依据: ['当前交付通过'], 来源: '明确用户意图的转述', 下一步: '创建成员并完成文件调查' });
-    const parent = { session: { id: LEAD.id, header: { cwd } } };
+    const parent = host.ctx.agents.get(LEAD.id);
     let creates = 0; let body = 0; let serial = 0;
+    const children = [];
     const runtime = { agent: parent, signal: new AbortController().signal, project: P,
       delegation: { authorize: () => ({ fingerprint: 'budget-test-delegation' }) },
-      subagents: { startContinuable: async (spec) => { creates++; return { childId: spec.childId ?? `budget-child-${creates}`, messageId: `initial-${creates}` }; }, sendMessage: async () => `opened-${creates}`, drainContinuableChildren: async () => {} } };
+      subagents: { startContinuable: async (spec) => { assert.equal(Object.hasOwn(spec, 'childId'), false); creates++; const childId = `budget-child-${creates}`; children.push({ id: childId, mode: 'continuable' }); return { childId }; }, listChildren: async () => children,
+        sendMessage: async () => `opened-${creates}`, drainContinuableChildren: async () => {} } };
+    runtime.hostCreation = fakeCreationCapability(runtime);
     const task = async (bind = false) => {
       const node = await org.tasks.create({ subject: LEAD, 项目: P, 描述: `受管工作${++serial}`, 负责人: '插件工程', 判据: ['内容可验证'] });
       const current = await org.goals.get(goal.id, { subject: LEAD, 项目: P });

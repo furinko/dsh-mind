@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { makeFixture, LEAD } from './helpers.mjs';
 import { Org } from '../src/org.js';
 import { runAction } from '../lib/actions.js';
+import { fakeCreationCapability, waitForCreationCallback } from './host-creation-fixture.mjs';
 import { readJsonl } from '../src/kernel/fsx.js';
 import { NeedsApproval } from '../src/kernel/errors.js';
 import { DelegationPolicy } from '../src/delegation-policy.js';
@@ -14,15 +15,16 @@ async function setup() {
   const f = await makeFixture();
   const org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
   const calls = { spawn: 0, stop: [], drain: [] };
-  const agent = { session: { id: 'lead' } };
+  const agent = { session: { id: 'lead' } }, children = [];
   const subagents = {
-    async startContinuable() { assert.equal(this, subagents); return { childId: `owned-${++calls.spawn}`, messageId: 'initial-accepted' }; },
+    async startContinuable() { assert.equal(this, subagents); const childId = `owned-${++calls.spawn}`; children.push({ id: childId, mode: 'continuable' }); return { childId }; },
     async sendMessage() { assert.equal(this, subagents); return { messageId: 'sent' }; },
     async interrupt(id) { assert.equal(this, subagents); calls.stop.push(id); },
     async drainContinuableChildren(parent, ids) { assert.equal(this, subagents); assert.equal(parent, agent); calls.drain.push(...ids); },
-    async listChildren() { return [{ id: 'owned-1', label: 'real child' }, { id: 'unregistered', label: 'unknown child' }]; },
+    async listChildren() { return [...children, { id: 'unregistered', mode: 'continuable', label: 'unknown child' }]; },
   };
   const host = { agent, subagents, delegation: { authorize: () => ({ fingerprint: 'isolated-failure-test' }) } };
+  host.hostCreation = fakeCreationCapability(host);
   const action = (args) => runAction({ org, 项目: P, 主体: LEAD, 面: 'tool', 宿主: host, args });
   const openArgs = { action: 'debate_open', 问题: '失败矩阵', 参与者: 'member-a', 参与岗位: '插件工程,插件工程', 方式: 'subagent' };
   const mode = async (value) => { await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: value })); await org.policy.reload(); };
@@ -194,52 +196,72 @@ it('宿主冒返已有身份时，不改绑、不seal、不停预给与别场', 
   }
 });
 
-for (const mode of ['subagent', 'team']) it(`创建后${mode}停机API消失：补偿如实失败而非可选调用假绿`, async () => {
+for (const timing of ['returned', 'registration']) for (const mode of ['subagent', 'team']) it(`创建后${mode}停机API在${timing}窗口消失：不假报登记或补偿成功`, async () => {
   const s = await setup();
   try {
-    s.org.registry.assign = async () => { throw new Error('registration before write injected'); };
+    let revoke = () => { delete s.subagents.drainContinuableChildren; }, assigns = 0;
+    s.org.registry.assign = async () => { assigns++; if (timing === 'registration') revoke(); throw new Error('registration before write injected'); };
     let run = s.action;
     let stopCalls = 0;
     if (mode === 'subagent') {
       const start = s.subagents.startContinuable;
       s.subagents.startContinuable = async function (...args) {
         const result = await start.apply(this, args);
-        delete this.drainContinuableChildren;
+        if (timing === 'returned') revoke();
         return result;
       };
     } else {
+      const roster = [];
       const teams = {
-        async spawnTeammate() { assert.equal(this, teams); s.calls.spawn++; delete this.interrupt; return { member: { id: 'owned-team', name: 'temporary' } }; },
+        async spawnTeammate(_agent, request) { assert.equal(this, teams); s.calls.spawn++; if (timing === 'returned') revoke(); const member = { id: 'owned-team', name: request.name, role: 'teammate', status: 'inactive' }; roster.push(member); return { member }; },
         async sendMessage() {},
         async interrupt() { stopCalls++; },
-        listMembers() { return [{ role: 'teammate', id: 'owned-team', name: 'temporary' }]; },
+        listMembers() { return roster; },
       };
+      revoke = () => { delete teams.interrupt; };
       const host = { agent: { session: { id: 'lead' } }, agentTeams: teams, delegation: { authorize: () => ({ fingerprint: 'test' }) } };
+      host.hostCreation = fakeCreationCapability(host);
       run = args => runAction({ org: s.org, 项目: P, 主体: LEAD, 面: 'tool', 宿主: host, args });
     }
     let failure;
     await assert.rejects(() => run({ ...s.openArgs, 方式: mode }), e => (failure = e, e.code === 'COUNCIL_CREATE_FAILED'));
-    assert.equal(s.calls.spawn, 1, '通过副作用前校验，真实创建后才注入缺接口');
-    assert.notEqual(failure.detail.错误详情.补偿失败, null, '缺接口必须有补偿失败证据');
-    assert.match(failure.detail.错误详情.补偿失败, /公共(?:释放|中断)接口.*不可用/);
-    assert.match(failure.detail.错误详情.原因, /registration before write injected/);
+    assert.equal(s.calls.spawn, 1, '通过副作用前校验，创建体执行后才注入缺接口');
+    if (timing === 'returned') {
+      assert.equal(assigns, 0, '返回前必要通道已失效，不能沿旧计划登记');
+      assert.equal(failure.cause.code, 'MEMBER_SPAWN_RESULT_UNKNOWN');
+      assert.equal(failure.outcome.提交状态, '未知'); assert.equal(failure.outcome.可重试, false);
+      assert.deepEqual(failure.detail.已创建, []);
+    } else {
+      assert.equal(assigns, 1, '返回检查通过之后的登记失败仍保留补偿负例');
+      assert.match(failure.detail.错误详情.补偿失败, /公共(?:释放|中断)接口.*不可用/);
+      assert.match(failure.detail.错误详情.原因, /registration before write injected/);
+    }
     assert.deepEqual(s.calls.drain, []); assert.deepEqual(s.calls.stop, []); assert.equal(stopCalls, 0);
-    assert.equal((await s.org.registry.identity()).members['member-a'].status, '在岗');
+    const members = (await s.org.registry.identity()).members;
+    assert.equal(members['member-a'].status, '在岗'); assert.equal(members['owned-1'], undefined); assert.equal(members['owned-team'], undefined);
   } finally { await s.f.cleanup(); }
 });
 
-it('opened未能提交时如实报未落线，不声称已落或已作废', async () => {
+for (const window of ['intent', 'opened']) it(`${window}无法落线时保留原失败阶段，不声称已开场或已作废`, async () => {
   const s = await setup();
-  const councilLog = s.org.layout.councilLog;
+  const councilLog = s.org.layout.councilLog, cardOf = s.org.registry.cardOf.bind(s.org.registry);
   try {
-    s.org.layout.councilLog = () => s.f.home;
+    if (window === 'intent') s.org.layout.councilLog = () => s.f.home;
+    else s.org.registry.cardOf = async id => {
+      const card = await cardOf(id);
+      if (id === 'owned-2') s.org.layout.councilLog = () => s.f.home;
+      return card;
+    };
     let failure;
-    await assert.rejects(() => s.action(s.openArgs), e => (failure = e, e.code === 'COUNCIL_OPEN_FAILED'));
-    assert.equal(failure.detail.opened已落线, false);
-    assert.match(failure.message, /opened 事件未能落线/);
+    await assert.rejects(() => s.action(s.openArgs), e => (failure = e, e.code === (window === 'intent' ? 'COUNCIL_CREATE_FAILED' : 'COUNCIL_OPEN_FAILED')));
+    if (window === 'opened') {
+      assert.equal(failure.detail.opened已落线, false);
+      assert.match(failure.message, /opened 事件未能落线/);
+    }
     assert.doesNotMatch(failure.message, /已尝试冻结作废/);
-    assert.deepEqual(s.calls.drain.sort(), ['owned-1', 'owned-2']);
-  } finally { s.org.layout.councilLog = councilLog; await s.f.cleanup(); }
+    assert.equal(s.calls.spawn, window === 'intent' ? 0 : 2);
+    assert.deepEqual(s.calls.drain.sort(), window === 'intent' ? [] : ['owned-1', 'owned-2']);
+  } finally { s.org.layout.councilLog = councilLog; s.org.registry.cardOf = cardOf; await s.f.cleanup(); }
 });
 
 it('开场发送阻塞后另一Root先收敛：失败作废不得覆盖已定格状态', async () => {
@@ -252,7 +274,7 @@ it('开场发送阻塞后另一Root先收敛：失败作废不得覆盖已定格
   try {
     s.subagents.sendMessage = async () => { entered(); await gate; throw new Error('delayed send injected'); };
     opening = s.action(s.openArgs).then(value => ({ value }), error => ({ error }));
-    await ready;
+    await waitForCreationCallback(ready, opening);
     const [opened] = await s.org.council.list({ 项目: P });
     for (const id of opened.参与者) await s.org.council.answer({ subject: { id, kind: '成员' }, 项目: P, id: opened.id, 结论: id });
     await s.org.council.unlock({ subject: LEAD, 项目: P, id: opened.id });

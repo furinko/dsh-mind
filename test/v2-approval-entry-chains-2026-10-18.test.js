@@ -13,6 +13,7 @@ import { makeFixture, seedReviewRelation, LEAD, REVIEWER } from './helpers.mjs';
 import { Org } from '../src/org.js';
 import { readJsonl } from '../src/kernel/fsx.js';
 import { runAction } from '../lib/actions.js';
+import { fakeCreationCapability } from './host-creation-fixture.mjs';
 import { Denied, InvalidBody, NeedsApproval } from '../src/kernel/errors.js';
 
 const P = 'proj-f-entry-chains';
@@ -32,19 +33,18 @@ async function 切档(f, org, 档位) {
 function 假宿主() {
   const 调用 = { 创建: 0, 发消息: 0, 停用: 0 };
   const 已创建 = [];
-  return {
-    调用,
-    已创建,
-    宿主: {
-      agent: { session: { id: 'lead-session' } },
-      delegation: { authorize: () => ({ fingerprint: 'test-auth' }), status: () => ({}) },
-      subagents: {
-        startContinuable: async (spec) => { 调用.创建 += 1; const childId = spec.childId ?? 'member-spawned'; 已创建.push({ id: childId, spec }); return { childId, messageId: 'initial-accepted' }; },
-        sendMessage: async () => { 调用.发消息 += 1; return 'work-inbox-accepted'; },
-        drainContinuableChildren: async () => { 调用.停用 += 1; },
-      },
+  const 宿主 = {
+    agent: { session: { id: 'lead-session' } },
+    delegation: { authorize: () => ({ fingerprint: 'test-auth' }), status: () => ({}) },
+    subagents: {
+      startContinuable: async (spec) => { assert.equal(Object.hasOwn(spec, 'childId'), false); 调用.创建 += 1; const childId = 'member-spawned'; 已创建.push({ id: childId, spec, mode: 'continuable' }); return { childId }; },
+      listChildren: async () => 已创建,
+      sendMessage: async () => { 调用.发消息 += 1; return 'work-inbox-accepted'; },
+      drainContinuableChildren: async () => { 调用.停用 += 1; },
     },
   };
+  宿主.hostCreation = fakeCreationCapability(宿主);
+  return { 调用, 已创建, 宿主 };
 }
 
 /** 跑一次写动作；返回错误或结果。 */
@@ -104,7 +104,7 @@ describe('② member_spawn 入口链', () => {
 
       await org.intervention.人侧决议({ 请求id, 决定: '批准', 通道: '设置页', 认证: '宿主 Connection 已认证' });
       const 回 = await 跑(org, 宿主, { action: 'member_spawn', 方式: 'subagent', 任务书: '开工', 节点: 节点.id, 岗位: '插件工程', 审批引用: 请求id });
-      assert.equal(回.实例, 已创建[0].spec.childId);
+      assert.equal(Object.hasOwn(已创建[0].spec, 'childId'), false, '宿主分配ID，不能把旧预留字段当创建回执');
       assert.equal(回.实例, 已创建[0].id);
       assert.equal(调用.创建, 1, '批准后只创建一次子');
       assert.equal((await org.registry.identity()).members[已创建[0].id].status, '在岗', '实例已登记在岗');

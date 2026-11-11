@@ -22,10 +22,12 @@
 import { randomUUID } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
-import { appendLines, readJsonl, serializeByKey, withLock } from './kernel/fsx.js';
+import { appendLines, serializeByKey, withLock } from './kernel/fsx.js';
 import { Denied, Fault, InvalidBody } from './kernel/errors.js';
 import { DEFAULT_DEBATE_BUDGET, subjectKindForRole } from './policy.js';
 import { judgeZeroDivergence, 盲标分配 } from './review.js';
+import { canonical } from './kernel/text.js';
+import { applyCouncilCreation, assertCouncilCreationOpened, readCouncilRows, COUNCIL_CREATION_RECORDER } from './council-creation-ledger.js';
 
 /** 讨论发言的合法类型（§9 消息类型里讨论段专用的三种）。 */
 export const DEBATE_SAY_TYPES = ['分歧', '表态', '答复'];
@@ -65,6 +67,9 @@ export class CouncilService {
    * @param {{ subject: object, 项目: string, 问题: string, 参与者?: string[], 参与岗位?: string[], 资料?: string[], 创建参与者?: Function|null, 发开场书?: Function|null, 退役实例?: Function|null, 模型路由?: object|null }} spec
    */
   async open(spec) {
+    // Callbacks are server-owned; clone only caller data before any asynchronous wait.
+    spec = { ...spec, 参与者: structuredClone(spec.参与者 ?? []), 参与岗位: structuredClone(spec.参与岗位 ?? []),
+      资料: 列表(spec.资料), 模型路由: structuredClone(spec.模型路由 ?? null) };
     const 问题 = String(spec.问题 ?? '').trim();
     if (!问题) throw new InvalidBody('会审需要「问题」：没有问题的会审没有收敛对象。', { missing: ['问题'] });
     const 参与者 = [...new Set((Array.isArray(spec.参与者) ? spec.参与者 : []).map(String).filter(Boolean))];
@@ -140,8 +145,10 @@ export class CouncilService {
     // 来源会话 = 真实登记主体 id；Lead 自己必须已钉版，否则父判/委托凭证会在创建后才炸。
     const 来源会话 = String(spec.subject?.id ?? '').trim();
     if (!来源会话) throw new InvalidBody('会审受管创建缺来源会话：来源只能取真实登记主体 id。', { missing: ['subject.id'] });
+    let 源钉摘要 = null;
     if (spec.subject.kind === 'Lead') {
       const 源钉 = await this.registry.cardOf(来源会话);
+      源钉摘要 = 源钉?.卡版本?.摘要 ?? null;
       if (源钉?.就绪 !== true) {
         throw new Fault('COUNCIL_SOURCE_NOT_READY', `Lead 实例 ${来源会话} 的钉版未就绪（${源钉?.原因 ?? 'registry 没给就绪读数'}）：先修好岗位卡/身份档案，再发起受管会审；不要先创建实例再补钉。`, {
           detail: { 来源会话, 就绪: 源钉?.就绪 ?? null, 原因: 源钉?.原因 ?? null },
@@ -149,6 +156,7 @@ export class CouncilService {
       }
     }
     // 岗位卡/角色种类/复核员全部在副作用前判；任一不合格 ⇒ 零创建。
+    const 岗位快照 = new Map();
     for (const 岗位 of 参与岗位) {
       if (subjectKindForRole(岗位) !== '成员') {
         throw new InvalidBody(`会审参与实例只收普通成员岗：${岗位} 是 ${subjectKindForRole(岗位)} 岗。`, { missing: ['参与岗位'] });
@@ -156,6 +164,7 @@ export class CouncilService {
       if (岗位 === '复核员') throw 复核岗不能参会(岗位);
       const 卡 = await this.registry.get({ id: 岗位 });
       if (!卡) throw new InvalidBody(`岗位「${岗位}」不存在：先建岗位卡，再发起会审。`, { missing: ['参与岗位'] });
+      岗位快照.set(岗位, canonical(卡));
     }
     const 资料 = await this.#校验资料(spec.资料);
     const id = `council-${this.clock.ms().toString(36)}-${randomUUID().slice(0, 5)}`;
@@ -168,9 +177,35 @@ export class CouncilService {
 
     // 1) 锁外创建：慢宿主调用不占会审锁；失败只清本次已建（逆序 seal→stop）。
     const 创建实例 = [];
+    // This server-issued closure is also called by the official Host adapter
+    // after admission waits and after return. It grants no new authority.
+    const 复判 = async () => {
+      await this.policy.check({ subject: spec.subject, action: 'create',
+        target: { id, kind: '会审', authority: '自治', zone: '私有', project: spec.项目 }, context: {} });
+      const identity = await this.registry.identity();
+      const withdrawn = new Set([来源会话, 'Lead', id, ...参与岗位, ...参与者]);
+      if (!Array.isArray(identity.denylist) || identity.denylist.some(x => withdrawn.has(x?.id))) throw new Denied('会审 · 准备后撤回', '发起者、岗位或参与者资格已撤回，旧会审计划不能继续。');
+      if (spec.subject.kind === 'Lead') {
+        const current = identity.members?.[来源会话], pin = await this.registry.cardOf(来源会话);
+        if (current?.岗位 !== 'Lead' || current.status !== '在岗' || pin?.就绪 !== true || pin.卡版本?.摘要 !== 源钉摘要) throw new Denied('会审 · 发起凭证变化', '来源Lead或钉版已变化，不能沿用准备前的凭证。');
+      }
+      for (const [role, snapshot] of 岗位快照) {
+        const card = await this.registry.get({ id: role });
+        if (!card || canonical(card) !== snapshot) throw new Denied('会审 · 岗位卡变化', `岗位 ${role} 在准备后变化，须重新核对问题与岗位，不能继续旧计划。`);
+        const boundary = this.policy.delegationBoundary({ subject: spec.subject, action: 'create',
+          target: { id: '（待创建会审实例）', kind: '身份', authority: '自治', zone: '私有', domain: '个体', project: null, 岗位: role }, context: { 身份操作: '实例' } });
+        if (boundary) throw new Denied(boundary.rule, boundary.reason, boundary);
+      }
+      for (const participant of 参与者) {
+        if (canonical(identity.members?.[participant] ?? null) !== canonical(档案[participant]) || identity.members?.[participant]?.status !== '在岗') throw new Denied('会审 · 预给参与者变化', `参与者 ${participant} 的登记已变化，不能继续旧计划。`);
+      }
+      if (canonical(会审预算(this.policy)) !== canonical(预算)) throw new Denied('会审 · 预算变化', '会审预算已变化，旧计划不能继续。');
+      if (canonical(await this.#校验资料(spec.资料)) !== canonical(资料)) throw new Denied('会审 · 资料范围变化', '资料真实路径已变化，不能借旧路径继续创建或发送。');
+    };
     try {
       for (const 岗位 of 参与岗位) {
-        const 建 = await spec.创建参与者({ 会审: id, 项目: spec.项目, 问题, 资料, 岗位, 来源会话, 模型路由: spec.模型路由 ?? null });
+        await 复判();
+        const 建 = await spec.创建参与者({ 会审: id, 项目: spec.项目, 问题, 资料: [...资料], 岗位, 来源会话, 模型路由: spec.模型路由 ?? null, 复判 });
         const 实例 = String(建?.实例 ?? '').trim();
         if (!实例) throw new Fault('COUNCIL_CREATE_NO_ID', `创建 ${岗位} 实例的适配器没有返回真实实例 id：不编造 Agent 对象/登记。`, { detail: { 岗位 } });
         if (参与者.includes(实例) || 创建实例.some((x) => x.实例 === 实例)) {
@@ -194,6 +229,7 @@ export class CouncilService {
     // 2) 锁内只落 opened（状态权威）；锁外不持锁等宿主。
     let view;
     try {
+      await 复判();
       ({ view } = await this.#append(spec.项目, {
         kind: 'opened', id, 问题,
         参与者: [...参与者, ...创建实例.map((x) => x.实例)],
@@ -220,6 +256,7 @@ export class CouncilService {
     const 已接收书 = [];
     try {
       for (const 项 of 创建实例) {
+        await 复判();
         const 回执 = await spec.发开场书({ 会审: id, 问题, 资料, 来源会话, 实例: 项.实例, 岗位: 项.岗位, 钉卡: 项.钉卡, 模型路由: spec.模型路由 ?? null });
         if (typeof 回执?.messageId === 'string' && 回执.已接收 === true) 已接收书.push({ 阶段: '会审任务书inbox已接收', 项目: spec.项目, 会审: id, 实例: 项.实例, 消息id: 回执.messageId, 已接收: true });
         已发 += 1;
@@ -234,6 +271,18 @@ export class CouncilService {
       }, error, spec.项目, [...已接收书, ...补偿阶段]);
     }
     return { 会审: view, id, 参与者: view.参与者, 创建实例: 创建实例.map(({ 实例, 岗位, 钉卡 }) => ({ 实例, 岗位, 卡版本: 钉卡?.卡版本?.摘要 ?? null })), 来源会话: view.来源会话 };
+  }
+
+  /** Server-only creation observations. No model action can append or replay them. */
+  async recordCreationIntent({ subject, 项目, 会审, 方式, 岗位, 序号, 宿主调用 }) {
+    const event = structuredClone({ kind: 'creation_intent', id: 会审, 来源会话: subject?.id, 方式, 岗位, 序号, 宿主调用 });
+    await this.policy.check({ subject, action: 'create', target: { id: 会审, kind: '会审', authority: '自治', zone: '私有', project: 项目 }, context: {} });
+    return this.#append(项目, event, subject, '会审创建调用意图');
+  }
+
+  async recordCreationReturn({ 项目, 会审, 宿主调用id, 实例, 团队名 }) {
+    const event = structuredClone({ kind: 'creation_returned', id: 会审, 宿主调用id, 实例, 团队名 });
+    return this.#append(项目, event, COUNCIL_CREATION_RECORDER, '会审宿主返回观察');
   }
 
   /**
@@ -865,6 +914,14 @@ export class CouncilService {
 
   /** 受管创建失败的审计（清理失败也写进详情）；返回审计错误文本或 null。 */
   async #记创建失败(项目, subject, id, 阶段, 创建实例, 补偿失败, error, 作废错误 = null, 附加 = {}) {
+    let 记录错误 = null;
+    if (['create', 'open'].includes(阶段)) {
+      try {
+        const current = await this.get(项目, id);
+        if (current?.创建调用?.length && current.状态 === '创建中') await this.#append(项目,
+          { kind: 'creation_halted', id, 阶段 }, COUNCIL_CREATION_RECORDER, '会审创建调用收尾');
+      } catch (cause) { 记录错误 = `创建观察未收尾：${错误信息(cause)}`; }
+    }
     try {
       await this.audit.append({
         动作: '会审创建失败',
@@ -882,11 +939,12 @@ export class CouncilService {
           ...(作废错误 ? { 作废错误 } : {}),
           ...附加,
           ...(error?.detail ? { 错误详情: error.detail } : {}),
+          ...(记录错误 ? { 记录错误 } : {}),
         },
       });
-      return null;
+      return 记录错误;
     } catch (审计失败) {
-      return 错误信息(审计失败);
+      return [记录错误, 错误信息(审计失败)].filter(Boolean).join('；');
     }
   }
 
@@ -975,13 +1033,13 @@ export class CouncilService {
     const file = this.layout.councilLog(项目);
     const eventId = `${event.kind}-${randomUUID().slice(0, 8)}`;
     return this.#withCouncilLock(项目, async () => {
-      const rows = await readJsonl(file);
+      const rows = await readCouncilRows(file);
       const views = foldCouncils(rows);
       const current = views.find((v) => v.id === event.id) ?? null;
       if (inLockGuard) await inLockGuard(current);
       const row = { ...event, at: this.clock.iso(), by: subject, eventId };
+      const 落线后 = foldCouncils([...rows, row]); // Validate new call associations BEFORE committing.
       await appendLines(file, [row]);
-      const 落线后 = foldCouncils([...rows, row]);
       const view = 落线后.find((v) => v.id === event.id);
       if (onCommitted) onCommitted(view);
       const 动作 = typeof 审计动作 === 'function' ? 审计动作(current) : 审计动作;
@@ -1009,7 +1067,7 @@ export class CouncilService {
   }
 
   async #foldAll(项目) {
-    const rows = await readJsonl(this.layout.councilLog(项目));
+    const rows = await readCouncilRows(this.layout.councilLog(项目));
     return foldCouncils(rows);
   }
 }
@@ -1076,15 +1134,20 @@ function 受管创建失败(code, message, detail, cause, 项目, 已有回执 =
  * 问题/各答案/分歧/结论/来源会话/时间——会审页直接读它，不另立存档库。
  */
 export function foldCouncils(rows) {
-  const map = new Map();
+  const map = new Map(), calls = new Set();
   for (const row of rows ?? []) {
     let c = map.get(row.id);
     if (!c) {
       c = { id: row.id, 问题: null, 参与者: [], 来源会话: null, 状态: '未知', 答案: [], 轮次: 0, 轮次上限: 0, 预算快照: null, 分歧清单: [], 结论: null, 创建于: null, 收敛于: null, 零分歧异常: false, 创建实例: [], 资料: [], 退役: [] };
       map.set(row.id, c);
     }
+    if (typeof row.kind === 'string' && row.kind.startsWith('creation_')) {
+      applyCouncilCreation(c, row, calls);
+      continue;
+    }
     switch (row.kind) {
       case 'opened':
+        assertCouncilCreationOpened(c, row);
         c.问题 = row.问题;
         c.参与者 = row.参与者 ?? [];
         c.来源会话 = row.来源会话 ?? null;

@@ -82,8 +82,12 @@ describe('独立调度启动：已激活范围闸承接创建约束', { timeout:
     for (const phase of [() => {}, start]) { phase(); for (const name of CREATION) { const reason = refusal(host, exec(name, undefined, true)); assert.match(reason, /成员工具闸/); assert.doesNotMatch(reason, /member_spawn/); } }
   }));
 
-  it('默认explicit-user的Lead不被新增组织创建限制，晚安装前后五工具均保持官方域', () => scene(async ({ host, exec, start }) => {
+  it('显式旧explicit-user保留原裸工具边界，不冒充受管新建许可', () => scene(async ({ host, exec, start }) => {
     for (const phase of [() => {}, start]) { phase(); for (const name of CREATION) assert.equal(refusal(host, exec(name)), undefined); }
+  }, { delegation: { mode: 'explicit-user' } }));
+
+  it('默认Host不留下裸创建窗口：晚安装前后五工具均转向受管入口', () => scene(async ({ host, exec, start }) => {
+    for (const phase of [() => {}, start]) { phase(); for (const name of CREATION) assert.match(refusal(host, exec(name)), /member_spawn/); }
   }, { delegation: {} }));
 
   it('仅匹配可信cwd的授权项目：范围外Lead保持原行为，自报project不能扩授权', () => scene(async ({ host, exec, other, start }) => {

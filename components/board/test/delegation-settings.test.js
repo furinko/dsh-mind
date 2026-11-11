@@ -8,7 +8,7 @@ const normalized = (config) => new DelegationPolicy(config);
 const asJSON = (value) => JSON.parse(JSON.stringify(value));
 
 async function setup(options = {}) {
-  let config = normalized(INITIAL).config;
+  let config = normalized(options.initial ?? INITIAL).config;
   let runtime = normalized(config).status('plugins');
   let held = null;
   let holdNext = false;
@@ -75,6 +75,31 @@ async function setup(options = {}) {
 }
 
 describe('调度设置浏览器闭环（独立真形状夹具，presence-only 495 断言不放宽）', () => {
+  it('空配置显示沿宿主与未评估；无依据也可保存项目收紧，不声称 Host 批准', async () => {
+    const t = await setup({ initial: {} });
+    try {
+      assert.equal(t.field('调度模式').props.value, 'host');
+      assert.equal(t.field('授权依据').props.value, '');
+      assert.match(t.text(), /可按宿主尝试/); assert.match(t.text(), /尚未评估/);
+      assert.match(t.text(), /配置同步不代表已获批准/);
+      t.change('授权项目', 'other'); await t.click('保存调度授权');
+      assert.equal(t.accepted, 1); assert.equal(t.config.mode, 'host'); assert.equal(t.config.authorizationRef, '');
+      assert.deepEqual(asJSON(t.config.projects), ['other']);
+      assert.match(t.text(), /受配置限制/); assert.match(t.text(), /尚未评估/);
+    } finally { t.close(); }
+  });
+
+  it('Host 模式可撤回为旧限制；旧部分配置不自动升级为 Host', async () => {
+    const t = await setup({ initial: {} });
+    try {
+      assert.equal(t.button('撤回自主调度').props.disabled, false);
+      await t.click('撤回自主调度'); assert.equal(t.config.mode, 'explicit-user');
+      assert.match(t.text(), /聊天点名不会自动解除/);
+      t.external({ projects: [] }); await t.poll();
+      assert.equal(t.field('调度模式').props.value, 'explicit-user'); assert.equal(t.accepted, 1);
+    } finally { t.close(); }
+  });
+
   it('展示模式/项目/依据/两面读数及撤回后不终止已有成员边界', async () => {
     const t = await setup();
     try {
@@ -115,7 +140,7 @@ describe('调度设置浏览器闭环（独立真形状夹具，presence-only 49
       await t.click('撤回自主调度');
       assert.equal(t.config.mode, 'explicit-user');
       assert.equal(t.field('调度模式').props.value, 'explicit-user');
-      assert.match(t.text(), /仅用户点名/);
+      assert.match(t.text(), /限制新建（旧模式）/);
       assert.match(t.text(), /不会终止已有成员/);
       t.change('调度模式', 'lead-discretion');
       await t.click('保存调度授权');

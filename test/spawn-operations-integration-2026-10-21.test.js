@@ -4,7 +4,10 @@ import assert from 'node:assert/strict';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeFixture, LEAD, SOVEREIGN } from './helpers.mjs';
+import { fakeCreationCapability } from './host-creation-fixture.mjs';
+import { randomUUID } from 'node:crypto';
 import { fakeHost } from './host-harness.mjs';
+import { attachFileParent } from './file-parent.mjs';
 import { apply } from '../components/kernel/lib/index.js';
 import { Org } from '../src/org.js';
 import { shareOrg, forgetSharedOrg, shareKey } from '../src/runtime.js';
@@ -17,13 +20,16 @@ async function scene(body) {
     const cwd = join(f.home, 'work'); await mkdir(cwd); const input = join(cwd, 'input.txt'); await writeFile(input, 'fixture input');
     const config = { home: f.home, privateRoot: f.privateRoot, factoryRoot: f.factoryRoot, project: P,
       projectBindings: [{ path: cwd, project: P }], memberFileAccess: { read: [cwd], write: [cwd] } };
+    attachFileParent(host,cwd);
     await apply(host.ctx, config); org = await shareOrg(config);
     const goal = await org.goals.create({ subject: LEAD, 项目: P, 期望结果: '创建可恢复的成员', 完成依据: ['当前工作可核对'], 来源: '明确用户意图的转述', 下一步: '创建成员调查文件' });
-    const counts = { creates: 0, sends: 0, releases: 0, requested: [] };
-    const agent = { session: { id: LEAD.id, header: { cwd } } };
+    const counts = { creates: 0, sends: 0, releases: 0, requested: [], created: [] }, kids = [];
+    const agent = host.ctx.agents.get(LEAD.id);
     const runtime = { agent, signal: new AbortController().signal, project: P, delegation: { authorize: () => ({ fingerprint: 'operations-fixture' }) },
-      subagents: { startContinuable: async spec => { counts.creates++; counts.requested.push(spec.childId); return { childId: spec.childId, messageId: `initial-${counts.creates}` }; },
+      subagents: { startContinuable: async spec => { counts.creates++; counts.requested.push(spec.childId); assert.equal(spec.childId, undefined); const childId = randomUUID(); counts.created.push(childId); kids.push({ id: childId, mode: 'continuable' }); return { childId }; },
+        listChildren: async () => kids,
         sendMessage: async () => `work-${++counts.sends}`, drainContinuableChildren: async () => { counts.releases++; } } };
+    runtime.hostCreation = fakeCreationCapability(runtime);
     const create = async (linked = true) => {
       const task = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '调查当前文件', 负责人: '插件工程', 判据: ['来源可验证'] });
       if (linked) { const current = await org.goals.get(goal.id, { subject: LEAD, 项目: P }); await org.goals.linkTask(goal.id, { subject: LEAD, 项目: P, 修订: current.修订, 任务: task.id }); }
@@ -38,9 +44,10 @@ async function scene(body) {
 }
 
 describe('成员创建意图的内核纵向接线', { timeout: 45_000 }, () => {
-  it('预留id传给宿主、六阶段和工具/工作台共源，重建后不重复创建', async () => scene(async ({ org, host, agent, runtime, goal, counts, create, request, act, query, reopen }) => {
+  it('调用关联先落盘、宿主分配id、六阶段和工具/工作台共源，重建后不重复创建', async () => scene(async ({ org, host, agent, runtime, goal, counts, create, request, act, query, reopen }) => {
     const task = await create(); const result = await act(request(task));
-    assert.equal(result.实例, counts.requested[0]); assert.equal(result.操作.拟用实例, result.实例); assert.equal(result.操作.记账, '已收尾');
+    assert.equal(result.实例, counts.created[0]); assert.equal(counts.requested[0], undefined); assert.equal(result.操作.拟用实例, null); assert.equal(result.操作.记账, '已收尾');
+    assert.equal(result.操作.宿主调用.调用id, runtime.hostCreation.calls[0].callId);
     const row = (await query({ id: result.操作.操作id })).操作页.条目[0];
     assert.equal(row.状态, 'audited'); assert.equal(row.阶段.length, 7);
     const tool = host.工具.get('mind');
@@ -60,11 +67,12 @@ describe('成员创建意图的内核纵向接线', { timeout: 45_000 }, () => {
     const task = await create(); await org.budgets.configure(goal.id, { subject: SOVEREIGN, 项目: P, 预算修订: 0, 上限: 2 });
     runtime.subagents.startContinuable = async spec => { counts.creates++; counts.requested.push(spec.childId); throw new Error('transport-private-body'); };
     let original;
-    await assert.rejects(act(request(task)), error => { original = error; return error.code === 'MEMBER_SPAWN_RESULT_UNKNOWN'; });
+    await assert.rejects(act(request(task)), error => { original = error; return error.code === 'HOST_CREATION_RESULT_UNKNOWN'; });
     const receipt = original.outcome.已确认阶段.find(row => row.操作id);
-    assert.equal(receipt.拟用实例, counts.requested[0]);
+    assert.equal(receipt.拟用实例, undefined, 'public failure phase omits a nonexistent candidate rather than inventing one'); assert.equal(counts.requested[0], undefined);
     const fresh = await reopen(); const row = (await fresh.spawnOperations.query({ subject: LEAD, 项目: P, id: receipt.操作id })).操作页.条目[0];
-    assert.equal(row.状态, 'intent'); assert.equal(row.拟用实例, counts.requested[0]);
+    assert.equal(row.状态, 'intent'); assert.equal(row.拟用实例, null);
+    assert.equal(row.宿主调用.调用id, runtime.hostCreation.calls[0].callId);
     assert.equal((await query({ 任务: task.id })).汇总.已见宿主回执, 0);
     await assert.rejects(act({ ...request(task), 任务书: '换句话再试' }), error => error.code === 'MEMBER_SPAWN_OPERATION_EXISTS');
     assert.equal(counts.creates, 1);

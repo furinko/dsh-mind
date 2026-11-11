@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
 import { readFile, writeFile, rmdir } from 'node:fs/promises';
 import { makeFixture, LEAD, MEMBER, SOVEREIGN } from './helpers.mjs';
+import { fakeCreationCapability } from './host-creation-fixture.mjs';
+import { randomUUID } from 'node:crypto';
 import { Org } from '../src/org.js';
 import { SpawnOperationService } from '../src/spawn-operations.js';
 import { readTextOrNull } from '../src/kernel/fsx.js';
@@ -25,21 +27,24 @@ async function scene(body) {
   try {
     const open = () => Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
     const org = await open();
-    const calls = { spawn: [], message: [], release: [] };
+    const calls = { spawn: [], message: [], release: [] }, kids = [], team = [];
     const host = {
       agent: { id: LEAD.id, session: { id: LEAD.id } },
       delegation: { authorize: () => ({ fingerprint: 'independent-operations-authorization' }) },
       subagents: {
-        startContinuable: async spec => { calls.spawn.push(spec); return { childId: spec.childId, messageId: `initial-inbox-${calls.spawn.length}` }; },
+        startContinuable: async spec => { assert.equal(spec.childId, undefined); const childId = randomUUID(); calls.spawn.push({ ...spec, createdId: childId }); kids.push({ id: childId, mode: 'continuable' }); return { childId }; },
+        listChildren: async () => kids,
         sendMessage: async (_parent, id, content) => { calls.message.push({ id, content }); return { messageId: `work-inbox-${calls.message.length}` }; },
         drainContinuableChildren: async (_parent, ids) => { calls.release.push(ids); },
       },
       agentTeams: {
-        spawnTeammate: async (_parent, spec) => { calls.spawn.push(spec); return { member: { id: `team-child-${calls.spawn.length}`, name: spec.name } }; },
+        spawnTeammate: async (_parent, spec) => { calls.spawn.push(spec); const member = { id: `team-child-${calls.spawn.length}`, name: spec.name, role: 'teammate', status: 'inactive' }; team.push(member); return { member }; },
+        listMembers: () => team,
         sendMessage: async (_parent, spec) => { calls.message.push(spec); return { messageId: `team-work-${calls.message.length}` }; },
         interrupt: async (_parent, name) => { calls.release.push(name); },
       },
     };
+    host.hostCreation = fakeCreationCapability(host);
     const create = () => org.tasks.create({ subject: LEAD, 项目: P, 描述: '独立持久创建验收', 负责人: '插件工程', 判据: ['真实回执可核对'] });
     const act = (args, currentOrg = org, subject = LEAD) => runAction({ org: currentOrg, 项目: P, subject, 主体: subject, 面: 'tool', 宿主: host, args });
     const query = (extra = {}, currentOrg = org) => currentOrg.spawnOperations.query({ subject: LEAD, 项目: P, ...extra });
@@ -148,11 +153,13 @@ describe('独立创建操作：真实动作阶段与中断', { timeout: 60_000 }
     host.subagents.startContinuable = async spec => {
       const existing = org.spawnOperations.findByTask(P, node.id);
       assert.ok(existing, '第一笔宿主调用前必须已经落意图');
-      assert.equal(existing.状态, 'intent'); assert.equal(existing.拟用实例, spec.childId); assert.match(spec.childId, UUID);
+      assert.equal(existing.状态, 'intent'); assert.equal(existing.拟用实例, null); assert.equal(spec.childId, undefined);
+      assert.equal(existing.宿主调用.调用id, host.hostCreation.calls[0].callId);
       return start(spec);
     };
     const result = await act(request(node));
-    assert.equal(result.实例, calls.spawn[0].childId); assert.equal(result.操作.拟用实例, result.实例);
+    assert.equal(result.实例, calls.spawn[0].createdId); assert.equal(result.操作.拟用实例, null);
+    assert.equal(result.操作.宿主调用.调用id, host.hostCreation.calls[0].callId);
     assert.equal(result.操作.记账, '已收尾'); assert.equal(result.操作.成员执行, null); assert.equal(result.执行完成, null);
     const view = await operationOf(query, node);
     assert.equal(view.操作id, result.操作.操作id); assert.equal(view.状态, 'audited');
@@ -179,7 +186,7 @@ describe('独立创建操作：真实动作阶段与中断', { timeout: 60_000 }
     const node = await create();
     host.subagents.startContinuable = async spec => { calls.spawn.push(spec); throw new Error(SECRET); };
     const original = await caught(() => act(request(node))); const id = operationIdOf(original);
-    assert.equal(original.code, 'MEMBER_SPAWN_RESULT_UNKNOWN'); assert.match(id, UUID);
+    assert.equal(original.code, 'HOST_CREATION_RESULT_UNKNOWN'); assert.match(id, UUID);
     assert.equal(original.outcome.可重试, false); assert.equal(calls.spawn.length, 1);
     const reopened = await open(); const second = await caught(() => act(request(node), reopened));
     assert.equal(second.code, 'MEMBER_SPAWN_OPERATION_EXISTS'); assert.equal(operationIdOf(second), id);
@@ -188,7 +195,8 @@ describe('独立创建操作：真实动作阶段与中断', { timeout: 60_000 }
     const third = await caught(() => act(request(node), reopened, replacement));
     assert.equal(third.code, 'MEMBER_SPAWN_OPERATION_EXISTS'); assert.equal(operationIdOf(third), id);
     const view = (await query({ subject: replacement, id }, reopened)).操作页.条目[0];
-    assert.equal(view.状态, 'intent'); assert.equal(view.拟用实例, calls.spawn[0].childId);
+    assert.equal(view.状态, 'intent'); assert.equal(view.拟用实例, null); assert.equal(calls.spawn[0].childId, undefined);
+    assert.equal(view.宿主调用.调用id, host.hostCreation.calls[0].callId);
     assert.equal(view.阶段.some(row => row.阶段 === 'host_returned'), false, '夹具知道宿主收过调用，不代表服务取得创建回执');
     assert.equal(calls.spawn.length, 1); assert.equal(calls.message.length, 0); assert.equal(calls.release.length, 0);
     assert.ok(!JSON.stringify(view).includes(SECRET));
@@ -223,18 +231,18 @@ describe('独立创建操作：真实动作阶段与中断', { timeout: 60_000 }
   }));
 
   for (const mismatch of [false, true]) {
-    it(`宿主${mismatch ? '返回另一id' : '缺少初始inbox凭据'}：保留候选和事实，零登记、零bind、零释放不明对象`, async () => scene(async ({ org, host, calls, create, act, query }) => {
+    it(`宿主${mismatch ? '返回目录外id' : '缺少返回id'}：保留意图和调用关联，零登记、零bind、零释放不明对象`, async () => scene(async ({ org, host, calls, create, act, query }) => {
       const node = await create(); const returned = 'unexpected-existing-child';
-      host.subagents.startContinuable = async spec => { calls.spawn.push(spec); return { childId: mismatch ? returned : spec.childId, ...(mismatch ? { messageId: 'initial-returned' } : {}) }; };
+      host.subagents.startContinuable = async spec => { calls.spawn.push(spec); return { ...(mismatch ? { childId: returned } : {}) }; };
+      const beforeIdentity = await org.registry.identity();
       const error = await caught(() => act(request(node))); const id = operationIdOf(error); assert.match(id, UUID);
-      assert.equal(error.code, mismatch ? 'MEMBER_SPAWN_RESERVED_ID_MISMATCH' : 'MEMBER_SPAWN_RECEIPT_UNKNOWN');
+      assert.equal(error.code, 'MEMBER_SPAWN_RESULT_UNKNOWN');
       const view = (await query({ id })).操作页.条目[0]; assert.equal(view.状态, 'intent');
-      assert.equal(view.阶段.length, 1); assert.equal(view.拟用实例, calls.spawn[0].childId);
+      assert.equal(view.阶段.length, 1); assert.equal(view.拟用实例, null); assert.equal(calls.spawn[0].childId, undefined);
+      assert.equal(view.宿主调用.调用id, host.hostCreation.calls[0].callId);
       assert.ok(view.问题.some(issue => issue.故障码 === error.code));
-      const publicRows = describeFailure(error).已确认阶段;
-      if (mismatch) assert.ok(publicRows.some(row => row.拟用实例 === view.拟用实例 && row.返回实例 === returned));
-      else assert.ok(publicRows.some(row => row.实例 === view.拟用实例));
-      const identity = await org.registry.identity(); assert.equal(identity.members[view.拟用实例], undefined); assert.equal(identity.members[returned], undefined);
+      assert.ok(describeFailure(error).已确认阶段.some(row => row.操作id === id));
+      const identity = await org.registry.identity(); assert.deepEqual(identity, beforeIdentity); assert.equal(identity.members[returned], undefined);
       const current = await org.tasks.get(node.id, { 项目: P }); assert.equal(current.状态, '待派发'); assert.equal(current.绑定?.length ?? 0, 0);
       assert.equal(calls.spawn.length, 1); assert.equal(calls.message.length, 0); assert.equal(calls.release.length, 0);
     }));

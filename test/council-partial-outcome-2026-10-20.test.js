@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { makeFixture, LEAD } from './helpers.mjs';
 import { Org } from '../src/org.js';
 import { runAction } from '../lib/actions.js';
+import { fakeCreationCapability } from './host-creation-fixture.mjs';
 import { describeFailure } from '../src/kernel/errors.js';
 
 const P = 'council-partial-outcome';
@@ -13,12 +14,13 @@ async function scene(run) {
   try {
     const org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
     const calls = { spawn: 0, send: 0, drain: [] };
-    const inbox = [];
+    const inbox = [], children = [];
     const host = {
       agent: { session: { id: 'lead-session' } },
       delegation: { authorize: () => ({ fingerprint: 'council-outcome-test' }) },
       subagents: {
-        startContinuable: async () => ({ childId: `owned-${++calls.spawn}`, messageId: `initial-${calls.spawn}` }),
+        startContinuable: async () => { const childId = `owned-${++calls.spawn}`; children.push({ id: childId, mode: 'continuable' }); return { childId }; },
+        listChildren: async () => children,
         sendMessage: async (_agent, id) => {
           calls.send += 1;
           const receipt = { messageId: `opening-${calls.send}` };
@@ -28,6 +30,7 @@ async function scene(run) {
         drainContinuableChildren: async (_agent, ids) => { calls.drain.push(...ids); },
       },
     };
+    host.hostCreation = fakeCreationCapability(host);
     const open = () => runAction({ org, 项目: P, subject: LEAD, 主体: LEAD, 面: 'tool', 宿主: host,
       args: { action: 'debate_open', 方式: 'subagent', 问题: '故障不能抹去已确认事实', 参与岗位: '插件工程,插件工程' } });
     await run({ org, host, calls, inbox, open });

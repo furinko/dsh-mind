@@ -66,8 +66,8 @@ describe('创建闸启动窗口：真实 apply 与范围闸', { timeout: 60_000 
     } finally { dispose?.(); }
   }));
 
-  it('默认Lead允许的创建在接通前后均只判一次，正式闸在位后首闸不重复委派判断', () => scene(async ({ f, host, config }) => {
-    config.delegation = {};
+  for (const mode of ['host', 'explicit-user']) it(`${mode}创建在接通前后均只判一次，正式闸在位后首闸不重复委派判断`, () => scene(async ({ f, host, config }) => {
+    config.delegation = { mode };
     const effect = host.ctx.effect.bind(host.ctx); let pending, dispose;
     host.ctx.effect = (callback, label) => label === LABEL ? (pending = callback) : effect(callback);
     await apply(host.ctx, config);
@@ -77,7 +77,8 @@ describe('创建闸启动窗口：真实 apply 与范围闸', { timeout: 60_000 
       for (const phase of [() => {}, () => { dispose = pending(); }]) {
         phase();
         for (const name of CREATION) {
-          const before = calls; assert.equal(refusal(host, invocation(f.home, name)), undefined);
+          const before = calls, reason = refusal(host, invocation(f.home, name));
+          if (mode === 'host') assert.match(reason, /member_spawn/); else assert.equal(reason, undefined);
           assert.equal(calls - before, 1);
         }
       }
@@ -85,7 +86,8 @@ describe('创建闸启动窗口：真实 apply 与范围闸', { timeout: 60_000 
     } finally { DelegationPolicy.prototype.creationGuard = original; dispose?.(); }
   }));
 
-  it('授权部署同步注册第二闸失败，保留原降级自述与未就绪范围闸合同', () => scene(async ({ f, host, config }) => {
+  for (const defaultHost of [false, true]) it(`默认Host=${defaultHost}同步注册第二闸失败，拒绝激活而非无闸放行`, () => scene(async ({ f, host, config }) => {
+    if (defaultHost) config.delegation = {};
     const register = host.ctx.tools.guard.bind(host.ctx.tools); let registrations = 0;
     host.ctx.tools.guard = handler => {
       if (++registrations === 2) throw new Error('test: creation guard unavailable');

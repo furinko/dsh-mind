@@ -192,13 +192,16 @@ export class TaskGraph {
   /** @type {Map<string, {text: string|null, rows: object[]}>} */
   #readCache;
   #toolFileAuthority;
+  #hostFileCeiling;
   // 仅服务端签发的准备结果可穿过审批预览到实际执行，不能由工具参数伪造。
   #recoveryPlans = new WeakSet();
 
   /** 仅装配期消费部署者配置；mind 动作不提供修改此上限的入口。 */
-  configureToolFiles(config) {
-    this.#toolFileAuthority = new ToolFileAuthority({ layout: this.layout, policy: this.policy, config, goals: this.goals });
-    return this.#toolFileAuthority;
+  configureToolFiles(config, hostCeiling = this.#hostFileCeiling) {
+    const authority = new ToolFileAuthority({ layout: this.layout, policy: this.policy, config, goals: this.goals, hostCeiling });
+    this.#hostFileCeiling = hostCeiling;
+    this.#toolFileAuthority = authority;
+    return authority;
   }
   toolFileAuthority() { return this.#toolFileAuthority; }
 

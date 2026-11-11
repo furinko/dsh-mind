@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeFixture, LEAD } from './helpers.mjs';
+import { fakeCreationCapability } from './host-creation-fixture.mjs';
 import { Org } from '../src/org.js';
 import { runAction } from '../lib/actions.js';
 import { prepareMemberSpawn, memberSpawnApprovalPlan, runMemberSpawnStages } from '../lib/member-spawn-plan.js';
@@ -16,21 +17,24 @@ async function scene(run, options = {}) {
   try {
     const org = await Org.open({ home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P });
     const calls = { spawn: 0, message: 0, release: 0 };
-    const created = [];
+    const created = [], team = [];
     const host = {
       agent: { session: { id: 'lead-session' } },
       delegation: { authorize: () => ({ fingerprint: 'shared-plan-authorized' }) },
       subagents: {
-        startContinuable: async (spec) => { calls.spawn++; const childId = spec.childId ?? `plan-child-${calls.spawn}`; created.push({ id: childId, spec }); return { childId, messageId: 'initial-inbox' }; },
+        startContinuable: async (spec) => { calls.spawn++; assert.equal(spec.childId, undefined); const childId = `plan-child-${calls.spawn}`; created.push({ id: childId, mode: 'continuable', spec }); return { childId }; },
+        listChildren: async () => created,
         sendMessage: async () => ({ messageId: `work-inbox-${++calls.message}` }),
         drainContinuableChildren: async () => { calls.release += 1; },
       },
       agentTeams: {
-        spawnTeammate: async (_agent, request) => ({ member: { id: `plan-team-${++calls.spawn}`, name: request.name } }),
+        spawnTeammate: async (_agent, request) => { const member = { id: `plan-team-${++calls.spawn}`, name: request.name, role: 'teammate', status: 'inactive' }; team.push(member); return { member }; },
+        listMembers: () => team,
         sendMessage: async () => ({ messageId: `team-inbox-${++calls.message}` }),
         interrupt: async () => { calls.release += 1; },
       },
     };
+    host.hostCreation = fakeCreationCapability(host);
     const create = (负责人 = '插件工程') => org.tasks.create({ subject: LEAD, 项目: P, 描述: `计划-${负责人}`, 负责人, 判据: ['产生可验收产物'] });
     const act = (args) => runAction({ org, 项目: P, subject: LEAD, 主体: LEAD, 面: 'tool', 宿主: host, args });
     const level = async (介入度) => { await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度 })); await org.policy.reload(); };

@@ -19,6 +19,7 @@
  */
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { fakeCreationCapability } from './host-creation-fixture.mjs';
 import { makeFixture, LEAD } from './helpers.mjs';
 import { Org } from '../src/org.js';
 import { DelegationPolicy } from '../src/delegation-policy.js';
@@ -53,11 +54,11 @@ async function 建复核关联(org, 目标id) {
 /** 假宿主（与 delegation.test.js 同款形状）：记录调用、可控名册，不碰真实执行体。 */
 function 假宿主() {
   const calls = { spawn: [], teamSend: [], subSend: [], interrupts: [] };
-  const agent = { id: 'lead-agent', session: { id: 'sess-lead' } };
+  const agent = { id: 'lead-agent', session: { id: 'sess-lead' } }, children = [], roster = [];
   const agentTeams = {
-    spawnTeammate: async (_caller, req) => { calls.spawn.push(req); return { member: { id: `team-${calls.spawn.length}`, name: req.name } }; },
+    spawnTeammate: async (_caller, req) => { calls.spawn.push(req); const member = { id: `team-${calls.spawn.length}`, name: req.name, role: 'teammate', status: 'inactive' }; roster.push(member); return { member }; },
     sendMessage: async (_caller, req) => { calls.teamSend.push(req); return { messageId: `tm-${calls.teamSend.length}` }; },
-    listMembers: () => [],
+    listMembers: () => roster,
     interrupt: (_caller, name) => { calls.interrupts.push(name); return { previousStatus: 'running' }; },
   };
   const subagents = {
@@ -65,17 +66,17 @@ function 假宿主() {
     startContinuable: async (spec) => {
       if (!(spec?.signal instanceof AbortSignal)) throw new Error('contract: spec.signal required');
       assert.equal(Object.hasOwn(spec.request, 'signal'), false, 'continuable signal belongs to outer spec');
-      calls.spawn.push(spec); return { childId: spec.childId ?? `sub-${calls.spawn.length}`, messageId: 'm0' };
+      assert.equal(Object.hasOwn(spec, 'childId'), false);
+      calls.spawn.push(spec); const childId = `sub-${calls.spawn.length}`; children.push({ id: childId, mode: 'continuable' }); return { childId };
     },
     sendMessage: async (_sender, id, content) => { calls.subSend.push({ id, content }); return `sm-${calls.subSend.length}`; },
     interrupt: (id) => { calls.interrupts.push(id); },
     drainContinuableChildren: async (_parent, ids) => { calls.interrupts.push(...ids); },
-    listChildren: async () => [],
+    listChildren: async () => children,
   };
-  return {
-    宿主: { agent, agentTeams, subagents, delegation: new DelegationPolicy({ mode: 'lead-discretion', projects: [P], authorizationRef: 'test-grant' }) },
-    calls,
-  };
+  const 宿主 = { agent, agentTeams, subagents, delegation: new DelegationPolicy({ mode: 'lead-discretion', projects: [P], authorizationRef: 'test-grant' }) };
+  宿主.hostCreation = fakeCreationCapability(宿主);
+  return { 宿主, calls };
 }
 
 async function 起现场() {

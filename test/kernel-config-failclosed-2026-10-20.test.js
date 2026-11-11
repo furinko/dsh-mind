@@ -6,6 +6,7 @@ import { apply } from '../components/kernel/lib/index.js';
 import { shareOrg, forgetSharedOrg } from '../src/runtime.js';
 import { makeFixture, LEAD } from './helpers.mjs';
 import { fakeHost } from './host-harness.mjs';
+import { attachFileParent } from './file-parent.mjs';
 
 const P = 'config-failclosed';
 const args = (name, file) => name === 'pwsh' ? { command: 'must not execute' }
@@ -39,7 +40,7 @@ async function fixture(t) {
   await writeFile(file, 'preserved input');
   const hosts = [];
   t.after(async () => { for (const host of hosts) host.清理(); forgetSharedOrg(); await f.cleanup(); });
-  const host = () => { const h = fakeHost(); hosts.push(h); return h; };
+  const host = () => { const h = fakeHost(); attachFileParent(h,cwd); hosts.push(h); return h; };
   const config = { home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, project: P,
     projectBindings: [{ path: cwd, project: P }], memberFileAccess: { read: [cwd], write: [cwd] }, audit工具调用: false };
   return { f, cwd, file, config, host };
@@ -52,7 +53,7 @@ async function assertRecovered(s) {
   assert.equal(host.闸.length, 2, '正常装配仍保持范围与创建两闸，不堆积启动平行闸');
   const tool = host.工具.get('mind');
   assert.ok(tool.parameters.properties.action.enum.includes('task_create'), '恢复完整组织工具而不是只读自述');
-  const exec = { name: 'mind', agent: { session: { id: 'lead', header: { cwd: s.cwd } } } };
+  const exec = { name: 'mind', agent: host.ctx.agents.get('lead') };
   const status = JSON.parse(await tool.execute({ action: 'status' }, exec));
   assert.equal(status.成功, true, JSON.stringify(status));
   const org = await shareOrg(s.config);

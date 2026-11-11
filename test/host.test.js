@@ -168,15 +168,14 @@ describe('dsh-mind 宿主半区', () => {
     assert.equal(JSON.parse(failure.text).成功, false);
   });
 
-  it('闸是单调的：拒绝后任何后来的监听者都翻不回来', async () => {
-    // 两道闸（2026-10-15 起）：①工具总范围（部署键）②Lead 调度创建闸（delegation 配置）。
-    // 默认都没授权 ⇒ 都不额外收窄；各自的单调性由 dsh-tools 管线保证（拒绝后无人能翻回）。
+  it('两道闸各就其位：默认Host将裸创建引导受管入口，不收紧普通读和shell', async () => {
+    // 只验证内核注册事实与返回值；单调执行由真实SDK专项独立验证。
     assert.equal(host.闸.length, 2, '应注册且只注册两道闸：工具总范围 + 调度创建闸');
     for (const guard of host.闸) {
       assert.equal(guard(fakeExec({ name: 'read' })), undefined);
       assert.equal(guard(fakeExec({ name: 'pwsh' })), undefined);
-      assert.equal(guard(fakeExec({ name: 'spawn_teammate' })), undefined, '默认未授权项目保持官方行为');
     }
+    assert.ok(host.闸.some(guard => /member_spawn/.test(guard(fakeExec({ name: 'spawn_teammate' })))));
   });
 
   it('工具总范围配置后立刻生效，并且越权调用带可执行理由', async () => {

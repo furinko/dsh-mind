@@ -8,6 +8,7 @@ import {复核对象引用} from './review-scope.js';
 import {EXPERIMENT_RECIPES,normalizeExperimentConfig,experimentDigest,experimentKeys,experimentId,verifyExperimentCandidate,verifyExperimentNode,copyExperimentCandidate,verifyExperimentCopy,experimentEnvironment,removeExperimentScope} from './review-experiment-files.js';
 import {executeReviewProcess} from './review-experiment-process.js';
 import {autonomousExperimentConfig,prepareAutonomousCandidate,autonomousExperimentPolicy,candidateRecipe,verifyAutonomousInterpreters} from './review-autonomy.js';
+import {cleanupAnchor,observeCleanupTree,cleanupError,confirmCleanupExit,cleanupOwnership} from './review-cleanup.js';
 
 const EVENT='复核实验事件';
 const READ_STATES=new Set(['已派发','执行中','已交卷','已打回']);
@@ -28,7 +29,7 @@ const resultTarget=(id,project)=>({id,kind:'产物',authority:'自治',zone:'私
  * @throws {Denied|InvalidBody} 显式部署配置不合法时拒绝构造，不能退回不受限执行。
  */
 export class ReviewExperimentService {
-  #org;#config;#services;#closed=false;#active=new Map();
+  #org;#config;#services;#closed=false;#active=new Map();#recoverable=new Map();
   constructor({org,config={},services=()=>({})}){this.#org=org;this.#config=Object.keys(config).some(k=>['node','candidates','boundary'].includes(k))?normalizeExperimentConfig(config):autonomousExperimentConfig(config);this.#services=services;}
   /** 只描述准入，不把配置启用写成实际后端/enforcement通过。 */
   status(){return {enabled:this.#config.enabled&&!this.#closed,mode:this.#config.mode??'deployment',boundary:this.#config.boundary??null,configuration:this.#config.digest??null,recipes:Object.keys(EXPERIMENT_RECIPES),closed:this.#closed,actualEnforcement:'未验'};}
@@ -104,6 +105,10 @@ export class ReviewExperimentService {
         const g=grants.get(row.permitId);if(!g||runs.has(row.run.id))throw new Fault('EXPERIMENT_LEDGER_INVALID','运行占用无来源或重复。');const run={...row.run,permitId:row.permitId,confirmed:anchors.has(hash),receipt:null};g.runs.push(run);runs.set(run.id,run);
       }else if(row.type==='finished'){
         const run=runs.get(row.runId);if(!run||run.receipt)throw new Fault('EXPERIMENT_LEDGER_INVALID','运行收据无来源或重复。');run.receipt={...row.receipt,auditConfirmed:anchors.has(hash)};
+      }else if(row.type==='cleanup_recovered'){
+        const run=runs.get(row.runId),finished=data.rows.find(r=>r.type==='finished'&&r.runId===row.runId);
+        if(!run?.receipt||run.recovery||row.permitId!==run.permitId||row.finishedHash!==finished?.hash||run.receipt.rangeExited!==true||run.receipt.originalUnchanged!==true||run.receipt.cleanup?.confirmed!==false||row.facts?.rangeExited!==true||row.facts?.removed!==true||typeof row.facts?.tree!=='string')throw new Fault('EXPERIMENT_LEDGER_INVALID','清理恢复无可靠原收据关联。');
+        run.recovery={...row.facts,confirmed:anchors.has(hash),eventHash:hash,finishedHash:row.finishedHash};
       }else throw new Fault('EXPERIMENT_LEDGER_INVALID','未知实验事件类型。');
     }
     return {rows:data.rows,grants,runs};
@@ -120,7 +125,7 @@ export class ReviewExperimentService {
     const layout=this.#org.layout;
     return serializeByKey(layout.identityFile(),()=>withLock(layout.identityLock(),()=>serializeByKey(layout.taskLog(project),()=>withLock(layout.taskLock(project),fn))));
   }
-  #unclosed(run){return !run.confirmed||!run.receipt||run.receipt.auditConfirmed!==true||run.receipt.rangeExited!==true||run.receipt.cleanup?.confirmed!==true;}
+  #unclosed(run){return !run.confirmed||!run.receipt||run.receipt.auditConfirmed!==true||run.receipt.rangeExited!==true||(run.receipt.cleanup?.confirmed!==true&&run.recovery?.confirmed!==true);}
   #fence(ledger,holder,task){if([...ledger.runs.values()].some(r=>(r.holder===holder||r.task===task)&&this.#unclosed(r)))throw denied('前次运行占用、收据审计或未收口事实未解决，不能换许可绕预算。');}
   async #lookup(spec,id){
     experimentId(id,'许可id');const actor=await this.#actor(spec),ledger=await this.#ledger(spec.project),grant=ledger.grants.get(id);
@@ -215,11 +220,13 @@ export class ReviewExperimentService {
     try{return await execution;}finally{spec.host?.signal?.removeEventListener('abort',onAbort);this.#active.delete(run.id);}
   }
   async #perform(spec,grant,run,controller){
-    let scope=null,process=null,problem=null,cleanup={confirmed:false,retainedRoot:null},originalUnchanged=false,outputs={},invocationStarted=false,provedBeforeSpawn=false,copyResidual=null;
+    let scope=null,process=null,problem=null,cleanup={confirmed:false,retainedRoot:null},originalUnchanged=false,outputs={},invocationStarted=false,provedBeforeSpawn=false,copyResidual=null,anchor=null,handle=null,ownership=null;
     try{
-      const candidate=this.#candidate(grant.candidate,grant.candidateSnapshot);scope=copyExperimentCandidate(candidate,this.#config);
+      const candidate=this.#candidate(grant.candidate,grant.candidateSnapshot);scope=copyExperimentCandidate(candidate,this.#config);anchor=cleanupAnchor(scope);
+      try{ownership=cleanupOwnership(scope,this.#services());}catch{/* Ordinary authorized experiment cleanup is unchanged; recovery needs stronger proof. */}
       invocationStarted=true;
       process=await executeReviewProcess({services:this.#services(),scope,argv:[scope.executables?.[run.recipe]??scope.nodePath,...candidateRecipe(candidate,run.recipe,this.#config).args],...(grant.nativePolicy?{nativePolicy:()=>grant.nativePolicy}:{}),env:()=>experimentEnvironment(scope),limits:grant.limits,signal:controller.signal,
+        onHandle:value=>{handle=value;},
         withSpawn:launch=>this.#locked(spec.project,()=>this.#taskLocked(spec.project,async()=>{
           const current=await this.#ledger(spec.project),g=current.grants.get(grant.id),reserved=current.runs.get(run.id);
           if(!reserved?.confirmed||!g)throw denied('运行占用审计未确认。');
@@ -242,22 +249,55 @@ export class ReviewExperimentService {
     if(scope){
       if(process?.cleanupSafe===true||(!process&&problem&&(!invocationStarted||provedBeforeSpawn)&&problem!=='EXPERIMENT_COPY_CLEANUP_FAILED')){
         // executeReviewProcess抛出只表示它在spawn前硬拒；spawn后的未知必须以非cleanupSafe收据返回。
-        try{removeExperimentScope(scope);cleanup={confirmed:true,retainedRoot:null};}catch{cleanup={confirmed:false,retainedRoot:scope.root};problem??='EXPERIMENT_CLEANUP_FAILED';}
+        try{removeExperimentScope(scope);cleanup={confirmed:true,retainedRoot:null};}catch(error){cleanup={confirmed:false,retainedRoot:scope.root,error:cleanupError(error,scope)};problem??='EXPERIMENT_CLEANUP_FAILED';}
       }else cleanup={confirmed:false,retainedRoot:scope.root};
     }else cleanup={confirmed:problem!=='EXPERIMENT_COPY_CLEANUP_FAILED',retainedRoot:copyResidual};
     const launchUnknown=invocationStarted&&!provedBeforeSpawn;
     const rangeExited=process?.rangeExited??!launchUnknown;
     const receipt={status:problem??process?.status??'preparation-failed',exitCode:process?.exitCode??null,signal:process?.signal??null,rangeExited,outputComplete:process?.outputComplete??false,
       enforcement:process?.enforcement??null,wrappedArgv:process?.wrappedArgv??null,denialSignatures:process?.denialSignatures??[],runnerFailureRules:process?.runnerFailureRules??[],processProof:process?.processProof??'未启动或未取得完整宿主结果',providerPrivateTempCleanup:process?.providerPrivateTempCleanup??'未观测',outputs,originalUnchanged,cleanup,needsIntervention:!cleanup.confirmed||rangeExited!==true||!originalUnchanged,finishedAt:clockMs(this.#org)};
+    if(scope&&anchor&&handle&&process?.cleanupSafe===true&&rangeExited&&originalUnchanged&&!cleanup.confirmed){
+      try{if(ownership)this.#recoverable.set(run.id,{scope,anchor,handle,ownership,tree:observeCleanupTree(anchor)});}catch{/* Unsafe/changed residuals have no automatic adoption path. */}
+    }
     await this.#locked(spec.project,()=>this.#append(spec.project,spec.subject,{type:'finished',permitId:grant.id,runId:run.id,receipt}));
     return {许可id:grant.id,运行id:run.id,状态:receipt.status,退出码:receipt.exitCode,沙箱:receipt.enforcement,输出:outputs,范围已退出:receipt.rangeExited,副本已清理:cleanup.confirmed,原树未变:originalUnchanged,需介入:receipt.needsIntervention,可重试:false,说明:'实验结果不是复核票；进程证明仅限正式宿主受管范围，未知不冒充零残留。'};
+  }
+  /** Human command only. No caller-supplied path/proof; revoked permits stay revoked. */
+  async recoverCleanup(spec){
+    experimentKeys(spec.args,['action','project','许可id','运行id'],'清理恢复');
+    if(spec.subject?.kind!=='主权者')throw new Denied('宪章 §3.2','清理恢复涉及物理删除，只能由主权者在人侧入口执行。',{requireAuthority:'主权者'});
+    if(this.#closed)throw new Fault('EXPERIMENT_DISPOSED','实验服务已卸载，不能复用旧句柄。');
+    experimentId(spec.args.许可id,'许可id');experimentId(spec.args.运行id,'运行id');
+    return this.#locked(spec.project,()=>this.#taskLocked(spec.project,async()=>{
+      const ledger=await this.#ledger(spec.project),grant=ledger.grants.get(spec.args.许可id),run=ledger.runs.get(spec.args.运行id);
+      if(!grant||!run||run.permitId!==grant.id||!grant.confirmed||!run.confirmed||!run.receipt?.auditConfirmed||run.receipt.rangeExited!==true||run.receipt.originalUnchanged!==true||run.receipt.cleanup?.confirmed!==false||run.recovery)throw denied('原运行未可靠结束、已收口或不属于该许可，拒绝清理恢复。');
+      const identity=await this.#org.registry.identity(),holder=identity.members?.[grant.holder],owner=identity.members?.[grant.owner];
+      if(holder?.status!=='在岗'||owner?.status!=='在岗'||holder.岗位!=='复核员'||owner.岗位!=='Lead'||holder.委派者?.id!==grant.owner||!same(stamp(holder),grant.holderStamp)||!same(stamp(owner),grant.ownerStamp))throw denied('原执行身份或委派归属已变化，不得恢复旧清理。');
+      const audit=await this.#org.audit.read({}),identityAnchor=id=>audit.filter(r=>r.对象?.kind==='身份'&&r.对象.id===id&&['状态变更','主体创建','迁移补登'].includes(r.动作)).at(-1)?.hash??null;
+      if(identityAnchor(grant.owner)!==grant.credentialEpoch?.owner||identityAnchor(grant.holder)!==grant.credentialEpoch?.holder)throw denied('原身份历史已变化，即使恢复同id也不能接管旧清理。');
+      const node=await this.#org.tasks.get(grant.task,{项目:spec.project});if(!node)throw denied('原任务不存在。');
+      await this.#org.policy.check({subject:spec.subject,action:'delete',target:resultTarget(grant.id,spec.project),context:{task:node}});
+      const witness=this.#recoverable.get(run.id);
+      if(!witness||witness.scope.root!==run.receipt.cleanup.retainedRoot)throw new Fault('EXPERIMENT_CLEANUP_NO_WITNESS','缺本服务原始句柄与实体归属观察；不能接管旧残留或凭声明解锁。');
+      await confirmCleanupExit(witness.handle,grant.limits.closeMs);
+      // No more await between the fresh identity/tree checks and deletion.
+      const current=await this.#org.registry.identity();
+      if(!same(current.members?.[grant.holder],holder)||!same(current.members?.[grant.owner],owner))throw denied('退出复核期间身份变化。');
+      if(!same(cleanupOwnership(witness.scope,this.#services()),witness.ownership))throw new Fault('EXPERIMENT_CLEANUP_OWNER_CHANGED','原目录所有者或安全描述符变化，不恢复删除。');
+      if(observeCleanupTree(witness.anchor)!==witness.tree)throw new Fault('EXPERIMENT_CLEANUP_UNSAFE','原目录或内容已被替换，拒绝恢复。');
+      try{removeExperimentScope(witness.scope);}catch(error){throw new Fault('EXPERIMENT_CLEANUP_FAILED','清理恢复未成功，旧收据仍阻断。',{detail:cleanupError(error,witness.scope)});}
+      const finished=ledger.rows.find(r=>r.type==='finished'&&r.runId===run.id);
+      await this.#append(spec.project,spec.subject,{type:'cleanup_recovered',permitId:grant.id,runId:run.id,finishedHash:finished.hash,facts:{rangeExited:true,removed:true,tree:witness.tree,observedAt:clockMs(this.#org)}});
+      this.#recoverable.delete(run.id);
+      return {许可id:grant.id,运行id:run.id,副本已清理:true,原收据未改:true,许可仍撤回:grant.revoked,额度未返还:true};
+    }));
   }
   /** 仅许可持有人与派发Lead读取；输出按有界字节分页，不接受文件路径。 */
   async read(spec){
     this.#validateArgs('review_experiment_read',spec.args);const {actor,ledger,grant}=await this.#lookup(spec,spec.args.许可id);
     if(!actor.lead){const ctx=await this.#reviewTask(spec,grant.task,grant.holder);if((ctx.node.代??1)!==grant.generation||!same(stamp(ctx.holder),grant.holderStamp)||ctx.credentialEpoch.holder!==grant.credentialEpoch?.holder||ctx.credentialEpoch.binding!==grant.credentialEpoch?.binding)throw denied('复核读证据的任务/实例代次已失效。');}
     const node=await this.#org.tasks.get(grant.task,{项目:spec.project});await this.#org.policy.check({subject:spec.subject,action:'read',target:resultTarget(grant.id,spec.project),context:{task:node}});
-    const summary={...this.#summary(grant),运行:grant.runs.map(r=>({运行id:r.id,配方:r.recipe,审计确认:r.confirmed,收据:r.receipt?{...r.receipt,cleanup:{confirmed:r.receipt.cleanup.confirmed,...(actor.lead?{retainedRoot:r.receipt.cleanup.retainedRoot}:{})}}:null}))};
+    const summary={...this.#summary(grant),运行:grant.runs.map(r=>({运行id:r.id,配方:r.recipe,审计确认:r.confirmed,...(r.recovery?{清理恢复:r.recovery}:{}),收据:r.receipt?{...r.receipt,cleanup:{confirmed:r.receipt.cleanup.confirmed,...(r.receipt.cleanup.error?{error:r.receipt.cleanup.error}:{}),...(actor.lead?{retainedRoot:r.receipt.cleanup.retainedRoot}:{})}}:null}))};
     if(spec.args.运行id===undefined)return summary;
     experimentId(spec.args.运行id,'运行id');const run=ledger.runs.get(spec.args.运行id);if(!run||run.permitId!==grant.id)throw denied('运行不属于本许可。');
     if(!run.receipt)throw denied('运行尚未产生收据。');

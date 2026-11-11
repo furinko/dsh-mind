@@ -21,6 +21,9 @@ import { agentSubject } from '../../../src/subject.js';
 import { readInstanceSnapshot } from '../../../src/instance-snapshot.js';
 import { readTaskLedgerSync } from '../../../src/task-ledger.js';
 import { assertFileSearchTree, assertSingleLinkTarget } from '../../../src/tool-file-scope.js';
+import { createHostFileCeiling } from '../../../src/host-file-ceiling.js';
+import { createHostCreationBridge } from '../../../src/host-creation-bridge.js';
+import { requireLiveActor } from '../../../src/runtime-actor.js';
 import { createProjectResolver } from '../../../src/project-identity.js';
 import { serializeMemoryEnvelope } from '../../../src/memory-response.js';
 import { describeFailure, Denied, Fault, InvalidBody } from '../../../src/kernel/errors.js';
@@ -97,7 +100,7 @@ export async function apply(ctx, config = {}) {
       project: config.project ?? DEFAULT_PROJECT,
       logger,
     });
-    org.tasks.configureToolFiles(config.memberFileAccess);
+    org.tasks.configureToolFiles(config.memberFileAccess, createHostFileCeiling({ services: () => ({ agents: 取服务(ctx, 'agents') }) }));
   } catch (error) {
     启动范围闸.degrade(error);
     // 装配失败必须响亮，但**不许**让宿主起不来：注册一个把原因说清楚的自述工具。
@@ -193,15 +196,30 @@ export async function apply(ctx, config = {}) {
   // 留下裸创建窗口。接线状态只取本次内存注册事实，磁盘回执仅供诊断。
   const delegation = 建调度策略(config.delegation, logger);
   const 调度接线回执 = { promptRegistered: false, creationGuardRegistered: false };
+  const creationBridge = createHostCreationBridge({ tools: ctx.tools, contextOf(exec, { maintenance = false } = {}) {
+    if (调度接线回执.creationGuardRegistered !== true) throw new Fault('HOST_CREATION_UNAVAILABLE', '本次内核创建闸尚未确认接线，不能签发受管创建调用。');
+    const subject = agentSubject(exec), project = 当前项目键(exec);
+    if (!chatConnected(org, exec?.agent?.session)) throw new Fault('MIND_CONNECTION_CHANGED', '当前聊天已断开心智，不接受旧派工调用。');
+    requireLiveActor({ host: { agent: exec.agent, agents: 取服务(ctx, 'agents'), project }, subject, project });
+    const state = maintenance ? delegation.authorizeMaintenance({ subject, project }) : delegation.authorize({ subject, project });
+    return { project, revision: chatRevision(org, exec.agent.session), fingerprint: state.fingerprint };
+  } });
+  // The real tool waterfall supplies the unforgeable outer execution token.
+  // Missing support leaves ordinary Mind reads usable, but creation unavailable.
+  ctx.on?.('tools/execute', (exec, next) => creationBridge.around(exec, next), { prepend: true });
   const 创建判定 = (exec) => observations.guard(exec, 'kernel.delegation', () => {
     if (!isCreationTool(exec?.name)) return undefined;
-    try { return delegation.creationGuard(exec, { subject: agentSubject(exec), project: 当前项目键(exec), connected: chatConnected(org, exec?.agent?.session) }); }
+    try {
+      if (creationBridge.allows(exec)) return undefined;
+      return delegation.creationGuard(exec, { subject: agentSubject(exec), project: 当前项目键(exec), connected: chatConnected(org, exec?.agent?.session) });
+    }
     catch (error) { return `[dsh-mind] 调度项目身份不可判定，按 fail-closed 拒绝：${错误消息(error)}`; }
   });
   const 关闭调度接线 = () => {
     // 必须先恢复首闸兜底并关闭判据，再移除专用创建闸；撤销器本身也可能触发工具调用。
     调度接线回执.creationGuardRegistered = false;
     调度接线回执.promptRegistered = false;
+    creationBridge.close();
     delegation.close();
   };
   // 单独承接整个组件的生命周期，包含创建 effect 尚未执行就卸载的情况。
@@ -351,7 +369,7 @@ export async function apply(ctx, config = {}) {
       闸回执.调度创建闸 = { registered: false, error: 错误消息(error) };
       落闸回执(1);
       logger.error?.(`[dsh-mind] 调度创建闸注册失败（闸在位探针将见红）：${闸回执.调度创建闸.error}`);
-      if (delegation.config.mode === 'lead-discretion') {
+      if (delegation.config.mode !== 'explicit-user' || !delegation.configurationValid) {
         拒绝激活 = `调度创建闸注册失败：${闸回执.调度创建闸.error}。调度授权已生效而创建闸缺席 = 授权面无闸，按 fail-closed 拒绝激活（R06）。`;
       }
     }
@@ -378,7 +396,7 @@ export async function apply(ctx, config = {}) {
   try {
     reviewExperiments = new ReviewExperimentService({
       org, config: config.reviewExperiments ?? {},
-      services: () => ({ sandbox: 取服务(ctx, 'sandbox'), subprocess: 取服务(ctx, 'subprocess'), sandboxPolicy: 取服务(ctx, 'sandboxPolicy'), sessionQuery: 取服务(ctx, 'sessionQuery') }),
+      services: () => ({ sandbox: 取服务(ctx, 'sandbox'), subprocess: 取服务(ctx, 'subprocess'), sandboxPolicy: 取服务(ctx, 'sandboxPolicy'), sessionQuery: 取服务(ctx, 'sessionQuery'), reviewCleanupOwnership: 取服务(ctx, 'reviewCleanupOwnership') }),
     });
     if (reviewExperiments.status().enabled && typeof ctx.effect !== 'function') throw Object.assign(new Error('实验生命周期未接线'), { code: 'EXPERIMENT_LIFECYCLE_UNAVAILABLE' });
     const lifetime = reviewExperiments;
@@ -399,6 +417,8 @@ export async function apply(ctx, config = {}) {
     subagents: 取服务(ctx, 'subagents'),
     agents: 取服务(ctx, 'agents'), // 既有委派维护须核对 exact live Agent，不能只相信同 id 对象。
     delegation,
+    hostCreation: creationBridge.forExecution(exec),
+    hostMaintenance: creationBridge.forExecution(exec, true),
     reviewExperiments,
   });
 
@@ -526,7 +546,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations, 
         project: { type: 'string', description: '项目键；省略则用当前项目' },
         role: { type: 'string', description: '兼容字段，不授予身份或岗位权限；实际主体由宿主会话与身份档案确定，自报 Lead 会被拒绝' },
         实例: { type: 'string', description: 'registry_assign / task_bind 的实例 id（必填；省略会被拒，不再按岗位推断）' },
-        工具文件范围: { type: 'object', properties: { 读: { type: 'array', items: { type: 'string' } }, 写: { type: 'array', items: { type: 'string' } } }, additionalProperties: false, description: 'task_dispatch / member_spawn：派发时冻结的通用文件读写绝对根。须在部署者 memberFileAccess 可授上限内；不从 cwd 授权，不允许 shell/未知执行类。' },
+        工具文件范围: { type: 'object', properties: { 读: { type: 'array', items: { type: 'string' } }, 写: { type: 'array', items: { type: 'string' } } }, additionalProperties: false, description: 'task_dispatch / member_spawn：派发时冻结的通用文件读写绝对根。Lead在真实宿主父会话现行文件权限内划分；显式 memberFileAccess 配置仅进一步收紧。缺宿主事实拒绝，不从 cwd 授权，不允许 shell/未知执行类。' },
         id: { type: 'string', description: '对象 id（持久目标 / 任务节点 / 记忆条目 / 挂起项 / 能力名——capability_read 按 id 读，不读 名）；budget_query及人侧budget_decide必填目标id。usage_query可选同项目精确目标id。operation_query可选操作UUID。turn_buffer_query可按消息id读取本会话已缓冲文本；project_brief_query按条目id核对来源片段' },
         协作反馈: collaborationFeedbackSchema(),
         需求理解: { type: 'object', properties: { 原始表达: { type: 'string', minLength: 1, maxLength: 1000 }, 当前理解: { type: 'string', minLength: 1, maxLength: 1000 }, 来源: { type: 'string', minLength: 1, maxLength: 500 }, 待验证: { type: 'array', maxItems: 6, items: { type: 'string', minLength: 1, maxLength: 240 } }, 关键问题: { type: 'array', maxItems: 3, items: { type: 'string', minLength: 1, maxLength: 240 } }, 分工: { type: 'array', maxItems: 6, items: { type: 'object', properties: { 岗位: { type: 'string', minLength: 1, maxLength: 80 }, 工作: { type: 'string', minLength: 1, maxLength: 500 }, 理由: { type: 'string', minLength: 1, maxLength: 240 } }, required: ['岗位', '工作', '理由'], additionalProperties: false } } }, required: ['原始表达', '当前理解', '来源'], additionalProperties: false, description: '仅goal_create或goal_progress可选；Lead可修正解释，不认证用户表达，不改目标本意、约束或判据，也不创建执行实例。修改目标约束后旧解释退出默认上下文，需按新目标重新记录；命令可传JSON对象。' },
@@ -627,6 +647,10 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations, 
         运行id: { type: 'string', description: '许可内已生成的实验运行id，不接受任意文件路径' },
         输出流: { type: 'string', enum: ['stdout','stderr'] },
         输出偏移: { type: 'integer', minimum: 0, maximum: 4194304, description: '按原字节分页的起点' },
+        原记录: { type: 'boolean', description: 'task_criteria的原提交/原票只读模式；默认仍仅返回冻结判据。按任务列元数据，按提交序或票读完整分页' },
+        提交序: { type: 'integer', minimum: 1, description: 'task_criteria(原记录=true)精确读取本项目原submitted事件；不能同时给票' },
+        记录偏移: { type: 'integer', minimum: 0, description: '原事件规范JSON的字节起点' },
+        记录长度: { type: 'integer', minimum: 1, maximum: 32768, description: '每页原字节长度，须读至完整并核SHA256' },
         输出长度: { type: 'integer', minimum: 1, maximum: 32768 },
         线程: { type: 'string', description: '线程名（bus_send / bus_read）' },
         发件: { type: 'string', description: '已忽略（W2 安全修复）：发件人恒为真实主体 id，自报无效——冒充发件人是伪造轮边界的第一步' },
@@ -1284,7 +1308,7 @@ function 建调度策略(config, logger) {
     return new DelegationPolicy(config);
   } catch (error) {
     logger.error?.(`[dsh-mind] delegation 配置非法，已按未授权（explicit-user）处理：${错误消息(error)}`);
-    return new DelegationPolicy({});
+    return DelegationPolicy.invalidConfiguration();
   }
 }
 

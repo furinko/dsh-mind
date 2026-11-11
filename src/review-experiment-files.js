@@ -88,8 +88,12 @@ export function normalizeExperimentConfig(raw={}){
 export function inspectExperimentCandidate(root,limits=EXPERIMENT_HARD_LIMITS,{omit=[]}={}){const manifest=filesAt(physicalRoot(root),limits,false,omit);return {manifest,manifestHash:experimentDigest(manifest)};}
 /** 执行前复核副本（服务专属Node和空临时目录单独验证），不凭复制已完成自述。 */
 export function verifyExperimentCopy(scope,candidate,config){
+  const root=physicalRoot(scope.root);
+  if(scope.workspace!==path.join(root,'dsh-mind')||scope.temp!==path.join(root,'tmp')||scope.home!==path.join(root,'home'))throw fail('副本源码、临时区与HOME不是本次专属根内的固定兄弟布局。');
+  if(!fs.lstatSync(scope.home).isDirectory()||fs.lstatSync(scope.home).isSymbolicLink()||folded(fs.realpathSync(scope.home))!==folded(path.resolve(scope.home))||fs.readdirSync(scope.home).length)throw fail('副本HOME不为空或发生重解析。');
   const binaries=scope.executables?Object.entries(candidate.recipes).map(([id,r])=>({source:r.interpreter,file:scope.executables[id]})):[{source:config.node,file:scope.nodePath}];
   for(const {source,file}of binaries){
+    const rel=path.relative(path.join(root,'bin'),file);if(rel.startsWith('..')||path.isAbsolute(rel))throw fail('副本解释器不在本次专属bin目录内。');
     const st=fs.lstatSync(file);
     if(!st.isFile()||st.isSymbolicLink()||st.nlink!==1||folded(fs.realpathSync(file))!==folded(path.resolve(file)))throw fail('副本解释器被替换或链接复用。');
     verifyExperimentNode({...source,path:file});
@@ -119,22 +123,23 @@ export function copyExperimentCandidate(candidate,config){
     if(candidate.recipes){
       executables={};let index=0;
       for(const [id,recipe]of Object.entries(candidate.recipes)){
-        const source=verifyExperimentNode(recipe.interpreter),bin=path.join(workspace,'.dsh-review-bin',String(index++),path.basename(source));
+        const source=verifyExperimentNode(recipe.interpreter),bin=path.join(root,'bin',String(index++),path.basename(source));
         fs.mkdirSync(path.dirname(bin),{recursive:true});fs.copyFileSync(source,bin,fs.constants.COPYFILE_EXCL);if(process.platform!=='win32')fs.chmodSync(bin,0o500);
         verifyExperimentNode({...recipe.interpreter,path:bin});executables[id]=bin;
       }
     }else{
-      nodePath=path.join(workspace,process.platform==='win32'?'.dsh-review-node.exe':'.dsh-review-node');fs.copyFileSync(executable,nodePath,fs.constants.COPYFILE_EXCL);if(process.platform!=='win32')fs.chmodSync(nodePath,0o500);verifyExperimentNode({...config.node,path:nodePath});
+      const bin=path.join(root,'bin');fs.mkdirSync(bin);
+      nodePath=path.join(bin,process.platform==='win32'?'node.exe':'node');fs.copyFileSync(executable,nodePath,fs.constants.COPYFILE_EXCL);if(process.platform!=='win32')fs.chmodSync(nodePath,0o500);verifyExperimentNode({...config.node,path:nodePath});
     }
-    const temp=path.join(workspace,'.dsh-review-tmp');fs.mkdirSync(temp);
-    return {root,workspace,temp,nodePath,...(executables?{executables}:{})};
+    const temp=path.join(root,'tmp'),home=path.join(root,'home');fs.mkdirSync(temp);fs.mkdirSync(home);
+    return {root,workspace,temp,home,nodePath,...(executables?{executables}:{})};
   }catch(error){try{removeExperimentScope({root,workspace});}catch(cleanup){throw new Fault('EXPERIMENT_COPY_CLEANUP_FAILED','副本准备失败且清理未完成。',{detail:{root,originalCode:error.code??'UNKNOWN'}});}throw error;}
 }
 /** 清空环境注入（含 Windows 大小写别名），只显式恢复必要系统路径与本次临时目录。 */
 export function experimentEnvironment(scope){
   const env=Object.fromEntries(Object.keys(process.env).map(k=>[k,undefined]));
   for(const key of ['SystemRoot','WINDIR','ComSpec']){const found=Object.keys(process.env).find(k=>k.toUpperCase()===key.toUpperCase());if(found)env[key]=process.env[found];}
-  return {...env,TEMP:scope.temp,TMP:scope.temp,TMPDIR:scope.temp,HOME:scope.workspace,USERPROFILE:scope.workspace,PATH:scope.executables?[...new Set(Object.values(scope.executables).map(p=>path.dirname(p))),process.env.PATH??''].filter(Boolean).join(path.delimiter):path.dirname(scope.nodePath),NODE_OPTIONS:undefined,NODE_PATH:undefined};
+  return {...env,TEMP:scope.temp,TMP:scope.temp,TMPDIR:scope.temp,HOME:scope.home??scope.workspace,USERPROFILE:scope.home??scope.workspace,PATH:scope.executables?[...new Set(Object.values(scope.executables).map(p=>path.dirname(p))),process.env.PATH??''].filter(Boolean).join(path.delimiter):path.dirname(scope.nodePath),NODE_OPTIONS:undefined,NODE_PATH:undefined};
 }
 /** 删除前核绝对真实路径与专属命名前缀；只能删除本服务随机生成的实验根。 */
 export function removeExperimentScope(scope){
