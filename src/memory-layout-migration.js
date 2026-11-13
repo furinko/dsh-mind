@@ -58,7 +58,7 @@ export async function planMemoryMigration(layout) {
   if (version === 2) return { from: 2, to: 2, root, alreadyCurrent: true, entries: [] };
   const before = await memoryTree(root);
   if (before.some(row => row.path === 'external-conversation-layout.json')) {
-    try { if (![2, 3].includes((await readJson(join(root, 'external-conversation-layout.json')))?.version)) throw Error(); }
+    try { if (![2, 3, 4].includes((await readJson(join(root, 'external-conversation-layout.json')))?.version)) throw Error(); }
     catch { throw fail('轮级缓冲来源布局标记未知或损坏，不自动迁移。'); }
   }
   const entries = before.flatMap((row) => { const to = targetOf(row); return to ? [{ ...row, to }] : []; });

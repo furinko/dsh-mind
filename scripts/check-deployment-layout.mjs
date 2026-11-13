@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Read metadata only. Never import code from the target commit or open memory ledgers.
-import { readFile, stat, realpath, lstat } from 'node:fs/promises';
+import { readFile, stat, realpath, lstat, readdir, open } from 'node:fs/promises';
 import { resolve, join, dirname, basename, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -29,7 +29,7 @@ export function supportedMemoryLayouts({ manifest, paths, reader }) {
       || new Set(parsed.objectHistoryLayouts).size !== parsed.objectHistoryLayouts.length) fail('目标提交的对象历史兼容清单无效，拒绝部署。');
     if (parsed.informationLayouts !== undefined && (!Array.isArray(parsed.informationLayouts) || !parsed.informationLayouts.length
       || parsed.informationLayouts.some(v => ![1, 2].includes(v)) || new Set(parsed.informationLayouts).size !== parsed.informationLayouts.length)) fail('目标提交的信息收录兼容清单无效，拒绝部署。');
-    if (parsed.turnBufferLayouts !== undefined && (!Array.isArray(parsed.turnBufferLayouts) || !parsed.turnBufferLayouts.length || parsed.turnBufferLayouts.some(v => ![1, 2, 3].includes(v)) || new Set(parsed.turnBufferLayouts).size !== parsed.turnBufferLayouts.length)) fail('目标提交的轮级缓冲兼容清单无效，拒绝部署。');
+    if (parsed.turnBufferLayouts !== undefined && (!Array.isArray(parsed.turnBufferLayouts) || !parsed.turnBufferLayouts.length || parsed.turnBufferLayouts.some(v => ![1, 2, 3, 4].includes(v)) || new Set(parsed.turnBufferLayouts).size !== parsed.turnBufferLayouts.length)) fail('目标提交的轮级缓冲兼容清单无效，拒绝部署。');
     return { memoryLayouts: parsed.memoryLayouts, objectHistoryLayouts: parsed.objectHistoryLayouts,
       ...(parsed.turnBufferLayouts ? { turnBufferLayouts: parsed.turnBufferLayouts } : {}),
       ...(parsed.informationLayouts ? { informationLayouts: parsed.informationLayouts } : {}) };
@@ -96,13 +96,37 @@ export async function informationLayoutVersion(privateRoot) {
 }
 
 export async function turnBufferLayoutVersion(privateRoot) {
-  const file = join(privateRoot, DIR.基础设施, DIR.记忆服务, 'external-conversation-layout.json');
+  const root = join(privateRoot, DIR.基础设施, DIR.记忆服务);
+  const file = join(root, 'external-conversation-layout.json');
+  let version = 1;
   try {
     const info = await lstat(file);
     if (!info.isFile() || info.isSymbolicLink() || info.size > 1024) fail('轮级缓冲布局标记不可核对，拒绝部署。');
     let marker; try { marker = JSON.parse(await readFile(file, 'utf8')); } catch { fail('轮级缓冲布局标记无效，拒绝部署。'); }
-    if (![2, 3].includes(marker?.version)) fail('轮级缓冲布局未知，拒绝部署。'); return marker.version;
-  } catch (error) { if (error.code === 'ENOENT') return 1; throw error; }
+    if (![2, 3, 4].includes(marker?.version)) fail('轮级缓冲布局未知，拒绝部署。'); version = marker.version;
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (version === 4) return version;
+  // Earlier development writers incorrectly kept the source-projection marker at
+  // 3 while creating v4 manifests. Inspect only names and a bounded format header,
+  // never memory ledgers or chunk contents, so such a tree cannot be handed to v3.
+  const buffers = memoryLayoutVersion(root) === 2 ? join(root, '工作记忆', '会话缓冲') : join(root, '轮级缓冲');
+  let projects;
+  try { projects = await readdir(buffers, { withFileTypes: true }); } catch (error) { if (error.code === 'ENOENT') return version; throw error; }
+  for (const project of projects) {
+    if (project.isSymbolicLink() || !project.isDirectory()) fail('轮级缓冲项目元数据不可核对，拒绝部署。');
+    const directory = join(buffers, project.name);
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (entry.isSymbolicLink() || !entry.isFile()) fail('轮级缓冲文件元数据不可核对，拒绝部署。');
+      if (/^[a-f0-9]{64}\.json\.part-[a-f0-9]{64}$/.test(entry.name)) return 4;
+      if (!/^[a-f0-9]{64}\.json$/.test(entry.name)) continue;
+      const handle = await open(join(directory, entry.name), 'r');
+      try {
+        const prefix = Buffer.alloc(96); const { bytesRead } = await handle.read(prefix, 0, prefix.length, 0);
+        if (/^\s*\{\s*"version"\s*:\s*4\s*[,}]/.test(prefix.subarray(0, bytesRead).toString('utf8'))) return 4;
+      } finally { await handle.close(); }
+    }
+  }
+  return version;
 }
 
 export async function checkDeploymentLayout({ repository, git = 'git', target, privateRoot }) {

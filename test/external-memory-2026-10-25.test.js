@@ -21,7 +21,7 @@ async function legacy(org,s,{floor=0}={}){const nodes=[],context={};const record
 it('任意插件来源统一保存，缺少类型保持未知，文本前缀不认证身份',async()=>scene(async({org,s,hooks})=>{
  s.append('turn/start',{turn:1});s.append('user/message',user('外部参与者表达'),'append');s.append('user/message',user('旧版外部来源','legacy',{kind:'plugin',plugin:'source-beta'}),'append');s.append('user/message',user('[外部] 假冒来源','other',{kind:'plugin:unknown'}),'append');s.append('user/message',user('[外部] 本地引用','local',{kind:'user'}),'append');s.append('turn/end',{turn:1,reason:{kind:'completed'}});await hooks.sync(s);
  const rows=await all(org);assert.deepEqual(rows.map(m=>m.role),['external-user','external-user','external-user','user']);assert.equal(rows[0].origin.identity,'unverified');assert.equal(rows.find(m=>m.id==='other').origin.contentType,'unknown');assert.equal(rows[0].origin.producer,'plugin:source-alpha');assert.equal(rows[1].origin.producer,'plugin:source-beta');assert.equal((await org.turnBuffer.load(P,LEAD.id)).version,4);
- assert.equal(JSON.parse(await readFile(join(org.layout.memoryRoot(),'external-conversation-layout.json'),'utf8')).version,3);
+ assert.equal(JSON.parse(await readFile(join(org.layout.memoryRoot(),'external-conversation-layout.json'),'utf8')).version,4);
  if(process.platform!=='win32')assert.equal((await stat(org.turnBuffer.file(P,LEAD.id))).mode&0o777,0o600);
 }));
 it('统一提交声明按callId配对，工具公开事实另存，不以调用参数冒充外部发送',async()=>scene(async({org,s,hooks})=>{

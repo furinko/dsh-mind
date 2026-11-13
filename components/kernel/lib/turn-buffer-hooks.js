@@ -67,7 +67,7 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
         } else if (row.type === 'message' && !externalConversationMessage(row)) row = { seq, type: 'skip' };
         if (row.type === 'replace' && row.message && !externalConversationMessage(row.message) && !kept.has(seq)) delete row.message;
         const external = row.type === 'replace' ? row.message : row;
-        if (externalConversationMessage(external) && (!Number.isFinite(external.time) || external.time < cutoff)) {
+        if (!kept.has(seq) && externalConversationMessage(external) && (!Number.isFinite(external.time) || external.time < cutoff)) {
           omitted++; if (row.type === 'replace') delete row.message; else row = { seq, type: 'skip' };
         }
         foldTurnRecords(state, [row], org.clock.ms());

@@ -219,6 +219,9 @@ export class TurnBufferService {
            || !(state.open === null || positive(state.open))) throw fail();
       if (state.sourceRecovery !== undefined && (![2, 3].includes(state.sourceRecovery?.version) || !integer(state.sourceRecovery.throughSeq) || state.sourceRecovery.throughSeq > state.nextSeq || !integer(state.sourceRecovery.omitted))) throw fail();
       if (state.sourceProjection !== undefined && ![2, 3].includes(state.sourceProjection)) throw fail();
+      if (state.legacyMigration !== undefined && (state.legacyMigration?.version !== 1 || !integer(state.legacyMigration.throughSeq)
+          || state.legacyMigration.throughSeq > state.nextSeq || !Number.isFinite(state.legacyMigration.protectedUntil)
+          || !/^[a-f0-9]{64}$/.test(state.legacyMigration.originalHash) || typeof state.legacyMigration.ownerMissing !== 'boolean')) throw fail();
       if (state.owner !== undefined && (state.owner.kind !== 'Lead' || state.owner.project !== project || state.owner.session !== session)) throw fail();
       let count = 0; let last = -1;
       for (const round of state.rounds) {
@@ -238,29 +241,63 @@ export class TurnBufferService {
     } catch (error) { if (error?.code === 'ENOENT') return null; throw fail(); }
   }
   prune(state) {
+    // An inline legacy document has not passed the lossless conversion boundary.
+    // Reads and source replay must not trim it before the backup is established.
+    if (state.version !== 4) return state;
+    const protection = state.legacyMigration;
     const cutoff = this.clock.ms() - TURN_BUFFER_LIMITS.days * 86400000;
     state.rounds = state.rounds.filter(round => {
       // Unfinished and explicitly selected experiences survive short-term expiry.
+      if (protection && this.clock.ms() < protection.protectedUntil && (round.start < protection.throughSeq || round.messages.some(message => message.seq < protection.throughSeq))) return true;
       if (round.at >= cutoff || round.status !== 'closed' || round.retain === true) return true;
       state.removed += round.messages.length; return false;
     });
     return state;
   }
-  async saveState(file, state) {
+  async saveState(file, state, { forget = false } = {}) {
+    const backupFile = file + '.migration-backup';
+    let migration = null;
+    let original;
+    try { original = await readFile(file, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    let inline = null;
+    if (!forget && original !== undefined) {
+      try { inline = JSON.parse(original.replace(/^\uFEFF/, '')); } catch { throw fail(); }
+    }
+    if (inline && [1, 2, 3].includes(inline.version)) {
+      if (inline.project !== state.project || inline.session !== state.session || !integer(inline.nextSeq)) throw fail();
+      const previous = await readJsonOrNull(backupFile);
+      if (previous && (previous.version !== 1 || previous.originalHash !== digest(original) || previous.original !== original || !Number.isFinite(previous.expiresAt))) throw new Fault('TURN_MIGRATION_CONFLICT', '迁移回退副本与当前原字节不符，保留现场，不覆盖。');
+      migration = previous ?? { version: 1, original, originalHash: digest(original),
+        expiresAt: this.clock.ms() + TURN_BUFFER_LIMITS.rollbackDays * 86400000 };
+      // An implicit capture/recovery may already contain new facts. Its initial
+      // v4 installation is not permission to erase those facts by rollback.
+      const payload = value => Object.fromEntries(Object.entries(value).filter(([key]) => !['version','coverageGaps','legacyMigration'].includes(key)));
+      migration.postMigrationWrites = migration.postMigrationWrites === true || canonical(payload(inline)) !== canonical(payload(state));
+      await save(backupFile, migration);
+      state.legacyMigration = { version: 1, throughSeq: inline.nextSeq, protectedUntil: migration.expiresAt,
+        originalHash: migration.originalHash, ownerMissing: inline.owner === undefined };
+      if (inline.owner === undefined) delete state.owner;
+    }
     if (state.version !== 4 && !(state.coverageGaps ?? []).some(gap => gap.kind === 'legacy-capture')) {
       state.coverageGaps = [...(state.coverageGaps ?? []), { kind: 'legacy-capture',
         detail: '旧缓冲曾有消息/轮数/长度上限且未保存全部公开类型；现存内容保留，丢失内容不能凭空恢复。' }];
     }
-    if (state.sourceProjection === 3 || state.rounds.some(r => r.messages.some(externalConversationMessage))) {
-      // Persist the compatibility barrier before any external text.
-      const marker = join(this.layout.memoryRoot(), 'external-conversation-layout.json');
-      const old = await readJsonOrNull(marker);
-      if (old && ![2, 3].includes(old.version)) throw fail();
-      if (old?.version !== 3) await save(marker, { version: 3 });
-    }
-    await saveTurnArchive(file, state, save);
-    const backup = await readJsonOrNull(file + '.migration-backup');
-    if (backup?.expiresAt <= this.clock.ms()) await rm(file + '.migration-backup', { force: true });
+    if (state.legacyMigration?.ownerMissing && !(state.coverageGaps ?? []).some(gap => gap.kind === 'legacy-owner-unknown')) state.coverageGaps = [...(state.coverageGaps ?? []), { kind: 'legacy-owner-unknown', detail: '原缓冲未记录owner；保留缺失，不追认历史归属。' }];
+    // Version 4 denotes the actual manifest/parts format, independently of
+    // external-message projection. Publish the old-reader barrier first.
+    const marker = join(this.layout.memoryRoot(), 'external-conversation-layout.json');
+    const old = await readJsonOrNull(marker);
+    if (old && ![2, 3, 4].includes(old.version)) throw fail();
+    if (old?.version !== 4) await save(marker, { version: 4 });
+    await saveTurnArchive(file, state, async (target, value) => {
+      if (target === file && migration) {
+        migration.installedHash = digest(JSON.stringify(value) + '\n');
+        await save(backupFile, migration);
+      }
+      await save(target, value);
+    });
+    const backup = await readJsonOrNull(backupFile);
+    if (backup?.expiresAt <= this.clock.ms()) await rm(backupFile, { force: true });
   }
   async recoverProjection({ subject, project, session, expected, state, active = () => true }) {
     const file = this.file(project, session);
@@ -288,7 +325,7 @@ export class TurnBufferService {
       const state = await this.load(project, session) ?? { version: 4, project, session,
         sourceProjection: 3, nextSeq: fromSeq, floor: fromSeq, missing: 0, removed: 0, open: null, rounds: [],
         coverageGaps: fromSeq > 0 ? [{ kind: 'uncovered-prefix', throughSeq: fromSeq, detail: '此副本未声明覆盖初始水位之前的历史；继承或宿主不可用范围不能冒充完整。' }] : [] };
-      state.owner = { kind: 'Lead', project, session };
+      if (state.owner !== undefined || state.version === 4 && !state.legacyMigration?.ownerMissing) state.owner = { kind: 'Lead', project, session };
       if (throughSeq <= state.nextSeq) {
         // 重复事件和清空前迟到的批次都不能复活正文；顺便物理清理已到期资料。
         const previous = JSON.stringify(state); this.prune(state);
@@ -411,7 +448,7 @@ export class TurnBufferService {
       await this.authorizeMutation(subject, project, session);
       const backup = await readJsonOrNull(file + '.migration-backup');
       if (!backup || backup.expiresAt <= this.clock.ms()) throw new Fault('TURN_ROLLBACK_EXPIRED', '迁移回退副本不存在或已到期。');
-      if (digest(backup.original) !== backup.originalHash || digest(await readFile(file, 'utf8')) !== backup.installedHash) {
+      if (backup.postMigrationWrites === true || digest(backup.original) !== backup.originalHash || digest(await readFile(file, 'utf8')) !== backup.installedHash) {
         throw new Fault('TURN_ROLLBACK_NEW_WRITES', '新格式已写入或迁移未完整确认；先核对并导出新写入，不能覆盖回旧副本。');
       }
       // Restore exact original bytes after validating the preserved document.
@@ -419,7 +456,7 @@ export class TurnBufferService {
       await savePrivateBufferText(file, backup.original);
       const { collectTurnArchive } = await import('./turn-archive.js');
       await collectTurnArchive(file, new Set()); await rm(file + '.migration-backup', { force: true });
-      return { 已回退: true, 需核对旧版兼容性: true };
+      return { 已回退: true, 需核对旧版兼容性: true, 全局读取屏障: 4, 说明: '单会话回退不降低全局屏障；切换旧源码前须完整核对全部v4资料与新写入。' };
     }));
   }
   async maintain({ subject, project, session }) {
@@ -441,7 +478,7 @@ export class TurnBufferService {
       const previous = await this.load(project, session).catch(error => { if (error.code === 'TURN_BUFFER_INVALID') return null; throw error; });
       const nextSeq = Math.max(throughSeq, previous?.nextSeq ?? 0);
       await this.saveState(file, { version: 4, project, session, owner: { kind: 'Lead', project, session }, nextSeq, floor: nextSeq,
-        missing: 0, removed: 0, open: null, rounds: [] });
+        missing: 0, removed: 0, open: null, rounds: [] }, { forget: true });
       await rm(file + '.migration-backup', { force: true });
       // First publish the forget barrier, then purge derivatives while holding the
       // same session writer lock. Delayed summarizers must recheck this floor.
