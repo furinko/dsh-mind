@@ -159,8 +159,9 @@ for (const projection of [2, 3]) it(`old external messages recover without an ag
   assert.equal(state.sourceRecovery.omitted, 0);
 }));
 
-async function replay(org, events, records, projectAtCwd = () => project, projection = 3) {
+async function replay(org, events, records, projectAtCwd = () => project, projection = 3, retention) {
   await org.turnBuffer.capture({ ...spec, records, fromSeq: 0, throughSeq: events.length });
+  if (retention) await org.turnBuffer.retain({ ...spec, ...retention });
   const file = org.turnBuffer.file(project, LEAD.id);
   const legacy = await org.turnBuffer.load(project, LEAD.id);
   legacy.version = 3; legacy.sourceProjection = projection;
@@ -234,6 +235,20 @@ it('unknown replay timestamps preserve the old round age and do not promote it t
   assert.equal(Object.hasOwn(state.rounds[0].messages[0], 'at'), false);
   const page = await org.conversationRecall.read(spec, { text: '', limit: 1 });
   assert.equal(page.条目[0].消息, 'recent');
+}));
+
+for (const retained of [true, false]) it(`unknown round start changes keep explicit retention ${retained}`, () => scene(async org => {
+  const time = org.clock.ms() - 90 * 86400000;
+  const events = [
+    { seq: 0, time, type: 'user/message', surfaceOp: 'append', data: { id: 'formerly-omitted', role: 'user', source: { kind: 'plugin:synthetic' }, content: [{ type: 'text', text: 'RECOVERED_PREFIX' }] } },
+    { seq: 1, time, type: 'user/message', surfaceOp: 'append', data: { id: 'previously-kept', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'KEPT_ORIGINAL' }] } },
+  ];
+  const nodes = [], context = {};
+  const records = events.map(event => projectTurnSurfaceEvent(event, nodes, context)).map(row => row.seq === 0 ? { seq: 0, type: 'skip' } : row);
+  const state = await replay(org, events, records, () => project, 3, { start: 1, retained });
+  assert.equal(state.rounds[0].start, 0);
+  assert.equal(state.rounds[0].retain, retained);
+  assert.deepEqual(state.rounds[0].messages.map(message => message.id), ['formerly-omitted', 'previously-kept']);
 }));
 
 it('project continuation keeps its exact original sources across a long inactive interval', () => scene(async org => {

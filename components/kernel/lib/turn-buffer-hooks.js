@@ -75,17 +75,22 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
       }
       state.open = before.open; state.nextSeq = before.nextSeq;
       const priorRounds = new Map(before.rounds.map(round => [canonical([round.start, round.turn]), round]));
+      const priorByMessage = new Map(before.rounds.flatMap(round => round.messages.map(message => [message.seq, round])));
       for (const round of state.rounds) {
         for (const message of round.messages) {
           const prior = kept.get(message.seq);
           // Historical messages with unknown time stay unknown, not replay-time now.
           if (prior ? !Object.hasOwn(prior, 'at') : !Number.isFinite(lease.events[message.seq]?.time)) delete message.at;
         }
-        const prior = priorRounds.get(canonical([round.start, round.turn]));
+        // Recovered prefixes can change an unknown round's start or merge it;
+        // its surviving original messages still identify the prior annotations.
+        const priors = [...new Set([priorRounds.get(canonical([round.start, round.turn])),
+          ...round.messages.map(message => priorByMessage.get(message.seq))].filter(Boolean))];
         const startTime = lease.events[round.start]?.time;
-        round.at = round.messages.reduce((latest, message) => Number.isFinite(message.at) ? Math.max(latest, message.at) : latest,
-          prior?.at ?? (Number.isFinite(startTime) ? startTime : 0));
-        if (prior && Object.hasOwn(prior, 'retain')) round.retain = prior.retain;
+        const priorTime = priors.reduce((latest, prior) => Math.max(latest, prior.at), Number.isFinite(startTime) ? startTime : 0);
+        round.at = round.messages.reduce((latest, message) => Number.isFinite(message.at) ? Math.max(latest, message.at) : latest, priorTime);
+        const markers = priors.map(prior => prior.retain).filter(value => typeof value === 'boolean');
+        if (markers.length) round.retain = markers.includes(true);
       }
       // A fully checked replay can remove the last external message too. Falling
       // back to the old payload in that case would undo its real withdrawals.
