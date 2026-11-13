@@ -182,7 +182,7 @@ describe('② 卡内声明岗位与登记岗位不符 ⇒ 拒（卡文件不能�
     } finally { await f.cleanup(); }
   });
 
-  it('钉住的卡岗位与档案登记岗位不符（档案被改） ⇒ cardOf 不就绪、写拒', async () => {
+  it('钉住的卡岗位与档案登记岗位不符（档案被改） ⇒ cardOf 不就绪、真实工作可执行', async () => {
     const f = await 起组织();
     try {
       await 登记成员(f, 'm-role-drift', '插件工程');
@@ -193,16 +193,13 @@ describe('② 卡内声明岗位与登记岗位不符 ⇒ 拒（卡文件不能�
       const 卡 = await f.registry.cardOf('m-role-drift');
       assert.equal(卡?.就绪, false);
       assert.match(String(卡?.原因), /档案登记岗位|不符/);
-      await assert.rejects(
-        () => f.policy.check({ subject: { id: 'm-role-drift', kind: '成员', roleId: '插件工程' }, action: 'write', target: 任务目标(), context: 任务上下文('m-role-drift') }),
-        (e) => e instanceof Denied && /卡快照校验失败|卡内声明岗位/.test(e.rule),
-      );
+      assert.equal((await f.policy.check({ subject: { id: 'm-role-drift', kind: '成员', roleId: '插件工程' }, action: 'write', target: 任务目标(), context: await 真实任务上下文(f, 'm-role-drift') })).verdict, 'allow', '专业资料不可用不撤销真实工作权限');
     } finally { await f.cleanup(); }
   });
 });
 
 describe('③ 读快照重算既有正文版本摘要：正文变 / 版本变 ⇒ 拒', () => {
-  it('正文被改而摘要照旧（旧摘要配新规程）⇒ cardOf 不就绪，写拒，段不再吐出', async () => {
+  it('正文被改而摘要照旧（旧摘要配新规程）⇒ cardOf 不就绪，工作可执行，坏段不再吐出', async () => {
     const f = await 起组织();
     try {
       await 登记成员(f, 'm-body', '插件工程');
@@ -215,10 +212,7 @@ describe('③ 读快照重算既有正文版本摘要：正文变 / 版本变 �
       assert.equal(卡?.就绪, false);
       assert.match(String(卡?.原因), /重算摘要不一致/);
       assert.equal(卡?.段, null, '坏证据不默用：不吐任何段落');
-      await assert.rejects(
-        () => f.policy.check({ subject: { id: 'm-body', kind: '成员', roleId: '插件工程' }, action: 'write', target: 任务目标(), context: 任务上下文('m-body') }),
-        (e) => e instanceof Denied && /卡快照校验失败/.test(e.rule),
-      );
+      assert.equal((await f.policy.check({ subject: { id: 'm-body', kind: '成员', roleId: '插件工程' }, action: 'write', target: 任务目标(), context: await 真实任务上下文(f, 'm-body') })).verdict, 'allow', '专业资料不可用不撤销真实工作权限');
     } finally { await f.cleanup(); }
   });
 
@@ -359,7 +353,7 @@ describe('⑦ 父也用同一凭证校验：父降岗 / 父卡坏 ⇒ 子的写�
     } finally { await f.cleanup(); }
   });
 
-  it('父的钉住快照被改坏 ⇒ 子写被父判拒（父凭证不齐，子也写不了）', async () => {
+  it('父专业快照被改坏不阻工作，专业内容仍不可用', async () => {
     const f = await 起组织();
     try {
       const 主 = { id: 'lead', kind: 'Lead', roleId: 'Lead' };
@@ -371,11 +365,10 @@ describe('⑦ 父也用同一凭证校验：父降岗 / 父卡坏 ⇒ 子的写�
 
       const 判 = await f.policy.decide({
         subject: { id: 'm-child2', kind: '成员', roleId: '插件工程' }, action: 'write',
-        target: 任务目标(), context: 任务上下文('m-child2'),
+        target: 任务目标(), context: await 真实任务上下文(f, 'm-child2'),
       });
-      assert.equal(判.verdict, 'deny');
-      assert.match(判.rule, /受控父判/);
-      assert.match(String(判.detail?.父判规则), /卡快照校验失败/);
+      assert.equal(判.verdict, 'allow', '父专业卡损坏不改变真实父身份和工作范围');
+      assert.equal((await f.registry.cardOf('lead')).就绪, false, '损坏的专业资料仍不可提供');
     } finally { await f.cleanup(); }
   });
 });
@@ -433,7 +426,7 @@ describe('⑧ 旧 schema 与来源路径差异：不误判合法旧钉版，也�
 });
 
 describe('⑨ 任意摘要字符串不构成凭证：四个消费者同一把尺', () => {
-  it('档案里写一个「像摘要」的字符串 ⇒ cardOf / 写前闸 / 同步快照 reader 都判不可用；只读保留', async () => {
+  it('档案里写一个「像摘要」的字符串 ⇒ cardOf与同步专业资料判不可用，普通工作保留', async () => {
     const f = await 起组织();
     try {
       const doc = await 读身份(f);
@@ -444,15 +437,13 @@ describe('⑨ 任意摘要字符串不构成凭证：四个消费者同一把尺
       assert.equal(卡?.就绪, false);
       assert.match(String(卡?.原因), /卡快照缺失|校验失败/);
 
-      await assert.rejects(
-        () => f.policy.check({ subject: { id: 'member-a', kind: '成员', roleId: '插件工程' }, action: 'write', target: 任务目标(), context: 任务上下文('member-a') }),
-        (e) => e instanceof Denied && /卡快照校验失败/.test(e.rule),
-      );
+      assert.equal((await f.policy.check({ subject: { id: 'member-a', kind: '成员', roleId: '插件工程' }, action: 'write', target: 任务目标(), context: await 真实任务上下文(f, 'member-a') })).verdict, 'allow', '专业资料不可用不撤销真实工作权限');
 
       const 同步 = f.registry.snapshotSync();
       assert.equal(同步.ok, true);
-      assert.equal(同步.成员['member-a'].就绪, false, '同步 reader 也不能拿任意摘要当凭证');
-      assert.match(String(同步.成员['member-a'].未就绪原因), /钉住卡快照不可用/);
+      assert.equal(同步.成员['member-a'].就绪, true, '真实在岗和委派归属仍可执行');
+      assert.equal(同步.成员['member-a'].专业就绪, false, '任意摘要不构成专业资料凭证');
+      assert.match(String(同步.成员['member-a'].专业未就绪原因), /卡快照缺失|校验失败/);
 
       const 只读 = await f.policy.decide({ subject: { id: 'member-a', kind: '成员', roleId: '插件工程' }, action: 'read', target: 任务目标(), context: {} });
       assert.equal(只读.verdict, 'allow', '坏凭证只挡写，不挡诊断读');
@@ -473,12 +464,12 @@ describe('⑨ 任意摘要字符串不构成凭证：四个消费者同一把尺
 });
 
 describe('⑩ 旧拒因轴不被新校验抢走口径', () => {
-  it('未钉卡版本 ⇒ 仍是「未钉卡版本」；缺委派归属 ⇒ 仍是「缺委派归属」；封存 ⇒ 仍是「身份停用=最严」', async () => {
+  it('未钉卡版本且缺委派归属 ⇒ 精确报告「缺委派归属」；缺委派归属 ⇒ 仍是「缺委派归属」；封存 ⇒ 仍是「身份停用=最严」', async () => {
     const f = await 起组织({ legacyMembers: true, members: { 'm-nopin': { id: 'm-nopin', 岗位: '插件工程', 代: 1, status: '在岗' } } });
     try {
       await assert.rejects(
         () => f.policy.check({ subject: { id: 'm-nopin', kind: '成员', roleId: '插件工程' }, action: 'write', target: 任务目标(), context: 任务上下文('m-nopin') }),
-        (e) => e instanceof Denied && /未钉卡版本/.test(e.rule),
+        (e) => e instanceof Denied && /缺委派归属/.test(e.rule),
       );
 
       await 登记成员(f, 'm-nodel', '插件工程');

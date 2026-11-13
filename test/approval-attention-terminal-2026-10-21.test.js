@@ -70,7 +70,7 @@ test('真实拒绝、撤销与当前档位失效仅退出待决定，历史投�
   await decide(org, revoked.请求id, '撤销');
   assert.deepEqual((await attention(org)).map(row => row.状态), ['待放行']);
 
-  await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '预审' }));
+  await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '预审' }));
   assert.equal(await org.policy.reload(), true);
   const auditBefore = await org.audit.read({});
   assert.deepEqual(await attention(org), []);

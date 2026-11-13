@@ -134,7 +134,7 @@ describe('② 受控父判：不卡已批准子请求，父 deny/父卡失效仍
     await org.tasks.dispatch(节点.id, { subject: LEAD, 项目: P });
     await org.tasks.start(节点.id, { subject: MEMBER, 项目: P });
     // 准备阶段在放权档做完，再切审批档——测的是写入面，不是 setup。
-    await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '审批' }, null, 2));
+    await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '审批' }, null, 2));
     await org.policy.reload();
     return 节点;
   }
@@ -187,7 +187,7 @@ describe('② 受控父判：不卡已批准子请求，父 deny/父卡失效仍
     }
   });
 
-  it('父卡失效仍拒：委派者本人的钉版快照被改坏 ⇒ 父判 deny', async () => {
+  it('父专业卡失效不改变真实父域，子可继续正常工作且不使用坏专业资料', async () => {
     const { f, org } = await 起({ defaults: { 介入度: '放权' } });
     try {
       const 节点 = await 建执行中任务(org, f);
@@ -198,12 +198,9 @@ describe('② 受控父判：不卡已批准子请求，父 deny/父卡失效仍
       await writeFile(身份文件, `${JSON.stringify(文档, null, 2)}\n`, 'utf8');
       await org.policy.reload();
       const 步骤 = [{ 动作: 'create', 目标: { kind: '经历', 新: true }, 说明: '写经历' }];
-      await assert.rejects(
-        () => 以放行上下文({ 原主体: 'member-a', 请求id: 'iv-badcard', 步骤 }, () => 写经历(org, 节点, '父卡坏')),
-        (e) => e instanceof Denied || e instanceof NeedsApproval,
-        '父卡失效必须拒，不能当 allow',
-      );
-      assert.equal((await org.memory.query({ subject: MEMBER, 类: ['经历'] })).条目.length, 0);
+      await 以放行上下文({ 原主体: 'member-a', 请求id: 'iv-badcard', 步骤 }, () => 写经历(org, 节点, '父专业卡坏仍可工作'));
+      assert.equal((await org.memory.query({ subject: MEMBER, 类: ['经历'] })).条目.length, 1);
+      assert.equal((await org.registry.cardOf('lead')).就绪, false, '父专业快照仍不可使用');
     } finally {
       await f.cleanup();
     }

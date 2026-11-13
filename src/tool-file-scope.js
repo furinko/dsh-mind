@@ -196,7 +196,7 @@ export class ToolFileAuthority {
 export function matchingBinding(binding, instance, member) {
   const pin = binding?.凭证;
   return binding?.实例 === instance && binding.岗位 === member?.岗位
-    && pin?.版本 === 1 && pin.代 === member.代 && pin.卡版本摘要 === member.卡版本摘要
+    && pin?.版本 === 1 && pin.代 === member.代
     && pin.宿主代次 === member.宿主代次;
 }
 

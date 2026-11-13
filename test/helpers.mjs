@@ -189,7 +189,7 @@ const LEAD_CARD = 最小岗位卡('Lead');
  * @returns {Promise<{ home: string, factoryRoot: string, privateRoot: string, layout: Layout, clock: Clock, audit: AuditLog, policy: PolicyEngine, registry: RoleRegistry, write(rel: string, text: string): Promise<void>, writePrivate(rel: string, text: string): Promise<void>, cleanup(): Promise<void> }>}
  */
 export async function makeFixture(options = {}) {
-  // `defaults` 只写 介入度.json（那一个键的唯一出厂源）；响应期限的两个键住在 响应期限.json ⇒ 走 `presence`。
+  // `defaults` 表示测试部署者明确选择的限制，写私有部署.json；出厂加载本身由 rules 夹具单测。
   // 以前这里对这两个键**静默无效**（写进了 介入度.json，而生效的是 响应期限.json）——
   // 下一个写测试的人会踩「夹具设了没用，还查不出为什么」。所以直接响亮拒绝并指路。
   for (const 键 of ['响应期限小时', '失联限制']) {
@@ -219,7 +219,7 @@ export async function makeFixture(options = {}) {
     await writeUnder(privateRoot, rel, text);
   }
   // `defaults`（介入度）**延后到 setup 之后**再写：合法初态（Lead/成员钉版）必须先在
-  // 放权档建立，否则审批档会把夹具准备一起拦成 NeedsApproval。响应期限不是自治写，照旧先行。
+  // 放权档建立，否则显式审批会把夹具准备一起拦成 NeedsApproval。响应期限不是自治写，照旧先行。
   if (options.presence) {
     await writeUnder(
       factoryRoot,
@@ -289,7 +289,7 @@ export async function makeFixture(options = {}) {
   // 否则测到的是 setup 被闸拦，而不是被测行为（4 个测试曾根本没进入被测体）。
   const 需身份收尾 = options.offline === true || options.denylist !== undefined;
   if (options.defaults) {
-    await writeUnder(factoryRoot, '集体L2-共享基础设施/defaults/介入度.json', JSON.stringify(options.defaults, null, 2));
+    await writeUnder(privateRoot, '集体L2-共享基础设施/defaults/部署.json', JSON.stringify(options.defaults, null, 2));
   }
   if (需身份收尾) {
     // 保留 setup 得到的真实卡版本/委派父，只改 sovereign 时钟与 denylist。

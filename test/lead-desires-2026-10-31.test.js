@@ -102,7 +102,7 @@ it('坏数值、任意执行字段、损坏文件和链接不落账或重置，�
 }));
 it('真实工具与审批完整接线，模型无整体开关；根窗口自动收到排序和长期接续资料', async () => scene(async (service, org, f) => {
   const host = { agent: { session: sessionOf() }, project: P }; const args = { action: 'lead_desire_update', 欲望: create() };
-  await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '审批' })); await org.policy.reload(); let request;
+  await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '审批' })); await org.policy.reload(); let request;
   await assert.rejects(runAction({ org, 项目: P, 主体: LEAD, args, 宿主: host }), e => e.code === 'NEEDS_APPROVAL' && Boolean(request = e.detail.请求id));
   assert.equal((await service.load()).desires.length, 0);
   await org.intervention.人侧决议({ 请求id: request, 决定: '批准', 通道: '设置页', 认证: '宿主 Connection 已认证' });

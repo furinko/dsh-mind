@@ -42,7 +42,7 @@ export const 免审票前缀 = 'ex-';
  * 采纳依据的**封闭清单**（补修K 字段合同 · 新增依据 = 改设计，不是加个字符串）。
  * 三个新路径由 `accept()` 写；「历史复核即采纳」只由 fold 折**旧账**得出，不新写。
  */
-export const 采纳依据集 = Object.freeze(['复核结论', '复核免审', '历史确认', '历史复核即采纳']);
+export const 采纳依据集 = Object.freeze(['直接检查', '复核结论', '复核免审', '历史确认', '历史复核即采纳']);
 
 /**
  * 「已被合法采纳」的**唯一判定**（补修K 字段合同，供后续消费者复用——别再只看状态字符串）。
@@ -157,6 +157,11 @@ export function 负责人实例名单(node) {
   return (node.负责人 ?? []).map((x) => String(x ?? '')).filter(Boolean);
 }
 
+/** 换人不会消除已经参与此任务的事实；此名单只判独立性，不授予历史执行者访问权。 */
+function 复核冲突实例名单(node) {
+  return [...new Set([...负责人实例名单(node), ...(node?.历史执行者 ?? []).map(binding => binding.实例).filter(Boolean)])];
+}
+
 /**
  * 会审已退出任务图：读面不得继续输出写闸恒拒的历史节点操作。
  * @param {object|null|undefined} node 任务图折叠节点
@@ -244,6 +249,7 @@ export class TaskGraph {
     if (!input.描述?.trim()) throw new InvalidBody('任务节点必须有描述。');
     const 判据 = normalizeList(input.判据);
     if (判据.length === 0) throw new InvalidBody('验收标准必填：没有判据的节点无法验收，也无法在派发后冻结。', { missing: ['判据'] });
+    if (input.验证要求 !== undefined && !['Lead判断', '独立复核'].includes(input.验证要求)) throw new InvalidBody('验证要求只能为 Lead判断 或 独立复核。');
     // 去重（2026-10-12 评审 P3）：['A','A'] 会让会审进度/参与者数虚增，
     // 「交齐」判据虽按人去重判定不受影响，但读数说谎就是缺陷。
     const 负责人 = [...new Set(normalizeList(input.负责人))];
@@ -269,6 +275,7 @@ export class TaskGraph {
       描述: input.描述,
       负责人,
       判据,
+      验证要求: input.验证要求 ?? 'Lead判断',
       依赖,
       // 空列表不落键：新节点不背「模式/复核对象空壳」，历史账本照原字节保留。
       ...(复核对象.length > 0 ? { 复核对象 } : {}),
@@ -345,8 +352,13 @@ export class TaskGraph {
    * @returns {Promise<object>}
    */
   async dispatch(id, spec) {
-    const node = await this.#require(id, spec.项目);
+    let node = await this.#require(id, spec.项目);
     if (node.状态 !== '待派发') throw new Denied('任务图 · 状态机', `节点 ${id} 当前状态为 ${node.状态}，不能重复派发。`, { howToChange: '只对「待派发」的节点派发。' });
+    // 只有可判定的当前真实 Lead 自领才自动补齐，不造身份、不另授权限。
+    if (this.registry && spec.subject?.kind === 'Lead' && node.负责人?.length === 1 && node.负责人[0] === 'Lead' && !(node.绑定?.length)) {
+      const member = (await this.registry.identity()).members?.[spec.subject.id];
+      if (member?.status === '在岗' && member.岗位 === 'Lead') node = await this.bind(id, { ...spec, 实例: spec.subject.id, 岗位: 'Lead' });
+    }
     const 复核对象 = 复核对象引用(node);
     const 工具文件范围 = spec.工具文件范围 === undefined ? null : this.#toolFileAuthority.grant(spec.工具文件范围, spec.subject);
     const { 节点 } = await this.#append(
@@ -632,7 +644,7 @@ export class TaskGraph {
     // v2 条目2/11：执行者同样不得复核本任务——判据是**负责人实例名单**（绑定优先、
     // 历史负责人回落，单源 负责人实例名单）。哪怕这个已绑执行者还没有亲自交卷
     // （别人代交 / 一岗多人里只交了一部分），他依然参与了产出，独立性一样破。
-    if (负责人实例名单(node).includes(复核者id)) {
+    if (复核冲突实例名单(node).includes(复核者id)) {
       throw new Denied('任务图 · 负责人不得复核自己的任务（v2 冲突排除）', `复核者 ${复核者id} 是节点 ${id} 的负责人：执行者复核自己的任务 = 自己验收自己。`, {
         howToChange: '由 Lead 用 member_spawn 起一位与本节点无关的复核员实例复核；该实例用完即封存。',
       });
@@ -864,6 +876,7 @@ export class TaskGraph {
    * @returns {Promise<object>} 采纳后的节点投影（含 `采纳` 字段）
    */
   async accept(id, spec) {
+    spec = { ...spec, ...(spec.验证 === undefined ? {} : { 验证: structuredClone(spec.验证) }) };
     if (!['Lead', '主权者'].includes(spec.subject?.kind)) {
       throw new Denied('任务图 · 采纳仅 Lead（补修K · 条目4 采纳权在 Lead）', `采纳是 Lead 的动作：${spec.subject?.kind ?? '未知'} 没有这只手。复核结论只是可引用票，不代 Lead 采纳。`, {
         requireAuthority: 'Lead',
@@ -878,13 +891,19 @@ export class TaskGraph {
       });
     }
     const 票 = String(spec.票 ?? '').trim();
+    if (node.恢复核对?.可继续 === false) throw new Denied('任务图 · 恢复结果未知', '先核对未知执行结果与副作用，不能采纳为成功。');
     // 票的形态必须可判（内部字段不能当指路）：task_review 回执与工作台都给出真票。
     if (票 && !/^rv-\d+$/.test(票)) {
       throw new InvalidBody(`采纳票格式不对（收到「${票}」）：票是任务账本里 reviewed 事件的可引用 id，形如 rv-12。`, { missing: ['票'] });
     }
     const 免审开 = this.policy?.reviewExemptAllowed?.() === true;
+    const 直接检查源 = spec.验证 === undefined ? null : digest(canonical({ 代: node.代, 答案: node.独立答案, 清单: node.交付物清单, 产物: node.产出物引用 }));
     let 依据;
-    if (票) {
+    if (spec.验证 !== undefined) {
+      if (票) throw new InvalidBody('直接检查与引用独立复核票不能混用；分别如实记录实际验证方式。');
+      this.#assertDirectVerification(node, spec.验证);
+      依据 = '直接检查';
+    } else if (票) {
       // 未验也收：补材料后再核出「过」是合法路径，当前代最后结论已是过（票由 fold 派生，
       // 下面 待采纳.票 才是唯一判据；状态只是门面，不能让它把有效票变成死胡同）。
       if (!['已交卷', '未验'].includes(node.状态)) {
@@ -922,6 +941,7 @@ export class TaskGraph {
       票: 依据 === '复核免审' ? null : (票 || node.采纳?.票 || null),
       依据,
       豁免: 依据 === '复核免审' ? (node.复核豁免?.票 ?? null) : null,
+      ...(依据 === '直接检查' ? { 验证: spec.验证 } : {}),
       ...(typeof spec.依据 === 'string' && spec.依据.trim() ? { 采纳说明: spec.依据.trim() } : {}),
     };
     const { 节点 } = await this.#append(
@@ -933,7 +953,7 @@ export class TaskGraph {
         const 交付物摘要 = await verifyArtifactManifest(nodeInLock?.交付物清单, artifactReferences(nodeInLock), {
           layout: this.layout, policy: this.policy, subject: spec.subject, task: { ...nodeInLock, 项目: spec.项目 },
         });
-        if (依据 !== '复核免审' && nodeInLock?.已复核交付物摘要 !== 交付物摘要) {
+        if (!['复核免审', '直接检查'].includes(依据) && nodeInLock?.已复核交付物摘要 !== 交付物摘要) {
           throw new Denied('任务图 · 采纳内容未绑定复核票', '复核票没有绑定本代交卷的内容清单：不能给旧票补造当前内容证据。', {
             howToChange: '重新交卷并复核出票后再采纳。',
           });
@@ -956,6 +976,11 @@ export class TaskGraph {
             howToChange: '采纳只对交卷后待验收的节点；并发采纳只有第一条生效。',
           });
         }
+        if (依据 === '直接检查') {
+          this.#assertDirectVerification(nodeInLock, spec.验证);
+          if (直接检查源 !== digest(canonical({ 代: nodeInLock.代, 答案: nodeInLock.独立答案, 清单: nodeInLock.交付物清单, 产物: nodeInLock.产出物引用 }))) throw new Denied('任务图 · 直接检查内容已变化', '检查期间交付内容已变化，请核对当前版本后重试；旧检查不采纳新成果。');
+        }
+        if (nodeInLock.验证要求 === '独立复核' && 依据 === '复核免审') throw new Denied('任务图 · 必须独立复核', '本任务明确要求独立复核，不能改成免审。');
         if (依据 === '复核结论' && nodeInLock.待采纳?.票 !== 票) {
           throw new Denied('任务图 · 采纳票已失效（锁内复判 · 补修K）', `票 ${票} 在锁内已不是节点 ${id} 当前代的有效过票（当前有效票=${nodeInLock.待采纳?.票 ?? '无'}）：票之后有新交卷/新产出物挂载，或复核已被覆盖。`, {
             howToChange: '重新复核出票后再采纳；不要借旧票采纳新成果。',
@@ -979,6 +1004,13 @@ export class TaskGraph {
       },
     );
     return 节点;
+  }
+
+  #assertDirectVerification(node, verification) {
+    if (node.验证要求 !== 'Lead判断') throw new Denied('任务图 · 必须独立复核', '本任务要求独立复核或属于未迁移的历史任务；直接检查不能改写原要求。');
+    if (!['已交卷', '未验'].includes(node.状态)) throw new Denied('任务图 · 直接检查必须有交付', '只有已交卷且仍待验收的工作才能直接检查采纳。');
+    if (!verification || typeof verification !== 'object' || Array.isArray(verification) || verification.方式 !== '直接检查' || verification.结论 !== '过' || !Array.isArray(verification.证据) || !verification.证据.length || verification.证据.some(item => typeof item !== 'string' || !item.trim())) throw new InvalidBody('直接检查需要 验证={方式:"直接检查",结论:"过",证据:[实际检查结果或引用]}；未验或失败不得采纳。');
+    if (node.最近三态 === '不过') throw new Denied('任务图 · 未解决的复核失败', '已有复核不过必须先返工，不能用直接检查覆盖原失败。');
   }
 
   /**
@@ -1008,7 +1040,7 @@ export class TaskGraph {
         throw new Denied('任务图 · 状态机', `节点 ${id} 已到终态 ${nodeInLock.状态}（锁内复检），不能再打回。`, { howToChange: '终态节点只能追加更正，不能回到环路里。' });
       }
     });
-    if ((rejected.事件.打回次数 ?? 0) === 2) {
+    if (!rejected.节点.验证要求 && (rejected.事件.打回次数 ?? 0) === 2) {
       // 去重判据就是「恰好第 2 次」本身（2026-10-14 审查 P2-8）：打回次数在锁内单调
       // 递增算出，全事件流里只有一条 rejected 携带次数==2 ⇒ 并发两个 reject 也只有
       // 一个满足条件。修前用 `>=2` + 锁外查「已升过」，两个并发 reject 都在对方
@@ -1021,7 +1053,7 @@ export class TaskGraph {
       });
       return 升级后;
     }
-    return rejected.节点;
+    return this.get(id, { 项目: spec.项目 });
   }
 
   /**
@@ -1094,6 +1126,48 @@ export class TaskGraph {
   // 独立功能（src/council.js，自己的 councils.jsonl 事件流）。旧事件（debate_*）
   // 仍由下方 fold 分支折出（历史数据原地只读不迁移）；TRANSITIONS 里的 debate_*
   // 条目同步失效：没有人再能追加它们，状态机自然封闭。
+
+  /**
+   * 中断核对与续接只记录已核对的事实；不重放工具、不停止进程、不伪造完成。
+   * 核对声明由真实 Lead 署名，宿主状态与副作用须带实际回执引用。
+   */
+  async reconcile(id, spec) {
+    spec = { ...spec, 核对: structuredClone(spec.核对) };
+    await this.#assertRecoveryActor(spec.subject);
+    const check = spec.核对;
+    if (!['续接', '换人', '接手'].includes(spec.决策) || !check || typeof check !== 'object' || Array.isArray(check) || typeof check.说明 !== 'string' || !check.说明.trim() ||
+        !Array.isArray(check.产物) || check.产物.some(ref => typeof ref !== 'string' || !ref.trim()) || !Array.isArray(check.副作用) ||
+        check.副作用.some(effect => !effect || typeof effect.引用 !== 'string' || !effect.引用.trim() || !['已发生', '未发生', '未知'].includes(effect.状态)) ||
+        !['已结束', '未知'].includes(check.执行状态) || (check.执行状态 === '已结束' && (typeof check.执行回执 !== 'string' || !check.执行回执.trim()))) {
+      throw new InvalidBody('恢复需要 决策=续接/换人/接手、核对={说明,产物:引用[],副作用:[{引用,状态:已发生/未发生/未知}],执行状态:已结束/未知,执行回执}；不能用空声明推断成功。');
+    }
+    const 可继续 = check.执行状态 === '已结束' && check.副作用.every(effect => effect.状态 !== '未知');
+    const instance = spec.决策 === '接手' ? spec.subject.id : String(spec.实例 ?? '').trim();
+    if (可继续 && !instance) throw new InvalidBody('恢复继续执行需要精确实例；接手自动取当前真实 Lead。');
+    const { 节点 } = await this.#append(spec.项目, { kind: 'reconciled', id }, spec.subject, '状态变更', async (node) => {
+      await this.#assertRecoveryActor(spec.subject);
+      if (!node || !['已派发', '执行中', '待决', '已交卷', '未验'].includes(node.状态) || 是只读旧会审(node)) throw new Denied('任务图 · 恢复状态', '只能核对未完成的当前任务，历史只读任务及终态不能复活。');
+      await this.#checkWrite(id, node, spec, 'reconcile');
+      const 已有产物 = artifactReferences(node);
+      const 未记录产物 = check.产物.filter(ref => !已有产物.includes(ref));
+      if (未记录产物.length) throw new InvalidBody(`先用 task_attach 保存已发现产物引用，再核对恢复：${未记录产物.join('、')}。恢复不能静默丢弃或补造产物。`);
+      const 产物清单 = await captureArtifactManifest(已有产物, { layout: this.layout, policy: this.policy, subject: spec.subject, task: { ...node, 项目: spec.项目 } });
+      const event = { kind: 'reconciled', id, 决策: spec.决策, 核对: check, 核对来源: 'Lead核对回执', 可继续, 产物清单,
+        交付已变化: Boolean(node.交付物清单?.摘要 && node.交付物清单.摘要 !== 产物清单.摘要) };
+      if (可继续) {
+        if (!this.registry) throw new Fault('TASK_RECOVERY_IDENTITY_UNAVAILABLE', '换人或续接缺少真实实例登记接口。');
+        const member = (await this.registry.identity()).members?.[instance];
+        if (member?.status !== '在岗') throw new InvalidBody(`恢复目标 ${instance} 尚未在册在岗；先修复实例登记，无需新增用户授权。`);
+        if (spec.决策 === '续接' && !负责人实例名单(node).includes(instance)) throw new InvalidBody('续接必须仍由原实例执行；换人请明确选换人或接手。');
+        if (spec.岗位 !== undefined && spec.岗位 !== member.岗位) throw new InvalidBody('恢复目标岗位与真实档案不一致。');
+        event.绑定 = { 实例: instance, 岗位: member.岗位, 于: this.clock.iso(), 凭证: { 版本: 1, 代: member.代 ?? 1, 卡版本摘要: member.卡版本?.摘要 ?? null, 宿主代次: member.代次?.代 ?? null } };
+        // 已交卷的内容继续等待验收，不因换人丢卷或让新执行者重交覆盖旧成果。
+        event.状态 = ['已交卷', '未验'].includes(node.状态) ? node.状态 : '执行中';
+      }
+      return event;
+    });
+    return { 节点, 可继续, 宿主停止状态: check.执行状态 === '已结束' ? '回执已核对' : '未确认', 已重放工具: false, 说明: 可继续 ? '已保留原成果和核对回执；按未完成部分继续，副作用不得重复执行。换人后须重新授予文件范围。' : '结果仍有未知项，已保留核对记录；等待实际回执，不推进依赖或重放执行。' };
+  }
 
   /** 只读准备终止；合法性与审批步骤由同一领域计划给出，不写账本。 */
   async closePlan(id, spec) {
@@ -1242,12 +1316,12 @@ export class TaskGraph {
     const 继承打回次数 = node.打回次数 ?? 0;
     const 接续提醒 = { 来源任务: id, 前序升级: structuredClone(node.升级 ?? null), 累计打回次数: 继承打回次数, 阈值提醒: 继承打回次数 >= 2,
       前序待决: node.终止.原状态 === '待决' ? { 原因: node.待决原因 ?? null, 类型: node.待决类型 ?? null } : null, 处置状态: '未确认' };
-    const source = { id, 描述: node.描述, 判据: node.判据, 依赖: node.依赖 ?? [], 复核对象: node.复核对象 ?? [], 终止: node.终止, 继承打回次数, 接续提醒 };
+    const source = { id, 描述: node.描述, 判据: node.判据, ...(node.验证要求 ? { 验证要求: node.验证要求 } : {}), 依赖: node.依赖 ?? [], 复核对象: node.复核对象 ?? [], 终止: node.终止, 继承打回次数, 接续提醒 };
     const 源快照摘要 = digest(canonical(source));
     const request = { 描述: spec.描述?.trim() ?? String(node.描述).trim(), 负责人: normalizeRecoveryOwners(spec.负责人), 原因: base.原因 };
     const 后继规范摘要 = digest(canonical(request));
     const nextId = `task-${slugOf(request.描述, 'x')}-next-${digest(canonical({ 项目: spec.项目, id, 源快照摘要, 后继规范摘要 })).slice(0, 20)}`;
-    const 后继输入 = { id: nextId, 描述: request.描述, 负责人: request.负责人, 判据: structuredClone(node.判据), 依赖: structuredClone(node.依赖 ?? []),
+    const 后继输入 = { id: nextId, 描述: request.描述, 负责人: request.负责人, ...(node.验证要求 ? { 验证要求: node.验证要求 } : {}), 判据: structuredClone(node.判据), 依赖: structuredClone(node.依赖 ?? []),
       ...(node.复核对象?.length ? { 复核对象: structuredClone(node.复核对象) } : {}), 状态: '待派发', 判据冻结: true, 前序任务: id, 后继原因: request.原因, 源快照摘要, 后继规范摘要, 继承打回次数, 接续提醒 };
     let 已有后继 = null;
     if (node.后继任务) {
@@ -1358,7 +1432,7 @@ export class TaskGraph {
         if (finalEvent === null) { 新节点 = node ?? null; return; }
         // 只阻止新推进；已发生的成果、复核与终止事实仍可收尾记录。
         // 新后继沿前序读取同一当前目标，不能换节点洗掉暂停或限制。
-        if (['dispatched', 'started'].includes(finalEvent.kind) || (finalEvent.kind === 'created' && finalEvent.前序任务)) {
+        if (['dispatched', 'started'].includes(finalEvent.kind) || (finalEvent.kind === 'reconciled' && finalEvent.可继续) || (finalEvent.kind === 'created' && finalEvent.前序任务)) {
           const current = finalEvent.kind === 'created' ? { ...finalEvent } : node;
           const goal = this.goals.constraintsForTask(current, fold(rows), 项目);
           assertGoalAllowsAdvance(goal);
@@ -1541,7 +1615,7 @@ export class TaskGraph {
    *   丢弃: string[],
    * }>}
    */
-  async settlePlan(id, spec = {}) {
+  async knowledgePlan(id, spec = {}) {
     // 在异步读候选之前固定显式说明；来源数据不会因排队期间改入参而迁移。
     const 处置输入 = spec.记忆处置 === undefined ? undefined : structuredClone(spec.记忆处置);
     if (处置输入 && typeof 处置输入 === 'object' && !Array.isArray(处置输入)) {
@@ -1555,7 +1629,7 @@ export class TaskGraph {
     const node = await this.#require(id, spec.项目);
     // 采纳谓词与状态机都在计划里先判（只读）：审批计划因此也不会为一单根本不能结账的节点
     // 造出待批准请求；执行侧再判一次是同一把尺，不会漂。
-    this.#requireTransition(node, 'settle');
+    if (!已被合法采纳(node)) throw new Denied('任务图 · 知识整理须有已采纳来源', '仅整理已采纳或已结账任务的候选；不改变原验收事实。');
     if (node.需Lead确认 === true) {
       throw new Denied('任务图 · 历史自动采纳未经 Lead 确认，不得结账（补修K）', `节点 ${id} 的「已采纳」来自旧账「复核即采纳」（当时执行者 ${node.采纳?.由 ?? '未知'}，非 Lead/主权者）：结账会把它洗成 Lead 收口。`, {
         requireAuthority: 'Lead',
@@ -1582,8 +1656,8 @@ export class TaskGraph {
     ];
     const 处置 = 处置输入;
     if (!处置 || typeof 处置 !== 'object' || Array.isArray(处置)) {
-      throw new Denied('任务图 · 结账必须带「记忆处置」声明（v2 条目16）', `节点 ${id} 结账被拒：先逐条判本任务的记忆候选（晋升 / 留账本 / 丢弃），再结账。候选清单在本拒绝的 detail.候选清单里；确无候选就传 记忆处置={} 明示「无产出需处置」。`, {
-        howToChange: '重发 task_settle 并带 记忆处置（候选键 → 晋升/留账本/丢弃）。',
+      throw new Denied('任务图 · 知识整理需要处置说明', `节点 ${id} 的知识整理需要候选处置；候选清单在 detail.候选清单。工作完成不依赖本步骤。`, {
+        howToChange: '按需调用 task_organize 并带 记忆处置（候选键 → 晋升/留账本/丢弃）。',
         detail: { 候选清单 },
       });
     }
@@ -1610,10 +1684,35 @@ export class TaskGraph {
     // 新说明只随知识本体保存；任务事件保留晋升id，不自动复制可被purge的说明正文。
     const 记录处置 = Object.fromEntries(Object.entries(处置).map(([key, value]) => {
       if (!value || typeof value !== 'object' || Array.isArray(value)) return [key, value];
-      const { 知识说明: _知识正文, ...receipt } = value;
+      const { 知识说明: _知识正文, 内容: _蒸馏正文, ...receipt } = value;
       return [key, receipt];
     }));
     return { 节点: node, 处置: 记录处置, 候选清单, 判, 晋升计划, 丢弃 };
+  }
+
+  /** 工作收口计划只涉及作答访问寿命，完全不读取知识候选。 */
+  async settlePlan(id, spec = {}) {
+    if (!this.memory?.archiveAnswers) throw new Fault('SETTLE_NO_MEMORY', '作答收口接口未接入任务图，请修复装配 archiveAnswers；无需新增用户授权。');
+    const node = await this.#require(id, spec.项目);
+    this.#requireTransition(node, 'settle');
+    if (!已被合法采纳(node)) throw new Denied('任务图 · 尚未合法采纳', '先核对实际验收并由 Lead 采纳，不能把结账当作验收。');
+    return { 节点: node, 晋升计划: [], 丢弃: [], 处置: {}, 候选清单: [], 判: {} };
+  }
+
+  /** 独立的知识整理入口；可在工作交付后重试，错误不反转工作完成状态。 */
+  async organizeKnowledge(id, spec) {
+    const plan = await this.knowledgePlan(id, spec);
+    await this.policy.check({ subject: spec.subject, action: 'settle', target: { id, kind: '任务', authority: '自治', zone: '私有', project: spec.项目 }, context: { task: plan.节点 } });
+    const 记忆晋升 = {};
+    for (const 晋升 of plan.晋升计划) {
+      const 产物 = await this.memory.promoteFromAdopted({ subject: spec.subject, 项目: spec.项目, 岗位: 晋升.岗位, 内容: 晋升.内容, 标题: 晋升.标题,
+        ...(Object.hasOwn(晋升, '知识说明') ? { 知识说明: 晋升.知识说明 } : {}), 来源: `任务知识整理：${id}`, 来源引用: [id, ...(晋升.候选.类 === '经历' ? [晋升.候选.键] : [])],
+        晋升: { 来源任务: id, 候选键: 晋升.候选.键 }, 任务: plan.节点 });
+      记忆晋升[晋升.候选.键] = 产物.id;
+    }
+    for (const key of plan.丢弃) await this.memory.invalidate(key, { subject: spec.subject, 原因: `任务知识整理：丢弃（${id}）` });
+    const { 节点 } = await this.#append(spec.项目, { kind: 'knowledge_organized', id, 记忆处置: plan.处置, 记忆晋升, 学习整理: { 状态: '完成' } }, spec.subject);
+    return 节点;
   }
 
   async settle(id, spec) {
@@ -1635,36 +1734,20 @@ export class TaskGraph {
       target: { id, kind: '任务', authority: '自治', zone: '私有', project: spec.项目 },
       context: { task: node },
     });
-    // 候选 / 处置归一 / 晋升与丢弃意图：**唯一规范化处**（`settlePlan`），这里只执行它算出的写。
-    const 计划 = await this.settlePlan(id, spec);
-
-    // 落笔：受限晋升（真实知识条目，幂等键 = 来源项目|任务|候选键）。知识写成功、结账事件
-    // 之后失败 ⇒ 重试会按幂等键认回同一条产物，不会重复产知识；写失败 ⇒ 直接抛，不结账。
-    const 记忆晋升 = {};
-    for (const 晋升 of 计划.晋升计划) {
-      const 产物 = await this.memory.promoteFromAdopted({
-        subject: spec.subject,
-        项目: spec.项目,
-        岗位: 晋升.岗位,
-        内容: 晋升.内容,
-        标题: 晋升.标题,
-        ...(Object.hasOwn(晋升, '知识说明') ? { 知识说明: 晋升.知识说明 } : {}),
-        来源: `结账晋升：任务 ${id} 的${晋升.候选.类}「${晋升.候选.标题}」`,
-        来源引用: [id, ...(晋升.候选.类 === '经历' ? [晋升.候选.键] : [])],
-        晋升: { 来源任务: id, 候选键: 晋升.候选.键 },
-        任务: node,
-      });
-      记忆晋升[晋升.候选.键] = 产物.id;
-    }
-
-    // 「丢弃」的机械含义 = 追加失效（不许改写只能追加——丢的是召回面，不是账本行）；
-    // 「留账本」= 不动。
-    for (const 键 of 计划.丢弃) {
-      await this.memory.invalidate(键, { subject: spec.subject, 原因: `结账记忆处置：丢弃（节点 ${id}）` });
+    await this.settlePlan(id, spec);
+    // 旧入口可携带整理意图，但失败只记学习结果，不能阻断真实工作交付。
+    let 学习整理 = { 状态: '未处理' };
+    if (spec.记忆处置 !== undefined && Object.keys(spec.记忆处置 ?? {}).length) {
+      try { await this.organizeKnowledge(id, spec); 学习整理 = { 状态: '完成' }; }
+      catch (error) {
+        const 已提交 = error instanceof Fault && error.code === 'AUDIT_APPEND_FAILED_AFTER_EVENT';
+        学习整理 = { 状态: 已提交 ? '待核对' : '失败', 错误码: error.code ?? error.name, 原因: String(error.message), 可重试: !已提交,
+          ...(已提交 ? { 说明: '知识整理事件已提交但审计缺失；先查真实回执，不重放。' } : {}) };
+      }
     }
     const 归档 = await this.memory.archiveAnswers({ 项目: spec.项目, 任务: id, subject: spec.subject });
     try {
-      const { 节点 } = await this.#append(spec.项目, { kind: 'settled', id, 状态: '已结账', 归档条数: 归档.归档条数, 记忆处置: 计划.处置, ...(Object.keys(记忆晋升).length > 0 ? { 记忆晋升 } : {}) }, spec.subject, '结账', null, this.#transitionGuard(id, 'settle'));
+      const { 节点 } = await this.#append(spec.项目, { kind: 'settled', id, 状态: '已结账', 归档条数: 归档.归档条数, 学习整理 }, spec.subject, '结账', null, this.#transitionGuard(id, 'settle'));
       return 节点;
     } catch (error) {
       // #append 已确认事件落线时，补偿“未落线”会留下反向事实和不可执行的重试指引。
@@ -1777,6 +1860,7 @@ export class TaskGraph {
 
   /** @param {object} node @param {keyof TRANSITIONS} op */
   #requireTransition(node, op) {
+    if (node.恢复核对?.可继续 === false && !['close', 'attach', 'markPending', 'resolvePending'].includes(op)) throw new Denied('任务图 · 恢复结果未知', '核对仍有未知副作用或宿主执行结果；先补回执并 task_reconcile，不能盲目继续或标记成功。');
     // 旧独立会审节点整体只读（v2 条目18 补修）：会审已退出任务图，旧节点的答案/讨论子态
     // 是历史证据。闸装在这里 = 所有写路径共用一处（start/submit/review/pending/attach/
     // reassign/bind/exempt/settle 都先过它），不在每个方法里各抄一份。
@@ -1842,7 +1926,7 @@ export class TaskGraph {
         // 负责人/执行者排除走**同一份**实例名单（绑定优先，历史负责人回落）：锁内复检
         // 不许另用一份旧口径（负责人在 v2 里是岗位名，只剩 `负责人.includes(id)` 会漏掉
         // 「已绑执行者但尚未亲自交卷」这一格）。
-        const 执行者名单 = 负责人实例名单(nodeInLock);
+        const 执行者名单 = 复核冲突实例名单(nodeInLock);
         const 撞负责人 = ids.find((谁) => 执行者名单.includes(谁));
         if (撞负责人) {
           throw new Denied('任务图 · 负责人不得复核自己的任务（v2 冲突排除，锁内复检）', `复核者 ${撞负责人} 是节点 ${id} 的负责人（锁内最新折叠视图）：执行者复核自己的任务 = 自己验收自己。`, {
@@ -1912,6 +1996,7 @@ export function fold(rows, visitor = null) {
           描述: row.描述,
           负责人: row.负责人,
           判据: row.判据,
+          ...(row.验证要求 ? { 验证要求: row.验证要求 } : {}),
           依赖: row.依赖 ?? [],
           // v2 条目18：「模式」字段已删——新事件不再带它，投影也不许造 `模式: null` 空壳；
           // 历史事件里有值才折出（旧数据原地只读）。
@@ -1943,6 +2028,24 @@ export function fold(rows, visitor = null) {
         // 派发事件里的复核对象是**冻结快照**（v2 条目6）：派发那一刻验哪一单可回放；
         // 之后补绑走 bound 事件，历史不改。
         if (Array.isArray(row.复核对象)) node.复核对象 = [...new Set(row.复核对象.map(String))];
+        break;
+      case 'reconciled':
+        node.恢复核对 = { 决策: row.决策, 核对: row.核对, 可继续: row.可继续, 由: row.by?.id ?? null, 于: row.at, 来源: row.核对来源, 产物清单: row.产物清单 };
+        if (row.交付已变化) {
+          delete node.已复核交付物摘要;
+          进度.最近改成果序 = 序;
+          node.交付物待补证 = '恢复核对发现成果已变化；旧复核仅对应原版本，需重新交卷与验证。';
+        }
+        if (row.可继续 && row.绑定) {
+          node.历史执行者 = [...(node.历史执行者 ?? []), ...(node.绑定 ?? [])];
+          node.绑定 = [row.绑定];
+          node.负责人 = [row.绑定.实例];
+          node.状态 = row.状态;
+          // 换人不继承旧文件授权；旧交付物与原作者签名仍保留。
+          delete node.工具文件范围;
+          delete node.待决原因;
+          delete node.待决类型;
+        }
         break;
       // 改派负责人（task-机制缺口-10th0）：名单整体替换，历史逐次留痕（谁改的、何时）。
       // 只在 待派发/已派发 态发生（写入面状态机守着），fold 不必再判——投影如实折事件流。
@@ -2104,6 +2207,7 @@ export function fold(rows, visitor = null) {
       case 'settled':
         node.状态 = row.状态 ?? '已结账';
         node.结账于 = row.at;
+        if (row.学习整理) node.学习整理 = row.学习整理;
         node.归档条数 = row.归档条数 ?? 0;
         // v2 条目16：记忆处置声明随结账事件折回节点——读面可见「结账时逐条判了什么」。
         if (row.记忆处置) node.记忆处置 = row.记忆处置;
@@ -2117,6 +2221,11 @@ export function fold(rows, visitor = null) {
           delete node.需Lead确认;
         }
         break;
+      case 'knowledge_organized':
+        node.记忆处置 = row.记忆处置;
+        node.记忆晋升 = { ...(node.记忆晋升 ?? {}), ...(row.记忆晋升 ?? {}) };
+        node.学习整理 = row.学习整理;
+        break;
       // 采纳（补修K）：Lead 的独立动作。事件只引用票/豁免，**不带** 三态/复核者/判据（不重签、不改票）。
       case 'accepted':
         node.状态 = row.状态 ?? '已采纳';
@@ -2129,6 +2238,7 @@ export function fold(rows, visitor = null) {
           代: row.代 ?? (node.代 ?? null),
           ...(row.交付物摘要 ? { 交付物摘要: row.交付物摘要 } : {}),
           ...(row.采纳说明 ? { 说明: row.采纳说明 } : {}),
+          ...(row.验证 ? { 验证: row.验证, 独立复核: false } : {}),
         };
         // Lead 显式采纳/确认即承接：旧账「待确认」标记到此结束。
         delete node.需Lead确认;

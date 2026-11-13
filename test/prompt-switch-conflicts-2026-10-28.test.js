@@ -58,19 +58,14 @@ test('实际装配承认持久目标，重开后恢复工作资料且不承诺�
   } finally { await reopened.observability.flush(); }
 }));
 
-test('受管项目关闭Mind即暂停新委派，隐藏不可用创建工具并给出可行恢复条件', () => scene(async ({ org, project, host, agent, exec, assemble, guard, connect }) => {
+test('关闭Mind暂停受管入口并移除Mind资料，保留宿主普通委派选择', () => scene(async ({ org, project, host, agent, exec, assemble, guard, connect }) => {
   const actor = agent('fresh-no-tasks-root');
   assert.equal((await org.tasks.snapshot({ 项目: project })).节点.length, 0);
   await connect(actor, false);
   const assembly = await assemble(actor);
-  assert.deepEqual(assembly.tools.map(row => row.name), ['ordinary_read']);
+  assert.deepEqual(assembly.tools.map(row => row.name), [...creationNames, 'ordinary_read']);
   assert.ok(assembly.sections.every(row => !row.name.startsWith('mind:')));
-  for (const name of creationNames) {
-    const reason = guard(name, actor);
-    assert.match(reason, /未接入心智.*暂停新委派/);
-    assert.match(reason, /重新打开.*心智/);
-    assert.doesNotMatch(reason, /member_spawn/);
-  }
+  for (const name of creationNames) assert.equal(guard(name, actor), undefined, 'Mind关闭不撤销Host独立许可');
   const refused = JSON.parse(await host.工具.get('mind').execute({ action: 'member_spawn' }, exec('mind', actor)));
   assert.equal(refused.成功, false); assert.match(refused.理由, /聊天框打开/);
   await connect(actor, true);
@@ -78,7 +73,7 @@ test('受管项目关闭Mind即暂停新委派，隐藏不可用创建工具并�
   assert.ok(enabled.tools.some(row => row.name === 'mind'));
   for (const name of creationNames) {
     assert.ok(enabled.tools.some(row => row.name === name));
-    assert.match(guard(name, actor), /member_spawn/);
+    assert.equal(guard(name, actor), undefined);
   }
 }));
 
@@ -89,7 +84,7 @@ test('关闭的受管聊天不改变其他聊天或非受管根聊天的原生�
   assert.ok(on.tools.some(row => row.name === 'mind'));
   assert.equal(off.tools.some(row => row.name === 'mind'), false);
   for (const name of creationNames) {
-    assert.ok(on.tools.some(row => row.name === name)); assert.match(guard(name, other), /member_spawn/);
+    assert.ok(on.tools.some(row => row.name === name)); assert.equal(guard(name, other), undefined);
     assert.ok(off.tools.some(row => row.name === name)); assert.equal(guard(name, ordinary), undefined);
   }
 }));

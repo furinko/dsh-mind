@@ -73,7 +73,7 @@ describe('知识适用说明动作合同', () => {
     }
     for (const 类 of ['经历', '偏好', '作答']) await assert.rejects(() => act(writeArgs({ 类, 知识说明: { 适用条件: ['x'] } })), error => error instanceof InvalidBody, 类);
     assert.equal(await log(), before);
-    await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '审批' }));
+    await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '审批' }));
     assert.equal(await org.policy.reload(), true);
     const requests = await org.intervention.投影({ 项目: P });
     for (const extra of [{ verified: true }, { 知识说明: { 验证状态: '已验证' } }, { 知识说明: null }]) {

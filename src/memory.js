@@ -3,7 +3,7 @@
  *
  * 三条设计原则决定了这里的每个形状：
  *  1. **写入必带「谁记的 + 怎么知道的」** —— 所以 `来源` 是必填结构，缺了在**写入时**就拒。
- *  2. **不许改写，只能追加** —— 失效 / 冷 / 被推翻全部是**追加一条状态记录**，
+ *  2. 旧生命周期保留来源；organize 提供当前状态替换和物理整理。旧规则：**不许改写，只能追加** —— 失效 / 冷 / 被推翻全部是**追加一条状态记录**，
  *     原条目那行字节不动。唯一的例外是物理删除，且只对敏感数据或主权者明确要求开放。
  *  3. **能力不在记忆服务里** —— 它在与记忆服务并列的能力库中。这里没有 `能力` 这一类。
  *
@@ -14,6 +14,8 @@ import { appendLines, exists, listDirs, readJsonl, readJsonlHealth, readTextOrNu
 import { readTaskLedger, parseTaskLedger } from './task-ledger.js';
 import { listMemoryProjects } from './memory-layout.js';
 import { stat } from 'node:fs/promises';
+import { assertMemoryReady, ledgerWrite, maintenanceFile, maintenanceLock, maintenanceWriter, finishMaintenance, memoryReadSnapshot } from './memory-maintenance.js';
+import { readJsonOrNull } from './kernel/fsx.js';
 import { InvalidBody, Denied, Fault } from './kernel/errors.js';
 import { objectId } from './kernel/ids.js';
 import { digest, canonical } from './kernel/text.js';
@@ -61,6 +63,8 @@ const 知识观察帧 = Symbol('dsh-mind-request-knowledge-read');
 const 自动连续性提交 = Symbol('dsh-mind-automatic-continuity');
 const 收录提交 = Symbol('dsh-mind-intake-commit');
 const 个体提交 = Symbol('dsh-mind-personal-memory');
+const 总结提交 = Symbol('dsh-mind-turn-summary');
+const 整理计划 = Symbol('dsh-mind-organize-plan');
 
 /** 披露正则编译缓存（#disclosureHits 用，按正则源键控，带上限防长胖）。 */
 const 披露正则缓存 = new Map();
@@ -184,6 +188,7 @@ export class MemoryService {
    * @returns {Promise<{签名: string, rows: object[], 坏行: number}>}
    */
   async #rowsHealth(file) {
+    await assertMemoryReady(this.layout);
     const 签名 = await this.#签名(file);
     const hit = this.#rowsCache.get(file);
     if (hit?.签名 === 签名) return hit;
@@ -211,6 +216,128 @@ export class MemoryService {
   /** 记一次本进程写入：让该文件的缓存签名失效。 */
   #bump(file) {
     this.#writeCount.set(file, (this.#writeCount.get(file) ?? 0) + 1);
+  }
+
+  /** Current-state editing and physical compaction, independent of task settlement. */
+  async recordTurnSummary({subject,project,session,body,metadata,check}) {
+    return this.rememberPersonal({subject,项目:project,类:'经历',标题:'轮级经历总结',内容:body,来源:'保留轮级原文与消息摘要核对；来源范围见轮级总结字段',标签:['轮级总结'],收录检查:check,[总结提交]:metadata});
+  }
+  async turnSummaries(spec) { return memoryReadSnapshot(this.layout, () => this.#turnSummaries(spec)); }
+  async #turnSummaries({subject,project,session}) {
+    const records = [];
+    for (const e of (await this.#foldAll()).values()) if (e.轮级总结?.session === digest(session) && e.项目 === project && !是否已被否(e) && e.状态 !== '物理删除' && await this.ownedReadable(e,subject,project)) records.push(e);
+    return records;
+  }
+  async organizePlan(spec = {}) { return this.organize({...spec,[整理计划]:true}); }
+  async organize(spec = {}) {
+    if (!['Lead', '主权者'].includes(spec.subject?.kind)) throw new Denied('记忆整理归属', '仅真实Lead或主权者可整理当前可读资料。');
+    const operations = ['update', 'merge', 'forget', 'compact', 'recover'];
+    if (!operations.includes(spec.op)) throw new InvalidBody('整理操作需要 update/merge/forget/compact/recover。');
+    if (typeof spec.原因 !== 'string' || !spec.原因.trim()) throw new InvalidBody('整理需要原因。');
+    const kinds = spec.类 ? [spec.类] : MEMORY_KINDS;
+    if (kinds.some(k => !MEMORY_KINDS.includes(k))) throw new InvalidBody('未知记忆类别。');
+    const scopes = [DIR.跨项目, ...(await this.#projectScopes())];
+    const allFiles = [...new Set(scopes.flatMap(scope => MEMORY_KINDS.map(kind => this.layout.memoryLog(scope, kind))))];
+    const ownershipStamp = await this.information?.visibilityStamp();
+    return maintenanceWriter(this.layout, async () => {
+      if (spec.op === 'recover') {
+        const journal = await readJsonOrNull(maintenanceFile(this.layout));
+        if (!journal || journal.phase === 'committed') return journal ?? { phase: 'committed', files: 0 };
+        if (journal.version !== 1 || !Array.isArray(journal.changes) || journal.changes.some(c => !allFiles.includes(c.file) || typeof c.after !== 'string' || typeof c.before !== 'string') || journal.files && (!Array.isArray(journal.files) || journal.files.some(file=>!allFiles.includes(file)))) throw new Fault('MEMORY_MAINTENANCE_INVALID', '整理回执无效，停止恢复。');
+        if (!Array.isArray(journal.owners)) throw new Fault('MEMORY_MAINTENANCE_INVALID','整理回执缺资料归属，不能猜测恢复权限。');
+        for (const e of journal.owners) if (!await this.ownedReadable(e,spec.subject,e.项目) || e.收录 && !await this.information?.nativeReadable(e,{subject:spec.subject,项目:e.项目,mutation:true})) throw new Denied('整理恢复归属','当前关系不能恢复这些资料。');
+        const steps = journal.owners.map(e => ({动作:'write',目标:memoryTarget(e.类,e.归属,e.项目),上下文:{id:e.id,整理:'recover',状态:'物理删除'},预览:{id:e.id,op:'recover'}}));
+        if (spec[整理计划]) return {步骤:steps};
+        for (const step of steps) await this.policy.check({subject:spec.subject,action:step.动作,target:step.目标,context:step.上下文});
+        const receipt = await finishMaintenance(this.layout, journal);
+        this.#rowsCache.clear(); this.#indexCache.clear(); this.#lineageCache.clear(); this.#writeCount.clear();
+        return receipt;
+      }
+      await assertMemoryReady(this.layout);
+      const ids = [...new Set(spec.ids ?? (spec.id ? [spec.id] : []))];
+      if (spec.op !== 'compact' && (!ids.length || ids.some(id => typeof id !== 'string'))) throw new InvalidBody('整理需要真实条目id。');
+      if (['update', 'merge'].includes(spec.op) && (typeof spec.内容 !== 'string' || !spec.内容.trim())) throw new InvalidBody('更新/合并需要完整的新内容。');
+      if (spec.op === 'update' && ids.length !== 1) throw new InvalidBody('update一次更新一条。');
+      const snapshot = new Map(); const entries = new Map();
+      for (const file of allFiles) {
+        const health = await readJsonlHealth(file);
+        if (health.坏行) throw new Fault('MEMORY_COMPACTION_INVALID', '有损坏行，保留原账本，不能静默清理。');
+        snapshot.set(file, { text: await readTextOrNull(file) ?? '', rows: health.rows });
+        for (const entry of fold(health.rows)) entries.set(entry.id, entry);
+      }
+      const selected = ids.map(id => entries.get(id));
+      if (selected.some(e => !e || e.状态 === '物理删除')) throw new InvalidBody('整理条目不存在或已删除。');
+      if (spec.op === 'merge' && selected.some(e => e.类 !== selected[0].类 || e.归属 !== selected[0].归属 || canonical(e.数据归属) !== canonical(selected[0].数据归属))) throw new InvalidBody('合并必须同类别、同范围、同真实资料归属。');
+      const targets = spec.op === 'compact' ? [...entries.values()].filter(e => kinds.includes(e.类) && (!spec.项目 || e.项目 === spec.项目)) : selected;
+      for (const e of targets) {
+        if (!await this.ownedReadable(e, spec.subject, spec.项目 ?? e.项目) || e.收录 && !await this.information?.nativeReadable(e, { subject: spec.subject, 项目: e.项目, mutation: true })) throw new Denied('记忆整理归属', '不能整理其他关系的资料。');
+        if (spec.项目 && e.项目 && ![spec.项目, '通用', '跨项目'].includes(e.项目)) throw new Denied('记忆整理项目', '条目不属于当前项目。');
+
+      }
+      const targetIds = new Set(targets.map(e => e.id));
+      const forgotten = new Set(spec.op === 'forget' ? ids : spec.op === 'merge' ? ids.slice(1) : []);
+      // Forget derived bodies too, including transitive summaries and old replacements.
+      if (spec.op === 'forget') for (let grew = true; grew;) {
+        grew = false;
+        for (const e of entries.values()) if (!forgotten.has(e.id) && [e.派生自, ...(e.来源引用 ?? [])].some(id => forgotten.has(id))) {
+          if (!await this.ownedReadable(e, spec.subject, e.项目) || e.收录 && !await this.information?.nativeReadable(e,{subject:spec.subject,项目:e.项目,mutation:true})) throw new Denied('派生资料归属', '遗忘涉及其他关系，不能宣称已完整清理。');
+          forgotten.add(e.id); grew = true;
+        }
+      }
+      const stale = new Set();
+      if (['update','merge'].includes(spec.op)) for (let grew=true; grew;) {
+        grew=false;
+        for (const e of entries.values()) if (!targetIds.has(e.id) && !forgotten.has(e.id) && !stale.has(e.id) && [e.派生自,...(e.来源引用 ?? [])].some(id=>targetIds.has(id)||stale.has(id))) {
+          if (!await this.ownedReadable(e,spec.subject,e.项目) || e.收录 && !await this.information?.nativeReadable(e,{subject:spec.subject,项目:e.项目,mutation:true})) throw new Denied('修订来源归属','派生资料不在当前关系，不能宣称已同步修正。');
+          stale.add(e.id); grew=true;
+        }
+      }
+      const referenced = spec.op === 'merge' ? [...entries.values()].filter(e => (e.来源引用 ?? []).some(id=>forgotten.has(id)) || forgotten.has(e.派生自)) : [];
+      for (const e of referenced) if (!await this.ownedReadable(e,spec.subject,e.项目) || e.收录 && !await this.information?.nativeReadable(e,{subject:spec.subject,项目:e.项目,mutation:true})) throw new Denied('合并来源归属','关联引用属于其他关系，不能静默改写。');
+      const affected = [...new Map([...targets,...referenced,...[...stale,...forgotten].map(id=>entries.get(id))].filter(Boolean).map(e=>[e.id,e])).values()];
+      const steps = affected.map(e=>({动作:'write',目标:memoryTarget(e.类,e.归属,e.项目),上下文:{id:e.id,整理:spec.op,...(['forget','merge','compact'].includes(spec.op)?{状态:'物理删除'}:{})},预览:{id:e.id,op:spec.op,...(spec.内容?{内容摘要:digest(spec.内容)}:{})}}));
+      if (spec[整理计划]) return {步骤:steps};
+      for (const step of steps) await this.policy.check({subject:spec.subject,action:step.动作,target:step.目标,context:step.上下文});
+      const owners = affected.map(e => Object.fromEntries(['id','类','项目','归属','数据归属','收录','连续性'].filter(k=>e[k]!==undefined).map(k=>[k,e[k]])));
+      const journal = { version: 1, phase: 'pending', operation: spec.op, at: this.clock.iso(), changes: [], bytesBefore: 0, owners, files:allFiles };
+      for (const [file, old] of snapshot) {
+        if (!old.rows.length) continue;
+        const localEntries = new Map(fold(old.rows).map(e => [e.id,e]));
+        const rows = []; const handled = new Set();
+        for (const original of old.rows) {
+          const row = spec.op === 'merge' && !isStateRow(original) ? {...original,
+            ...(original.来源引用 ? {来源引用:[...new Set(original.来源引用.map(id => forgotten.has(id) ? ids[0] : id))].filter(id=>id!==original.id)} : {}),
+            ...(forgotten.has(original.派生自) ? {派生自:original.id === ids[0] ? null : ids[0]} : {})} : original;
+          const key = isStateRow(row) ? row.指向 : row.id;
+          if (!targetIds.has(key) && !forgotten.has(key) && !stale.has(key)) { rows.push(row); continue; }
+          if (handled.has(key)) continue;
+          handled.add(key);
+          const current = localEntries.get(key);
+          if (!current) { rows.push(row); continue; }
+          if (forgotten.has(key)) {
+            rows.push({ id: `forgotten-${digest(key)}`, 指向: key, 追加: '物理删除', 追于: this.clock.iso(), ...continuityTombstone(current, this.clock) });
+          } else {
+            const { 历史, ...fresh } = current;
+            if (stale.has(key)) { fresh.状态 = '已失效'; fresh.来源修订 = {ids,于:this.clock.iso()}; }
+            if (是否已被否(current) && !['已失效','被推翻','已隔离','待删除'].includes(fresh.状态)) fresh.状态 = '已失效';
+            if (spec.op === 'merge') { if (row.来源引用) fresh.来源引用 = row.来源引用; if (row.派生自 !== undefined) fresh.派生自 = row.派生自; }
+            if (['update', 'merge'].includes(spec.op) && key === ids[0]) {
+              fresh.内容 = spec.内容; fresh.标题 = spec.内容.slice(0, 40); fresh.修订于 = this.clock.iso();
+              fresh.修订 = { 依据: spec.原因, 前版摘要: digest(current.内容 ?? ''), 来源: ids };
+            }
+            rows.push(fresh);
+          }
+        }
+        const after = rows.map(row => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : '');
+        if (after !== old.text) { journal.changes.push({ file, before: digest(old.text), after }); journal.bytesBefore += Buffer.byteLength(old.text); }
+      }
+      await this.audit.append({ 动作: '记忆整理意图', 主体: spec.subject, 对象: { id: ids.join(',') || 'compact', kind: '记忆' }, 依据: spec.原因, 结果: spec.op, 项目: spec.项目 });
+      if (ownershipStamp !== await this.information?.visibilityStamp()) throw new Denied('记忆整理关系变化', '资料关系在整理期间变化，请重新核对。');
+      await atomicWrite(maintenanceFile(this.layout), JSON.stringify(journal) + '\n');
+      const result = await finishMaintenance(this.layout, journal);
+      this.#rowsCache.clear(); this.#indexCache.clear(); this.#lineageCache.clear(); this.#writeCount.clear();
+      return { ...result, ids, forgotten: forgotten.size, scope: 'Mind持有的记忆；宿主原始聊天及外部备份不在此范围' };
+    });
   }
 
   /**
@@ -348,6 +475,7 @@ export class MemoryService {
         ...(input.数据归属 === undefined ? {} : { 数据归属: input.数据归属 }),
         ...(协作反馈 === undefined ? {} : { 协作反馈 }),
         ...(知识说明 === undefined ? {} : { 知识说明 }),
+        ...(input[总结提交] ? { 轮级总结: input[总结提交] } : {}),
         状态: '有效',
         记于: this.clock.iso(),
         轮: input.轮 ?? null,
@@ -414,7 +542,8 @@ export class MemoryService {
       收录检查: check, 幂等键: `intake:${record.id}:${generation}:${role}`, [内部通道]: true, [收录提交]: true,
     });
   }
-  async intakeEntry(id, { subject, project, inspect = false, mutation = false, followReplacements = true } = {}) {
+  async intakeEntry(id, spec = {}) { return memoryReadSnapshot(this.layout, () => this.#intakeEntry(id, spec)); }
+  async #intakeEntry(id, { subject, project, inspect = false, mutation = false, followReplacements = true } = {}) {
     let entry = await this.#folded(id); const seen = new Set();
     // Governance also needs the original lifecycle history: following a replacement
     // alone would hide a human's correction on the original intake entry.
@@ -979,7 +1108,7 @@ export class MemoryService {
       if (guard.stamp !== undefined && guard.stamp !== await this.information?.visibilityStamp()) throw new Denied('记忆读取范围变化', '来源、关系或可用状态在读取期间变化，请重新读取。');
       return guard.unavailable ? { ...result, 来源警示: '收录来源状态不可用，相关派生记忆未提供；原有其他记忆照常读取' } : result;
     };
-    return this.information ? this.information.withReadSnapshot(read) : read();
+    return memoryReadSnapshot(this.layout, () => this.information ? this.information.withReadSnapshot(read) : read());
   }
   async #query(query = {}, intakeGuard = {}) {
     if (query.浏览项目 !== undefined && (query.浏览项目 !== true || query.subject?.kind !== '主权者' || !query.项目)) throw new InvalidBody('项目浏览仅供已认证的人侧按明确项目查看。');
@@ -1182,7 +1311,8 @@ export class MemoryService {
    * @param {{ subject: object, id: string }} spec
    * @returns {Promise<{ id: string, 上游: Array<{id: string, 深: number, 关系: '引用'|'派生'}>, 下游: Array<{id: string, 深: number, 关系: '引用'|'派生'}>, 深度读数: object }>}
    */
-  async lineage(spec) {
+  async lineage(spec) { return memoryReadSnapshot(this.layout, () => this.#lineage(spec)); }
+  async #lineage(spec) {
     await this.policy.check({
       subject: spec.subject,
       action: 'read',
@@ -1470,7 +1600,7 @@ export class MemoryService {
     // 另一本会留下全文副本，而审计却写着「内容已抹掉」：那是一句假话。
     // 漏删的那本正是「原文禁读、副本仍可读」的空窗（评审稿 §C8 明令禁止）。
     for (const { file } of 覆盖) {
-      await withLock(`${file}.lock`, async () => {
+      await ledgerWrite(this.layout, file, async () => {
         const text = (await readTextOrNull(file)) ?? '';
         const kept = text
           .split('\n')
@@ -1549,7 +1679,7 @@ export class MemoryService {
     // 「未归档」，而不是从原始行滤「不是状态行」（2026-10-12 评审 P1-6：修前 `!isStateRow`
     // 选中的是**全部历史条目行**——已归档的条目行照旧在账上 ⇒ 每次结账都给全体老条目
     // 再追加一轮归档行，账本无限长胖、审计读数「归档 N 条」次次虚高）。
-    const 归档行 = await withLock(`${file}.lock`, async () => {
+    const 归档行 = await ledgerWrite(this.layout, file, async () => {
       // 锁内重读真源（fresh）：归档候选集必须建立在锁内看到的行上。
       const rows = await readJsonl(file);
       const open = fold(rows).filter((entry) => entry.归档 !== true);
@@ -1860,7 +1990,7 @@ export class MemoryService {
   async #appendLedger(file, lines, guard = undefined) {
     const list = Array.isArray(lines) ? lines : [lines];
     if (list.length === 0) return list;
-    await withLock(`${file}.lock`, async () => {
+    await ledgerWrite(this.layout, file, async () => {
       if (guard) await guard();
       await appendLines(file, list);
     });
@@ -1893,7 +2023,7 @@ export class MemoryService {
    * @returns {Promise<object>} 实际落线的行
    */
   async #appendEntry(file, spec) {
-    return withLock(`${file}.lock`, async () => {
+    return ledgerWrite(this.layout, file, async () => {
       // 锁内必须重读真源（fresh）：id 查重建立在锁内看到的行上，缓存可能落后于别的进程。
       const rows = await readJsonl(file);
       if (typeof spec.幂等键 === 'string' && spec.幂等键) {

@@ -11,8 +11,8 @@ for (const config of [undefined, {}, { mode: 'host' }]) test(`Host default is el
   assert.equal(state.authorized, false); assert.equal(state.admission, 'host-required');
   assert.equal(state.hostAdmission, 'not-evaluated'); assert.equal(state.authorizationRef, null);
   assert.equal(new DelegationPolicy(policy.config).fingerprint, policy.fingerprint, 'normalized default roundtrips');
-  assert.match(policy.creationGuard({ name: 'subagent' }, spec), /member_spawn/);
-  assert.match(policy.creationGuard({ name: 'subagent' }, { ...spec, connected: false }), /未接入/);
+  assert.equal(policy.creationGuard({ name: 'subagent' }, spec), undefined);
+  assert.equal(policy.creationGuard({ name: 'subagent' }, { ...spec, connected: false }), undefined);
   assert.throws(() => policy.authorize({ ...spec, subject: { kind: '成员' } }));
   policy.close(); assert.equal(policy.status('plug').canAttempt, false);
   assert.equal(policy.status('plug').admission, 'unavailable'); assert.throws(() => policy.authorize(spec));

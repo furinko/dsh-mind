@@ -117,7 +117,7 @@ it('工具真实接线，当前会话变更或关闭心智使在途写入失效'
   assert.equal((await service.load()).events.length, 1);
 }));
 it('审批冻结完整情绪入参；批准前无状态，批准后单步写入且批准不能复用', async () => scene(async (service, org, f) => {
-  await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '审批' })); await org.policy.reload();
+  await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '审批' })); await org.policy.reload();
   const host = { agent: { session: sessionOf() }, project: P }; const args = { action: 'lead_affect_update', 情绪: record() }; let request;
   await assert.rejects(runAction({ org, 项目: P, 主体: LEAD, 宿主: host, args }), e => e.code === 'NEEDS_APPROVAL' && Boolean(request = e.detail.请求id));
   assert.equal((await service.load()).events.length, 0);

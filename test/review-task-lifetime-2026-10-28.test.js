@@ -102,7 +102,7 @@ it('封存复核员仍由身份闸拒绝，Lead独立验收不要求虚构复核
 
 it('Lead独立验收审批重放的锁内重复核验不重复消耗同一张许可', () => scene(async ({ f, org, lead, review, business, run }) => {
   await org.tasks.dispatch(review.id, lead);
-  await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '审批' }));
+  await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '审批' }));
   await org.policy.reload();
   const args = { action: 'task_review', id: business.id, 三态: '过' }; let requestId;
   await assert.rejects(() => run(LEAD, args), error => {

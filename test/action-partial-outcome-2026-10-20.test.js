@@ -42,7 +42,7 @@ async function scene(run) {
     const act = (args) => runAction({ org, 项目: P, subject: LEAD, 主体: LEAD, 面: 'tool', 宿主: host, args });
     const create = () => org.tasks.create({ subject: LEAD, 项目: P, 描述: '部分回执验收', 负责人: '插件工程', 判据: ['交付可核对'] });
     const approvalLevel = async () => {
-      await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '审批' }));
+      await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '审批' }));
       await org.policy.reload();
     };
     const approve = async (args) => {

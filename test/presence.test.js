@@ -129,9 +129,16 @@ const 冻结动作表 = [
   'lead_desire_update',
   'memory_query',
   'turn_buffer_query',
+  // 只管理Mind经历留存，不写宿主权限或部署开关。
+  'turn_experience_retain',
   'project_brief_query',
   'memory_lineage',
   'memory_lifecycle',
+  // 新整理/总结/工作恢复入口仅处理各自资料与事实，仍沿真实归属及用户明确限制。
+  'memory_organize',
+  'turn_summary',
+  'task_reconcile',
+  'task_organize',
   'capability_list',
   'capability_resolve',
   'capability_read',

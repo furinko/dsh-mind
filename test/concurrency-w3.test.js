@@ -121,8 +121,8 @@ describe('W3 批1 · 并发一致性', () => {
     );
     const 节点 = await tasks.get(node.id, { 项目: P });
     assert.equal(节点.打回次数, 2);
-    assert.equal(节点.升级?.至, '主权者', '次数够 2 就必须升级；丢计数会让升级永不发生');
-    assert.equal(行.filter((r) => r.kind === 'escalated').length, 1, '只升级一次：并发下不许两条都判「≥2」');
+    assert.equal(节点.升级, undefined, '新任务保留真实失败计数，由Lead判断恢复，不机械索取用户介入');
+    assert.equal(行.filter((r) => r.kind === 'escalated').length, 0, '新任务并发失败计数准确，不机械追加主权者审批');
   });
 
   it('④runtime.shareKey 路径归一：同一私有区的两种写法同键，且共用同一个 Org 实例', async () => {

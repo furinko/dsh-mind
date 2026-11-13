@@ -288,7 +288,7 @@ describe('③ 幂等与失败窗口', () => {
     } finally { await f.cleanup(); }
   });
 
-  it('同幂等键换了业务参数 ⇒ 响亮拒且不结账（旧知识不冒充本次内容）', async () => {
+  it('同幂等键换参数的知识整理仍拒，但已验收工作可以交付（旧知识不冒充新内容）', async () => {
     const { f, org } = await 起组织();
     try {
       const { node } = await 已采纳节点(org, { 知识候选: ['同键换参数'] });
@@ -299,10 +299,12 @@ describe('③ 幂等与失败窗口', () => {
         晋升: { 来源任务: node.id, 候选键: 键 },
       });
       await assert.rejects(
-        () => org.tasks.settle(node.id, { subject: LEAD, 项目: P, 记忆处置: { [键]: '晋升' } }),
+        () => org.tasks.organizeKnowledge(node.id, { subject: LEAD, 项目: P, 记忆处置: { [键]: '晋升' } }),
         (e) => e instanceof Denied && /幂等键/.test(e.rule),
       );
-      assert.equal((await org.tasks.get(node.id, { 项目: P })).状态, '已采纳', '失败不结账');
+      const settled = await org.tasks.settle(node.id, { subject: LEAD, 项目: P, 记忆处置: { [键]: '晋升' } });
+      assert.equal(settled.状态, '已结账', '学习失败不阻断交付');
+      assert.equal(settled.学习整理.状态, '失败');
       assert.equal((await org.memory.query({ subject: LEAD, 类: '知识', 项目: P, 读者: LEAD })).条目.filter((e) => e.内容 === '同键换参数').length, 1, '没有产第二条');
     } finally { await f.cleanup(); }
   });

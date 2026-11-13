@@ -595,6 +595,7 @@ describe('⑥ 动作面接线（模型可达面）', () => {
     const org = {
       // Lead 自治写要先过钉版闸：用真实 Registry（夹具已建合法 Lead 初态）。
       registry: f.registry,
+      policy: f.policy,
       council: {
         councilPlan: async () => null,
         open: async (s) => { 收到.push(['open', s]); return {}; },

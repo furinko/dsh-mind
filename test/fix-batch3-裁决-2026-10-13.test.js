@@ -136,7 +136,7 @@ describe('裁决第二批 · P2-13 盲标映射', () => {
 });
 
 describe('裁决第二批 · P3 escalated 去重', () => {
-  it('打回 3 次只落一条 escalated', async () => {
+  it('新任务打回 3 次保留失败计数，恢复方法由 Lead 决定', async () => {
     const f = await makeFixture();
     const tasks = new TaskGraph({ layout: f.layout, policy: f.policy, audit: f.audit, clock: f.clock });
     const node = await tasks.create({ subject: LEAD, 项目: P, 描述: '反复打回', 负责人: 'member-a', 判据: ['x'] });
@@ -148,7 +148,7 @@ describe('裁决第二批 · P3 escalated 去重', () => {
       await tasks.review(node.id, { subject: REVIEWER, 项目: P, 三态: '不过', 分歧清单: ['再来'] });
     }
     const rows = JSON.parse(`[${(await readFile(f.layout.taskLog(P), 'utf8')).trim().split('\n').join(',')}]`);
-    assert.equal(rows.filter((r) => r.kind === 'escalated').length, 1, '升级只落一次');
+    assert.equal(rows.filter((r) => r.kind === 'escalated').length, 0, '新任务不把失败次数变成额外用户审批');
     const final = await tasks.get(node.id, { 项目: P });
     assert.equal(final.打回次数, 3, '打回计数照常累计');
     await f.cleanup();

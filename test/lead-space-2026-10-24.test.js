@@ -168,7 +168,7 @@ it('自由空间人侧路由认证、同源、配置冲突和任意动作拒绝'
   assert.equal((await request(ctx, 'POST', { op: 'configure', expectedRevision: 0, config: LEAD_SPACE_DEFAULTS })).status, 409);
 }));
 it('审批档冻结草稿完整入参，批准前无正文，批准后单步重放且不可复用', async () => scene(async (service, org, f) => {
-  await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '审批' })); await org.policy.reload();
+  await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '审批' })); await org.policy.reload();
   const args = { action: 'lead_space_update', 自由空间: { op: 'write', title: '随手想法', text: '先审批再保存' } };
   const host = { agent: { session: sessionOf() }, project: P }; let request;
   await assert.rejects(runAction({ org, 项目: P, 主体: LEAD, args, 宿主: host }), error => error.code === 'NEEDS_APPROVAL' && Boolean(request = error.detail.请求id));

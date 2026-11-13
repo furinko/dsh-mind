@@ -60,7 +60,7 @@ for(const mutation of ['ownership','task','catalog','approval','abort']) test(`s
   if(mutation==='ownership')s.member(m=>({...m,委派者:{id:'other',kind:'Lead'}}));
   if(mutation==='task')s.tasks(n=>({...n,负责人:['other']}));
   if(mutation==='catalog')s.kids.length=0;
-  if(mutation==='approval'){await s.f.write('集体L2-共享基础设施/defaults/介入度.json',JSON.stringify({介入度:'审批'}));await s.org.policy.reload();}
+  if(mutation==='approval'){await s.f.writePrivate('集体L2-共享基础设施/defaults/部署.json',JSON.stringify({介入度:'审批'}));await s.org.policy.reload();}
   if(mutation==='abort')controller.abort();
  }return out;};
  await assert.rejects(s.act());assert.equal(s.calls.length,0);

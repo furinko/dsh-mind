@@ -470,7 +470,7 @@ describe('⑧ 条目10 收口（W5 审计反例）：Lead 自治写要过写前�
       assert.equal((await org.registry.identity()).members[主Lead.id].status, '封存');
       await assert.rejects(
         () => org.tasks.create({ subject: 主Lead, 项目: P, 描述: '封存后写', 负责人: '插件工程', 判据: ['x'] }),
-        (e) => e instanceof Denied && /条目10/.test(e.rule),
+        (e) => e instanceof Denied && /不在岗/.test(e.rule),
         '封存 Lead 的自治写必须 fail-closed',
       );
       assert.equal((await org.tasks.list({ 项目: P })).some((n) => n.描述 === '封存后写'), false, '被拒的写不落盘');
@@ -481,7 +481,7 @@ describe('⑧ 条目10 收口（W5 审计反例）：Lead 自治写要过写前�
     } finally { await f.cleanup(); }
   });
 
-  it('Lead 记录未钉卡版本 ⇒ 自治写拒；ensureLeadInstance 明确「未就绪」而不是假幂等成功', async () => {
+  it('Lead缺专业卡仍可执行；ensureLeadInstance如实报告专业资料未就绪', async () => {
     const { f, org } = await 起组织({ members: { 'lead-nopin': { id: 'lead-nopin', 岗位: 'Lead', 代: 1, status: '在岗' } } });
     try {
       const 出生 = await org.registry.ensureLeadInstance({ 实例: 'lead-nopin', 代次: { 代: 'g-test', pid: process.pid } });
@@ -489,11 +489,7 @@ describe('⑧ 条目10 收口（W5 审计反例）：Lead 自治写要过写前�
       assert.equal(出生.就绪, false, '必须明确不就绪');
       assert.match(String(出生.原因), /未钉|钉/);
       assert.equal((await org.registry.identity()).members['lead-nopin'].卡版本, undefined, '不得自动补钉冒充就绪');
-      await assert.rejects(
-        () => org.policy.check({ subject: { id: 'lead-nopin', kind: 'Lead' }, action: 'write', target: { id: 'x', kind: '任务', authority: '自治' }, context: {} }),
-        (e) => e instanceof Denied && /未钉卡版本/.test(e.rule),
-        '未钉版的 Lead 自治写必须拒',
-      );
+      assert.equal((await org.policy.check({ subject: { id: 'lead-nopin', kind: 'Lead' }, action: 'write', target: { id: 'x', kind: '任务', authority: '自治' }, context: {} })).verdict, 'allow', '缺专业卡不撤销真实Lead工作权限');
       const 只读 = await org.policy.decide({ subject: { id: 'lead-nopin', kind: 'Lead' }, action: 'read', target: { id: 'x', kind: '任务', authority: '自治', zone: '私有' }, context: {} });
       assert.equal(只读.verdict, 'allow', '未钉版也不挡只读');
     } finally { await f.cleanup(); }
@@ -526,7 +522,7 @@ describe('⑧ 条目10 收口（W5 审计反例）：Lead 自治写要过写前�
       const 前 = (await org.registry.identity()).members['member-a'];
       await assert.rejects(
         () => org.policy.check({ subject: { id: 'member-a', kind: '成员', roleId: '插件工程' }, action: 'write', target: { id: node.id, kind: '任务', authority: '自治' }, context: { task: node } }),
-        (e) => e instanceof Denied && /条目10/.test(e.rule),
+        (e) => e instanceof Denied && /缺委派归属/.test(e.rule),
       );
       // Lead 正规补登 ⇒ 只补缺的两位，登记时间不变，审计单列。
       const r = await org.registry.assign({ subject: 主, 岗位: '插件工程', 实例: 'member-a' });

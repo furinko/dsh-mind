@@ -20,7 +20,7 @@ async function withKernel(s,fn,{configured=true}={}){
   try{await applyKernel(host.ctx,config);const tool=host.工具.get('mind');const invoke=async(args,child=false)=>JSON.parse(await tool.execute({project:REVIEW_PROJECT,...args},{name:'mind',agent:child?s.childAgent:s.parentAgent}));await fn({host,tool,invoke,disposers});}
   finally{for(const dispose of disposers.reverse())await dispose?.();forgetSharedOrg(config);}
 }
-async function approvalMode(s){await s.f.write('集体L2-共享基础设施/defaults/介入度.json',JSON.stringify({介入度:'审批'}));await s.org.policy.reload();}
+async function approvalMode(s){await s.f.writePrivate('集体L2-共享基础设施/defaults/部署.json',JSON.stringify({介入度:'审批'}));await s.org.policy.reload();}
 const owner={通道:'设置页',认证:'宿主 Connection 已认证（同源浏览器设置入口）'};
 async function pending(promise){let id;await assert.rejects(promise,e=>{id=e.detail?.请求id;return e.name==='NeedsApproval'&&typeof id==='string';});return id;}
 
@@ -63,7 +63,7 @@ test('审批后部署配置变化：现在计划不同，不执行冻结标签�
 test('审批后身份封存恢复：同id同卡不替换原批准的实例事实',()=>reviewScene(async s=>{
   await approvalMode(s);const id=await pending(act(s,'parent','review_experiment_allow',s.grantArgs));await s.org.intervention.人侧决议({...owner,请求id:id,决定:'批准'});
   // 由受控人侧放权准备合法撤权/恢复，不用模型自报Owner绕工具入口。
-  await s.f.write('集体L2-共享基础设施/defaults/介入度.json',JSON.stringify({介入度:'放权'}));await s.org.policy.reload();
+  await s.f.writePrivate('集体L2-共享基础设施/defaults/部署.json',JSON.stringify({介入度:'放权'}));await s.org.policy.reload();
   await s.org.registry.seal({subject:s.parent('x').subject,实例:s.reviewer.id,理由:'post-approval ABA'});await s.org.registry.restore({subject:s.parent('x').subject,实例:s.reviewer.id});await approvalMode(s);
   await assert.rejects(act(s,'parent','review_experiment_allow',{...s.grantArgs,审批引用:id}),/放行不可用|计划|步骤/);assert.equal(s.calls.spawn.length,0);
 }));

@@ -37,7 +37,7 @@ async function scene(run, options = {}) {
     host.hostCreation = fakeCreationCapability(host);
     const create = (负责人 = '插件工程') => org.tasks.create({ subject: LEAD, 项目: P, 描述: `计划-${负责人}`, 负责人, 判据: ['产生可验收产物'] });
     const act = (args) => runAction({ org, 项目: P, subject: LEAD, 主体: LEAD, 面: 'tool', 宿主: host, args });
-    const level = async (介入度) => { await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度 })); await org.policy.reload(); };
+    const level = async (介入度) => { await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度 })); await org.policy.reload(); };
     await run({ f, org, host, calls, created, create, act, level });
   } finally { await f.cleanup(); }
 }

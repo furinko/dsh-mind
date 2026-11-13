@@ -97,13 +97,17 @@ it('用户接纳即落盘，未结束轮次重开服务仍能读取，助手中�
   if (process.platform !== 'win32') assert.equal(file.mode & 0o777, 0o600);
 }));
 
-it('公开用户来源可采集，插件回报、图片、推理和未提交模型流均不冒充对话', async () => scene(async ({ emit, hooks, read }) => {
+it('公开用户来源和附件引用可采集，推理和未提交模型流不冒充对话', async () => scene(async ({ org, session, emit, hooks, read }) => {
   emit('turn/start', { turn: 1 });
   emit('user/message', human('插件秘密', 'plugin', { kind: 'plugin' }), 'append');
   emit('user/message', { ...human('', 'image'), content: [{ type: 'image', url: 'private-image' }, { type: 'reasoning', text: 'private-thinking' }] }, 'append');
   emit('assistant/attempt', { stream: [{ text: '未提交的秘密' }] });
   emit('user/message', human('已接纳公开文本'), 'append');
-  await hooks.flush(); assert.deepEqual(texts(await read()), ['已接纳公开文本']);
+  await hooks.flush(); assert.deepEqual(texts(await read()).filter(Boolean), ['已接纳公开文本']);
+  const image = await org.turnBuffer.readOriginal({ subject: LEAD, project: P, session: session.id, id: 'image', part: 'public' });
+  assert.equal(JSON.parse(image.文本).content[0].url, 'private-image');
+  assert.equal(image.缺口[0].status, 'retention-unverified');
+  assert.doesNotMatch(image.文本, /private-thinking/);
 }));
 
 it('重复通知、服务重开和并发重放不产生重复文本', async () => scene(async ({ f, session, hooks, emit, read }) => {
@@ -177,18 +181,20 @@ it('会话、项目和成员隔离；fork继承前缀不复制为新会话的用
 }));
 
 it('过期内容退出读取，并在下一检查点从缓冲文件移除', async () => scene(async ({ org, session, hooks, emit, read }) => {
-  emit('turn/start', { turn: 1 }); emit('user/message', human('应过期内容'), 'append'); await hooks.flush();
+  emit('turn/start', { turn: 1 }); emit('user/message', human('应过期内容'), 'append');
+  emit('turn/end', { turn: 1, reason: { kind: 'completed' } }); await hooks.flush();
   org.clock._source = () => new Date(Date.now() + 31 * 86400000);
   assert.deepEqual(texts(await read()), []); await hooks.sync(session);
   assert.doesNotMatch(await readFile(org.turnBuffer.file(P, session.id), 'utf8'), /应过期内容/);
 }));
 
-it('单消息截断有标识，多消息分页可取齐且可按消息id读详情', async () => scene(async ({ hooks, emit, read }) => {
+it('原文完整保存，预算投影有标识，多消息分页可取齐且可按消息id读详情', async () => scene(async ({ hooks, emit, read }) => {
   emit('turn/start', { turn: 1 });
   for (let i = 0; i < 5; i++) emit('user/message', human(`message-${i}`, `m-${i}`), 'append');
   emit('user/message', human('长'.repeat(20000), 'long'), 'append'); await hooks.flush();
   const first = await read({ limit: 2 }); assert.equal(first.下一偏移, 2); assert.equal(first.截断, true);
-  assert.equal(texts(await read({ id: 'long' }))[0].length, TURN_BUFFER_LIMITS.text);
+  assert.equal(texts(await read({ id: 'long' }))[0].length, 20000);
+  assert.equal((await read({ id: 'long' })).截断, false);
   const all = []; let offset = 0;
   do { const page = await read({ limit: 2, offset }); all.push(...texts(page)); offset = page.下一偏移; } while (offset !== null);
   assert.equal(all.length, 6); assert.equal(new Set(all).size, 6);
@@ -287,27 +293,30 @@ it('窗口受限的SDK退回单事件补读，仍不漏掉事件', async () => s
   await hooks.sync(session); assert.ok(fallbacks); assert.deepEqual(texts(await read()), ['小窗口内容']);
 }));
 
-it('轮数、消息数和实际UTF8字节均有硬上限，并公开已清理数量', async () => scene(async ({ org, session, read }) => {
+it('短期范围超旧轮数消息数及字节上限仍完整保存，清单引用分块', async () => scene(async ({ org, session, read }) => {
   for (let turn = 1; turn <= 130; turn++) {
     session.append('turn/start', { turn }); session.append('user/message', human(`轮-${turn}`, `u-${turn}`), 'append');
   }
   await org.turnBuffer.capture({ subject: LEAD, project: P, session: session.id, fromSeq: 0, throughSeq: session.seq,
     records: session.events.map(projectTurnEvent) });
-  let state = JSON.parse(await readFile(org.turnBuffer.file(P, session.id), 'utf8'));
-  assert.equal(state.rounds.length, TURN_BUFFER_LIMITS.rounds); assert.equal(state.removed, 2);
+  let state = await org.turnBuffer.load(P, session.id);
+  assert.equal(state.rounds.length, 130); assert.equal(state.removed, 0);
   const from = session.seq;
   session.append('turn/start', { turn: 131 });
   for (let i = 0; i < 520; i++) session.append('user/message', human(`短消息${i}`, `short-${i}`), 'append');
   await org.turnBuffer.capture({ subject: LEAD, project: P, session: session.id, fromSeq: from, throughSeq: session.seq,
     records: session.events.slice(from).map(projectTurnEvent) });
-  state = JSON.parse(await readFile(org.turnBuffer.file(P, session.id), 'utf8'));
-  assert.equal(state.rounds.flatMap(r => r.messages).length, TURN_BUFFER_LIMITS.messages);
+  state = await org.turnBuffer.load(P, session.id);
+  assert.equal(state.rounds.flatMap(r => r.messages).length, 650);
   const largeFrom = session.seq;
   for (let i = 0; i < 48; i++) session.append('user/message', human('汉'.repeat(16384), `large-${i}`), 'append');
   await org.turnBuffer.capture({ subject: LEAD, project: P, session: session.id, fromSeq: largeFrom, throughSeq: session.seq,
     records: session.events.slice(largeFrom).map(projectTurnEvent) });
-  assert.ok((await stat(org.turnBuffer.file(P, session.id))).size <= TURN_BUFFER_LIMITS.bytes);
-  assert.ok((await read()).已清理消息数 > 10);
+  const manifest = JSON.parse(await readFile(org.turnBuffer.file(P, session.id), 'utf8'));
+  assert.equal(manifest.version, 4); assert.ok(manifest.parts.length > 1);
+  assert.equal((await org.turnBuffer.load(P, session.id)).rounds.flatMap(r => r.messages).length, 698);
+  assert.equal((await read()).已清理消息数, 0);
+  assert.ok((await org.turnBuffer.storageUsage({ subject: LEAD, project: P, session: session.id })).总字节 > 2 * 1024 * 1024);
 }));
 
 it('内容版本支持稳定分页，正文变化时拒绝旧页；人可清空损坏缓冲', async () => scene(async ({ org, session, hooks, emit, read }) => {
@@ -414,7 +423,7 @@ it('跨项目的逆序替换撤回原项目压缩锚点，外项目正文不进�
   assert.doesNotMatch(await readFile(org.turnBuffer.file(P, session.id), 'utf8'), /A待撤回原文|B私人正文|B新的私人正文|外项目压缩摘要/);
 }));
 
-it('较长恢复分批推进，检查点不将尚未补齐的后缀报告为已持久化', async () => scene(async ({ org, session, read }) => {
+it('较长恢复在一个检查点内分批提交并核对完整前缀', async () => scene(async ({ org, session, read }) => {
   const start = session.append('turn/start', { turn: 1 });
   await org.turnBuffer.capture({ subject: LEAD, project: P, session: session.id, fromSeq: 0, throughSeq: 1, records: [projectTurnEvent(start)] });
   for (let i = 0; i < 2100; i++) session.append('tool/call', { arguments: '不得复制的参数' });
@@ -425,9 +434,9 @@ it('较长恢复分批推进，检查点不将尚未补齐的后缀报告为已�
   } }) });
   const host = fakeHost(); const dispose = hooks.attach(host.ctx);
   const checkpoint = host.钩子.get('session/flush')[0];
-  await assert.rejects(checkpoint(session), { code: 'TURN_BUFFER_RECOVERY_PENDING' });
-  assert.equal((await read()).下次事件序号, 2049);
-  await checkpoint(session); assert.deepEqual(texts(await read()), ['积压尾部消息']); dispose();
+  await checkpoint(session);
+  assert.equal((await read()).下次事件序号, session.seq);
+  assert.deepEqual(texts(await read()), ['积压尾部消息']); dispose();
 }));
 
 it('检查点写盘期间后台任务追加事件，只核验开始时的前缀，下一检查点补齐新事件', async () => scene(async ({ org, session, hooks, emit, read }) => {

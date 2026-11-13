@@ -33,7 +33,7 @@ async function scene(run) {
     const act = (args, subject = LEAD) => runAction({ org, 项目: P, 主体: subject, subject, 面: 'tool', 宿主: host, args });
     const create = (extra = {}) => org.tasks.create({ subject: LEAD, 项目: P, 描述: '恢复源任务', 负责人: '插件工程', 判据: ['先核对边界', '交付可复验'], ...extra });
     const approval = async () => {
-      await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '审批' }));
+      await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '审批' }));
       assert.equal(await org.policy.reload(), true);
     };
     const requests = () => org.intervention.投影({ 项目: P });

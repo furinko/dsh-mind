@@ -330,6 +330,10 @@ export async function apply(ctx, config = {}) {
           const 当前工作 = await injectWorkContext(专业上下文, { agent: context?.agent, org, projectOf: 当前项目键, logger, active });
           const 轮缓冲 = await injectTurnBuffer(当前工作, { agent: context?.agent, org, hooks: turnBufferHooks,
             projectOf: 当前项目键, logger, active });
+          if (agentSubject({agent:context?.agent})?.kind === 'Lead') {
+            try { await org.turnSummaries.summarize({ subject:agentSubject({agent:context?.agent}), project:当前项目键({agent:context?.agent}), session:context.agent.session.id }); }
+            catch (error) { logger?.warn?.(`[dsh-mind] 轮级总结待处理：${error?.code ?? error?.message}`); }
+          }
           const 既往对话 = await injectConversationRecall(轮缓冲, { agent: context?.agent, org, hooks: turnBufferHooks,
             projectOf: 当前项目键, logger, active });
           const 待整理协作表达 = await injectPendingContinuity(既往对话, { agent: context?.agent, org, hooks: continuityCaptureHooks,
@@ -523,6 +527,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations, 
       '所有写动作都过策略引擎；被拒绝时结果里带「哪条规则 + 改它要什么授权」。',
       '读取请用 status / workbench / memory_query / capability_list / audit_tail；写入用 task_* / memory_write / bus_send 等。',
       'turn_buffer_query不带文本时读本会话本项目轮缓冲；带文本时直接检索本地主人的跨会话、跨项目原文，不要求先记入长期记忆，可带跨项目=false限本项目。按turn-引用id与正文偏移读原文，扫描截断时按扫描下一偏移传扫描偏移继续。新会话按当前话题自动召回相关片段与近期对话；长期记忆用于整理压缩和稳定复用。历史不认证当前决定或完成，人可用/mind turn_buffer_forget清空当前缓冲。',
+      '本会话消息原文用turn_buffer_query 原文=true id=<消息id>，字段=text读文本、字段=public读公开工具/附件结构；按下次文本偏移继续正文偏移，带同一数据版本逐段取齐。附件引用缺口按记录说明。turn_experience_retain按轮起始事件序号保留或取消长期原始经历，不要求提炼知识。',
       'project_brief_query读取本项目跨会话的有来源工作摘要；id可读取条目及来源原文片段。用户明确表达、助手记录与推断分开，当前正式目标状态优先，历史资料不授予权限。人可用/mind project_brief_forget清空当前项目摘要并保留旧来源处理屏障。',
       'usage_query只读当前接线的assistant-stream观察窗口；已报告token字段汇总可能不完整，目标token总量和费用仍未知，不修改准入预算。',
       'operation_query只读成员创建意图与已落盘阶段回执，可按操作UUID或精确任务id查询；拟用实例不证明宿主已创建，audited不证明宿主已停止；不提供重放、恢复或清零操作。',
@@ -542,6 +547,16 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations, 
         情绪: { type: 'object', description: 'lead_affect_query={id?,offset?,limit?}；lead_affect_update={op:record,epoch,key,account:{event,appraisal,feelings:[],desires:[],affect:{valence,arousal},halfLifeHours?}}；revise需epoch,id,revision,reason,完整account；remove需epoch,id,revision,reason。心情跨窗口延续，具体缘由按当前项目/关系读取；事件为转述，理解/情绪/动机为自述，不认证用户态度或事实。愉悦/激活变化为-1至1，半衰期1至24小时，默认6小时。人侧清空和停用不能由模型操作。' },
         自由空间: { type: 'object', description: 'lead_space_query={id?,offset?,limit?}；lead_space_update={op:write/remove,id?,revision?,hash?,title?,text?,share?}。随笔为非任务草稿，不自动写正式记忆；更新/删除需当前revision和hash；不能配置自由活动或扩大关系边界。' },
         信息: { type: 'object', description: 'information_query: {collection:status/materials/growth/interests/candidates,id?,query?,offset?,limit?}; information_read: {id,hash?,version?,offset?,limit?}; information_update: {op,data}。submit={messageIds:[真实消息ID],title?,note?}；submit_tool={receiptId,title,note?}；record={type:growth/candidate,kind?,title,text,sources:[{readingId,quote}],expiresAt?,method?,conditions?,limitations?,roles?,replaces?:[{id,revision}]}，经原记忆服务写成pref-/exp-/know-；distribute={id:收录回执id,revision,roles,reason}，Lead自治调整正式知识的适用岗位；revise={id,revision,reason,state?,text?,stage?,trial?:{task,outcome,detail},expiresAt?}；finish={readingIds:[]}；publish={id,revision}。正式正文与生命周期可用memory_query/memory_lifecycle。模型不配置目录、预算或扩大私人来源范围。', additionalProperties: true },
+        ids: {type:'array',items:{type:'string'},description:'memory_organize的同归属条目id；merge第一项为保留id'},
+        验证要求: {type:'string',enum:['Lead判断','独立复核'],description:'task_create冻结用户要求；旧任务不追认'},
+        验证: {type:'object',description:'task_accept直接检查：{方式:直接检查,结论:过,证据:[真实验证引用]}'},
+        核对: {type:'object',description:'task_reconcile：{说明,产物:[],副作用:[{引用,状态:已发生/未发生/未知}],执行状态:已结束/未知,执行回执}'},
+        决策: {type:'string',enum:['续接','换人','接手']},
+        总结: {type:'object',description:'turn_summary可选语义理解：{用户决定:[{text,source}],助手建议:[{text,source}],认识:[{text,source}]}；source必须为本次待总结消息真实id，认识可修正'},
+        原文: {type:'boolean',description:'仅turn_buffer_query：true按本会话消息id分页读取完整已保存原文；投影预算不截掉保存正文'},
+        字段: {type:'string',enum:['text','public'],description:'原文模式字段：text为可见正文，public为公开工具参数、结果和附件引用的JSON原文，均按正文偏移分段'},
+        起始事件序号: {type:'integer',minimum:0,description:'turn_experience_retain的真实轮次起点，可从turn_buffer_query返回的轮次起始事件序号取得'},
+        保留: {type:'boolean',description:'turn_experience_retain默认true；false取消长期原始经历保留，短期内仍完整保存'},
         action: { type: 'string', enum: ACTIONS, description: '要执行的动作' },
         project: { type: 'string', description: '项目键；省略则用当前项目' },
         role: { type: 'string', description: '兼容字段，不授予身份或岗位权限；实际主体由宿主会话与身份档案确定，自报 Lead 会被拒绝' },
@@ -622,7 +637,7 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations, 
         含失效: { type: 'boolean', description: '检索时是否包含已失效/被推翻的记忆（默认 false：只召回当前有效视图）' },
         含待复验: { type: 'boolean', description: '仅memory_query：true显式纳入作者复验期限已到的知识；不纳入失效条目，须另含失效=true；仍受项目、岗位及复核读域限制，不改状态或权限' },
         全量: { type: 'boolean', description: 'workbench 是否越过「成员只读自己那片」的切片' },
-        op: { type: 'string', enum: ['invalidate', 'demote', 'overturn', 'purge', 'promote'], description: '记忆处置；不许改写只能追加' },
+        op: { type: 'string', enum: ['invalidate', 'demote', 'overturn', 'purge', 'promote', 'update', 'merge', 'forget', 'compact', 'recover'], description: 'memory_lifecycle兼容旧处置；memory_organize修正当前内容、合并、遗忘或压实' },
         敏感: { type: 'boolean', description: 'op=purge 时显式声明「这是敏感数据」；声明会进审计，不声明只有主权者能物理删除' },
         披露豁免: { type: 'boolean', description: 'op=promote 时 Lead 显式豁免披露机械检查（仅 Lead 可用）；豁免与命中的敏感模式名会一起进审计' },
         新条目: { type: 'string' },
@@ -1398,11 +1413,10 @@ async function 钉Lead实例(org, 主体, logger, 宿主会话, 宿主) {
   if (主体?.kind !== 'Lead') return null;
   try {
     const 读数 = await org.registry.ensureLeadInstance({ 实例: 主体.id, 代次: org.boot?.代次, 宿主会话, ...(宿主?.agents ? { 宿主 } : {}) });
-    // 就绪 = 有登记事实 + 明确就绪 + 有卡版本摘要。缺关键位（unknown）按**未就绪**处理：
-    // 写前闸不许「少一个字段就默认 ready」。
-    const 就绪 = 读数?.已登记 === true && 读数?.就绪 === true && Boolean(读数?.卡版本);
-    if (!就绪) logger?.warn?.(`[dsh-mind] Lead 实例钉版未就绪（模型面自治写将 fail-closed）：${读数?.原因 ?? '没有可判就绪读数'}（实例 ${主体.id}）`);
-    return { ...读数, 就绪, ...(就绪 ? {} : { 原因: 读数?.原因 ?? '没有可判就绪读数（unknown ⇒ 未就绪）' }) };
+    // 只消费Registry签发的执行结论；不能从在岗快照忽略旧绑定或续接拒绝。
+    const 就绪 = 读数?.已登记 === true && 读数?.执行就绪 === true;
+    if (!就绪) logger?.warn?.(`[dsh-mind] Lead 实例身份未就绪：${读数?.原因 ?? '没有可判就绪读数'}（实例 ${主体.id}）`);
+    return { ...读数, 就绪, ...(就绪 ? {} : { 原因: 读数?.原因 ?? '没有可判真实身份就绪读数' }) };
   } catch (error) {
     const 原因 = error instanceof Error ? error.message : String(error);
     logger?.warn?.(`[dsh-mind] Lead 实例钉版失败（模型面自治写将 fail-closed）：${原因}`);
@@ -1412,10 +1426,10 @@ async function 钉Lead实例(org, 主体, logger, 宿主会话, 宿主) {
 
 function 断言Lead业务就绪(主体, action, 登记) {
   if (主体.kind !== 'Lead' || !是写动作(action) || 登记?.就绪 === true) return;
-  throw new Denied('v2 条目10 · Lead 自治写前钉版未就绪（内核入口）',
+  throw new Denied('Lead 真实身份未就绪（内核入口）',
     `Lead 实例 ${主体.id} 的出生/钉版读数未就绪：${登记?.原因 ?? '内核没拿到就绪读数（unknown ⇒ 按未就绪处理）'}。业务写 fail-closed，在准备审批前拒绝；status / workbench / audit 等诊断读与真实人侧恢复仍可用。`, {
       requireAuthority: '主权者/Lead',
-      howToChange: '先核对真实宿主根会话及Lead岗位卡、在岗记录与钉版快照；不能先冻结业务写再借批准补发身份。',
+      howToChange: '核对真实宿主根会话、在岗记录和运行绑定；岗位卡缺失只影响专业资料，不需要重复授权。',
       detail: { 实例: 主体.id, 动作: action, 写动作: true, 就绪读数: 登记 ?? null },
     });
 }
@@ -1451,7 +1465,7 @@ async function 注入Lead已钉规程(assembly, agent, org, logger, 宿主) {
       段文本 = [
         '【Lead 岗位规程 · 未就绪】',
         `实例 ${主体.id} 的岗位卡钉版未就绪（${登记?.原因 ?? 'unknown'}）：自治写已按 fail-closed 拒绝；`,
-        '只读诊断（status / workbench / audit_tail / task_criteria）仍可用。请先由主权者修好 Lead 岗位卡与身份档案。',
+        '只读诊断（status / workbench / audit_tail / task_criteria）仍可用。请核对宿主会话与实际身份档案；缺少专业卡单独报告，不要求新增授权。',
       ].join('\n');
     } else {
       const 钉 = await org.registry.cardOf(主体.id);
@@ -1479,7 +1493,7 @@ async function 注入Lead已钉规程(assembly, agent, org, logger, 宿主) {
 }
 
 /** 布尔型参数白名单（与上方 schema 的 type:'boolean' 一一对应）。 */
-const BOOLEAN_ARGS = new Set(['显式', '含失效', '含待复验', '跨项目', '全量', '敏感', '披露豁免', '暂不投递', '延后', '未投递']);
+const BOOLEAN_ARGS = new Set(['显式', '含失效', '含待复验', '跨项目', '全量', '敏感', '披露豁免', '暂不投递', '延后', '未投递', '原文', '保留']);
 
 function normalizeArgs(args) {
   const out = { ...args };
@@ -1492,7 +1506,7 @@ function normalizeArgs(args) {
     else if (out[key] === 'false') out[key] = false;
   }
   // 命令键值对没有 JSON 数字类型；只转换显式数字参数（分页、目标/预算修订与上限），不改自由文本。
-  for (const key of ['limit', '条数上限', '内容预算', '偏移', '正文偏移', '扫描偏移', '条数', '修订', '预算修订', '上限']) {
+  for (const key of ['limit', '条数上限', '内容预算', '偏移', '正文偏移', '扫描偏移', '条数', '修订', '预算修订', '上限', '起始事件序号']) {
     if (typeof out[key] === 'string' && /^(0|[1-9]\d*)$/.test(out[key])) out[key] = Number(out[key]);
   }
   // 采用知识是结构声明，命令只接受JSON数组；不把坏串或null改成空声明。

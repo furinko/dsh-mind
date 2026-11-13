@@ -106,15 +106,15 @@ it('装配两次读取之间被替换的卡不进入模型，下一步可用稳�
 
 it('最终身份复核的异步间隙替换核心卡时，末尾同步digest核验仍清掉旧段', async () => scene(async org => {
   await card(org, '# 原核心\n最后一次异步读取后仍可能变化。');
-  const original = org.registry.cardOf.bind(org.registry);
+  const original = org.registry.identity.bind(org.registry);
   let reads = 0;
-  org.registry.cardOf = async (...args) => {
+  org.registry.identity = async (...args) => {
     const value = await original(...args);
     if (++reads === 2) await card(org, '# 新核心\n人侧已在最后一步更换卡片。');
     return value;
   };
   assert.deepEqual((await inject(org)).sections, base().sections);
-  org.registry.cardOf = original;
+  org.registry.identity = original;
   assert.match(section(await inject(org)).text, /人侧已在最后一步更换卡片/);
 }));
 

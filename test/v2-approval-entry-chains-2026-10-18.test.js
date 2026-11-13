@@ -25,7 +25,7 @@ async function 起(默认档位 = '放权') {
 }
 
 async function 切档(f, org, 档位) {
-  await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: 档位 }, null, 2));
+  await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: 档位 }, null, 2));
   assert.equal(await org.policy.reload(), true);
 }
 
@@ -123,7 +123,7 @@ describe('② member_spawn 入口链', () => {
 });
 
 describe('③ task_settle 多候选入口链', () => {
-  it('一次批准覆盖 settle + 两条知识晋升 + 归档；不逐门重新挂起', async () => {
+  it('工作收口批准不夹带知识晋升；知识整理未获当前明确许可时单独失败，工作仍完成', async () => {
     const { f, org } = await 起('放权');
     try {
       const 节点 = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '结账链', 负责人: 'lead', 判据: ['x'] });
@@ -148,23 +148,27 @@ describe('③ task_settle 多候选入口链', () => {
       await org.intervention.人侧决议({ 请求id, 决定: '批准', 通道: '设置页', 认证: '宿主 Connection 已认证' });
       const 回 = await 跑(org, null, { action: 'task_settle', id: 节点.id, 记忆处置: 处置, 审批引用: 请求id });
       assert.equal((await org.tasks.get(节点.id, { 项目: P })).状态, '已结账', '一次批准完成结账');
-      assert.equal(Object.keys(回.节点?.记忆晋升 ?? {}).length, 2, '两条候选都真实产出知识');
-      assert.equal((await org.memory.query({ subject: LEAD, 类: ['知识'], 项目: P })).条目.length, 2);
+      assert.equal(Object.keys(回.节点?.记忆晋升 ?? {}).length, 0, '工作许可不扩大知识写权限');
+      assert.equal(回.节点.学习整理.状态, '失败');
+      assert.equal((await org.memory.query({ subject: LEAD, 类: ['知识'], 项目: P })).条目.length, 0);
       assert.equal((await org.intervention.投影({ 项目: P })).find((x) => x.请求id === 请求id).状态, '已完成');
 
       await assert.rejects(
         () => 跑(org, null, { action: 'task_settle', id: 节点.id, 记忆处置: 处置, 审批引用: 请求id }),
         (e) => e instanceof Denied,
       );
-      assert.equal((await org.memory.query({ subject: LEAD, 类: ['知识'], 项目: P })).条目.length, 2, '重复重放不重复产知识');
+      await 切档(f, org, '放权');
+      const organized = await org.tasks.organizeKnowledge(节点.id, { subject: LEAD, 项目: P, 记忆处置: 处置 });
+      assert.equal(Object.keys(organized.记忆晋升).length, 2);
+      assert.equal(organized.状态, '已结账', '后续学习不反转工作完成');
     } finally {
       await f.cleanup();
     }
   });
 });
 
-describe('④ 结账单源：只读 settlePlan 与执行业务消费同一结果', () => {
-  it('settlePlan 零写；执行后写的东西与计划意图一致；非法处置同一把尺', async () => {
+describe('④ 结账单源：只读 knowledgePlan 与执行业务消费同一结果', () => {
+  it('knowledgePlan 零写；执行后写的东西与计划意图一致；非法处置同一把尺', async () => {
     const { f, org } = await 起('放权');
     try {
       const 节点 = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '单源链', 负责人: 'lead', 判据: ['x'] });
@@ -187,14 +191,14 @@ describe('④ 结账单源：只读 settlePlan 与执行业务消费同一结果
         作答: (await readJsonl(f.layout.memoryLog(P, '作答'))).length,
       });
       const 前 = await 快照();
-      const 计划 = await org.tasks.settlePlan(节点.id, { 项目: P, 记忆处置: 处置 });
-      assert.deepEqual(await 快照(), 前, 'settlePlan 必须是只读的（零写：审计/任务事件/记忆账本都不动）');
+      const 计划 = await org.tasks.knowledgePlan(节点.id, { 项目: P, 记忆处置: 处置 });
+      assert.deepEqual(await 快照(), 前, 'knowledgePlan 必须是只读的（零写：审计/任务事件/记忆账本都不动）');
       assert.equal(计划.晋升计划.length, 1, '候选 1 留账本、候选 0 晋升 ⇒ 只计划一条晋升');
       assert.deepEqual(计划.丢弃, [经历.id], '丢弃只含判了丢弃的经历候选');
       assert.equal(计划.晋升计划[0].幂等键, `${P}|${节点.id}|候选/lead/0`, '幂等键与 memory.promoteFromAdopted 同一口径');
       assert.equal(计划.晋升计划[0].内容, '甲', '晋升内容来自候选，计划里可预览真正将写什么');
       await assert.rejects(
-        () => org.tasks.settlePlan(节点.id, { 项目: P, 记忆处置: { ...处置, '候选/lead/9': '晋升' } }),
+        () => org.tasks.knowledgePlan(节点.id, { 项目: P, 记忆处置: { ...处置, '候选/lead/9': '晋升' } }),
         (e) => e instanceof InvalidBody,
         '非法处置在计划阶段就拒（同一把尺，不等到写）',
       );

@@ -29,7 +29,6 @@ import { parseDocument, effectiveDocument, extractPolicyBlock } from './tags.js'
 import { MECHANISM_SUBJECT, MECHANISM_NAMES, mechanismAllows } from './mechanism.js';
 // 条目10 补修J（2026-10-18 独立审计）：写前凭证闸要验**钉住卡的真实内容**（重算摘要 +
 // 派生面重算），不能只认一个摘要字符串；读取/校验面只有 card-credential 一处。
-import { readVerifiedCardSnapshot } from './card-credential.js';
 // v2 条目14/17（2026-10-18 补修F）：主权者逐请求放行的**唯一读取点**。放行上下文只由
 // 重放路径 `以放行上下文` 包住那一次调用（AsyncLocalStorage）；匹配按**步骤计划**
 // （底层 动作+目标 kind/id）逐条消费，宏动作名不参与——本文件只读、不写。
@@ -584,7 +583,7 @@ export class PolicyEngine {
     }
     // 已有真实绑定时，「这一岗」不再代表该岗所有实例。否则旧执行者失效后，同岗新实例
     // 仍能 resolve / submit 旧节点，甚至以旧任务为凭据写记忆。绑定和当时凭证共同限定执行者；
-    // 负责人 id、岗位名和自报 roleId 均不能绕过它。卡正文校验仍由统一写前凭证闸负责。
+    // 负责人 id、岗位名和自报 roleId 均不能绕过它。岗位卡版本不改变真实实例的工作归属。
     if (task.绑定 != null && !Array.isArray(task.绑定)) {
       return { ok: false, reason: '任务实例绑定形状不可用：不能把坏绑定当成无绑定旧任务放行' };
     }
@@ -597,11 +596,10 @@ export class PolicyEngine {
         return b?.实例 === subject.id && member?.status === '在岗' && b.岗位 === member.岗位
           && (名单.includes(b.实例) || 名单.includes(b.岗位))
           && pin?.版本 === 1 && pin.代 === (member.代 ?? 1)
-          && typeof pin.卡版本摘要 === 'string' && Boolean(pin.卡版本摘要)
-          && pin.卡版本摘要 === member.卡版本?.摘要 && pin.宿主代次 === 宿主代次;
+          && pin.宿主代次 === 宿主代次;
       });
       if (!本人绑定) {
-        return { ok: false, reason: `任务已有真实实例绑定，但 ${subject.id} 没有与当前负责人、在岗岗位及实例凭证一致的绑定：同岗、旧代次或旧卡不能继承任务写权` };
+        return { ok: false, reason: `任务已有真实实例绑定，但 ${subject.id} 没有与当前负责人、在岗岗位及实例凭证一致的绑定：同岗或旧代次不能继承任务写权` };
       }
     } else if (!名单.includes(subject.id)) {
       // 只有完全无绑定的旧任务保留按负责人 id / 档案岗位寻址的兼容路径。
@@ -757,6 +755,8 @@ export class PolicyEngine {
     if (target?.authority && target.authority !== '自治') return false;
     if (this.#leadBirthMatches({ subject, action, target, context })) return false;
     const level = this.intervention();
+    // 只有部署者在私有配置明确选择的旧限制继续生效；出厂通用流程不另造审批。
+    if (this.state.defaults来源?.介入度 !== '私有') return false;
     if (level === '审批') return true;
     if (level === '预审') return this.#预审高风险(String(action), target, context);
     return false;
@@ -764,7 +764,7 @@ export class PolicyEngine {
 
   /** 内部宿主适配：只为一位真实live根Agent登记现行Lead卡，不能批准任何业务写。 */
   async withLeadBirth({ 实例, 宿主, 卡版本 }, execute) {
-    if (typeof execute !== 'function' || typeof 卡版本 !== 'string' || !/^[a-f0-9]{64}$/.test(卡版本)) throw new Denied('Lead出生 · 宿主凭据不可判', '出生上下文必须绑定真实宿主根会话与精确Lead卡摘要。');
+    if (typeof execute !== 'function' || (卡版本 !== null && (typeof 卡版本 !== 'string' || !/^[a-f0-9]{64}$/.test(卡版本)))) throw new Denied('Lead出生 · 宿主凭据不可判', '出生上下文必须绑定真实宿主根会话与精确专业卡摘要或明确无卡状态。');
     const project = 宿主?.project;
     this.#assertLeadBirthHost(实例, 宿主, project);
     const lease = { active: true, 实例, 宿主, project, 卡版本 };
@@ -801,7 +801,10 @@ export class PolicyEngine {
 
   /** @param {{ subject: object, action: string, target: object, context?: object }} input */
   #evaluate(input) {
-    const subject = normalizeSubject(input.subject);
+    let subject = normalizeSubject(input.subject);
+    // 专业岗位来自真实登记；自报 roleId 不能改变复核读域或任何资料权限。
+    const registeredRole = this.#档案岗位Of(subject.id);
+    if (registeredRole && ['Lead', '成员'].includes(subject.kind)) subject = { ...subject, roleId: registeredRole };
     const target = input.target ?? {};
     const action = input.action;
     const context = input.context ?? {};
@@ -836,14 +839,7 @@ export class PolicyEngine {
       });
     }
 
-    // v2 条目10/20 最终统一凭证闸（2026-10-18 裁决）：**Lead 与成员的所有新写**都要求
-    // 相应凭证齐备——不是只自治档（身份版本凭证不能被某一档 grant 旁路），也不是只 Lead。
-    // 三条边界：
-    //  ① **所有写档**，但**只读一律保留**（诊断与恢复：status / workbench / audit_tail /
-    //     task_criteria 在同样的坏状态下必须还能读出来，读域规则不变）；
-    //  ② 写动作 fail-closed：没记录 / 非在岗 / 缺卡版本 / 成员缺委派归属 都拒，拒因精确；
-    //  ③ 受控父判里的委派者走同一个闸（父凭证不齐 ⇒ 子也写不了）。
-    // 历史实例：不判死（在岗事实照旧），但**只读**——「过去合法」不换「今后可写」。
+    // 普通写只核真实身份和生命周期；专业卡不是执行通行证。
     const 凭证闸 = this.#凭证闸(subject, action);
     if (凭证闸) return 凭证闸;
 
@@ -966,23 +962,8 @@ export class PolicyEngine {
     );
   }
 
-  /**
-   * 统一实例凭证闸（v2 条目10/20 · 2026-10-18 最终裁决）：**Lead 与成员的所有新写**都要
-   * 相应凭证齐备。要求：
-   *  - Lead：在册在岗 + 钉住的卡版本摘要；
-   *  - 成员：在册在岗 + 钉住的卡版本摘要 + **委派归属**（`委派者.id`）。
-   *
-   * 三条边界（都是被否过的方案的替代）：
-   *  ① **所有写档**，不按授权档开洞——身份版本凭证不能被某一档 grant 旁路；
-   *     **只读一律保留**（诊断/恢复通道：status ∕ workbench ∕ audit_tail ∕ task_criteria，
-   *     读域规则不变）；
-   *  ② 历史实例：**不判死**（在岗事实照旧、孤儿回收仍走代次判据），但**只读**——
-   *     「过去合法」不换「今后可写」；要恢复写权走 `registry.assign` 的**迁移补登**
-   *     （补缺的卡版本 / 委派归属，保留出生与登记时间，审计单列）；
-   *  ③ 受控父判里的委派者也走这一个闸（父凭证不齐 ⇒ 子也写不了）。
-   *
-   * @param {object} subject @param {string} action
-   * @returns {object|null} 拒绝结论；通过 / 不适用 ⇒ null
+  /** 普通执行核对真实身份、生命周期和委派归属；岗位卡只提供专业资料。
+   * 卡快照仍由 registry.cardOf 校验后用于专业方法，不再充当执行通行证。
    */
   #凭证闸(subject, action) {
     if (action === 'read') return null;
@@ -1037,13 +1018,6 @@ export class PolicyEngine {
         detail: { 实例: subject.id, 档案岗位: 岗位, 声称种类: subject.kind, 岗位对应种类: 岗位种类 },
       });
     }
-    if (!member.卡版本?.摘要) {
-      return deny(`v2 条目10 · ${谁}未钉卡版本（写 fail-closed）`, `${谁} ${subject.id} 的记录上没有钉住的卡版本摘要：规则面无法回答「凭哪一版」，写一律拒。`, {
-        requireAuthority: '机制',
-        howToChange: '由 Lead 走 registry.assign 做迁移补登（补当前卡版本，保留出生/登记时间，审计单列）；不由写路径自动补钉假装成功。只读诊断不受影响。',
-        detail: { 实例: subject.id, 缺: '卡版本' },
-      });
-    }
     if (subject.kind === '成员' && !member.委派者?.id) {
       return deny('v2 条目20 · 成员缺委派归属（写 fail-closed）', `成员实例 ${subject.id} 的记录上没有委派者：父判无从进行，写一律拒（历史遗留不是新写的永久豁免）。`, {
         requireAuthority: 'Lead',
@@ -1051,20 +1025,15 @@ export class PolicyEngine {
         detail: { 实例: subject.id, 缺: '委派归属' },
       });
     }
-    // 补修J（2026-10-18 独立审计 · 第二处缺口）：**摘要字符串 != 凭证**。修前这一闸
-    // 只查 `member.卡版本.摘要` 非空——任意一个 sha256 形状的字符串都能当凭证，快照
-    // 里的正文 / 派生段 / 能力引用从未被告闸核对过。现在按真实内容验：岗位对齐、
-    // 由声明版本 + 正文重算摘要、段与能力引用由正文重派生。坏证据不默用（写拒），
-    // 也不在这里修/覆写（那是证据，处置走人工 + registry.assign 重新钉版）。
-    const 卡面 = readVerifiedCardSnapshot(this.layout.cardSnapshot(member.卡版本.摘要), { 钉: member.卡版本, 期望岗位: 岗位 });
-    if (!卡面.ok) {
-      return deny(`v2 条目10 · ${谁}钉住的卡快照校验失败（写 fail-closed）`, `${谁} ${subject.id} 钉住的卡版本 ${String(member.卡版本.摘要).slice(0, 12)}… 内容校验不过：${卡面.原因}。摘要字符串本身不构成凭证——正文、派生段与能力引用必须能被同一把尺验回；坏证据不默用。只读诊断不受影响。`, {
-        requireAuthority: '机制',
-        howToChange: '由 Lead 走 registry.assign 重新钉当前卡（内容寻址快照会写新摘要）；不要手改快照（那是证据）；确需重建时先移走坏文件留档。',
-        detail: { 实例: subject.id, 卡版本: member.卡版本.摘要 },
-      });
-    }
     return null;
+  }
+
+  /** 写前执行身份只读核对；不生成业务审批、不改变登记或专业卡。 */
+  async executionIdentity(subject) {
+    await this.refreshIfStale();
+    if (!this.healthy) throw new Fault('POLICY_NOT_READY', '执行身份核对需要健康策略，先修复实际加载错误。');
+    const decision = this.#凭证闸(normalizeSubject(subject), 'write');
+    return { ok: decision === null, decision };
   }
 
   /**
@@ -1524,7 +1493,8 @@ export class PolicyEngine {
     if (!target) return false;
     if (target.kind === '身份' && (action === 'write' || (action === 'create' && context?.身份操作 !== '实例'))) return true;
     if (target.kind === '能力' && (action === 'create' || action === 'write')) return true;
-    if (target.kind === '记忆' && action === 'write' && context?.状态 === '物理删除') return true;
+    if (['记忆', '知识', '经历', '偏好', '作答'].includes(target.kind) && action === 'write'
+      && (context?.状态 === '物理删除' || ['forget', 'merge', 'compact', 'recover'].includes(context?.整理))) return true;
     if (target.kind === '设置' && (action === 'create' || action === 'write')) return true;
     return false;
   }

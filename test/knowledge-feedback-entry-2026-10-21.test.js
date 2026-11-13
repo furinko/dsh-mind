@@ -42,7 +42,7 @@ async function scene(run) {
     const log = () => readTextOrNull(f.layout.memoryLog(P, '知识'));
     const requests = () => org.intervention.投影({ 项目: P });
     const approval = async () => {
-      await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '审批' }));
+      await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '审批' }));
       assert.equal(await org.policy.reload(), true);
     };
     const request = async args => {
@@ -174,7 +174,7 @@ describe('知识负反馈生命周期入口', () => {
     assert.equal(parse(await log()).length, parse(before).length + 2, '替代条目和旧状态一起落线');
     const replacement = (await act({ action: 'memory_query', id: result.结果.新条目 })).结果.条目[0];
     assert.deepEqual(replacement.知识说明, { 适用条件: ['当前接口'] });
-    await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '放权' }));
+    await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '放权' }));
     await org.policy.reload();
     const failedItem = await feedback(org, f);
     const failureBefore = await log();

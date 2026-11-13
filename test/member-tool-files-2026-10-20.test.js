@@ -242,7 +242,8 @@ describe('普通成员通用工具文件边界', () => {
         await s.org.registry.seal({ subject: LEAD, 实例: MEMBER.id, 理由: 'new identity pin' });
         if (change === '卡') await s.f.write('集体L3-成员角色卡/插件工程.md', source.replace('1. 先定判据再干活。', '1. 先定判据再干活。\n2. 新卡新增限制。'));
         await s.org.registry.assign({ subject: LEAD, 实例: MEMBER.id, 岗位: '插件工程', ...(change === '代' ? { 代: 2 } : {}), ...(change === '宿主代次' ? { 代次: { 代: 'new-host-generation', pid: process.pid } } : {}) });
-        assert.match(s.guard('write', { file_path: s.input }), /绑定岗位\/实例凭证/);
+        if (change === '卡') assert.equal(s.guard('write', { file_path: s.input }), undefined, '专业卡更新不撤销相同真实身份的原文件范围');
+        else assert.match(s.guard('write', { file_path: s.input }), /绑定岗位\/实例凭证/);
       }
     } finally { await s.cleanup(); }
   });

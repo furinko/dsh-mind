@@ -27,7 +27,7 @@ async function setup() {
   host.hostCreation = fakeCreationCapability(host);
   const action = (args) => runAction({ org, 项目: P, 主体: LEAD, 面: 'tool', 宿主: host, args });
   const openArgs = { action: 'debate_open', 问题: '失败矩阵', 参与者: 'member-a', 参与岗位: '插件工程,插件工程', 方式: 'subagent' };
-  const mode = async (value) => { await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: value })); await org.policy.reload(); };
+  const mode = async (value) => { await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: value })); await org.policy.reload(); };
   const approve = async (args) => {
     let request;
     await assert.rejects(() => action(args), e => e instanceof NeedsApproval && (request = e.detail.请求id, true));

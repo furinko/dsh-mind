@@ -41,7 +41,8 @@ function targetOf(row) {
   const [first, second] = parts;
   if (LEGACY_MEMORY_FUNCTIONS.includes(first)) {
     const limit = first === '轮级缓冲' ? 3 : 2;
-    if ((row.type === 'file' && (parts.length !== limit || !parts.at(-1).endsWith('.json')))
+    const turnFile = first === '轮级缓冲' && /^[a-f0-9]{64}\.json(?:\.part-[a-f0-9]{64}|\.migration-backup)?$/.test(parts.at(-1));
+    if ((row.type === 'file' && (parts.length !== limit || !(turnFile || parts.at(-1).endsWith('.json'))))
       || (row.type === 'directory' && parts.length >= limit)) throw fail(`旧功能目录有不能自动归类的路径：${row.path}`);
     const prefix = first === '连续性提炼' ? ['提炼状态', '连续性'] : ['工作记忆', first === '轮级缓冲' ? '会话缓冲' : '项目接续'];
     return [...prefix, ...parts.slice(1)].join('/');

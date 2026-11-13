@@ -9,19 +9,21 @@ import { readLeadFocus } from './lead-focus.js';
 export const PROFESSIONAL_CONTEXT_LIMIT = 4;
 export const PROFESSIONAL_CONTEXT_BUDGET = 12000;
 
-async function currentScope(org, subject, project) {
+export async function currentConversationScope(org, subject) {
   const member = (await org.registry.identity()).members?.[subject?.id];
   const role = member?.岗位;
   if (!['Lead', '成员'].includes(subject?.kind) || member?.status !== '在岗' || typeof role !== 'string' || !role || role.length > 256
       || (subject.kind === 'Lead') !== (role === 'Lead') || (subject.roleId !== undefined && subject.roleId !== role)) {
     throw new Denied('专业上下文 · 当前岗位', '没有匹配的在岗身份，不能按自报岗位召回。');
   }
-  const card = await org.registry.cardOf(subject.id);
-  if (card?.就绪 !== true || card.岗位 !== role || !member.卡版本?.摘要 || card.卡版本?.摘要 !== member.卡版本.摘要) {
-    throw new Denied('专业上下文 · 岗位凭证', '当前岗位卡未就绪，不注入未核对的专业记忆。');
-  }
-  const actor = { id: subject.id, kind: subject.kind, roleId: role, 卡版本: member.卡版本.摘要 };
-  const bindingMember = { ...member, 卡版本摘要: member.卡版本.摘要, 宿主代次: member.代次?.代 ?? null };
+  // 读取公开对话仅核真实会话身份；不加载岗位卡或依赖任务登记。
+  const actor = { id: subject.id, kind: subject.kind, roleId: role };
+  return { actor, role, member, credentialStamp: digest(canonical({ actor, member })) };
+}
+
+async function currentScope(org, subject, project) {
+  const { actor, role, member } = await currentConversationScope(org, subject);
+  const bindingMember = { ...member, 卡版本摘要: member.卡版本?.摘要 ?? null, 宿主代次: member.代次?.代 ?? null };
   const nodes = subject.kind === '成员' && !member.会审绑定
     ? (await org.tasks.list({ 项目: project })).filter(node => ['已派发', '执行中'].includes(node.状态)
       && (node.绑定 ?? []).some(binding => matchingBinding(binding, subject.id, bindingMember))) : [];

@@ -5,8 +5,8 @@ import { canonical, digest, normalizeForSearch, tokenize } from './kernel/text.j
 import { buildIndex, search } from './retrieval.js';
 import { expandRecallQuery } from './memory-recall.js';
 import { Denied, Fault, InvalidBody } from './kernel/errors.js';
-import { currentProfessionalScope } from './professional-context.js';
-import { TURN_BUFFER_LIMITS } from './turn-buffer.js';
+import { currentConversationScope } from './professional-context.js';
+import { turnArchiveBytes } from './turn-archive.js';
 
 export const CONVERSATION_RECALL_LIMITS = Object.freeze({ files: 1024, bytes: 64 * 1024 * 1024, context: 7000, snippet: 900 });
 const natural = n => Number.isSafeInteger(n) && n >= 0;
@@ -58,7 +58,7 @@ export class ConversationRecallService {
     const root = dirname(dirname(this.org.layout.turnBufferFile(spec.project, digest(spec.session))));
     const projects = crossProject ? (await entries(root)).filter(e => e.isDirectory() && !e.isSymbolicLink()).map(e => e.name) : [spec.project];
     projects.sort((a, b) => (a === spec.project ? -1 : b === spec.project ? 1 : a.localeCompare(b)));
-    const actor = (await currentProfessionalScope(this.org, spec.subject, spec.project)).actor;
+    const actor = (await currentConversationScope(this.org, spec.subject, spec.project)).actor;
     const rows = []; const sources = new Map();
     const health = { 已扫描文件: 0, 不可读文件: 0, 扫描下一偏移: null, 扫描截断: false };
     let sourceIndex = 0; let bytes = 0;
@@ -74,11 +74,11 @@ export class ConversationRecallService {
         catch (e) { if (e.code === 'DENIED') continue; throw e; }
         const info = await lstat(join(directory, file.name)).catch(e => { if (e.code === 'ENOENT') return null; throw e; });
         if (!info || !info.isFile() || info.isSymbolicLink()) continue;
-        if (info.size > TURN_BUFFER_LIMITS.bytes + 8192) { health.不可读文件++; continue; }
-        if (health.已扫描文件 >= CONVERSATION_RECALL_LIMITS.files || bytes + info.size > CONVERSATION_RECALL_LIMITS.bytes) {
+        const archiveBytes = await turnArchiveBytes(join(directory, file.name));
+        if (health.已扫描文件 >= CONVERSATION_RECALL_LIMITS.files || bytes + archiveBytes > CONVERSATION_RECALL_LIMITS.bytes) {
           health.扫描截断 = true; health.扫描下一偏移 = sourceIndex - 1; break scan;
         }
-        bytes += info.size; health.已扫描文件++;
+        bytes += archiveBytes; health.已扫描文件++;
         let stored;
         try { stored = await this.org.turnBuffer.loadKey(project, file.name.slice(0, -5)); }
         catch (e) { if (e.code !== 'TURN_BUFFER_INVALID') throw e; health.不可读文件++; continue; }
@@ -118,6 +118,7 @@ export class ConversationRecallService {
         角色: m.role, 时间: m.at ?? null, 轮次状态: row.round.status, 结束原因: row.round.reason ?? null,
         文本: piece.text, 正文偏移: piece.offset, 下一正文偏移: next, 保存时截断: m.clipped, 中断: m.interrupted,
         ...(m.origin ? { 来源: m.origin } : {}),
+        ...(m.gaps?.length ? { 内容缺口: m.gaps } : {}), ...(m.public ? { 公开记录: m.public } : {}),
         继续读取: { action: 'turn_buffer_query', id: row.id, 正文偏移: 0, 扫描偏移: scanOffset, 跨项目: crossProject } });
       frame.截断 ||= m.clipped || piece.offset > 0 || next !== null;
     }

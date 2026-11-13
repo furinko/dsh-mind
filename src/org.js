@@ -35,6 +35,7 @@ import { GoalBudgetService } from './goal-budget.js';
 import { ModelUsageService } from './model-usage.js';
 import { SpawnOperationService } from './spawn-operations.js';
 import { KnowledgeReuseService } from './knowledge-reuse.js';
+import { TurnSummaryService } from './turn-summary.js';
 import { TurnBufferService } from './turn-buffer.js';
 import { ConversationRecallService } from './conversation-recall.js';
 import { ProjectBriefService } from './project-brief.js';
@@ -83,8 +84,9 @@ export class Org {
     // memory 先建、再交给 tasks（W3 批3）：结账（tasks.settle）要归档该项目的作答，
     // 而归档逻辑只有一处（MemoryService.archiveAnswers）——不在任务图里再写一份。
     const memory = new MemoryService({ layout, policy, audit, clock, registry });
-    const tasks = new TaskGraph({ layout, policy, audit, clock, memory, registry });
-    memory.tasks = tasks;
+    const taskMemory = Object.fromEntries(['archiveAnswers','settleCandidates','promoteFromAdopted','invalidate','readKnowledgeEvidence'].map(name => [name, (...args) => memory[name](...args)]));
+    const tasks = new TaskGraph({ layout, policy, audit, clock, memory: taskMemory, registry });
+    memory.tasks = { goals: tasks.goals, list: tasks.list.bind(tasks) };
     const goals = tasks.goals;
     const budgets = new GoalBudgetService({ layout, policy, audit, clock, registry, goals });
     const modelUsage = new ModelUsageService({ layout, policy, clock, registry, goals });
@@ -151,6 +153,7 @@ export class Org {
     });
     org.observability = new ObservabilityService({ audit, clock, registry, tasks, policy, logger: spec.logger ?? console });
     org.turnBuffer = new TurnBufferService({ layout, org, clock });
+    org.turnSummaries = new TurnSummaryService({ turns: org.turnBuffer, memory, clock });
     org.conversationRecall = new ConversationRecallService(org);
     org.projectBrief = new ProjectBriefService({ layout, org, clock });
     org.continuityCapture = new ContinuityCaptureService({ layout, org, clock });

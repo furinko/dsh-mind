@@ -301,7 +301,7 @@ describe('任务终止与正式后继的领域合同', () => {
     const failed = await tasks.get(child.节点.id, { 项目: P });
     assert.equal(failed.打回次数, 2);
     assert.equal(failed.本节点打回次数, 1);
-    assert.deepEqual(failed.升级, { 原因: '打回≥2', 至: '主权者' });
+    assert.equal(failed.升级, undefined, '保留失败次数，恢复方法由Lead决定');
     await tasks.markPending(child.节点.id, { subject: LEAD, 项目: P, 原因: '前序事项待裁决', 待决类型: '升级差异' });
     await tasks.close(child.节点.id, CLOSE);
     const before = await rows();
@@ -309,7 +309,7 @@ describe('任务终止与正式后继的领域合同', () => {
     assert.equal(next.节点.状态, '待派发');
     assert.equal(next.节点.打回次数, 2);
     assert.equal(next.节点.本节点打回次数, 0);
-    assert.deepEqual(next.节点.接续提醒, { 来源任务: child.节点.id, 前序升级: failed.升级, 累计打回次数: 2, 阈值提醒: true, 前序待决: { 原因: '前序事项待裁决', 类型: '升级差异' }, 处置状态: '未确认' });
+    assert.deepEqual(next.节点.接续提醒, { 来源任务: child.节点.id, 前序升级: failed.升级 ?? null, 累计打回次数: 2, 阈值提醒: true, 前序待决: { 原因: '前序事项待裁决', 类型: '升级差异' }, 处置状态: '未确认' });
     assert.equal((await rows()).filter((row) => row.kind === 'escalated').length, before.filter((row) => row.kind === 'escalated').length, '不为前序重复伪造升级事实');
     assert.equal((await tasks.dispatch(next.节点.id, { subject: LEAD, 项目: P })).状态, '已派发', '提醒不新增审批门或待决状态');
   }));

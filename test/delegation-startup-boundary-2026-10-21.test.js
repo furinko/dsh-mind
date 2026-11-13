@@ -37,7 +37,7 @@ describe('创建闸启动窗口：真实 apply 与范围闸', { timeout: 60_000 
     try {
       loading = apply(host.ctx, config); await reached.promise;
       assert.equal(host.闸.length, 1);
-      for (const name of CREATION) assert.match(refusal(host, invocation(f.home, name)), /member_spawn/);
+      for (const name of CREATION) assert.equal(refusal(host, invocation(f.home, name)), undefined);
       assert.equal(refusal(host, invocation(f.home, 'read')), undefined);
     } finally { release.resolve(); try { await loading; } finally { fs.rename = rename; syncBuiltinESMExports(); } }
   }));
@@ -48,7 +48,7 @@ describe('创建闸启动窗口：真实 apply 与范围闸', { timeout: 60_000 
     try {
       await apply(host.ctx, config); assert.equal(host.闸.length, 1);
       const before = CREATION.map(name => refusal(host, invocation(f.home, name)));
-      for (const reason of before) assert.match(reason, /member_spawn/);
+      for (const reason of before) assert.equal(reason, undefined);
       dispose = pending(); assert.equal(host.闸.length, 2);
       assert.deepEqual(CREATION.map(name => refusal(host, invocation(f.home, name))), before);
     } finally { dispose?.(); }
@@ -78,7 +78,7 @@ describe('创建闸启动窗口：真实 apply 与范围闸', { timeout: 60_000 
         phase();
         for (const name of CREATION) {
           const before = calls, reason = refusal(host, invocation(f.home, name));
-          if (mode === 'host') assert.match(reason, /member_spawn/); else assert.equal(reason, undefined);
+          assert.equal(reason, undefined, 'Mind无额外流程许可；真实宿主准入仍由宿主执行器判定');
           assert.equal(calls - before, 1);
         }
       }

@@ -168,14 +168,14 @@ describe('dsh-mind 宿主半区', () => {
     assert.equal(JSON.parse(failure.text).成功, false);
   });
 
-  it('两道闸各就其位：默认Host将裸创建引导受管入口，不收紧普通读和shell', async () => {
+  it('两道闸各就其位：默认Host保留方法选择，不另造普通委派许可', async () => {
     // 只验证内核注册事实与返回值；单调执行由真实SDK专项独立验证。
     assert.equal(host.闸.length, 2, '应注册且只注册两道闸：工具总范围 + 调度创建闸');
     for (const guard of host.闸) {
       assert.equal(guard(fakeExec({ name: 'read' })), undefined);
       assert.equal(guard(fakeExec({ name: 'pwsh' })), undefined);
     }
-    assert.ok(host.闸.some(guard => /member_spawn/.test(guard(fakeExec({ name: 'spawn_teammate' })))));
+    assert.equal(host.闸.every(guard => guard(fakeExec({ name: 'spawn_teammate' })) === undefined), true, 'Mind不另造许可，真实Host仍判定执行');
   });
 
   it('工具总范围配置后立刻生效，并且越权调用带可执行理由', async () => {

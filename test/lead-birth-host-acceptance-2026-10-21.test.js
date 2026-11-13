@@ -51,7 +51,7 @@ describe('审批档真实根会话有限出生', () => {
   it('旧内部ensure在审批无live证据仍拒，放权旧调用兼容', async () => scene(async ({ f, org, id }) => {
     await assert.rejects(() => org.registry.ensureLeadInstance({ 实例: id, 宿主会话: { id, header: { id } } }), error => error instanceof NeedsApproval);
     assert.equal((await org.registry.identity()).members[id], undefined);
-    await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '放权' })); await org.policy.reload();
+    await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '放权' })); await org.policy.reload();
     assert.equal((await org.registry.ensureLeadInstance({ 实例: id })).就绪, true);
   }));
 

@@ -217,7 +217,7 @@ describe('恢复入口：真作用域、工具闸、审批计划', () => {
   it('审批完整链：open 在 host 前挂完整五步单（含失败补偿）；批准一次后建两实例；converge 一次批准覆盖 write+两seal', async () => {
     const s = await setup();
     try {
-      await s.f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '审批' }));
+      await s.f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '审批' }));
       await s.org.policy.reload();
       let openRequest;
       await assert.rejects(() => s.action(s.openArgs), (e) => e instanceof NeedsApproval && (openRequest = e.detail.请求id, true));
@@ -232,9 +232,9 @@ describe('恢复入口：真作用域、工具闸、审批计划', () => {
       const council = opened.会审;
       assert.equal(s.calls.spawn.length, 2);
       // setup 只在夹具切回放权，完成独立作答与解锁；随后恢复审批档验证第二个宏动作。
-      await s.f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '放权' })); await s.org.policy.reload();
+      await s.f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '放权' })); await s.org.policy.reload();
       await unlock(s, council);
-      await s.f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '审批' })); await s.org.policy.reload();
+      await s.f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '审批' })); await s.org.policy.reload();
       const args = { action: 'debate_converge', id: council.id, 内容: '批准后结论' };
       let request;
       await assert.rejects(() => s.action(args), (e) => e instanceof NeedsApproval && (request = e.detail.请求id, true));

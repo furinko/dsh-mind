@@ -144,11 +144,18 @@ it('来源时间未知的旧版轮缓冲不能作为恢复已暂停事项的更�
   const restored = await root(org, 'legacy-time-unknown');
   await capture(org, ['继续事项'], restored, { touch: false });
   const file = org.turnBuffer.file(P, restored.session);
-  const stored = JSON.parse(await readFile(file, 'utf8'));
+  // Decode the v4 manifest before constructing a genuinely old inline fixture.
+  // This test intentionally removes source timestamps; capture time must not
+  // become evidence of a newer user decision during legacy migration.
+  const stored = await org.turnBuffer.load(P, restored.session);
+  stored.version = 1;
   for (const round of stored.rounds) for (const message of round.messages) delete message.at;
   await writeFile(file, JSON.stringify(stored) + '\n');
   await org.projectBrief.touch(restored);
-  const result = await settle(update(org, input => ({ items: [item(input.messages[0].source, '事项恢复进行中')] }), restored));
+  const result = await settle(update(org, input => {
+    assert.equal(input.messages[0].at, null);
+    return { items: [item(input.messages[0].source, '事项恢复进行中')] };
+  }, restored));
   if (result.error) assert.ok(result.error.code === 'INVALID_BODY' || stale(result.error), String(result.error));
   assert.equal((await org.projectBrief.read(restored)).条目.find(row => row.id === 'work').状态, '暂停');
 }));

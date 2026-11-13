@@ -108,11 +108,13 @@ describe('真实任务绑定优先于岗位和负责人回退', () => {
           ...(change === '宿主代次' ? { 代次: { 代: 'new-host-generation', pid: process.pid } } : {}),
         });
       }
-      await assert.rejects(() => run({ id: MEMBER.id, kind: '成员' }, { action: 'memory_write', 类: '经历', 内容: '新凭证不能续写旧任务', 来源: '旧绑定反例', 任务: id }), bindingDenied);
+      const write = () => run({ id: MEMBER.id, kind: '成员' }, { action: 'memory_write', 类: '经历', 内容: '核对当前实例真实归属', 来源: '旧绑定核对', 任务: id });
+      if (change === '卡') assert.ok((await write()).条目.id, '专业卡更新不撤销真实绑定');
+      else await assert.rejects(write, bindingDenied);
     });
   });
 
-  it('真实卡快照失效仍由统一凭证闸拒绝，绑定中的相同摘要不构成豁免', async () => {
+  it('真实专业卡快照失效不阻工作，损坏内容仍不能作为专业方法', async () => {
     await fixture(async ({ org, run, create }) => {
       const id = await create();
       await run(MEMBER, { action: 'task_start', id });
@@ -120,7 +122,8 @@ describe('真实任务绑定优先于岗位和负责人回退', () => {
       const file = org.layout.cardSnapshot(member.卡版本.摘要);
       const snapshot = JSON.parse(await readFile(file, 'utf8'));
       await writeFile(file, JSON.stringify({ ...snapshot, 正文: `${snapshot.正文}\n被篡改的规则` }), 'utf8');
-      await assert.rejects(() => run(MEMBER, { action: 'memory_write', 类: '经历', 内容: '坏卡不能再写', 来源: '快照失效反例', 任务: id }), error => error?.code === 'DENIED' && /快照|校验/.test(error.message));
+      assert.ok((await run(MEMBER, { action: 'memory_write', 类: '经历', 内容: '真实工作不依赖专业卡', 来源: '快照失效核对', 任务: id })).条目.id);
+      assert.equal((await org.registry.cardOf(MEMBER.id)).就绪, false, '损坏专业资料仍不提供');
     });
   });
 });

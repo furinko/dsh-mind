@@ -13,6 +13,7 @@ import { LEAD_DESIRE_GUIDANCE, LEAD_DESIRE_SECTION } from './lead-desires.js';
 import { contextPayload } from './context-frame.js';
 import { canonical } from '../../../src/kernel/text.js';
 import { PERSONA_CORE_SECTION } from './persona-core.js';
+import { memoryReadSnapshot } from '../../../src/memory-maintenance.js';
 
 const GUIDANCE = new Map([
   [PROFESSIONAL_SECTION, PROFESSIONAL_GUIDANCE], [WORK_CONTEXT_SECTION, WORK_GUIDANCE],
@@ -26,9 +27,9 @@ const GUIDANCE = new Map([
 
 /** A changed intake scope invalidates the assembled view, including earlier sections. */
 export async function withMindReadSnapshot(assembly, { org, logger }, assemble) {
-  try { return await org.information.withReadSnapshot(assemble); }
+  try { return await memoryReadSnapshot(org.layout, () => org.information.withReadSnapshot(assemble)); }
   catch (error) {
-    if (!['INFORMATION_SCOPE_CHANGED', 'INFORMATION_STATE_INVALID'].includes(error?.code)) throw error;
+    if (!['INFORMATION_SCOPE_CHANGED', 'INFORMATION_STATE_INVALID', 'MEMORY_READ_CHANGED', 'MEMORY_MAINTENANCE_PENDING'].includes(error?.code)) throw error;
     logger?.warn?.('[dsh-mind] 上下文装配期间收录资料变化或不可读，本轮撤下自动资料，等待下步重新核对。');
     const keep = section => !GUIDANCE.has(section?.name) && section?.name !== PERSONA_CORE_SECTION;
     return { ...assembly, sections: assembly.sections.filter(keep),
@@ -46,6 +47,7 @@ export const MIND_RUNTIME_RULES = [
 ].join('\n\n');
 
 export function projectMindRuntimeContext(assembly) {
+  assembly = budgetMindContext(assembly);
   // Older hosts without a runtime-context surface retain the checked, bounded
   // legacy sections. They still benefit from removal of volatile metadata.
   if (!Array.isArray(assembly?.sections) || !Array.isArray(assembly.contexts)) return assembly;
@@ -57,6 +59,31 @@ export function projectMindRuntimeContext(assembly) {
   }
   if (sections.length === assembly.sections.length && contexts.length === assembly.contexts.length) return assembly;
   return { ...assembly, sections, contexts };
+}
+
+export const MIND_CONTEXT_BUDGET = 48000;
+/** Select complete frames under one budget; raw storage is unaffected. */
+export function budgetMindContext(assembly, budget = MIND_CONTEXT_BUDGET) {
+  if (!Array.isArray(assembly?.sections)) return assembly;
+  const candidates = [...assembly.sections, ...(assembly.contexts ?? [])].filter(s => GUIDANCE.has(s?.name) || s?.name === PERSONA_CORE_SECTION);
+  const priority = name => name === PERSONA_CORE_SECTION ? 0 : name === WORK_CONTEXT_SECTION ? 1 : name === PROFESSIONAL_SECTION ? 2 : name === PROJECT_BRIEF_SECTION ? 3 : 4;
+  candidates.sort((a,b) => priority(a.name) - priority(b.name));
+  const selected = new Set(); const seen = new Set(); let used = 0;
+  for (const frame of candidates) {
+    const key = `${frame.name}\n${frame.text}`;
+    if (seen.has(key) || used + String(frame.text ?? '').length > budget) continue;
+    seen.add(key); selected.add(frame); used += String(frame.text ?? '').length;
+  }
+  if (selected.size === candidates.length) return assembly;
+  const emitted = new Set();
+  const keep = frame => {
+    if (!(GUIDANCE.has(frame?.name) || frame?.name === PERSONA_CORE_SECTION)) return true;
+    const key = `${frame.name}\n${frame.text}`;
+    if (!selected.has(frame) || emitted.has(key)) return false;
+    emitted.add(key); return true;
+  };
+  return { ...assembly, sections: assembly.sections.filter(keep),
+    ...(Array.isArray(assembly.contexts) ? { contexts: assembly.contexts.filter(keep) } : {}) };
 }
 
 const protectedRows = (name, frame) => name === PROFESSIONAL_SECTION

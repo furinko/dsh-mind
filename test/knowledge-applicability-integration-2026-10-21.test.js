@@ -84,7 +84,7 @@ describe('知识适用说明的真实装配', { timeout: 30000 }, () => {
     assert.equal(before.条目.length, 1); const id = before.条目[0].id;
     assert.deepEqual(before.条目[0].知识说明, notes);
     const changed = structuredClone(request); changed.记忆处置[key].知识说明.复验期限 = new Date(Date.parse(deadline) + 1000).toISOString();
-    await assert.rejects(org.tasks.settle(task.id, changed), /幂等|参数|不一致/);
+    await assert.rejects(org.tasks.organizeKnowledge(task.id, changed), /幂等|参数|不一致/);
     org.memory.archiveAnswers = archive;
     const settled = await org.tasks.settle(task.id, request);
     assert.equal(settled.状态, '已结账'); assert.equal(settled.记忆晋升[key], id);
@@ -93,12 +93,12 @@ describe('知识适用说明的真实装配', { timeout: 30000 }, () => {
     assert.ok(!tasks.includes('notes-only-private-marker')); assert.ok(!Object.hasOwn(settled.记忆处置[key], '知识说明'));
   }));
 
-  it('非法结账说明在知识/归档写前拒绝，不能借晋升对象注入验证结论', async () => scene(async ({ org, makeTask, accept }) => {
+  it('非法知识说明在整理写前拒绝，不能借晋升对象注入验证结论', async () => scene(async ({ org, makeTask, accept }) => {
     const task = await makeTask(); await org.tasks.submit(task.id, { subject: MEMBER, 项目: P, 知识候选: ['本次候选'] }); await accept(task);
     const beforeTask = await readFile(org.layout.taskLog(P), 'utf8');
     const beforeMemory = await readTextOrNull(org.layout.memoryLog(P, '知识'));
     for (const notes of [{ 复验期限: '2026-02-30T00:00:00Z' }, { 适用条件: ['实际条件'], 验证状态: '已验证' }]) {
-      await assert.rejects(org.tasks.settle(task.id, { subject: LEAD, 项目: P, 记忆处置: { [`候选/${MEMBER.id}/0`]: { 处置: '晋升', 知识说明: notes } } }), /知识说明|复验期限/);
+      await assert.rejects(org.tasks.organizeKnowledge(task.id, { subject: LEAD, 项目: P, 记忆处置: { [`候选/${MEMBER.id}/0`]: { 处置: '晋升', 知识说明: notes } } }), /知识说明|复验期限/);
       assert.equal(await readFile(org.layout.taskLog(P), 'utf8'), beforeTask);
       assert.equal(await readTextOrNull(org.layout.memoryLog(P, '知识')), beforeMemory);
     }

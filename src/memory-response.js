@@ -178,7 +178,7 @@ function fitSerializedResponse(result, serialize) {
     result.信封截断 = true;
     result.内容截断 = true;
     result.条目 = (result.条目 ?? []).map((entry) => ({
-      ...Object.fromEntries(['id', '类', '状态', '内容', '摘要', '正文偏移', '正文总字符', '下一正文偏移', '正文截断', '复验状态', '复验警示'].filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]])),
+      ...Object.fromEntries(['id', '类', '状态', '内容', '摘要', '正文偏移', '正文总字符', '下一正文偏移', '正文截断', '复验状态', '复验警示', '轮级总结', '修订', '修订于'].filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]])),
       元数据截断: true,
     }));
     result.命中 = (result.命中 ?? []).map((hit) => ({ id: hit.id, 分数: hit.分数, 摘要: hit.摘要 ?? '' }));
@@ -212,10 +212,10 @@ function fitSerializedResponse(result, serialize) {
 
 /** 摘要不携带完整历史；所有动态元数据仍由总预算兜底。 */
 function compactEntry(entry) {
-  return { ...Object.fromEntries(['id', '类', '标题', '状态', '项目', '岗位', '归属', '记于', '来源', '来源引用', '派生自', '归档', '连续性', '知识说明', '复验状态', '复验警示'].filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]])),
+  return { ...Object.fromEntries(['id', '类', '标题', '状态', '项目', '岗位', '归属', '记于', '来源', '来源引用', '派生自', '归档', '连续性', '知识说明', '复验状态', '复验警示', '轮级总结', '修订', '修订于'].filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]])),
     ...(Object.hasOwn(entry, '协作反馈') ? { 协作反馈摘要: collaborationFeedbackSummary(entry.协作反馈) } : {}) };
 }
-function reviewWarnings(entry) { return Object.fromEntries(['复验状态', '复验警示'].filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]])); }
+function reviewWarnings(entry) { return Object.fromEntries(['复验状态', '复验警示', '轮级总结', '修订', '修订于'].filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]])); }
 
 /** 字符分页不可把补充平面字符切成两个坏代理项。 */
 function sliceText(text, size) {

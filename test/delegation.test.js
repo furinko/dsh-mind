@@ -79,12 +79,12 @@ describe('DelegationPolicy · 授权真源', () => {
     assert.throws(() => p.authorize({ subject: LEAD, project: P }), (e) => e.code === 'DELEGATION_DISPOSED');
   });
 
-  it('creationGuard：授权项目内挡裸创建并指回 member_spawn；未授权项目保持官方默认', () => {
+  it('creationGuard：保留宿主方法选择，成员和实际限制仍阻断', () => {
     const p = new DelegationPolicy(授权配置);
     assert.equal(p.creationGuard({ name: 'read' }, { subject: LEAD, project: P }), undefined);
     assert.equal(p.creationGuard({ name: 'spawn_teammate' }, { subject: LEAD, project: 'other' }), undefined);
-    assert.match(p.creationGuard({ name: 'spawn_teammate' }, { subject: LEAD, project: P }), /member_spawn/);
-    assert.match(p.creationGuard({ name: 'workflow' }, { subject: LEAD, project: P }), /member_spawn/);
+    assert.equal(p.creationGuard({ name: 'spawn_teammate' }, { subject: LEAD, project: P }), undefined);
+    assert.equal(p.creationGuard({ name: 'workflow' }, { subject: LEAD, project: P }), undefined);
     assert.match(p.creationGuard({ name: 'subagent' }, { subject: MEMBER, project: P }), /仅允许 Lead/);
   });
 
@@ -364,14 +364,14 @@ describe('内核接线 · 提示词与创建闸', () => {
     return { home, host };
   }
 
-  it('授权项目：创建闸挡裸 spawn_teammate 并指回 member_spawn；waterfall 原位改写唯一策略段', async () => {
+  it('授权项目：不额外挡普通宿主委派，waterfall 原位保留唯一官方策略段', async () => {
     // 授权本次完整工作目录对应的项目身份；不能再用 basename 合并同名项目。
     const 本次项目 = projectKeyForPath(process.cwd());
     const { home, host } = await 起内核({ mode: 'lead-discretion', projects: [本次项目], authorizationRef: 'test' });
     try {
       const exec = fakeExec({ name: 'spawn_teammate' });
       const reasons = host.闸.map((g) => g(exec)).filter(Boolean);
-      assert.ok(reasons.some((r) => /member_spawn/.test(r)), `创建闸应指回 member_spawn：${reasons.join(' | ')}`);
+      assert.deepEqual(reasons, [], 'Mind不强迫受管入口，真实Host仍决定执行');
       const listeners = host.钩子.get('system-prompt/assemble') ?? [];
       assert.equal(listeners.length, 1, '唯一提示词监听');
       const assembly = { sections: [{ name: 'team:policy', text: OFFICIAL }, { name: 'mind:organization', text: '组织说明' }], tools: [], contexts: [] };

@@ -38,7 +38,7 @@ async function scene(run) {
     const query = (extra = {}) => org.knowledgeReuse.query({ subject: LEAD, 项目: P, ...extra });
     const log = () => readTextOrNull(f.layout.memoryLog(P, '知识'));
     const prepare = (id, 反馈引用, op = 'invalidate', extra = {}) => org.memory.prepareFeedbackReference(id, { subject: LEAD, 项目: P, op, 反馈引用, ...extra });
-    const approval = async () => { await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '审批' })); await org.policy.reload(); };
+    const approval = async () => { await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '审批' })); await org.policy.reload(); };
     const approve = async args => {
       let request; await assert.rejects(() => act(args), error => error instanceof NeedsApproval && Boolean(request = error.detail.请求id));
       await org.intervention.人侧决议({ 请求id: request, 决定: '批准', 通道: '设置页', 认证: '宿主Connection已认证' }); return request;

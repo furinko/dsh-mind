@@ -19,7 +19,7 @@ async function 起(默认档 = '放权') {
   // 绑定在放权档落（准备），再切到被测档——审批档会把准备动作也一起拦下。
   await org.registry.assign({ subject: LEAD, 岗位: '插件工程', 实例: 'member-c', 会审: { id: 'council-1', 项目: P }, 代: 1 });
   if (默认档 !== '放权') {
-    await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: 默认档 }, null, 2));
+    await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: 默认档 }, null, 2));
     assert.equal(await org.policy.reload(), true);
   }
   return { f, org };

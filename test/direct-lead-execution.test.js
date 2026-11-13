@@ -81,21 +81,23 @@ describe('Lead 真实自执行与不越授唯一判定', { timeout: 60_000 }, ()
     assert.equal(end.独立答案[0].成员, SELF.id);
   }));
 
-  it('原实例id自领保留；岗位Lead没有真实绑定仍拒', async () => withOrg(async ({ create, dispatch, get }) => {
+  it('原实例id自领保留；岗位Lead缺绑定时补齐当前真实Lead，无需新增授权', async () => withOrg(async ({ create, dispatch, get }) => {
     const direct = await create(SELF.id);
     assert.equal((await dispatch(direct.id)).节点.状态, '已派发');
     const role = await create();
-    await assert.rejects(dispatch(role.id), overGrant);
-    assert.equal((await get(role.id)).状态, '待派发');
+    await dispatch(role.id);
+    assert.equal((await get(role.id)).状态, '已派发');
+    assert.deepEqual((await get(role.id)).绑定.map(b => b.实例), [SELF.id]);
   }));
 
-  it('自报context/task/自领不能替代真实绑定', async () => withOrg(async ({ create, dispatch }) => {
+  it('自报context/task/自领被忽略，自动补齐只取真实当前Lead', async () => withOrg(async ({ create, dispatch, get }) => {
     const n = await create();
-    await assert.rejects(dispatch(n.id, { 自领: true, context: { task: { 绑定: [{ 实例: SELF.id, 岗位: 'Lead' }] } }, task: { 绑定: [{ 实例: SELF.id, 岗位: 'Lead' }] } }), overGrant);
+    await dispatch(n.id, { 自领: true, context: { task: { 绑定: [{ 实例: OTHER, 岗位: 'Lead' }] } }, task: { 绑定: [{ 实例: OTHER, 岗位: 'Lead' }] } });
+    assert.deepEqual((await get(n.id)).绑定.map(b => b.实例), [SELF.id]);
   }));
 
   it('另一Lead、主权者、出厂作者的实例与岗位派发仍拒，混合负责人不被本人掩盖', async () => withOrg(async ({ create, dispatch, get }) => {
-    for (const 负责人 of [OTHER, 'boss', 'author', 'Lead', '主权者', '出厂作者', [SELF.id, OTHER], [SELF.id, 'boss'], [SELF.id, 'author']]) {
+    for (const 负责人 of [OTHER, 'boss', 'author', '主权者', '出厂作者', [SELF.id, OTHER], [SELF.id, 'boss'], [SELF.id, 'author']]) {
       const n = await create(负责人);
       await assert.rejects(dispatch(n.id), overGrant);
       assert.equal((await get(n.id)).状态, '待派发');

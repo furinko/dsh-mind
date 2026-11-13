@@ -25,7 +25,7 @@ async function scene(run) {
     const create = async (extra = {}) => (await act({ ...CREATE, 请求键: `entry-${++serial}`, ...extra })).目标;
     const log = () => readTextOrNull(f.layout.goalLog(P));
     const approval = async () => {
-      await f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '审批' }));
+      await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '审批' }));
       await org.policy.reload();
     };
     const approve = async (args) => {

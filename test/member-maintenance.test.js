@@ -110,7 +110,7 @@ test('缺live校验服务/消息服务、子会话伪父、重复目录均零发
 test('意图后政策收紧仍在投递前复检，准入通过不缓存写许可',()=>scene(async s=>{
  const append=s.org.audit.append.bind(s.org.audit);s.org.audit.append=async row=>{
   const out=await append(row);if(row.动作==='成员消息'&&row.结果==='意图'){
-   await s.f.write('集体L2-共享基础设施/defaults/介入度.json',JSON.stringify({介入度:'审批'}));await s.org.policy.reload();
+   await s.f.writePrivate('集体L2-共享基础设施/defaults/部署.json',JSON.stringify({介入度:'审批'}));await s.org.policy.reload();
   }return out;
  };await assert.rejects(send(s),e=>e.name==='NeedsApproval');assert.equal(s.calls.sub.length,0);
 }));
@@ -118,4 +118,4 @@ test('宿主异常code和message都不得反射私有消息正文',()=>scene(asy
  s.host.subagents.sendMessage=async()=>{throw Object.assign(Error(SECRET),{code:SECRET});};
  await assert.rejects(send(s),e=>e.code==='MEMBER_MESSAGE_FAILED'&&e.detail?.宿主错误码==='UNKNOWN');assert.ok(!JSON.stringify(await s.org.audit.read({})).includes(SECRET));
 }));
-test('审批档仍经唯一策略挂起，零发送，不能因维护准入而绕介入度',()=>scene(async s=>{await s.f.write('集体L2-共享基础设施/defaults/介入度.json',JSON.stringify({介入度:'审批'}));await s.org.policy.reload();await assert.rejects(send(s),e=>e.name==='NeedsApproval');assert.equal(s.calls.sub.length,0);}));
+test('审批档仍经唯一策略挂起，零发送，不能因维护准入而绕介入度',()=>scene(async s=>{await s.f.writePrivate('集体L2-共享基础设施/defaults/部署.json',JSON.stringify({介入度:'审批'}));await s.org.policy.reload();await assert.rejects(send(s),e=>e.name==='NeedsApproval');assert.equal(s.calls.sub.length,0);}));

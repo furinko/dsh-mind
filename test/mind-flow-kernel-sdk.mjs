@@ -116,7 +116,7 @@ for (const mutation of ['task', 'permission', 'parent']) test(`route-preflight w
   await Promise.race([entered, running.then(r => { throw Error('never reached actual SDK route preflight: ' + JSON.stringify(r)); })]);
   assert.equal(f.calls.length, 0, 'SDK has not entered the creation service');
   if (mutation === 'task') await f.org.tasks.close(f.task.id, { subject: LEAD, 项目: P, 原因: 'withdraw while actual SDK route resolver is suspended' });
-  if (mutation === 'permission') await f.f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '审批' })), await f.org.policy.reload();
+  if (mutation === 'permission') await f.f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '审批' })), await f.org.policy.reload();
   if (mutation === 'parent') f.agents.set(f.parent.id, { ...f.parent });
   // Bounded observation, no resampling; SDK resolver remains held until cancellation.
   let timer;
@@ -175,7 +175,7 @@ for(const decision of ['allow','deny','ask','disabled','changed-target','changed
     if(exec.name==='interrupt_agent'){
       if(decision==='deny'||decision==='ask')return {kind:decision,reason:'synthetic cleanup restriction'};
       if(decision==='changed-target')f.roster.push({...f.roster[0],id:randomUUID()});
-      if(decision==='changed-policy'){await f.f.write('集体L2-共享基础设施/defaults/介入度.json',JSON.stringify({介入度:'审批'}));await f.org.policy.reload();}
+      if(decision==='changed-policy'){await f.f.writePrivate('集体L2-共享基础设施/defaults/部署.json',JSON.stringify({介入度:'审批'}));await f.org.policy.reload();}
       if(decision==='changed-owner'||decision==='sealed-parent'||decision==='changed-role'){
         const original=f.org.registry.identity.bind(f.org.registry);
         f.org.registry.identity=async()=>{const view=structuredClone(await original());
@@ -481,7 +481,7 @@ for (const mode of ['subagent', 'team']) {
     f.ctx.on('tools/pre-execute', async (exec, next) => {
       const decision = await next();
       if (exec.name === nativeName) {
-        await f.f.write('集体L2-共享基础设施/defaults/介入度.json', JSON.stringify({ 介入度: '审批' }));
+        await f.f.writePrivate('集体L2-共享基础设施/defaults/部署.json', JSON.stringify({ 介入度: '审批' }));
         await f.org.policy.reload();
       }
       return decision;

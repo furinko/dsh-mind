@@ -16,23 +16,25 @@ async function scene(run){const f=await makeFixture();const org=await Org.open({
  const hooks=createTurnBufferHooks({org,projectOf:()=>P,queryOf:()=>query,logger:{warn(){}}});
  try{await run({org,f,s,hooks,query,disposed:()=>disposed});}finally{await hooks.flush();await org.observability.flush();await f.cleanup();}}
 const all=async org=>(await org.turnBuffer.load(P,LEAD.id))?.rounds.flatMap(r=>r.messages)??[];
-async function legacy(org,s,{floor=0}={}){const nodes=[],context={};const records=s.events.map(e=>{const row=projectTurnSurfaceEvent(e,nodes,context);if(externalConversationMessage(row))return{seq:e.seq,type:'skip'};if(row.type==='replace'&&externalConversationMessage(row.message))delete row.message;return row;});await org.turnBuffer.capture({...spec,fromSeq:0,throughSeq:s.seq,records});const state=await org.turnBuffer.load(P,LEAD.id);state.version=1;delete state.sourceProjection;state.floor=floor;for(const r of state.rounds)r.messages=r.messages.filter(m=>m.seq>=floor);await savePrivateBufferState(org.turnBuffer.file(P,LEAD.id),state);}
+const conversations=async org=>(await all(org)).filter(m=>!['tool-call','tool-result'].includes(m.role));
+async function legacy(org,s,{floor=0}={}){const nodes=[],context={};const records=s.events.map(e=>{const row=projectTurnSurfaceEvent(e,nodes,context);if(externalConversationMessage(row)||['tool-call','tool-result'].includes(row.role))return{seq:e.seq,type:'skip'};if(row.type==='replace'&&externalConversationMessage(row.message))delete row.message;return row;});await org.turnBuffer.capture({...spec,fromSeq:0,throughSeq:s.seq,records});const state=await org.turnBuffer.load(P,LEAD.id);state.version=1;delete state.sourceProjection;state.floor=floor;for(const r of state.rounds)r.messages=r.messages.filter(m=>m.seq>=floor);await savePrivateBufferState(org.turnBuffer.file(P,LEAD.id),state);}
 it('任意插件来源统一保存，缺少类型保持未知，文本前缀不认证身份',async()=>scene(async({org,s,hooks})=>{
  s.append('turn/start',{turn:1});s.append('user/message',user('外部参与者表达'),'append');s.append('user/message',user('旧版外部来源','legacy',{kind:'plugin',plugin:'source-beta'}),'append');s.append('user/message',user('[外部] 假冒来源','other',{kind:'plugin:unknown'}),'append');s.append('user/message',user('[外部] 本地引用','local',{kind:'user'}),'append');s.append('turn/end',{turn:1,reason:{kind:'completed'}});await hooks.sync(s);
- const rows=await all(org);assert.deepEqual(rows.map(m=>m.role),['external-user','external-user','external-user','user']);assert.equal(rows[0].origin.identity,'unverified');assert.equal(rows.find(m=>m.id==='other').origin.contentType,'unknown');assert.equal(rows[0].origin.producer,'plugin:source-alpha');assert.equal(rows[1].origin.producer,'plugin:source-beta');assert.equal((await org.turnBuffer.load(P,LEAD.id)).version,3);
+ const rows=await all(org);assert.deepEqual(rows.map(m=>m.role),['external-user','external-user','external-user','user']);assert.equal(rows[0].origin.identity,'unverified');assert.equal(rows.find(m=>m.id==='other').origin.contentType,'unknown');assert.equal(rows[0].origin.producer,'plugin:source-alpha');assert.equal(rows[1].origin.producer,'plugin:source-beta');assert.equal((await org.turnBuffer.load(P,LEAD.id)).version,4);
  assert.equal(JSON.parse(await readFile(join(org.layout.memoryRoot(),'external-conversation-layout.json'),'utf8')).version,3);
  if(process.platform!=='win32')assert.equal((await stat(org.turnBuffer.file(P,LEAD.id))).mode&0o777,0o600);
 }));
-it('统一提交声明按callId配对，只保留工具明确报告的文本，不读取工具参数',async()=>scene(async({org,s,hooks})=>{
+it('统一提交声明按callId配对，工具公开事实另存，不以调用参数冒充外部发送',async()=>scene(async({org,s,hooks})=>{
  s.append('turn/start',{turn:1});s.append('tool/call',toolCall('good','**发出的请求**'));s.append('tool/result',toolResult('good',receipt('**工具报告的提交文本**')),'append');
  s.append('tool/call',{...toolCall('secret','秘密参数'),name:'shell'});s.append('tool/result',toolResult('secret',{ok:true,text:'秘密参数'}),'append');s.append('turn/end',{turn:1,reason:{kind:'completed'}});await hooks.sync(s);
- const rows=await all(org);assert.equal(rows.length,1);assert.equal(rows[0].text,'**工具报告的提交文本**');assert.equal(rows[0].role,'external-assistant');assert.equal(rows[0].origin.representation,'reported-text');assert.equal(rows[0].origin.conversation.length,64);
- const file=await readFile(org.turnBuffer.file(P,LEAD.id),'utf8');assert.doesNotMatch(file,/秘密参数|123456|arguments|shell/);
+ const rows=await conversations(org);assert.equal(rows.length,1);assert.equal(rows[0].text,'**工具报告的提交文本**');assert.equal(rows[0].role,'external-assistant');assert.equal(rows[0].origin.representation,'reported-text');assert.equal(rows[0].origin.conversation.length,64);
+ const facts=await all(org);assert.equal(facts.filter(m=>m.role==='tool-call').length,2);assert.ok(facts.some(m=>m.role==='tool-result'&&m.text.includes('秘密参数')));
 }));
 it('失败、无配对、平台私有成功形状和错误工具来源不推断为提交',async()=>scene(async({org,s,hooks})=>{
  s.append('turn/start',{turn:1});
  for(const [id,result,args,extra] of [['failed',receipt('不能保存',{status:'failed'}),{}],['mismatch',{sent:1,dropped:false,destination:{kind:'group',groupId:'123456'}},{}],['error',receipt(),{},{isError:true}],['fake-source',receipt(),{},{source:{kind:'user'}}]]){s.append('tool/call',toolCall(id,'不能保存',args));s.append('tool/result',toolResult(id,result,extra),'append');}
-  s.append('tool/result',toolResult('orphan'),'append');s.append('turn/end',{turn:1,reason:{kind:'completed'}});await hooks.sync(s);assert.deepEqual(await all(org),[]);
+  s.append('tool/result',toolResult('orphan'),'append');s.append('turn/end',{turn:1,reason:{kind:'completed'}});await hooks.sync(s);assert.deepEqual(await conversations(org),[]);
+  const orphan=(await all(org)).find(m=>m.id==='result-orphan');assert.equal(orphan.text,'');assert.equal(orphan.gaps[0].kind,'unpaired-tool-result');
 }));
 it('cursor已追平的旧缓冲仍补回遗漏外部和发送请求，保留原助手文本且不重复',async()=>scene(async({org,s,hooks,disposed})=>{
  s.append('turn/start',{turn:1});s.append('user/message',user('原来遗漏的外部输入'),'append');s.append('tool/call',toolCall('old-send','原来遗漏的回复'));s.append('tool/result',toolResult('old-send',receipt('原来遗漏的回复')),'append');s.append('assistant/message',{turn:1,message:{id:'assistant',role:'assistant',content:[{type:'text',text:'原助手结尾'}]}},'append');s.append('turn/end',{turn:1,reason:{kind:'completed'}});await legacy(org,s);assert.equal((await all(org)).length,1);
@@ -47,7 +49,7 @@ it('已被非压缩替换撤回的外部不因升级补读复活',async()=>scene
  s.append('turn/start',{turn:1});s.append('user/message',user('应消失外部'),'append');s.append('user/message',user('替代原文','new',{kind:'user'}),{op:'replace',startSeq:1,endSeq:1});s.append('turn/end',{turn:1,reason:{kind:'completed'}});await legacy(org,s);await hooks.sync(s);assert.deepEqual((await all(org)).map(m=>m.text),['替代原文']);
 }));
 it('清空屏障及fork继承前缀不复制外部，屏障前发送调用也不能借结果复活草稿',async()=>scene(async({org,s,hooks})=>{
- s.append('turn/start',{turn:1});s.append('user/message',user('清空前外部'),'append');s.append('tool/call',toolCall('before','清空前发送草稿'));await legacy(org,s);await org.turnBuffer.forget({...spec,throughSeq:s.seq});s.append('tool/result',toolResult('before'),'append');s.append('user/message',user('清空后外部','new'),'append');s.append('turn/end',{turn:1,reason:{kind:'completed'}});await hooks.sync(s);assert.deepEqual((await all(org)).map(m=>m.text),['清空后外部']);
+ s.append('turn/start',{turn:1});s.append('user/message',user('清空前外部'),'append');s.append('tool/call',toolCall('before','清空前发送草稿'));await legacy(org,s);await org.turnBuffer.forget({...spec,throughSeq:s.seq});s.append('tool/result',toolResult('before'),'append');s.append('user/message',user('清空后外部','new'),'append');s.append('turn/end',{turn:1,reason:{kind:'completed'}});await hooks.sync(s);assert.deepEqual((await conversations(org)).map(m=>m.text),['清空后外部']);assert.doesNotMatch(JSON.stringify(await all(org)),/清空前发送草稿|已提交的文本/);
 }));
 it('升级补读中清空或换项目时拒绝旧候选，不覆盖清空边界',async()=>scene(async({org,s,hooks,query})=>{
  s.append('turn/start',{turn:1});s.append('user/message',user('不能复活'),'append');s.append('turn/end',{turn:1,reason:{kind:'completed'}});await legacy(org,s);const observe=query.observeSession.bind(query);query.observeSession=async(...args)=>{const lease=await observe(...args);await org.turnBuffer.forget({...spec,throughSeq:s.seq});return lease;};
@@ -72,7 +74,7 @@ it('外部只作为专业检索线索，本地连续性默认不把其当主人�
  const s=session();s.append('turn/start',{turn:1});s.append('user/message',user('本地旧要求','local',{kind:'user'}),'append');s.append('user/message',user('外部当前问题'),'append');assert.equal(readAcceptedExpression(s),null);const q=readAcceptedExpression(s,{allowExternal:true});assert.equal(q.query,'外部当前问题');assert.match(q.description.类型,/身份未核对/);
 });
 it('发送回执必须来自同一项目，目录切换使旧调用失去配对',async()=>{
- const context={},nodes=[];projectTurnSurfaceEvent({seq:0,type:'tool/call',data:toolCall('x','不该串项目')},nodes,context);projectTurnSurfaceEvent({seq:1,type:'working-directory/change',data:{cwd:'/elsewhere'}},nodes,context);assert.equal(projectTurnSurfaceEvent({seq:2,type:'tool/result',data:toolResult('x'),surfaceOp:'append'},nodes,context).type,'skip');
+ const context={},nodes=[];projectTurnSurfaceEvent({seq:0,type:'tool/call',data:toolCall('x','不该串项目')},nodes,context);projectTurnSurfaceEvent({seq:1,type:'working-directory/change',data:{cwd:'/elsewhere'}},nodes,context);const result=projectTurnSurfaceEvent({seq:2,type:'tool/result',data:toolResult('x'),surfaceOp:'append'},nodes,context);assert.equal(result.role,'tool-result');assert.equal(result.text,'');assert.equal(result.gaps[0].kind,'unpaired-tool-result');
 });
 it('继承前缀外部不作为当前会话来源补回',async()=>scene(async({org,s,hooks})=>{
  s.append('turn/start',{turn:1});s.append('user/message',user('fork继承的外部','inherited'),'append');s.append('turn/end',{turn:1,reason:{kind:'completed'}});s.inheritedEventCount=s.seq;s.append('turn/start',{turn:2});s.append('user/message',user('本会话外部','own'),'append');s.append('turn/end',{turn:2,reason:{kind:'completed'}});await legacy(org,s);await hooks.sync(s);assert.deepEqual((await all(org)).map(m=>m.id),['own']);
@@ -126,10 +128,11 @@ it('外部文本可作只读检索线索而不认证人类表达，通知不用�
   assert.equal(readAcceptedExpression(s),null);
  }
 });
-it('两个任意名称工具共用提交协议；重复调用与过大声明不留正文或参数',()=>{
+it('两个任意名称工具共用提交协议；重复调用与过大声明不冒充外部已发送',()=>{
  const events=[],nodes=[],context={};let seq=0;const add=(type,data,surfaceOp)=>{const r=projectTurnSurfaceEvent({seq:seq++,type,data,surfaceOp},nodes,context);if(r.type==='message')events.push(r);};
  for(const name of ['a_reader_reply','brand_new_transport']){add('tool/call',{...toolCall(name,'秘密调用参数'),name});add('tool/result',toolResult(name,receipt('报告的正文-'+name)),'append');}
  add('tool/call',toolCall('duplicate'));add('tool/call',toolCall('duplicate'));add('tool/result',toolResult('duplicate'),'append');
  add('tool/call',toolCall('large'));add('tool/result',toolResult('large',receipt('x'.repeat(16385))),'append');
- assert.equal(events.length,2);assert.deepEqual(events.map(m=>m.origin.producer),['tool:a_reader_reply','tool:brand_new_transport']);assert.doesNotMatch(JSON.stringify(context),/秘密调用参数/);
+ const sent=events.filter(externalConversationMessage);assert.equal(sent.length,2);assert.deepEqual(sent.map(m=>m.origin.producer),['tool:a_reader_reply','tool:brand_new_transport']);assert.doesNotMatch(JSON.stringify(context),/秘密调用参数/);
+ assert.equal(events.filter(m=>m.role==='tool-call').length,5);assert.ok(events.find(m=>m.id==='result-large').text.includes('x'.repeat(16385)));
 });

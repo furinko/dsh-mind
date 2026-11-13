@@ -74,6 +74,6 @@ for(const target of ['reviewer','lead','task'])test(`撤回${target}后复核读
  assert.equal((await s.capture(REVIEWER,await s.current())).条目[0].类型,'不可验证');
 }));
 test('审批收紧时复核清单沿原交卷策略停下，不借只读权绕过写准入',()=>scene(async s=>{
- await s.f.write('集体L2-共享基础设施/defaults/介入度.json',JSON.stringify({介入度:'审批'}));await s.org.policy.reload();
+ await s.f.writePrivate('集体L2-共享基础设施/defaults/部署.json',JSON.stringify({介入度:'审批'}));await s.org.policy.reload();
  assert.equal((await s.capture(REVIEWER,await s.current())).条目[0].类型,'不可验证');
 }));

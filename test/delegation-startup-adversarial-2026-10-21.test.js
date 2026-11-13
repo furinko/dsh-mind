@@ -60,16 +60,16 @@ async function scene(run, { delegation = granted, missingEffect = false, failCre
 }
 
 describe('独立调度启动：已激活范围闸承接创建约束', { timeout: 60_000 }, () => {
-  it('晚effect前五种裸创建均被真实单范围闸拒，安装后仍只有两道闸且理由一致', () => scene(async ({ host, exec, start, registrations }) => {
+  it('晚effect前后都由Host准入，Mind仍只注册两道闸且普通工具规则一致', () => scene(async ({ host, exec, start, registrations }) => {
     assert.equal(host.闸.length, 1); const earlier = new Map();
-    for (const name of CREATION) { const reason = refusal(host, exec(name)); assert.match(reason, /member_spawn/); earlier.set(name, reason); }
+    for (const name of CREATION) { const reason = refusal(host, exec(name)); assert.equal(reason, undefined); earlier.set(name, reason); }
     assert.equal(refusal(host, exec('read')), undefined, '正常范围闸已activate，不以全面闭合掩盖缺口');
     start(); assert.equal(registrations(), 2); assert.equal(host.闸.length, 2, '不增第三道平行闸');
     for (const name of CREATION) assert.equal(refusal(host, exec(name)), earlier.get(name), '兜底与正式创建闸共用判据');
   }));
 
-  it('创建专用effect从未可用时仍有定向兜底，非创建工具保持既有行为', () => scene(async ({ host, exec }) => {
-    assert.equal(host.闸.length, 1); for (const name of CREATION) assert.match(refusal(host, exec(name)), /member_spawn/);
+  it('创建专用effect从未可用也不复活强制受管流程，范围闸继续在位', () => scene(async ({ host, exec }) => {
+    assert.equal(host.闸.length, 1); for (const name of CREATION) assert.equal(refusal(host, exec(name)), undefined);
     assert.equal(refusal(host, exec('read')), undefined); assert.equal(refusal(host, exec('mind')), undefined);
   }, { missingEffect: true }));
 
@@ -86,8 +86,11 @@ describe('独立调度启动：已激活范围闸承接创建约束', { timeout:
     for (const phase of [() => {}, start]) { phase(); for (const name of CREATION) assert.equal(refusal(host, exec(name)), undefined); }
   }, { delegation: { mode: 'explicit-user' } }));
 
-  it('默认Host不留下裸创建窗口：晚安装前后五工具均转向受管入口', () => scene(async ({ host, exec, start }) => {
-    for (const phase of [() => {}, start]) { phase(); for (const name of CREATION) assert.match(refusal(host, exec(name)), /member_spawn/); }
+  it('默认Host在安装前后允许Lead选择宿主委派，不增加受管流程门槛', () => scene(async ({ host, exec, start }) => {
+    for (const phase of [() => {}, start]) { phase(); for (const name of CREATION) assert.equal(refusal(host, exec(name)), undefined); }
+    // Mind不授予宿主许可；宿主自己的拒绝闸仍会阻断执行。
+    host.闸.push(() => 'fixture: Host admission denied');
+    assert.match(refusal(host, exec('subagent')), /Host admission denied/);
   }, { delegation: {} }));
 
   it('仅匹配可信cwd的授权项目：范围外Lead保持原行为，自报project不能扩授权', () => scene(async ({ host, exec, other, start }) => {
@@ -100,13 +103,13 @@ describe('独立调度启动：已激活范围闸承接创建约束', { timeout:
 
   it('磁盘registered=true不是准入凭据，晚effect未执行也不能绕过创建约束', () => scene(async ({ org, host, exec }) => {
     await writeFile(org.layout.guardReceiptFile(), JSON.stringify({ 范围闸: { registered: true }, 调度创建闸: { registered: true } }) + '\n', 'utf8');
-    assert.equal(host.闸.length, 1); for (const name of CREATION) assert.match(refusal(host, exec(name)), /member_spawn/);
+    assert.equal(host.闸.length, 1); for (const name of CREATION) assert.equal(refusal(host, exec(name)), undefined);
   }));
 
   it('晚注册真实失败仍由范围闸承重，伪回执与重复读不能把它变成已安装', () => scene(async ({ org, host, exec, start, registrations }) => {
     start(); assert.equal(registrations(), 2); assert.equal(host.闸.length, 1); assert.ok(host.日志.some(line => /创建闸注册失败/.test(line)));
     await writeFile(org.layout.guardReceiptFile(), JSON.stringify({ 调度创建闸: { registered: true } }) + '\n', 'utf8');
-    for (const name of CREATION) assert.match(refusal(host, exec(name)), /member_spawn|未就绪|fail-closed/);
+    for (const name of CREATION) assert.equal(refusal(host, exec(name)), undefined);
   }, { failCreationRegistration: true }));
 
   it('创建闸注销前后及disposer返回后都拒绝，close须先于移除旧闸且兜底先恢复', () => scene(async ({ host, exec, start, stop, onRemoval }) => {

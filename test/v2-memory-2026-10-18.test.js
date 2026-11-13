@@ -71,8 +71,8 @@ describe('① 知识 = 晋升动作', () => {
   });
 });
 
-describe('② 结账强制记忆处置', () => {
-  it('无声明 ⇒ 拒收且列出候选；逐条判 ⇒ 结账；丢弃 ⇒ 经历失效；处置折回节点', async () => {
+describe('② 知识整理与工作结账分开', () => {
+  it('工作先结账；另行整理需逐条处置且可在完成后执行，保留来源与失效合同', async () => {
     const { f, org } = await 起组织();
     try {
       const node = await 成员节点(org); // 执行中
@@ -83,29 +83,11 @@ describe('② 结账强制记忆处置', () => {
       // 补修K：复核过只出票，采纳是 Lead 的独立一步（引用真票）——结账前置仍是已采纳。
       const 核 = await org.tasks.review(node.id, { subject: { id: 'reviewer', kind: '成员', roleId: '复核员' }, 项目: P, 三态: '过', 分歧清单: [] });
       await org.tasks.accept(node.id, { subject: LEAD, 项目: P, 票: 核.待采纳?.票 });
-      // 无声明 ⇒ 拒收，detail 里列出两类候选。
-      let 清单 = null;
-      await assert.rejects(
-        () => org.tasks.settle(node.id, { subject: LEAD, 项目: P }),
-        (e) => {
-          if (!(e instanceof Denied) || !/记忆处置/.test(e.rule)) return false;
-          清单 = e.detail?.候选清单 ?? [];
-          return true;
-        },
-        '无记忆处置声明 ⇒ 拒收',
-      );
-      assert.ok(清单.some((c) => c.键 === exp.id && c.类 === '经历'), '候选清单含本任务经历');
-      assert.ok(清单.some((c) => c.键 === `候选/${MEMBER.id}/0` && c.类 === '交卷候选'), '候选清单含交卷知识候选');
-      // 覆盖不全 ⇒ 拒（缺交卷候选那条）。
-      await assert.rejects(
-        () => org.tasks.settle(node.id, { subject: LEAD, 项目: P, 记忆处置: { [exp.id]: '留账本' } }),
-        (e) => e instanceof InvalidBody,
-      );
-      // 逐条判：经历丢弃（⇒ 失效）、交卷候选晋升（补修E：真实产出知识条目，不是只记声明）。
-      const settled = await org.tasks.settle(node.id, {
-        subject: LEAD, 项目: P,
-        记忆处置: { [exp.id]: '丢弃', [`候选/${MEMBER.id}/0`]: '晋升' },
-      });
+      const finished = await org.tasks.settle(node.id, { subject: LEAD, 项目: P });
+      assert.equal(finished.状态, '已结账', '无知识处置不再阻断实际交付');
+      await assert.rejects(() => org.tasks.organizeKnowledge(node.id, { subject: LEAD, 项目: P }), e => e instanceof Denied && e.detail.候选清单.length === 2);
+      await assert.rejects(() => org.tasks.organizeKnowledge(node.id, { subject: LEAD, 项目: P, 记忆处置: { [exp.id]: '留账本' } }), e => e instanceof InvalidBody);
+      const settled = await org.tasks.organizeKnowledge(node.id, { subject: LEAD, 项目: P, 记忆处置: { [exp.id]: '丢弃', [`候选/${MEMBER.id}/0`]: '晋升' } });
       assert.equal(settled.状态, '已结账');
       assert.deepEqual(settled.记忆处置, { [exp.id]: '丢弃', [`候选/${MEMBER.id}/0`]: '晋升' }, '处置声明折回节点');
       const 知识id = settled.记忆晋升?.[`候选/${MEMBER.id}/0`];

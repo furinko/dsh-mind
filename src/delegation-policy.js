@@ -121,7 +121,7 @@ export class DelegationPolicy {
   }
 
   /**
-   * 受授权项目的创建只走组织适配入口，避免裸工具绕过登记与任务装载。
+   * 普通宿主委派不强迫受管流程；仍执行已关闭、无效配置与明确项目/主体限制。
    * @param {{name?: string}} exec
    * @param {{subject: object, project: string, connected?: boolean}} spec
    * @returns {string|undefined} 宿主单调 guard 使用的拒绝理由。
@@ -133,9 +133,9 @@ export class DelegationPolicy {
     if (!this.configurationValid) return '调度配置非法，暂停新建；不能把坏配置当作默认 Host 准入。';
     const state = this.status(project);
     if (this.config.mode === 'host' && !state.canAttempt) return '本项目受到调度项目范围限制，不能绕过 Mind 创建。';
-    if (state.canAttempt) return connected === false
-      ? '本项目已启用心智自主调度，但当前聊天未接入心智，暂停新委派。请在聊天框重新打开“接入心智”后再委派；也可由 Lead 直接执行。'
-      : '本项目已启用组织调度：创建团队或子智能体请走 mind member_spawn，先定任务判据再登记、装载并开工；也可由 Lead 直接执行。';
+    // 模式与项目约束决定 Mind 受管创建资格；它们不强迫普通宿主工作走受管入口。
+    // 每次真实宿主工具执行仍由 Host 的现行准入决定。
+
     return undefined;
   }
 
@@ -157,14 +157,14 @@ export class DelegationPolicy {
       this.config.mode === 'host'
         ? `[${DelegationPolicy.generation}] Mind adds no separate delegation grant requirement in project ${JSON.stringify(project)}. Every creation still requires the current Host tool executor, policy and admission; availability is not approval.`
         : `[${DelegationPolicy.generation}] The deployment owner explicitly authorizes the Team Lead to choose direct execution, ordinary subagents, or Agent Teams according to task needs in project ${JSON.stringify(project)}. Host admission is still required for every creation.`,
-      'Delegation is optional: do not create agents merely to parallelize. Use mind member_spawn for governed delegation; it registers the actual instance, binds a task with acceptance criteria, loads role instructions, and only then sends the work.',
+      'Delegation is optional: the Lead chooses direct execution, ordinary Host delegation, or mind member_spawn for managed task records. The managed entry registers the actual instance and records task criteria; it is not a prerequisite for ordinary Host work.',
       // v2（口述收敛 2026-10-18 条目1/3）：复核员是**普通岗位卡**，不再需要主权者任命授权——
       // Lead 按任务用 member_spawn 起复核实例即完成就位，独立性由复核时的冲突排除
       // （交卷人 / 负责人不得复核本任务）与机制附上的冻结判据承担。
       // 修前这句写的是 "Reviewer appointments still require the existing sovereign authorization"，
       // 与真源冲突：一句提示词就是一次「任命授权」闸的复活（且模型会照做）。
       'Only the Lead chooses and initiates delegation. Members and reviewers cannot create further agents or grant themselves authority. Reviewers are ordinary role cards: the Lead spawns a review instance per task like any other member, and independence is enforced by conflict exclusion (whoever submitted or owns the work must not review it) plus the criteria frozen by the mechanism, not by any appointment authorization.',
-      'Use mind member_message and member_stop for organization-managed instances; Team names and ordinary child session ids are different addresses. The organization task graph remains the business-state authority; the Team task board is an execution mirror, not a second acceptance authority.',
+      'Use mind member_message and member_stop for organization-managed instances; ordinary Host children use Host tools. Team names and ordinary child session ids are different addresses. Record the actual execution, verification and unresolved results without inventing independent acceptance.',
     ].join('\n');
     const prefix = header + '\n\n';
     const alreadyAssembled = typeof original === 'string' && original.startsWith(prefix);

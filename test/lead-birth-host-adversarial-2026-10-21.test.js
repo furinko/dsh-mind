@@ -96,7 +96,7 @@ describe('独立Lead出生：审批正链与窄例外', { timeout: 60_000 }, () 
 
 describe('独立Lead出生：硬闸与锁内竞态', { timeout: 60_000 }, () => {
   it('策略坏不能出生，诊断不把未就绪改成注册成功', async () => scene(async ({ f, org, status, identity }) => {
-    await f.write('集体L2-共享基础设施/defaults/介入度.json', '{broken'); assert.equal(await org.policy.reload(), false); await status(); assert.equal((await identity()).members[ROOT], undefined);
+    await f.writePrivate('集体L2-共享基础设施/defaults/部署.json', '{broken'); assert.equal(await org.policy.reload(), false); await status(); assert.equal((await identity()).members[ROOT], undefined);
   }));
 
   for (const id of [ROOT, 'Lead']) it(`撤回${id}仍阻止首次出生`, async () => scene(async ({ org, status, identity }) => { await org.registry.revoke({ subject: SOVEREIGN, 对象id: id, 理由: '明确撤回不能被机械出生恢复' }); await status(); assert.equal((await identity()).members[ROOT], undefined); assert.ok((await identity()).denylist.some(row => row.id === id)); }));
@@ -105,15 +105,18 @@ describe('独立Lead出生：硬闸与锁内竞态', { timeout: 60_000 }, () => 
     org.clock._source = () => new Date(Date.now() + 30 * 24 * 3600_000); await org.policy.reload(); assert.equal(org.policy.presence().lost, true); await status(); assert.equal((await identity()).members[ROOT], undefined);
   }));
 
-  it('Lead卡声明错岗不能出生，也不能把任意卡钉成Lead', async () => scene(async ({ f, org, status, identity }) => {
-    const file = join(f.factoryRoot, '集体L3-成员角色卡/Lead.md'); const text = await readFile(file, 'utf8'); await writeFile(file, text.replace('id: Lead', 'id: 插件工程'), 'utf8'); await org.policy.reload(); await status(); assert.equal((await identity()).members[ROOT], undefined);
+  it('Lead专业卡声明错岗不冒充Lead资料，真实根会话身份可独立出生', async () => scene(async ({ f, org, status, identity }) => {
+    const file = join(f.factoryRoot, '集体L3-成员角色卡/Lead.md'); const text = await readFile(file, 'utf8'); await writeFile(file, text.replace('id: Lead', 'id: 插件工程'), 'utf8'); await org.policy.reload(); await status(); const member = (await identity()).members[ROOT]; assert.equal(member.岗位, 'Lead'); assert.equal(member.卡版本, undefined); assert.equal((await org.registry.cardOf(ROOT)).就绪, false);
   }));
 
   it('已有封存、错岗或坏钉卡不由出生路径修复', async () => {
     for (const mode of ['seal', 'wrong-role', 'bad-snapshot']) await scene(async ({ f, org, status, identity }) => {
       if (mode === 'wrong-role') await org.registry.assign({ subject: SOVEREIGN, 实例: ROOT, 岗位: '插件工程' });
       else { await status(); if (mode === 'seal') await org.registry.seal({ subject: SOVEREIGN, 实例: ROOT, 理由: '明确封存' }); else { const hash = (await identity()).members[ROOT].卡版本.摘要; await writeFile(f.layout.cardSnapshot(hash), '{}\n', 'utf8'); } }
-      const before = (await identity()).members[ROOT]; const result = await status(); assert.equal(result.实例登记?.就绪, false); assert.deepEqual((await identity()).members[ROOT], before);
+      const before = (await identity()).members[ROOT]; const result = await status();
+      if (mode === 'bad-snapshot') { assert.equal(result.成功, true); assert.equal((await org.registry.cardOf(ROOT)).就绪, false, '坏专业资料不冒充可用，普通真实身份仍可诊断'); }
+      else assert.equal(result.实例登记?.就绪, false);
+      assert.deepEqual((await identity()).members[ROOT], before);
     });
   });
 

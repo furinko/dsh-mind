@@ -102,8 +102,8 @@ describe('主干环路', () => {
     await review.record({ subject: REVIEWER, 项目: P, 节点: node.id, 三态: '不过', 分歧清单: ['判据 1 仍未满足'] });
     const after2 = await tasks.get(node.id, { 项目: P });
     assert.equal(after2.打回次数, 2);
-    assert.equal(after2.升级.至, '主权者');
-    assert.equal(after2.升级.原因, '打回≥2');
+    assert.equal(after2.升级, undefined, '新任务失败次数不自动变成权限审批');
+
   });
 
   it('任务：产出物只存引用；待决项是节点状态且裁决后记录不消失', async () => {
