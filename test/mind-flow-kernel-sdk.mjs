@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { makeFixture, LEAD, SOVEREIGN } from './helpers.mjs';
 import { shareOrg, shareKey, forgetSharedOrg } from '../src/runtime.js';
 import * as kernel from '../components/kernel/lib/index.js';
@@ -138,6 +138,25 @@ test('route-preflight held current plan can release and create through the offic
 });
 
 for (const mode of ['team', 'subagent']) {
+  test(`SDK ${mode} real parent without specialty card traverses budget and durable intent before native creation`, async t => {
+    const f = await fixture(t, mode);
+    const goal = await f.org.goals.create({ subject: LEAD, 项目: P, 期望结果: '合成受管委派', 完成依据: ['官方入口只创建一次'], 来源: '隔离用户任务', 下一步: '执行合成委派' });
+    await f.org.goals.linkTask(goal.id, { subject: LEAD, 项目: P, 修订: goal.修订, 任务: f.task.id });
+    await f.org.budgets.configure(goal.id, { subject: SOVEREIGN, 项目: P, 预算修订: 0, 上限: 1 });
+    const identity = await f.org.registry.identity(), hash = identity.members[LEAD.id].卡版本?.摘要;
+    delete identity.members[LEAD.id].卡版本;
+    await writeFile(f.org.layout.identityFile(), JSON.stringify(identity));
+    for (const root of [f.f.factoryRoot, f.f.privateRoot]) await rm(resolve(root, '集体L3-成员角色卡', 'Lead.md'), { force: true });
+    if (hash) await rm(f.org.layout.cardSnapshot(hash), { force: true });
+    assert.equal((await f.org.registry.cardOf(LEAD.id)).就绪, false, 'professional contents are genuinely unavailable');
+    const result = await f.invoke();
+    assert.equal(result.成功, true, JSON.stringify(result));
+    assert.equal(f.calls.length, 1); assert.equal(f.sends.length, 1); assert.equal(f.interrupts.length, 0);
+    assert.equal(f.operation().状态, 'audited');
+    const budget = await f.org.budgets.query(goal.id, { subject: LEAD, 项目: P });
+    assert.equal(budget.累计准入, 1); assert.equal(budget.尝试页.条目[0].类别, 'member_spawn');
+    assert.equal((await f.invoke()).成功, false); assert.equal(f.calls.length, 1, 'already-created work is not replayed');
+  });
   for (const [label, delegation, allow] of [
     ['absent', undefined, true], ['empty', {}, true], ['explicit-old', { mode: 'explicit-user' }, false],
     ['partial-old', { projects: [] }, false], ['scoped-out', { mode: 'host', projects: ['other'] }, false],
