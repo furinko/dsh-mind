@@ -1201,7 +1201,7 @@ function 复核授权读根(exec, deps) {
   const identity = readInstanceSnapshot(org.layout.identityFile());
   const subject = deps.主体 ?? agentSubject(exec);
   const 域 = 复核读域({ 节点, 主体: subject, 项目: 项目名, 成员: identity.成员?.[subject.id] });
-  if (!域.限定) return { 拒: '[dsh-mind] 复核员读路径 · 主体不是已登记的复核员岗（unknown ⇒ 拒）。' };
+  if (!域.限定) return { 拒: '[dsh-mind] 复核员读路径 · 主体没有当前有效的真实复核用途（unknown ⇒ 拒；不以专业名判断）。' };
   const 根 = new Set();
   for (const node of 节点) {
     if (!域.集合.has(String(node.id))) continue;

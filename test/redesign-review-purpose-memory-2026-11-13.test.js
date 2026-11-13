@@ -61,3 +61,20 @@ it('新记忆审计不复制来源正文，遗忘后程序持有的正式正文�
   await org.memory.organize({ subject: LEAD, 项目: P, op: 'forget', id: record.id, 原因: '合成遗忘' });
   assert.equal((await org.memory.query({ subject: LEAD, 项目: P, id: record.id })).条目.length, 0);
 }));
+
+it('明确岗位分享只筛选专业，复核专业普通任务可读而任意专业真实复核用途不可读', () => scene(async org => {
+  const ordinary = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '复核专业的普通资料整理', 负责人: REVIEWER.roleId, 判据: ['整理资料'] });
+  await org.tasks.bind(ordinary.id, { subject: LEAD, 项目: P, 实例: REVIEWER.id, 岗位: REVIEWER.roleId });
+  await org.tasks.dispatch(ordinary.id, { subject: LEAD, 项目: P });
+  const scope = { project: P, audience: 'roles', roles: [REVIEWER.roleId, MEMBER.roleId], relationship: null };
+  assert.equal(await org.dataOwnership.allows(scope, REVIEWER, P), true);
+  assert.equal(await org.dataOwnership.allows({ ...scope, roles: [MEMBER.roleId] }, REVIEWER, P), false, '保留明确分享岗位筛选');
+  assert.equal(await org.dataOwnership.allows({ ...scope, audience: 'lead' }, REVIEWER, P), false, '私人Lead资料不因专业开放');
+  assert.equal(await org.dataOwnership.allows(scope, REVIEWER, 'another-project'), false, '保留项目归属');
+  const target = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '独立核对目标', 负责人: 'Lead', 判据: ['可核对'] });
+  const review = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '技术专业承担真实复核', 负责人: MEMBER.roleId,
+    判据: ['核对目标'], 复核对象: [target.id] });
+  await org.tasks.bind(review.id, { subject: LEAD, 项目: P, 实例: MEMBER.id, 岗位: MEMBER.roleId });
+  await org.tasks.dispatch(review.id, { subject: LEAD, 项目: P });
+  assert.equal(await org.dataOwnership.allows(scope, MEMBER, P), false, '真实复核用途不借专业分享扩大读域');
+}));

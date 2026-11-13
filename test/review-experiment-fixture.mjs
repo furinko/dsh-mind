@@ -21,12 +21,13 @@ export async function reviewScene(fn,options={}){
     }
     const node=path.join(root,'operator-pinned-interpreter.bin');fs.writeFileSync(node,'CONTROLLED-NODE-BYTES-NOT-A-REAL-OS-PROCESS');
     const org=await Org.open({home:f.home,factoryRoot:f.factoryRoot,privateRoot:f.privateRoot,project:REVIEW_PROJECT});
-    await org.registry.assign({subject:LEAD,岗位:'复核员',实例:REVIEW_HOLDER});
-    const target=await org.tasks.create({subject:LEAD,项目:REVIEW_PROJECT,描述:'被验业务',负责人:['插件工程'],判据:['冻结原判据']});
-    const task=await org.tasks.create({subject:LEAD,项目:REVIEW_PROJECT,描述:'独立复核任务',负责人:['复核员'],判据:['独立复核'],复核对象:[target.id]});
-    await org.tasks.bind(task.id,{subject:LEAD,项目:REVIEW_PROJECT,实例:REVIEW_HOLDER,岗位:'复核员'});await org.tasks.dispatch(task.id,{subject:LEAD,项目:REVIEW_PROJECT});
+    const reviewRole=options.role??'复核员';
+    await org.registry.assign({subject:LEAD,岗位:reviewRole,实例:REVIEW_HOLDER});
+    const target=await org.tasks.create({subject:LEAD,项目:REVIEW_PROJECT,描述:'被验业务',负责人:[options.role?'member-a':'插件工程'],判据:['冻结原判据']});
+    const task=await org.tasks.create({subject:LEAD,项目:REVIEW_PROJECT,描述:'独立复核任务',负责人:[reviewRole],判据:['独立复核'],复核对象:[target.id]});
+    await org.tasks.bind(task.id,{subject:LEAD,项目:REVIEW_PROJECT,实例:REVIEW_HOLDER,岗位:reviewRole});await org.tasks.dispatch(task.id,{subject:LEAD,项目:REVIEW_PROJECT});
     await org.tasks.attach(task.id,{subject:LEAD,项目:REVIEW_PROJECT,产出物:source,读根:true});
-    const reviewer={id:REVIEW_HOLDER,kind:'成员',roleId:'复核员'};await org.tasks.start(task.id,{subject:reviewer,项目:REVIEW_PROJECT});
+    const reviewer={id:REVIEW_HOLDER,kind:'成员',roleId:reviewRole};await org.tasks.start(task.id,{subject:reviewer,项目:REVIEW_PROJECT});
     const parentAgent={id:LEAD.id,session:{id:LEAD.id,header:{id:LEAD.id,cwd:f.home}}},childAgent={id:REVIEW_HOLDER,session:{id:REVIEW_HOLDER,header:{id:REVIEW_HOLDER,cwd:f.home,origin:'subagent',parentSession:LEAD.id}}};
     const agents={get:id=>id===LEAD.id?parentAgent:id===REVIEW_HOLDER?childAgent:undefined};
     const parentHost={project:REVIEW_PROJECT,agent:parentAgent,agents,subagents:{listChildren:async()=>[{id:REVIEW_HOLDER,mode:'continuable'}]}};

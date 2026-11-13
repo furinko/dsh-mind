@@ -67,3 +67,24 @@ test('审批后身份封存恢复：同id同卡不替换原批准的实例事实
   await s.org.registry.seal({subject:s.parent('x').subject,实例:s.reviewer.id,理由:'post-approval ABA'});await s.org.registry.restore({subject:s.parent('x').subject,实例:s.reviewer.id});await approvalMode(s);
   await assert.rejects(act(s,'parent','review_experiment_allow',{...s.grantArgs,审批引用:id}),/放行不可用|计划|步骤/);assert.equal(s.calls.spawn.length,0);
 }));
+
+
+test('技术专业真实审查用途可冻结并运行实验，结束用途后旧许可不能继续执行',()=>reviewScene(async s=>{
+  assert.equal(s.reviewer.roleId,'插件工程');
+  const grant=await act(s,'parent','review_experiment_allow',s.grantArgs);
+  const result=await act(s,'child','review_experiment_run',{许可id:grant.许可id,配方:'preflight'});
+  assert.equal(result.状态,'completed');assert.equal(s.calls.spawn.length,1);
+  await s.org.tasks.close(s.task.id,{subject:{id:'lead',kind:'Lead'},项目:REVIEW_PROJECT,原因:'结束实际审查用途'});
+  await assert.rejects(act(s,'child','review_experiment_run',{许可id:grant.许可id,配方:'preflight'}),e=>e.code==='DENIED');
+  assert.equal(s.calls.spawn.length,1);
+},{role:'插件工程'}));
+
+test('专业名或旧许可不能替代真实审查用途，普通任务无显式对象不能登记实验',()=>reviewScene(async s=>{
+  await s.org.tasks.close(s.task.id,{subject:{id:'lead',kind:'Lead'},项目:REVIEW_PROJECT,原因:'结束旧用途'});
+  const node=await s.org.tasks.create({subject:{id:'lead',kind:'Lead'},项目:REVIEW_PROJECT,描述:'技术专业普通任务',负责人:s.reviewer.id,判据:['普通交付']});
+  await s.org.tasks.bind(node.id,{subject:{id:'lead',kind:'Lead'},项目:REVIEW_PROJECT,实例:s.reviewer.id,岗位:s.reviewer.roleId});
+  await s.org.tasks.dispatch(node.id,{subject:{id:'lead',kind:'Lead'},项目:REVIEW_PROJECT});
+  await s.org.tasks.start(node.id,{subject:s.reviewer,项目:REVIEW_PROJECT});
+  await assert.rejects(act(s,'parent','review_experiment_allow',{...s.grantArgs,任务:node.id}),e=>e.code==='DENIED');
+  assert.equal(s.calls.spawn.length,0);
+},{role:'插件工程'}));

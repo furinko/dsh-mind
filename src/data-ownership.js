@@ -31,7 +31,7 @@ export class DataOwnershipService {
     if (scope.audience !== 'roles') return false;
     try {
       const current = await currentProfessionalScope(this.org, subject, project);
-      return !current.council && current.nodes.length > 0 && !current.domain?.限定 && current.role !== '复核员' && scope.roles.includes(current.role);
+      return !current.council && current.nodes.length > 0 && !current.domain?.限定 && scope.roles.includes(current.role);
     } catch { return false; }
   }
 }

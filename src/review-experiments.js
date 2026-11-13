@@ -4,7 +4,8 @@ import {randomUUID,createHash} from 'node:crypto';
 import {Denied,Fault,InvalidBody} from './kernel/errors.js';
 import {appendLines,readJsonlHealth,serializeByKey,withLock,ensureDir} from './kernel/fsx.js';
 import {requireLiveActor} from './runtime-actor.js';
-import {复核对象引用} from './review-scope.js';
+import {复核对象引用,复核用途} from './review-scope.js';
+import {subjectKindForRole} from './policy.js';
 import {EXPERIMENT_RECIPES,normalizeExperimentConfig,experimentDigest,experimentKeys,experimentId,verifyExperimentCandidate,verifyExperimentNode,copyExperimentCandidate,verifyExperimentCopy,experimentEnvironment,removeExperimentScope} from './review-experiment-files.js';
 import {executeReviewProcess} from './review-experiment-process.js';
 import {autonomousExperimentConfig,prepareAutonomousCandidate,autonomousExperimentPolicy,candidateRecipe,verifyAutonomousInterpreters} from './review-autonomy.js';
@@ -37,14 +38,13 @@ export class ReviewExperimentService {
   async #actor(spec){
     if(this.#closed)throw new Fault('EXPERIMENT_DISPOSED','实验服务已卸载。');
     const agent=requireLiveActor(spec),identity=await this.#org.registry.identity(),member=identity.members?.[spec.subject.id];
-    const role=spec.subject.kind==='Lead'?'Lead':'复核员';
-    if(!member||member.status!=='在岗'||member.岗位!==role||!['Lead','成员'].includes(spec.subject.kind))throw denied('执行者不是当前在岗Lead或复核员。');
+    if(!member||member.status!=='在岗'||!['Lead','成员'].includes(spec.subject.kind)||subjectKindForRole(member.岗位)!==spec.subject.kind)throw denied('执行者真实在岗身份与宿主主体不符。');
     const card=await this.#org.registry.cardOf(spec.subject.id);if(card?.就绪!==true)throw denied('执行者钉卡事实不可用。');
     return {agent,identity,member,lead:spec.subject.kind==='Lead'};
   }
   async #reviewTask(spec,taskId,holderId,{running=false}={}){
     const actor=await this.#actor(spec),holder=actor.identity.members?.[holderId];
-    if(!holder||holder.status!=='在岗'||holder.岗位!=='复核员'||!holder.委派者?.id||holder.委派者.kind!=='Lead')throw denied('目标不是有可信派发归属的在岗复核实例。');
+    if(!holder||holder.status!=='在岗'||subjectKindForRole(holder.岗位)!=='成员'||!holder.委派者?.id||holder.委派者.kind!=='Lead')throw denied('目标不是有可信派发归属的在岗复核实例。');
     const owner=holder.委派者.id,lead=actor.identity.members?.[owner];
     if(!lead||lead.status!=='在岗'||lead.岗位!=='Lead')throw denied('派发Lead在岗事实缺失。');
     if(actor.lead?spec.subject.id!==owner:spec.subject.id!==holderId||parentId(actor.agent)!==owner)throw denied('复核许可不属于当前派发关系。');
@@ -52,7 +52,8 @@ export class ReviewExperimentService {
     const health=await readJsonlHealth(this.#org.layout.taskLog(spec.project));if(health.坏行||!health.末行完整)throw new Fault('EXPERIMENT_TASK_LEDGER_INVALID','任务真源损坏，不使用跳行投影授予实验。');
     const node=await this.#org.tasks.get(taskId,{项目:spec.project});
     if(!node||node.模式==='独立会审'||!READ_STATES.has(node.状态)||(running&&node.状态!=='执行中')||node.判据冻结!==true||!Array.isArray(node.判据)||!node.判据.length)throw denied('复核任务不在允许状态或缺冻结判据；运行须先实际开工。');
-    if((node.绑定??[]).length!==1||!node.绑定.some(b=>b.实例===holderId&&b.岗位==='复核员')||!(node.负责人??[]).some(v=>v===holderId||v==='复核员'))throw denied('复核任务缺单实例精确同岗绑定。');
+    const purpose=复核用途({节点:[node],主体:{id:holderId,kind:'成员'},项目:spec.project,成员:holder});
+    if(!purpose.限定||!purpose.复核任务.includes(taskId)||(node.绑定??[]).length!==1)throw denied('实验需要当前实例的真实复核用途与单实例精确绑定。');
     const targets=复核对象引用(node);if(!targets.length||targets.includes(node.id))throw denied('复核任务缺显式被验对象。');
     for(const id of targets)if(!await this.#org.tasks.get(id,{项目:spec.project}))throw denied('被验对象不在本项目。');
     const roots=(node.复核读根??[]).filter(p=>typeof p==='string'&&path.isAbsolute(p));if(!roots.length)throw denied('复核任务缺正式读根。');
@@ -272,7 +273,7 @@ export class ReviewExperimentService {
       const ledger=await this.#ledger(spec.project),grant=ledger.grants.get(spec.args.许可id),run=ledger.runs.get(spec.args.运行id);
       if(!grant||!run||run.permitId!==grant.id||!grant.confirmed||!run.confirmed||!run.receipt?.auditConfirmed||run.receipt.rangeExited!==true||run.receipt.originalUnchanged!==true||run.receipt.cleanup?.confirmed!==false||run.recovery)throw denied('原运行未可靠结束、已收口或不属于该许可，拒绝清理恢复。');
       const identity=await this.#org.registry.identity(),holder=identity.members?.[grant.holder],owner=identity.members?.[grant.owner];
-      if(holder?.status!=='在岗'||owner?.status!=='在岗'||holder.岗位!=='复核员'||owner.岗位!=='Lead'||holder.委派者?.id!==grant.owner||!same(stamp(holder),grant.holderStamp)||!same(stamp(owner),grant.ownerStamp))throw denied('原执行身份或委派归属已变化，不得恢复旧清理。');
+      if(holder?.status!=='在岗'||owner?.status!=='在岗'||subjectKindForRole(holder.岗位)!=='成员'||owner.岗位!=='Lead'||holder.委派者?.id!==grant.owner||!same(stamp(holder),grant.holderStamp)||!same(stamp(owner),grant.ownerStamp))throw denied('原执行身份或委派归属已变化，不得恢复旧清理。');
       const audit=await this.#org.audit.read({}),identityAnchor=id=>audit.filter(r=>r.对象?.kind==='身份'&&r.对象.id===id&&['状态变更','主体创建','迁移补登'].includes(r.动作)).at(-1)?.hash??null;
       if(identityAnchor(grant.owner)!==grant.credentialEpoch?.owner||identityAnchor(grant.holder)!==grant.credentialEpoch?.holder)throw denied('原身份历史已变化，即使恢复同id也不能接管旧清理。');
       const node=await this.#org.tasks.get(grant.task,{项目:spec.project});if(!node)throw denied('原任务不存在。');
