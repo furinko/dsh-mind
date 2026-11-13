@@ -133,20 +133,24 @@ export class SpawnOperationService {
   async #reader(subject) {
     if (!spawnOperationText(subject?.id) || !['Lead', '主权者'].includes(subject.kind)) throw new Denied('成员创建操作 · 治理读资格', '创建操作只向当前真实Lead或主权者开放，成员、复核员和声明文本不能扩大读域。');
     if (subject.kind === 'Lead') {
-      if (!this.registry?.identity || !this.registry?.cardOf) throw new Fault('SPAWN_OPERATION_IDENTITY_UNAVAILABLE', '缺少真实Lead身份或卡凭证真源。');
+      if (!this.registry?.identity || typeof this.policy?.executionIdentity !== 'function') throw new Fault('SPAWN_OPERATION_IDENTITY_UNAVAILABLE', '缺少真实Lead身份或执行凭证真源。');
+      const readiness = await this.policy.executionIdentity(subject);
+      if (!readiness.ok) throw new Denied(readiness.decision.rule, readiness.decision.reason, readiness.decision);
       const member = (await this.registry.identity()).members?.[subject.id];
-      if (member?.岗位 !== 'Lead' || member.status !== '在岗' || (subject.roleId !== undefined && subject.roleId !== 'Lead') || (await this.registry.cardOf(subject.id))?.就绪 !== true) throw new Denied('成员创建操作 · 治理读资格', '当前主体不是在册、在岗且卡凭证就绪的Lead。');
+      if (member?.岗位 !== 'Lead' || member.status !== '在岗' || (subject.roleId !== undefined && subject.roleId !== 'Lead')) throw new Denied('成员创建操作 · 治理读资格', '当前主体不是在册、在岗且执行身份有效的Lead。');
     }
   }
   async #creator(subject, taskId) {
     if (!spawnOperationText(subject?.id) || subject.kind !== 'Lead') throw new Denied('成员创建操作 · 发起资格', '只有当前真实Lead可以记录新的创建意图；该记录不产生原动作授权。');
-    if (!this.registry?.identity || !this.registry?.cardOf || typeof this.policy?.refreshIfStale !== 'function') throw new Fault('SPAWN_OPERATION_IDENTITY_UNAVAILABLE', '缺少真实身份、卡凭证或当前策略，不能新增意图。');
+    if (!this.registry?.identity || typeof this.policy?.executionIdentity !== 'function' || typeof this.policy?.refreshIfStale !== 'function') throw new Fault('SPAWN_OPERATION_IDENTITY_UNAVAILABLE', '缺少真实执行身份或当前策略，不能新增意图。');
     await this.policy.refreshIfStale();
     if (!this.policy.healthy) throw new Fault('SPAWN_OPERATION_POLICY_UNAVAILABLE', '当前策略不健康，停止新增创建意图。');
     if (this.policy.presence?.().lost !== false) throw new Denied('成员创建操作 · 当前写冻结', '主权者失联或失联资格不可确认，不能新增创建意图。');
+    const readiness = await this.policy.executionIdentity(subject);
+    if (!readiness.ok) throw new Denied(readiness.decision.rule, readiness.decision.reason, readiness.decision);
     const identity = await this.registry.identity();
     const member = identity.members?.[subject.id];
-    if (member?.岗位 !== 'Lead' || member.status !== '在岗' || (subject.roleId !== undefined && subject.roleId !== 'Lead') || (await this.registry.cardOf(subject.id))?.就绪 !== true) throw new Denied('成员创建操作 · 当前实例凭证', '当前Lead不在岗、岗位自报不符或真实卡凭证失效，不能新增创建意图。');
+    if (member?.岗位 !== 'Lead' || member.status !== '在岗' || (subject.roleId !== undefined && subject.roleId !== 'Lead')) throw new Denied('成员创建操作 · 当前实例凭证', '当前Lead不在岗、岗位自报不符或真实执行凭证失效，不能新增创建意图。');
     if (!Array.isArray(identity.denylist) || identity.denylist.some((entry) => [subject.id, 'Lead', taskId].includes(entry?.id))) throw new Denied('成员创建操作 · 当前撤回资格', 'Lead、岗位或任务已撤回，或拒绝名单不可判，不能新增创建意图。');
     return { id: subject.id, kind: 'Lead' };
   }

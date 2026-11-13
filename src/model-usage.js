@@ -105,9 +105,11 @@ export class ModelUsageService {
   async #reader(subject) {
     if (typeof subject?.id !== 'string' || !subject.id.trim() || !['Lead', '主权者'].includes(subject.kind)) throw new Denied('模型用量 · 治理读资格', '模型用量只向当前真实Lead或主权者开放，成员和自报认证不能扩大读域。');
     if (subject.kind === 'Lead') {
-      if (!this.registry?.identity || !this.registry?.cardOf) throw new Fault('MODEL_USAGE_IDENTITY_UNAVAILABLE', '缺少真实Lead身份或卡凭证真源。');
+      if (!this.registry?.identity || typeof this.policy?.executionIdentity !== 'function') throw new Fault('MODEL_USAGE_IDENTITY_UNAVAILABLE', '缺少真实Lead身份或执行凭证真源。');
+      const readiness = await this.policy.executionIdentity(subject);
+      if (!readiness.ok) throw new Denied(readiness.decision.rule, readiness.decision.reason, readiness.decision);
       const member = (await this.registry.identity()).members?.[subject.id];
-      if (member?.岗位 !== 'Lead' || member.status !== '在岗' || (await this.registry.cardOf(subject.id))?.就绪 !== true) throw new Denied('模型用量 · 治理读资格', '当前主体不是在册、在岗且卡凭证就绪的Lead。');
+      if (member?.岗位 !== 'Lead' || member.status !== '在岗') throw new Denied('模型用量 · 治理读资格', '当前主体不是在册、在岗且执行身份有效的Lead。');
     }
   }
   #readTarget(id, project) { return { id: id ?? 'model-usage', kind: '模型用量', authority: '自治', zone: '私有', domain: '集体', project }; }

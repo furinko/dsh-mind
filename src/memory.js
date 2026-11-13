@@ -999,11 +999,14 @@ export class MemoryService {
       if (!this.policy?.refreshIfStale || !this.policy?.decideCurrentSync) return unavailable();
       await this.policy.refreshIfStale();
       let actor = { ...subject };
+      let identityStamp = null;
+      const executionStamp = member => digest(canonical({岗位:member.岗位,status:member.status,代:member.代 ?? 1,代次:member.代次 ?? null,委派者:member.委派者 ?? null}));
       if (actor.kind !== '主权者') {
-        if (!this.registry?.identity || !this.registry?.cardOf) return unavailable();
+        if (!this.registry?.identity || !this.policy?.executionIdentity || (await this.policy.executionIdentity(actor))?.ok !== true) return unavailable();
         const member = (await this.registry.identity()).members?.[actor.id];
-        if (member?.status !== '在岗' || (await this.registry.cardOf(actor.id))?.就绪 !== true) return unavailable();
+        if (member?.status !== '在岗') return unavailable();
         if ((actor.kind === 'Lead' && member.岗位 !== 'Lead') || (actor.kind === '成员' && member.岗位 === 'Lead') || (actor.roleId !== undefined && actor.roleId !== member.岗位)) return unavailable();
+        identityStamp = executionStamp(member);
         actor = { ...actor, roleId: member.岗位 };
       }
       const permission = { subject: actor, action: 'read', target: { id: `记忆/检索/${项目}`, kind: '记忆', authority: '自治', zone: '私有', domain: '集体', project: 项目 }, context: { 类: '知识' } };
@@ -1056,6 +1059,10 @@ export class MemoryService {
       if (intakeStamp !== undefined && intakeStamp !== await this.information?.visibilityStamp()) return unavailable();
       if (!frame) for (const source of sources) if (await readTextOrNull(source.file) !== source.text) return unknown();
       if (this.policy.decideCurrentSync(permission)?.verdict !== 'allow') return unavailable();
+      if (identityStamp !== null) {
+        const member = (await this.registry.identity()).members?.[actor.id];
+        if (!member || executionStamp(member) !== identityStamp || (await this.policy.executionIdentity(actor))?.ok !== true) return unavailable();
+      }
       if (!frame) for (const entry of fold(rows)) if (result.get(entry.id)?.状态 === '可核来源版本') {
         try { this.#feedbackRead(actor, memoryTarget('知识', entry.归属, entry.项目), { id: entry.id, 类: '知识' }); } catch { return unknown(); }
       }
@@ -2195,7 +2202,7 @@ export class MemoryService {
     if (!this.policy.healthy) throw new Fault('KNOWLEDGE_FEEDBACK_POLICY_UNAVAILABLE', '当前策略不健康，不能核对或关联反馈。');
     if (subject.kind === 'Lead') {
       const member = (await this.registry?.identity?.())?.members?.[subject.id];
-      if (member?.岗位 !== 'Lead' || member.status !== '在岗' || (subject.roleId !== undefined && subject.roleId !== 'Lead') || (await this.registry?.cardOf?.(subject.id))?.就绪 !== true) throw new Denied('知识反馈 · 当前Lead凭证', '主体不是在册、在岗且真实卡就绪的Lead。');
+      if (member?.岗位 !== 'Lead' || member.status !== '在岗' || (subject.roleId !== undefined && subject.roleId !== 'Lead') || !this.policy.executionIdentity || (await this.policy.executionIdentity(subject))?.ok !== true) throw new Denied('知识反馈 · 当前Lead凭证', '主体没有匹配的在册、在岗及当前运行绑定Lead身份；专业卡不决定反馈治理权限。');
     }
   }
   #feedbackRead(subject, target, context = {}) {

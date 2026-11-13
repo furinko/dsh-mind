@@ -17,7 +17,7 @@ const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const denied=message=>new Denied('冻结实验 · 任务与天然凭据',message,{howToChange:'核对实际派发关系、冻结任务/代码/配方及宿主当前权限；由Lead登记本次许可，不要求主权者逐项审读候选或代跑。'});
 const clockMs=org=>typeof org.clock?.ms==='function'?org.clock.ms():Date.now();
 const parentId=agent=>typeof agent.session?.header?.parentSession==='string'?agent.session.header.parentSession:null;
-const stamp=m=>({generation:m.代??1,card:m.卡版本?.摘要??null});
+const stamp=m=>({id:m.id??null,generation:m.代??1,host:typeof m.代次==='string'?m.代次:m.代次?.代??null});
 const same=(a,b)=>experimentDigest(a)===experimentDigest(b);
 const inside=(root,file)=>{const fold=p=>process.platform==='win32'?p.toLowerCase():p;const a=fold(root),b=fold(file);return b===a||b.startsWith(a+path.sep);};
 const safeTask=n=>({id:n.id,状态:n.状态,代:n.代??1,负责人:n.负责人,绑定:n.绑定,判据冻结:n.判据冻结,复核对象:复核对象引用(n),复核读根:n.复核读根??[]});
@@ -39,7 +39,7 @@ export class ReviewExperimentService {
     if(this.#closed)throw new Fault('EXPERIMENT_DISPOSED','实验服务已卸载。');
     const agent=requireLiveActor(spec),identity=await this.#org.registry.identity(),member=identity.members?.[spec.subject.id];
     if(!member||member.status!=='在岗'||!['Lead','成员'].includes(spec.subject.kind)||subjectKindForRole(member.岗位)!==spec.subject.kind)throw denied('执行者真实在岗身份与宿主主体不符。');
-    const card=await this.#org.registry.cardOf(spec.subject.id);if(card?.就绪!==true)throw denied('执行者钉卡事实不可用。');
+    const readiness=await this.#org.policy.executionIdentity(spec.subject);if(!readiness.ok)throw denied(readiness.decision.reason);
     return {agent,identity,member,lead:spec.subject.kind==='Lead'};
   }
   async #reviewTask(spec,taskId,holderId,{running=false}={}){
@@ -48,7 +48,7 @@ export class ReviewExperimentService {
     const owner=holder.委派者.id,lead=actor.identity.members?.[owner];
     if(!lead||lead.status!=='在岗'||lead.岗位!=='Lead')throw denied('派发Lead在岗事实缺失。');
     if(actor.lead?spec.subject.id!==owner:spec.subject.id!==holderId||parentId(actor.agent)!==owner)throw denied('复核许可不属于当前派发关系。');
-    if((await this.#org.registry.cardOf(holderId))?.就绪!==true||!stamp(holder).card||!stamp(lead).card)throw denied('复核实例或派发Lead未钉卡就绪。');
+    for(const identity of [{id:holderId,kind:'成员'},{id:owner,kind:'Lead'}]){const ready=await this.#org.policy.executionIdentity(identity);if(!ready.ok)throw denied(ready.decision.reason);}
     const health=await readJsonlHealth(this.#org.layout.taskLog(spec.project));if(health.坏行||!health.末行完整)throw new Fault('EXPERIMENT_TASK_LEDGER_INVALID','任务真源损坏，不使用跳行投影授予实验。');
     const node=await this.#org.tasks.get(taskId,{项目:spec.project});
     if(!node||node.模式==='独立会审'||!READ_STATES.has(node.状态)||(running&&node.状态!=='执行中')||node.判据冻结!==true||!Array.isArray(node.判据)||!node.判据.length)throw denied('复核任务不在允许状态或缺冻结判据；运行须先实际开工。');
@@ -137,7 +137,7 @@ export class ReviewExperimentService {
     if(grant.config!==this.#config.digest)throw denied('许可的可信部署配置已变化。');
     if(grant.revoked||clockMs(this.#org)>=grant.expiresAt)throw denied('许可已撤回或过期。');
     const ctx=await this.#reviewTask(spec,grant.task,grant.holder,{running});
-    if((ctx.node.代??1)!==grant.generation||!same(stamp(ctx.holder),grant.holderStamp)||!same(stamp(ctx.ownerMember),grant.ownerStamp)||!same(ctx.targets,grant.targets)||!same(ctx.credentialEpoch,grant.credentialEpoch))throw denied('任务/实例/钉卡代次或被验对象已变化，旧许可不能复活。');
+    if((ctx.node.代??1)!==grant.generation||!same(stamp(ctx.holder),grant.holderStamp)||!same(stamp(ctx.ownerMember),grant.ownerStamp)||!same(ctx.targets,grant.targets)||!same(ctx.credentialEpoch,grant.credentialEpoch))throw denied('任务/真实实例代次或被验对象已变化，旧许可不能复活。');
     if(this.#config.mode==='autonomous'&&!same(await autonomousExperimentPolicy(spec,ctx,this.#services()),grant.nativePolicy))throw denied('宿主会话权限已变化，需要Lead重新冻结许可。');
     const candidate=this.#candidate(grant.candidate,grant.candidateSnapshot);if(candidate.manifestHash!==grant.manifest)throw denied('候选清单已变化。');this.#rootAllowed(ctx,candidate);
     return {...ctx,candidate};

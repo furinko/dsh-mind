@@ -159,29 +159,35 @@ export class GoalBudgetService {
     if (typeof subject?.id !== 'string' || !subject.id.trim() || (configure ? subject.kind !== '主权者' : !['Lead', '主权者'].includes(subject.kind))) throw new Denied('目标额度 · 治理资格', configure ? '额度配置只接受真实人侧主权者，声明文本不能代替认证。' : '额度读面只向真实 Lead 或主权者开放。');
     if (subject.kind === 'Lead') {
       if (!this.registry?.identity) throw new Fault('GOAL_BUDGET_IDENTITY_UNAVAILABLE', '缺少真实身份源。');
+      const readiness = await this.policy.executionIdentity(subject);
+      if (!readiness.ok) throw new Denied(readiness.decision.rule, readiness.decision.reason, readiness.decision);
       const member = (await this.registry.identity()).members?.[subject.id];
       if (member?.岗位 !== 'Lead' || member.status !== '在岗') throw new Denied('目标额度 · 治理资格', '当前主体不是在册在岗 Lead。');
     }
   }
   async #executionActor(subject, goalId, category) {
     if (typeof subject?.id !== 'string' || !subject.id.trim() || !['Lead', '成员'].includes(subject.kind) || (category === 'member_spawn' && subject.kind !== 'Lead')) throw new Denied('目标额度 · 准入资格', '受管准入只接受真实 Lead 或成员，派活仅限 Lead；额度不产生原动作权限。');
-    if (!this.registry?.identity || !this.registry?.cardOf || typeof this.policy?.refreshIfStale !== 'function') throw new Fault('GOAL_BUDGET_IDENTITY_UNAVAILABLE', '缺少当前身份、卡凭证或新鲜策略，不能准入。');
+    if (!this.registry?.identity || typeof this.policy?.executionIdentity !== 'function' || typeof this.policy?.refreshIfStale !== 'function') throw new Fault('GOAL_BUDGET_IDENTITY_UNAVAILABLE', '缺少当前真实执行身份或新鲜策略，不能准入。');
     await this.policy.refreshIfStale();
     if (!this.policy.healthy) throw new Fault('GOAL_BUDGET_POLICY_UNAVAILABLE', '当前策略不健康，停止新准入。');
     if (this.policy.presence?.().lost !== false) throw new Denied('目标额度 · 当前写冻结', '主权者失联或失联资格不可确认，不能新增受管准入。');
+    const readiness = await this.policy.executionIdentity(subject);
+    if (!readiness.ok) throw new Denied(readiness.decision.rule, readiness.decision.reason, readiness.decision);
     const identity = await this.registry.identity();
     const member = identity.members?.[subject.id];
     const kind = member?.岗位 === 'Lead' ? 'Lead' : ['主权者', '出厂作者'].includes(member?.岗位) ? member.岗位 : '成员';
-    if (!member || member.status !== '在岗' || kind !== subject.kind || (subject.kind === '成员' && subject.roleId !== member.岗位) || (subject.kind === 'Lead' && subject.roleId !== undefined && subject.roleId !== 'Lead') || (await this.registry.cardOf(subject.id))?.就绪 !== true) throw new Denied('目标额度 · 当前实例凭证', '实例不在岗、岗位自报不匹配或真实卡凭证失效，不能准入。');
+    if (!member || member.status !== '在岗' || kind !== subject.kind || (subject.kind === '成员' && subject.roleId !== undefined && subject.roleId !== member.岗位) || (subject.kind === 'Lead' && subject.roleId !== undefined && subject.roleId !== 'Lead')) throw new Denied('目标额度 · 当前实例凭证', '实例不在岗、岗位自报不匹配或真实执行凭证失效，不能准入。');
     const denied = new Set([subject.id, member.岗位, goalId]);
     if (subject.kind === '成员') {
       const parentId = member.委派者?.id;
       const parent = identity.members?.[parentId];
-      if (!parentId || parent?.岗位 !== 'Lead' || parent.status !== '在岗' || (await this.registry.cardOf(parentId))?.就绪 !== true) throw new Denied('目标额度 · 当前父Lead资格', '成员缺少当前真实在岗父 Lead，不能准入。');
+      if (!parentId || parent?.岗位 !== 'Lead' || parent.status !== '在岗') throw new Denied('目标额度 · 当前父Lead资格', '成员缺少当前真实在岗父 Lead，不能准入。');
+      const parentReadiness = await this.policy.executionIdentity({ id: parentId, kind: 'Lead' });
+      if (!parentReadiness.ok) throw new Denied(parentReadiness.decision.rule, parentReadiness.decision.reason, parentReadiness.decision);
       denied.add(parentId); denied.add('Lead');
     }
     if (!Array.isArray(identity.denylist) || identity.denylist.some((entry) => denied.has(entry?.id))) throw new Denied('目标额度 · 当前撤回资格', '主体、岗位、父 Lead 或目标已撤回，或拒绝名单不可判；停止新准入。');
-    return { id: subject.id, kind: subject.kind, ...(subject.kind === '成员' ? { roleId: subject.roleId } : {}) };
+    return { id: subject.id, kind: subject.kind, ...(subject.kind === '成员' ? { roleId: member.岗位 } : {}) };
   }
   async #audit(row, project, subject) {
     try { await this.audit.append({ 动作: '状态变更', 主体: subject, 对象: { id: row.id, kind: '目标预算' }, 依据: '目标额度事件流', 结果: row.kind, 项目: project, 详情: { 事件: row.kind, 预算修订: row.预算修订 ?? null, ...(row.执行键 ? { 执行键: row.执行键 } : {}) } }); }

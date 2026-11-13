@@ -74,11 +74,8 @@ export class LeadSpaceService {
     if (!['Lead', '主权者'].includes(spec?.subject?.kind)) throw new Denied('Lead自由空间', '只向Lead和已认证的人侧开放。');
     // Identity/relationship read is shared; draft writes have their own one-step policy target.
     await this.org.information.authorize(spec);
-    if (write && spec.subject.kind === 'Lead') {
-      const member = (await this.org.registry.identity()).members?.[spec.subject.id];
-      const card = await this.org.registry.cardOf(spec.subject.id);
-      if (card?.就绪 !== true || !member?.卡版本?.摘要 || card.卡版本?.摘要 !== member.卡版本.摘要) throw new Denied('自由空间身份凭证', '需要当前真实Lead的有效钉版凭据。');
-    }
+    // Own-target policy writes check the actual registered Lead and host
+    // generation; specialty card versions do not gate ordinary draft writing.
     await this.org.policy.check({ subject: spec.subject, action: write ? 'write' : 'read', target: this.target(spec.project) });
   }
   async notes(spec, { globalOnly = false } = {}) {

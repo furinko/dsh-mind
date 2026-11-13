@@ -257,11 +257,11 @@ export class InformationService {
     if (actor.kind !== '主权者') {
       const member = (await this.org.registry.identity()).members?.[actor.id];
       if (!member || member.status !== '在岗' || (actor.roleId && actor.roleId !== member.岗位)) throw new Denied('信息收录身份', '当前实例不在岗或岗位不匹配。');
-      credential = { role: member.岗位, generation: member.代 ?? null, boot: member.代次 ?? null, card: member.卡版本?.摘要 ?? null };
+      credential = { role: member.岗位, generation: member.代 ?? null, boot: member.代次 ?? null };
       if (actor.kind === 'Lead' && member.岗位 !== 'Lead') throw new Denied('信息收录身份', 'Lead 身份必须与在册岗位一致。');
       if (actor.kind === 'Lead' && write) {
-        const card = await this.org.registry.cardOf(actor.id);
-        if (card?.就绪 !== true || !card.卡版本?.摘要 || card.卡版本.摘要 !== member.卡版本?.摘要) throw new Denied('信息成长身份凭证', 'Lead 岗位凭证未就绪，不写入成长资料。');
+        const identity = await this.org.policy.executionIdentity(actor);
+        if (!identity.ok) throw new Denied(identity.decision.rule, identity.decision.reason, identity.decision);
       }
       if (actor.kind === '成员') {
         if (write) throw new Denied('信息成长治理', '专业成员读取明确共享的资料；成长与能力候选由Lead整合，成员通过任务交卷反馈。');

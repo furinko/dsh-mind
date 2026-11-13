@@ -8,7 +8,7 @@
  * 三条必须保证：
  *  1. **封存 ≠ 删除** —— 封存只把状态改成「封存」，卡留在盘上。
  *  2. **随时能答「这身份能碰什么」** —— `canTouch()` 把卡的分段与策略引擎的判定拼成一张表。
- *  3. **实例权限只来自岗位** —— `assign()` 拒绝一个不存在的岗位。
+ *  3. **专业资料不冒充执行权限** —— `assign()` 指定的专业必须真实存在；普通执行另核真实身份。
  */
 import { listDirs, listFiles, readJsonOrNull, readTextOrNull, atomicWrite, exists, withLock } from './kernel/fsx.js';
 import { readInstanceSnapshot } from './instance-snapshot.js';
@@ -442,7 +442,7 @@ export class RoleRegistry {
       throw new InvalidBody('registry_assign 需要「实例」：省略实例会把一个不存在的键写进身份真源（历史坏键 members["undefined"] 即此）。', { missing: ['实例'] });
     }
     if (!岗位) {
-      throw new InvalidBody('registry_assign 需要「岗位」：实例权限只来自岗位，空岗位不能被登记。', { missing: ['岗位'] });
+      throw new InvalidBody('registry_assign 需要「岗位」：此入口登记指定专业，空岗位不能被登记。', { missing: ['岗位'] });
     }
     spec = { ...spec, 实例, 岗位 };
     // 会审绑定（补修I）：先归一/校验，任何不合法都在写盘前拒（fail-closed）。
@@ -460,7 +460,7 @@ export class RoleRegistry {
     const 扩张 = 自我登记 ? await this.扩张集合({ 实例, 岗位 }) : null;
     // v2（条目20 · 受控父判，2026-10-18）：把**委派者**钉在实例绑定上——策略引擎在成员每次
     // 写动作时用同一 action/target/context 对委派者做一次父判。这里只备事实，不判权。
-    // 卡版本取委派者自己钉住的那一版（条目10），于是「父判依据的是父出生时的那张卡」可核。
+    // 摘要仅记录父实例的历史专业元数据；父判依据真实身份与现行宿主权限，不读取父卡准入。
     // 机制出生（系统）不算委派：那是宿主起会话，不是人派人。
     // **自己登记自己不算委派**（自我登记归「不自授」判），否则会给自己钉一个自指的父。
     const 委派者 = 自我登记 ? null : await this.#委派者事实(spec.subject);
@@ -481,15 +481,14 @@ export class RoleRegistry {
     let 首登 = false;
     const updated = await this.#mutateIdentity(async (current) => {
       // 岗位卡存在性【锁内复检·设计评审 #12 · 2026-10-15】：修前在锁外预读（assign 一进来
-      // 就 `this.get`）——check 与写入之间岗位卡被删/改名的话，一个「不存在的岗位」会被登记
-      // 进档案（实例权限只来自岗位就成了空话）。搬进锁内：读的是持锁时刻的盘上事实，
+      // 就 `this.get`）——check 与写入之间岗位卡被删/改名的话，一个「不存在的专业」会被登记
+      // 进档案并被宣称已加载。搬进锁内：读的是持锁时刻的盘上事实，
       // 「卡在校验后被删」的窗口随锁关闭。幂等路径同样先过这道（与修前顺序一致：
       // 卡不存在就先拒，不进分派表）。
       const card = await this.get({ id: spec.岗位 });
       if (!card) {
-        throw new Denied('角色注册表 · 实例权限只来自岗位（§7）', `岗位「${spec.岗位}」不存在：不能给一个不存在的岗位发实例权限。`, {
-          requireAuthority: 'Lead',
-          howToChange: '先在 集体L3-成员角色卡/ 建岗位卡，再派实例。',
+        throw new Denied('角色注册表 · 指定专业资料不可用', `岗位「${spec.岗位}」的专业资料不存在：无法登记为已加载该专业。`, {
+          howToChange: '修复指定岗位卡，或在既有宿主许可内改用普通委派或其他可用专业；这是专业接线问题，不需要新增用户授权。',
         });
       }
       const 现存 = current.members[spec.实例];
@@ -650,7 +649,7 @@ export class RoleRegistry {
       动作: '状态变更',
       主体: spec.subject,
       对象: { id: spec.实例, kind: '身份' },
-      依据: '角色注册表：实例权限只来自岗位',
+      依据: '角色注册表：登记真实身份与指定专业资料',
       结果: `登记到岗位 ${spec.岗位}（第 ${spec.代 ?? 1} 代）`,
       // 审计带卡版本（条目10）：账上要能回答「它当时凭的是哪一版岗位卡」。
       详情: { 实例数: Object.keys(updated.members).length, 卡版本: updated.members[spec.实例]?.卡版本?.摘要 ?? null, 卡声明版本: updated.members[spec.实例]?.卡版本?.声明版本 ?? null, 会审: updated.members[spec.实例]?.会审绑定?.会审 ?? null },
@@ -851,10 +850,8 @@ export class RoleRegistry {
    *  ② **绝不拿空表放行**：`ok:false` 时 `成员` 必为空且调用方必须 fail-closed；只有
    *     「未引导」（档案不存在 / 没有 members 键）才 `ok:true, 未引导:true, 成员:{}`——
    *     那是全新部署的合法初态，不是坏档；
-   *  ③ **口径与写前闸一致**：`就绪 = 在岗 && 卡版本摘要 && 卡快照内容校验通过 &&
-   *     (成员岗还要 委派者 id)`；Lead / 主权者 / 出厂作者不要求委派者（天然凭证，不泛化系统豁免）。
-   *     卡面校验与 `cardOf` / `policy` 写前闸共用 card-credential 的唯一校验面（补修J：
-   *     摘要字符串不是凭证，必须由正文重算并重派生段与能力引用）。
+   *  ③ **执行与专业分开**：执行`就绪`只核真实在岗身份、代次和成员委派归属；
+   *     `专业就绪`另用 card-credential 核对卡正文和派生字段，不充当普通执行通行证。
    *
    * @returns {{ok: boolean, 原因?: string, 未引导?: boolean, 成员: Record<string, {id: string, 岗位: string|null, 状态: string|null, 卡版本摘要: string|null, 委派者id: string|null, 就绪: boolean, 未就绪原因?: string}>}}
    */
@@ -911,8 +908,8 @@ export class RoleRegistry {
   /**
    * 委派者事实（v2 条目20 · 受控父判的唯一来源）。
    *
-   * 记 `{id, kind, 卡版本}`：id/kind 决定父判用哪个主体判；卡版本是委派者**出生时钉住**的
-   * 那一版（条目10），于是「父判凭的是哪一版规则」也可核。
+   * 记 `{id, kind, 卡版本}`：id/kind 决定父判用哪个主体判；卡版本仅保留登记时的
+   * 专业资料摘要元数据，不读取专业正文，也不作为父判执行权限凭证。
    *
    * 机制出生（系统）不算委派——那是宿主起会话，不是人/组织派人；返回 null。
    *
@@ -923,8 +920,8 @@ export class RoleRegistry {
     const id = String(subject?.id ?? '').trim();
     const kind = String(subject?.kind ?? '').trim();
     if (!id || !kind || kind === '系统') return null;
-    const 钉 = await this.cardOf(id);
-    return { id, kind, 卡版本: 钉?.卡版本?.摘要 ?? null };
+    const member = (await this.#identity()).members[id];
+    return { id, kind, 卡版本: member?.卡版本?.摘要 ?? null };
   }
 
   /**

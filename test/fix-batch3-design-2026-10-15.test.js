@@ -300,7 +300,7 @@ describe('设计评审 2026-10-15 批次C · #12 assign 岗位卡锁内复检', 
       };
       await assert.rejects(
         () => reg.assign({ subject: LEAD, 岗位: '插件工程', 实例: 'member-race' }),
-        (e) => e instanceof Denied && /实例权限只来自岗位/.test(e.rule),
+        (e) => e instanceof Denied && /指定专业资料不可用/.test(e.rule) && /不需要新增用户授权/.test(e.howToChange),
         '锁内复检必须拒（修前：锁外预读已通过 ⇒ 不存在的岗位进档案）',
       );
       assert.equal((await reg.identity()).members['member-race'], undefined, '被拒的登记不许落进身份档案');

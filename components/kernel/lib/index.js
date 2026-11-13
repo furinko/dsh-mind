@@ -1472,6 +1472,8 @@ async function 注入Lead已钉规程(assembly, agent, org, logger, 宿主) {
         `实例 ${主体.id} 的岗位卡钉版未就绪（${登记?.原因 ?? 'unknown'}）：自治写已按 fail-closed 拒绝；`,
         '只读诊断（status / workbench / audit_tail / task_criteria）仍可用。请核对宿主会话与实际身份档案；缺少专业卡单独报告，不要求新增授权。',
       ].join('\n');
+    } else if (登记?.专业就绪 !== true) {
+      段文本 = '【Lead 专业资料未加载】真实执行身份已核对；专业卡缺失或不可用，仅影响专业规程取用，不代表需要新增授权。';
     } else {
       const 钉 = await org.registry.cardOf(主体.id);
       const 段 = 钉?.段 ?? {};

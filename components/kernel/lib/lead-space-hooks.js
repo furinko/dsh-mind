@@ -80,8 +80,8 @@ export function createLeadSpaceHooks({ org, projectOf, llmOf = () => null, logge
         const spec = { ...entry.spec };
         // Only normal host entry binds identity. Background work cannot revive a sealed or stale Lead.
         const member = (await org.registry.identity()).members?.[spec.subject.id];
-        const card = member?.status === '在岗' && member.岗位 === 'Lead' ? await org.registry.cardOf(spec.subject.id) : null;
-        if (card?.就绪 !== true || card.卡版本?.摘要 !== member.卡版本?.摘要) { lastState = 'waiting-for-lead'; return; }
+        const identity = member?.status === '在岗' && member.岗位 === 'Lead' ? await org.policy.executionIdentity(spec.subject) : null;
+        if (identity?.ok !== true) { lastState = 'waiting-for-lead'; return; }
         const scopeProof = await org.information.authorize(spec, true);
         if (!active(entry)) return;
         const wake = await service.reserve(spec); if (!wake) { lastState = 'idle'; return; }

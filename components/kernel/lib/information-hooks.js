@@ -71,13 +71,13 @@ export function createInformationHooks({ org, projectOf, llmOf = () => null, log
         // Defer auxiliary work instead of treating an imported/sealed identity as a failed reading.
         const member = (await org.registry.identity()).members?.[spec.subject.id];
         if (member?.status !== '在岗' || member.岗位 !== 'Lead') { waitingForLead++; return; }
-        const card = await org.registry.cardOf(spec.subject.id);
-        if (card?.就绪 !== true || card.卡版本?.摘要 !== member.卡版本?.摘要) { waitingForLead++; return; }
+        const identity = await org.policy.executionIdentity(spec.subject);
+        if (!identity.ok) { waitingForLead++; return; }
         for (let i = 0; i < 2 && same(session, spec) && !controller.signal.aborted; i++) {
           let prepared;
           try { prepared = await service.prepareLearning(spec); }
           catch (error) {
-            // A valid pinned card does not prove the restored session is bound to this process.
+            // A specialty card does not prove the restored session is bound to this process.
             // Only the normal host prompt/tool entry may rebind it; background reading waits.
             if (error?.code === 'DENIED' && error.rule === 'Lead 运行绑定失效（写 fail-closed）') { waitingForLead++; return; }
             throw error;

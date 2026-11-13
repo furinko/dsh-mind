@@ -142,14 +142,14 @@ describe('持久成员创建操作领域', () => {
     assert.equal(service.findByTask(P, spec.任务).阶段[2].阶段, 'registered');
   }));
 
-  it('无当前Lead/岗位伪报/无就绪卡不产生intent，主权者也不代Lead发起', async () => scene(async ({ f, begin, rows }) => {
+  it('无当前Lead或主体伪报不产生intent，缺专业卡不妨碍真实Lead记录意图', async () => scene(async ({ f, begin, rows }) => {
     for (const subject of [MEMBER, SOVEREIGN, { id: MEMBER.id, kind: 'Lead' }, { id: 'ghost', kind: 'Lead' }, { ...LEAD, roleId: '插件工程' }]) await assert.rejects(() => begin({ subject }), (error) => error instanceof Denied);
     const file = f.layout.identityFile();
     const saved = await readFile(file, 'utf8'); const identity = JSON.parse(saved);
     identity.members.lead.卡版本 = null;
     await writeFile(file, JSON.stringify(identity));
-    await assert.rejects(() => begin(), (error) => error instanceof Denied);
-    assert.equal((await rows()).length, 0);
+    assert.equal((await begin()).可创建, true, '缺专业卡不撤销真实执行身份');
+    assert.equal((await rows()).length, 1);
     await writeFile(file, saved);
   }));
 

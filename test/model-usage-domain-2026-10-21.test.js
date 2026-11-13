@@ -252,8 +252,8 @@ describe('模型用量只读观察领域', () => {
     const broken = JSON.parse(identityRaw);
     broken.members.lead.卡版本 = null;
     await writeFile(identityFile, JSON.stringify(broken));
-    assert.equal(await usage.summaryFor({ subject: LEAD, 项目: P }), null, '真实Lead钉版不可用时不泄露统计');
-    await assert.rejects(() => usage.query({ subject: LEAD, 项目: P }), (error) => error instanceof Denied);
+    assert.notEqual(await usage.summaryFor({ subject: LEAD, 项目: P }), null, '缺专业卡不阻真实Lead治理查询');
+    assert.ok(await usage.query({ subject: LEAD, 项目: P }));
     await writeFile(identityFile, identityRaw);
     const matrix = '集体L1-法律/权限矩阵.md';
     const ruleRaw = await readFile(f.layout.factory(matrix), 'utf8');

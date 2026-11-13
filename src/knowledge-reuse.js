@@ -148,9 +148,11 @@ export class KnowledgeReuseService {
     await this.policy.refreshIfStale();
     if (!this.policy.healthy) throw new Fault('KNOWLEDGE_REUSE_POLICY_UNAVAILABLE', '当前策略不健康，不能生成知识复用治理读面。');
     if (subject.kind === 'Lead') {
-      if (!this.registry?.identity || !this.registry?.cardOf) throw new Fault('KNOWLEDGE_REUSE_IDENTITY_UNAVAILABLE', '缺少真实Lead身份或卡凭证真源。');
+      if (!this.registry?.identity || typeof this.policy?.executionIdentity !== 'function') throw new Fault('KNOWLEDGE_REUSE_IDENTITY_UNAVAILABLE', '缺少真实Lead身份或执行凭证真源。');
+      const readiness = await this.policy.executionIdentity(subject);
+      if (!readiness.ok) throw new Denied(readiness.decision.rule, readiness.decision.reason, readiness.decision);
       const member = (await this.registry.identity()).members?.[subject.id];
-      if (member?.岗位 !== 'Lead' || member.status !== '在岗' || (subject.roleId !== undefined && subject.roleId !== 'Lead') || (await this.registry.cardOf(subject.id))?.就绪 !== true) throw new Denied('知识复用 · 治理读资格', '当前主体不是在册、在岗且卡凭证就绪的Lead。');
+      if (member?.岗位 !== 'Lead' || member.status !== '在岗' || (subject.roleId !== undefined && subject.roleId !== 'Lead')) throw new Denied('知识复用 · 治理读资格', '当前主体不是在册、在岗且执行身份有效的Lead。');
     }
   }
   #decision(subject, target, context = {}) { if (!this.policy?.healthy || typeof this.policy?.decideCurrentSync !== 'function') throw new Fault('KNOWLEDGE_REUSE_POLICY_UNAVAILABLE', '当前策略不可判，不能用旧读域生成知识复用统计。'); return this.policy.decideCurrentSync({ subject, action: 'read', target, context }); }

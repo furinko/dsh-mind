@@ -136,7 +136,7 @@ describe('对象存储 / 能力库 / 角色注册表', () => {
     assert.equal(index.岗位.find((r) => r.id === '插件工程').来源, '私有');
   });
 
-  it('实例权限只来自岗位：不存在的岗位不能发实例', async () => {
+  it('指定专业必须真实存在：不存在的专业不能被登记为已加载', async () => {
     await assert.rejects(
       () => registry.assign({ subject: LEAD, 岗位: '不存在的岗位', 实例: 'ghost-1' }),
       (error) => error instanceof Denied,

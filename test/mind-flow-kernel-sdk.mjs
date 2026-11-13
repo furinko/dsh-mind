@@ -254,13 +254,13 @@ for(const mode of ['team','subagent'])test(`SDK ${mode} review repair reuses exa
   const f=await fixture(t,mode,'member',{role:'复核员',delegation:{mode:'explicit-user'}}),id=await seedExisting(f,mode,'复核员');
   const business=await f.org.tasks.create({subject:LEAD,项目:P,描述:'synthetic review target',负责人:['插件工程'],判据:['original business criterion']});
   const message={action:'member_message',实例:id,任务:f.task.id,内容:'Read only granted synthetic review materials.'};
-  let r=await f.invoke(message);assert.equal(r.成功,false);assert.match(r.怎么改,/task_bind/);assert.equal(f.sends.length,0);
+  let r=await f.invoke(message);assert.equal(r.成功,true,'专业名称不把普通任务变成复核用途');assert.equal(f.sends.length,1);assert.equal(f.sends[0].id,id);
   assert.equal((await f.invoke({action:'member_stop',实例:id})).已请求中断,true,'missing review scope does not block stop-only');
   assert.equal((await f.invoke({action:'task_bind',id:f.task.id,复核对象:[business.id]})).成功,true);
-  r=await f.invoke(message);assert.equal(r.成功,false);assert.match(r.怎么改,/task_attach/);assert.equal(f.sends.length,0);
+  r=await f.invoke(message);assert.equal(r.成功,false);assert.match(r.怎么改,/task_attach/);assert.equal(f.sends.length,1);
   assert.equal((await f.invoke({action:'task_attach',id:f.task.id,产出物引用:f.f.factoryRoot})).成功,true);
   r=await f.invoke(message);assert.equal(r.成功,true,JSON.stringify(r));assert.equal(r.已接收,true);assert.equal(f.sends[0].id,id);
-  assert.equal(f.calls.length,0);assert.equal(f.sends.length,1);assert.equal((await f.invoke({action:'delegation_status'})).数据.authorized,false);
+  assert.equal(f.calls.length,0);assert.equal(f.sends.length,2);assert.equal((await f.invoke({action:'delegation_status'})).数据.authorized,false);
 });
 test('SDK Team stop post-body failure stays unknown, not replayed',async t=>{
   const f=await fixture(t,'team','member',{delegation:{mode:'explicit-user'}}),id=await seedExisting(f,'team');

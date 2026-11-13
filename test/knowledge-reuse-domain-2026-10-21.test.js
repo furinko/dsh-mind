@@ -171,7 +171,7 @@ describe('知识复用逐交卷历史与当前来源', () => {
     for (const subject of [MEMBER, REVIEWER, { id: MEMBER.id, kind: 'Lead' }, { id: 'ghost', kind: 'Lead' }, { ...LEAD, roleId: 'wrong' }]) await assert.rejects(() => query({ subject }), (error) => error instanceof Denied);
     assert.equal((await query({ subject: SOVEREIGN })).汇总.交卷记录, 1);
     const identityFile = f.layout.identityFile(); const saved = await readFile(identityFile, 'utf8'); const identity = JSON.parse(saved); identity.members.lead.卡版本 = null; await writeFile(identityFile, JSON.stringify(identity));
-    await assert.rejects(() => query(), (error) => error instanceof Denied); assert.equal(await reuse.summaryFor({ subject: LEAD, 项目: P }), null);
+    assert.equal((await query()).汇总.交卷记录, 1, '缺专业卡仍沿真实治理身份读现有证据'); assert.notEqual(await reuse.summaryFor({ subject: LEAD, 项目: P }), null);
     await writeFile(identityFile, saved); await f.registry.seal({ subject: SOVEREIGN, 实例: LEAD.id, 理由: '当前治理读主体封存' });
     await assert.rejects(() => query(), (error) => error instanceof Denied);
   }));
