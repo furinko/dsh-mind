@@ -47,7 +47,7 @@ describe('批次4 · 缺口1B：动作层拦截入账', () => {
     try {
       const tasks = new TaskGraph({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock });
       const registry = new RoleRegistry({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock });
-      const org = { tasks, registry, audit: g.audit };
+      const org = { tasks, registry, audit: g.audit, policy:g.policy };
       const node = await tasks.create({ subject: LEAD, 项目: P, 描述: 'x', 负责人: ['member-a'], 判据: ['y'] });
       // ① 服务层状态机闸：待派发节点不许交卷（Denied 不经过策略引擎 ⇒ 修前无痕）
       await assert.rejects(

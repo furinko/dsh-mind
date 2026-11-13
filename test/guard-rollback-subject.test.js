@@ -95,12 +95,12 @@ describe('手工回滚定位的主体边界与审计归因', () => {
   it('手工重新定位保留真实红灯与全绿目标，另记手工调用者', async () => withGuard(async ({ fixture }) => {
     const probes = new ProbeRunner({ ...fixture, 无内核装配: true });
     const green = await probes.run({ subject: LEAD });
-    assert.equal(green.全绿, true);
+    assert.equal(green.全绿, true, JSON.stringify(green));
     fixture.policy.state.ok = false;
     const red = await probes.run({ subject: LEAD });
     const subject = { id: 'manual-recheck-root', kind: 'Lead' };
     const result = await probes.rollback({ subject });
-    assert.equal(result.已定位, true);
+    assert.equal(result.已定位, true, JSON.stringify(result));
     assert.deepEqual(result.触发快照, red.快照);
     assert.deepEqual(result.目标快照, green.快照);
     assert.equal(result.执行, false);

@@ -31,7 +31,7 @@ import { atomicWrite, stripBom } from '../../../src/kernel/fsx.js';
 import { ACTIONS, READ_ONLY_ACTIONS, COMMAND_ONLY_ACTIONS, 是写动作, runAction, 会审参与动作闸 } from '../../../lib/actions.js';
 // 复核读域单源（v2 条目6）：guard 是同步的 ⇒ 直接同步读任务账本 + fold，不另造一套范围判据。
 import { fold } from '../../../src/tasks.js';
-import { 复核读域 } from '../../../src/review-scope.js';
+import { 复核读域, 取复核用途同步 } from '../../../src/review-scope.js';
 // 看板尾长单源（设计评审 #17 · 2026-10-15）：装配期喂给看板包的「40」改引常量（值不变）。
 import { 看板审计尾条数 } from '../../../src/audit.js';
 // 单源（2026-10-11 schema 口径修缮）：类型 参数描述里的消息类型枚举从 bus.js 的
@@ -911,7 +911,9 @@ function 普通成员工具闸(exec, 项目, deps) {
   if (!快照.ok) return '[dsh-mind] 成员工具闸 · 身份快照不可用（unknown ⇒ 拒）。';
   const member = 快照.成员?.[主体.id];
   // 复核/会审由它们自己的更窄边界处理。
-  if (member?.岗位 === '复核员' || member?.会审绑定) return undefined;
+  if (member?.会审绑定) return undefined;
+  try { if (取复核用途同步({ layout: deps.org.layout, subject: 主体, 项目: deps.项目键 ? deps.项目键(exec) : 项目键(exec.agent, 项目), identity: 快照 })?.限定) return undefined; }
+  catch (error) { return `[dsh-mind] 复核用途不可判：${错误消息(error)}`; }
   if (exec.name === 'send_message' && member) return 成员报告通道(exec, 快照, member);
   if (!member?.就绪) return `[dsh-mind] 成员工具闸 · 实例未就绪：${member?.未就绪原因 ?? '缺身份'}；仅可向可信派发 Lead 报告。`;
   if (['mind', 'mind_guard', 'skill'].includes(exec.name)) return undefined;
@@ -943,7 +945,7 @@ function 咨询参与工具闸(exec, 项目, deps) {
     if (快照.成员?.[member.委派者id]?.岗位 !== 'Lead') return 拒('报告通道没有可信的派发 Lead，unknown ⇒ 拒。');
     return { 命中: true, 拒: 成员报告通道(exec, 快照, member) };
   }
-  if (member.就绪 !== true || member.岗位 === '复核员' || member.岗位 === 'Lead') {
+  if (member.就绪 !== true || member.岗位 === 'Lead') {
     return 拒(`实例未就绪：${member.未就绪原因 ?? '咨询实例不是普通成员岗'}；仅可向派发 Lead 报告。`);
   }
   if (绑定.无效 || 绑定.来源会话 !== member.委派者id) return 拒(`绑定不可用（${绑定.无效 ?? '来源会话与真实委派者冲突'}），unknown ⇒ 拒；请报告派发 Lead。`);
@@ -1009,7 +1011,8 @@ function 复核员工具闸(exec, 项目, deps) {
   if (!member || member.状态 !== '在岗' || !member.岗位) {
     return `[dsh-mind] 工具闸 · 成员身份未就绪：${主体.id} ${member ? `状态为 ${member.状态 ?? '缺失'}、岗位 ${member.岗位 ?? '缺失'}` : '没有在册记录'}。未知/封存实例不能因无法识别复核岗位而获得通用工具权限，请交回 Lead 诊断。`;
   }
-  if (member.岗位 !== '复核员') return undefined;
+  try { if (!取复核用途同步({ layout: deps.org.layout, subject: 主体, 项目: deps.项目键 ? deps.项目键(exec) : 项目键(exec.agent, 项目), identity: 快照 })?.限定) return undefined; }
+  catch (error) { return `[dsh-mind] 复核用途不可判：${错误消息(error)}`; }
   // 报告通道（唯一放行的非只读工具）：只允许发给**派发它的 Lead**，不是全局放行
   // send_message（否则复核员可唤醒任意成员/再派活）。见 成员报告通道()。
   if (工具 === 'send_message') return 成员报告通道(exec, 快照, member);
@@ -1195,7 +1198,9 @@ function 复核授权读根(exec, deps) {
     return { 拒: `[dsh-mind] 复核员读路径 · 读不到项目 ${项目名} 的任务账本（unknown ⇒ 拒，不拿「没读到」当「没有引用」）：${error instanceof Error ? error.message : String(error)}。若尚无复核任务/授权产出引用，请 Lead 先建复核任务并 attach 源码目录/产物文件（授权产出引用，绝对路径）。` };
   }
   const 节点 = [...fold(rows).values()];
-  const 域 = 复核读域({ 节点, 主体: deps.主体 ?? agentSubject(exec), 项目: 项目名 });
+  const identity = readInstanceSnapshot(org.layout.identityFile());
+  const subject = deps.主体 ?? agentSubject(exec);
+  const 域 = 复核读域({ 节点, 主体: subject, 项目: 项目名, 成员: identity.成员?.[subject.id] });
   if (!域.限定) return { 拒: '[dsh-mind] 复核员读路径 · 主体不是已登记的复核员岗（unknown ⇒ 拒）。' };
   const 根 = new Set();
   for (const node of 节点) {

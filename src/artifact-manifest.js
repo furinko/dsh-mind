@@ -42,7 +42,9 @@ function assertPublicFile(path, layout) {
 function canCaptureFile(path, spec) {
   const { task, subject, fileAuthority } = spec;
   if (subject?.kind !== '成员') return true;
-  return fileAuthority?.canCapture?.(path, task, subject) === true;
+  const project = spec.项目 ?? spec.project ?? task?.项目;
+  if (typeof project !== 'string' || !project.trim()) return false;
+  return fileAuthority?.canCapture?.(path, { ...task, 项目: project }, subject) === true;
 }
 
 /** 每一级都查链接；只查最终 realpath 会把「目录内文件越界」隐藏掉。 */

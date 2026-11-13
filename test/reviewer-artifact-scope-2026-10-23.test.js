@@ -25,7 +25,7 @@ async function scene(fn,{attach=true}={}){
   if(attach)await grant();await org.tasks.start(review.id,{subject:REVIEWER,项目:P});
   const submit=(refs=[file])=>org.tasks.submit(review.id,{subject:REVIEWER,项目:P,产出物引用:refs,结论:'独立复核报告'});
   const current=()=>org.tasks.get(review.id,{项目:P});
-  const capture=async(subject,task,refs=[file])=>captureArtifactManifest(refs,{layout:f.layout,policy:org.policy,fileAuthority:org.tasks.toolFileAuthority(),subject,task});
+  const capture=async(subject,task,refs=[file])=>captureArtifactManifest(refs,{layout:f.layout,policy:org.policy,fileAuthority:org.tasks.toolFileAuthority(),subject,task,项目:P});
   await fn({f,org,file,other,workspace,business,review,act,grant,submit,current,capture});
  }finally{await f.cleanup();}
 }

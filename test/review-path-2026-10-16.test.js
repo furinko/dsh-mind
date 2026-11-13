@@ -150,17 +150,13 @@ describe('② 统一可信岗位回填（v2：复核员岗成员保持成员 kin
   });
   const 执行 = (主体, args) => runAction({ org, 项目: P, 主体, subject: 主体, args });
 
-  it('a. R02 反例闭合（v2 形态）：复核员成员持【自己负责的已派发任务】＋任务上下文写知识 ⇒ 复核员只读守卫拒', async () => {
-    const node = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '复核员名下任务', 负责人: 'reviewer', 判据: ['判据一'] });
-    await org.tasks.dispatch(node.id, { subject: LEAD, 项目: P });
-    // 修前（R02 实证越权面）：主体形状 kind=成员 ⇒ 只读守卫不触发，scopeOf 命中
-    // 负责人名单 ['reviewer'] ⇒ 普通业务写放行。v2：入口回填 roleId=复核员 ⇒
-    // #preGrantBoundary 按岗位名先于一切拒写。任务上下文与负责人匹配**齐全**仍是拒——
-    // 证明拒的是「岗位」不是「缺参数」。
+  it('a. 真实复核用途下即使本人任务上下文齐全，也不能修改持久资料', async () => {
+    const business = await org.tasks.create({subject:LEAD,项目:P,描述:'用途只读的业务对象',负责人:'member-a',判据:['实际核对']});
+    const reviewId = await 建复核关联(org,business.id);
     await assert.rejects(
-      () => 执行(复核员成员, { action: 'memory_write', 类: '知识', 内容: 'x', 来源: '测试', 任务: node.id, project: P }),
+      () => 执行(复核员成员, { action: 'memory_write', 类: '经历', 内容: 'x', 来源: '测试', 任务: reviewId, project: P }),
       (e) => e instanceof Denied && /只读数/.test(e.rule),
-      '持任务也拿不到普通业务写权（复核员岗 · 只读数，不改）',
+      '本人真实复核用途仍只读，不以专业名判断',
     );
   });
 

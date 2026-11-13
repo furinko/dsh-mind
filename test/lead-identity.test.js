@@ -79,7 +79,7 @@ function 装配(g) {
   const registry = new RoleRegistry({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock });
   const review = new ReviewProtocol({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock, tasks, bus, random: () => 0 });
   const council = new CouncilService({ layout: g.layout, policy: g.policy, audit: g.audit, clock: g.clock, bus, registry });
-  return { tasks, bus, registry, review, council };
+  return { tasks, bus, registry, review, council, policy:g.policy };
 }
 
 /** 备好一场「已解锁 + 已开讨论（第 1 轮）」的双人会审，返回会审 id。 */
@@ -97,7 +97,7 @@ async function 备好会审(parts) {
  * （成员/复核者一律过档 —— 判据「role:'插件工程' 正对照仍放行」靠的就是这一步）。
  */
 function 动作面org(parts) {
-  return { registry: parts.registry, tasks: parts.tasks, bus: parts.bus, council: parts.council };
+  return { policy:parts.policy, registry: parts.registry, tasks: parts.tasks, bus: parts.bus, council: parts.council };
 }
 
 /** 当前轮次 / 状态 / 结论 / 轮边界消息数（四条「副作用没发生」的读数）。 */

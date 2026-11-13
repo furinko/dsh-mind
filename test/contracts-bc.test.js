@@ -286,7 +286,7 @@ describe('契约C · 知识晋升披露机械检查（2026-10-09 主权者裁决
     try {
       // 工具面 Lead 自治写要先过钉版闸：用真实 Registry（不是手填摘要的桩）。
       const org = {
-        registry: g.registry,
+        registry: g.registry, policy:g.policy,
         memory: { promoteCrossProject: async (id, spec) => { 收到 = spec; return { id, 岗位: spec.岗位 }; } },
       };
       await runAction({ org, 项目: 'default', subject: { id: 'lead', kind: 'Lead' }, 主体: LEAD, args: { action: 'memory_lifecycle', op: 'promote', id: 'k-1', 岗位: '插件工程', 原因: 'r', 披露豁免: true } });

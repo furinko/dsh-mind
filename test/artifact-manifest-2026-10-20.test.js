@@ -156,7 +156,7 @@ describe('交付物内容清单与复核票绑定', () => {
 
   it('组织原始路径禁止交付，成员范围外路径不会读取生成摘要', async (t) => {
     const f = await fixture(t);
-    const spec = { layout: f.layout, policy: f.policy, subject: LEAD };
+    const spec = { layout: f.layout, policy: f.policy, subject: LEAD, 项目: P };
     await assert.rejects(captureArtifactManifest([f.layout.identityFile()], spec), blocked);
     const path = join(f.home, 'private-answer.txt');
     await writeFile(path, '不能越域读取');

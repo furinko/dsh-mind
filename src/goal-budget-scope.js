@@ -7,6 +7,7 @@ import { readTaskLedgerSync } from './task-ledger.js';
 import { fold } from './tasks.js';
 import { constraintsForTaskInSnapshot } from './goal-ledger.js';
 import { FILE_READ_TOOLS, FILE_WRITE_TOOLS } from './tool-file-scope.js';
+import { 复核读域 } from './review-scope.js';
 
 export function memberFileBudgetScope(exec, { org, projectOf, cwdOf }) {
   if (!FILE_READ_TOOLS.has(exec?.name) && !FILE_WRITE_TOOLS.has(exec?.name)) return null;
@@ -16,12 +17,13 @@ export function memberFileBudgetScope(exec, { org, projectOf, cwdOf }) {
   if (!identity.ok) throw new Denied('预算 · 身份不可判', '不能读取真实成员身份，无法确认预算归属。');
   const member = identity.成员[subject.id];
   // 复核/会审有不同读域，本轮不凭普通文件任务范围猜它们的预算归属。
-  if (member?.岗位 === '复核员' || member?.会审绑定) return null;
+  if (member?.会审绑定) return null;
   const parent = identity.成员[member?.委派者id];
   if (!member?.就绪 || !parent?.就绪 || parent.岗位 !== 'Lead') throw new Denied('预算 · 身份不可判', '当前成员或派发 Lead 未就绪，不能签发预算准入。');
   const project = projectOf(exec);
   const cwd = cwdOf(exec);
   const nodes = [...fold(readTaskLedgerSync(org.layout.taskLog(project))).values()].map(node => ({ ...node, 项目: project }));
+  if (复核读域({ 节点: nodes, 主体: subject, 项目: project, 成员: { ...member, status: member.状态 } }).限定) return null;
   const scope = org.tasks.toolFileAuthority().scopeTasks({ tool: exec.name, args: exec.arguments, cwd, nodes, instance: subject.id, parent: member.委派者id, member });
   const snapshot = org.goals.rawSnapshot(project);
   const goalIds = [...new Set(scope.constrained.map(node => constraintsForTaskInSnapshot(node, nodes, snapshot)?.目标).filter(Boolean))].sort();

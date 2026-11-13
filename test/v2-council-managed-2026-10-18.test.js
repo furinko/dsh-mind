@@ -10,7 +10,7 @@
  *    opened 冻结 创建实例+卡版本，任务图节点数不增长；
  *  ② 作答/解锁/讨论/收敛沿用原状态机与盲评遮罩；收敛后只退役 opened.创建实例 中
  *    仍在岗且绑定=本场的实例，预给参与者与别场实例不动；
- *  ③ 复核岗在发起前就拒（预给与新建两条路），不靠「跳过只读窄条」凑齐卷；
+ *  ③ 专业名不阻断普通参会，实际活动复核用途与提案冲突在副作用前拒；
  *  ④ 创建/登记/钉版/发送失败：只清本次 owned 实例，opened 未落则不落、已落则 aborted，
  *    预给参与者不动；审计带阶段/已建/补偿失败；
  *  ⑤ 慢创建不占会审锁（同项目另一场会审可继续作答）；
@@ -205,23 +205,24 @@ describe('① 受管 open 全流程（域服务，不冒充端到端）', () => 
   });
 });
 
-describe('② 复核岗与副作用前拒绝', () => {
-  it('复核岗不能参会：预给与新建两条路都在创建前拒，并指路真实复核任务', async () => {
+describe('② 实际用途与副作用前拒绝', () => {
+  it('复核专业可普通参会和受管创建，实际复核用途才在参与提案前拒绝', async () => {
     const { f, org } = await 起组织();
     try {
       const a = 造适配器(org);
-      await assert.rejects(
-        () => org.council.open({ subject: LEAD, 项目: P, 问题: 'q', 参与者: [MEMBER.id, REVIEWER.id] }),
-        (e) => e instanceof Denied && /复核岗不能作为参与者/.test(e.rule) && /复核任务/.test(e.message),
-        '预给复核员也要在副作用前拒',
-      );
-      await assert.rejects(
-        () => org.council.open({ subject: LEAD, 项目: P, 问题: 'q', 参与者: [MEMBER.id], 参与岗位: ['复核员'], ...a }),
-        (e) => e instanceof Denied && /复核岗/.test(e.rule),
-        '新建复核岗同样拒',
-      );
-      assert.equal(a.calls.创建.length, 0, '拒发生在创建前');
-      assert.deepEqual(await org.council.list({ 项目: P }), []);
+      const normal = await org.council.open({ subject: LEAD, 项目: P, 问题: 'q', 参与者: [MEMBER.id, REVIEWER.id] });
+      assert.ok(normal.参与者.includes(REVIEWER.id));
+      const managed = await org.council.open({ subject: LEAD, 项目: P, 问题: 'q', 参与者: [MEMBER.id], 参与岗位: ['复核员'], ...a });
+      assert.equal(managed.创建实例.length, 1); assert.equal(a.calls.创建.length, 1);
+      const target = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '待核对目标', 负责人: 'Lead', 判据: ['核对'] });
+      const review = await org.tasks.create({ subject: LEAD, 项目: P, 描述: '真实复核用途', 负责人: REVIEWER.roleId, 判据: ['核对对象'], 复核对象: [target.id] });
+      await org.tasks.bind(review.id, { subject: LEAD, 项目: P, 实例: REVIEWER.id, 岗位: REVIEWER.roleId });
+      await org.tasks.dispatch(review.id, { subject: LEAD, 项目: P });
+      const before = (await org.council.list({ 项目: P })).length;
+      await assert.rejects(() => org.council.open({ subject: LEAD, 项目: P, 问题: 'q',
+        参与者: [MEMBER.id, REVIEWER.id], 参与岗位: ['插件工程'], ...a }), (e) => e instanceof Denied && /活动复核用途冲突/.test(e.rule));
+      assert.equal(a.calls.创建.length, 1, '实际用途冲突拒发生在新增创建前');
+      assert.equal((await org.council.list({ 项目: P })).length, before, '冲突不落新会审');
     } finally { await f.cleanup(); }
   });
 
@@ -274,16 +275,17 @@ describe('② 复核岗与副作用前拒绝', () => {
     } finally { await f.cleanup(); }
   });
 
-  it('Lead 未钉版 ⇒ 副作用前 COUNCIL_SOURCE_NOT_READY', async () => {
+  it('真实Lead无专业钉版仍可咨询，封存身份仍在副作用前拒绝', async () => {
     const { f, org } = await 起组织({ lead: 'unpinned' });
     try {
       const a = 造适配器(org);
-      await assert.rejects(
-        () => org.council.open({ subject: LEAD, 项目: P, 问题: 'q', 参与者: [MEMBER.id], 参与岗位: ['插件工程'], ...a }),
-        (e) => e instanceof Fault && e.code === 'COUNCIL_SOURCE_NOT_READY',
-      );
-      assert.equal(a.calls.创建.length, 0);
-      assert.deepEqual(await org.council.list({ 项目: P }), []);
+      const normal = await org.council.open({ subject: LEAD, 项目: P, 问题: 'q', 参与者: [MEMBER.id], 参与岗位: ['插件工程'], ...a });
+      assert.equal(normal.创建实例.length, 1);
+      const identity = await org.registry.identity(); identity.members[LEAD.id].status = '封存';
+      await writeFile(f.layout.identityFile(), JSON.stringify(identity));
+      await assert.rejects(() => org.council.open({ subject: LEAD, 项目: P, 问题: 'q', 参与者: [MEMBER.id], 参与岗位: ['插件工程'], ...a }),
+        (e) => e instanceof Fault && e.code === 'COUNCIL_SOURCE_NOT_READY');
+      assert.equal(a.calls.创建.length, 1, '封存后未新增创建');
     } finally { await f.cleanup(); }
   });
 });
@@ -496,7 +498,7 @@ describe('⑤ registry.assign 会审绑定分支', () => {
     } finally { await f.cleanup(); }
   });
 
-  it('改绑/解除/补绑/复核员/Lead 岗/节点互斥全部拒；seal/restore 保留绑定', async () => {
+  it('专业名不阻断出生，改绑/解除/补绑/Lead种类/节点互斥仍拒；seal/restore保留绑定', async () => {
     const { f, org } = await 起组织();
     try {
       const 资料 = [join(f.home, 'brief.md')];
@@ -509,10 +511,8 @@ describe('⑤ registry.assign 会审绑定分支', () => {
         () => org.registry.assign({ subject: LEAD, 岗位: '插件工程', 实例: 'm-bind' }),
         (e) => e instanceof Denied && /不可静默解除/.test(e.rule),
       );
-      await assert.rejects(
-        () => org.registry.assign({ subject: LEAD, 岗位: '复核员', 实例: 'm-rev', 会审: { id: 'c-1', 项目: P, 资料 } }),
-        (e) => e instanceof Denied && /只能是普通成员岗/.test(e.rule) && /复核员/.test(e.message),
-      );
+      await org.registry.assign({ subject: LEAD, 岗位: '复核员', 实例: 'm-rev', 会审: { id: 'c-1', 项目: P, 资料 } });
+      assert.equal((await org.registry.identity()).members['m-rev'].会审绑定.会审, 'c-1');
       await assert.rejects(
         () => org.registry.assign({ subject: LEAD, 岗位: 'Lead', 实例: 'm-lead', 会审: { id: 'c-1', 项目: P, 资料 } }),
         (e) => e instanceof Denied && /只能是普通成员岗/.test(e.rule),

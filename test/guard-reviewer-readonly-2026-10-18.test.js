@@ -205,7 +205,7 @@ describe('复核员只读工具闸（真 host guard）', () => {
       // 无 path 且无 cwd：不许退回 header.cwd 乱猜，也不许放行。
       const 无cwd = { name: 'glob', arguments: { pattern: '**/*' }, agent: { session: { id: 'reviewer', header: { origin: 'subagent' } } } };
       const 无cwd拒 = 闸(host, 无cwd);
-      assert.ok(typeof 无cwd拒 === 'string' && /unknown/.test(无cwd拒), `无 cwd ⇒ unknown 拒：${无cwd拒}`);
+      assert.ok(typeof 无cwd拒 === 'string' && /unknown|未知/.test(无cwd拒), `无 cwd ⇒ unknown 拒：${无cwd拒}`);
     } finally { await f.cleanup(); }
   });
 
@@ -219,7 +219,8 @@ describe('复核员只读工具闸（真 host guard）', () => {
     await writeFile(join(项目目录, 'src', 'a.js'), 'export const a = 1;\n', 'utf8');
     const host = fakeHost();
     try {
-      await plugin.apply(host.ctx, { home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot });
+      await seedReviewRelation(f, { 项目: 项目键, 目标: 'scope-target' });
+      await plugin.apply(host.ctx, { home: f.home, factoryRoot: f.factoryRoot, privateRoot: f.privateRoot, projectBindings: [{path:项目目录,project:项目键}] });
       const 写 = 闸(host, 复核exec('write', { file_path: join(项目目录, 'src', 'a.js'), 内容: 'x' }, 项目目录));
       assert.ok(typeof 写 === 'string' && /只读闭名单/.test(写), '范围未配置时角色闸仍须拒写');
       // 读也不再是「整个工作区放行」：没有授权产出引用就明确拒并指路 Lead attach。

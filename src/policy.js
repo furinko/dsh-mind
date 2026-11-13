@@ -35,6 +35,7 @@ import { MECHANISM_SUBJECT, MECHANISM_NAMES, mechanismAllows } from './mechanism
 import { 本次放行匹配, 本次放行可匹配 } from './intervention.js';
 import { isTaskTerminal } from './task-state.js';
 import { requireLiveActor } from './runtime-actor.js';
+import { 取复核用途同步 } from './review-scope.js';
 // 保留既有公开导出；解析实现只在tags.js，避免合并与求值各维护一份口径。
 export { extractPolicyBlock } from './tags.js';
 
@@ -1415,8 +1416,15 @@ export class PolicyEngine {
    * v2（口述收敛 2026-10-18 条目1）：复核员是普通岗位卡，不再是主体类——
    * 边界按**岗位名**（subject.roleId）判，与主体种类脱钩。
    */
+  #reviewPurpose(subject, target, context) {
+    if (subject?.kind !== '成员') return null;
+    const project = target?.project ?? context?.task?.项目;
+    if (typeof project !== 'string' || !project) return null;
+    return 取复核用途同步({ layout: this.layout, subject, 项目: project, identity: this.state.identity });
+  }
+
   #preGrantBoundary(subject, action, target, authority, write, context) {
-    if (subject.roleId === '复核员') {
+    if (this.#reviewPurpose(subject, target, context)?.限定) {
       // v2 条目11（W7）：复核实例有**自己的复核任务节点**（绑在它名下），要能对自己的节点
       // 走受限生命周期（开工 → 交卷报告）。这不是按 role 全局豁免：判据是「这个节点绑定里
       // 有我这个实例」，没有绑定就一步也不放。被复核的业务节点负责人仍是执行者——
@@ -1430,13 +1438,13 @@ export class PolicyEngine {
       // 「只读数，不改，不参与提案」的准确边界：不许改被验对象；结论是只增证据。
       if (action === 'experiment') {
         if (target.sandbox !== true) {
-          return deny('复核员岗 · 需要落盘的实验走沙箱区', '复核员的落盘实验必须落在沙箱区：单独授权、不进持久状态、任务结束即清。', {
+          return deny('复核用途 · 需要落盘的实验走沙箱区', '复核员的落盘实验必须落在沙箱区：单独授权、不进持久状态、任务结束即清。', {
             requireAuthority: '主权者',
             howToChange: '把实验放进沙箱区（target.sandbox = true），或改由成员在任务内执行。',
           });
         }
       } else if (!['read', 'review'].includes(action) && !受限生命周期) {
-        return deny('复核员岗 · 只读数，不改，不参与提案（按岗位名判定）', `复核员不得执行写动作 ${action}：它不改被验对象，也不派活、不提案${我绑的节点 ? '' : '（本节点没有绑定该复核实例，受限生命周期也不放行）'}。`, {
+        return deny('复核用途 · 只读数，不改被验对象', `复核员不得执行写动作 ${action}：它不改被验对象，也不派活、不提案${我绑的节点 ? '' : '（本节点没有绑定该复核实例，受限生命周期也不放行）'}。`, {
           requireAuthority: '主权者',
           howToChange: '复核结论经 review 落账（只增证据）；需要改动由 Lead 按结论执行。',
         });
@@ -1542,7 +1550,7 @@ export class PolicyEngine {
     }
     if (authority === '自治') {
       if (subject.kind === '主权者') return allow('法律 权限矩阵 · 自治档', '主权者随时可介入自治档。');
-      if (subject.kind === '成员' && subject.roleId !== '复核员') {
+      if (subject.kind === '成员' && !this.#reviewPurpose(subject, target, context)?.限定) {
         // v2（条目18）：会审退出任务图后会审答案没有任务上下文可挂——会审参与者的
         // 作答/发言权按「在 context.会审.参与者 名单里」判（名单由 CouncilService 从
         // 自己的事件流折出来，不信自报）。不在名单 ⇒ 落到下面的「任务外无」照样拒。

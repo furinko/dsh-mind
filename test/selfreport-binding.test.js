@@ -55,7 +55,7 @@ describe('批次1 · P1-2：task_review 复核者归属不许自报', () => {
   it('成员把结论署到别人头上 ⇒ Denied（修前全链路无人核对归属）', async () => {
     const f = await makeFixture();
     try {
-      const org = { registry: f.registry, review: { record: async () => { throw new Error('不该走到 record'); } } };
+      const org = { policy:f.policy, registry: f.registry, review: { record: async () => { throw new Error('不该走到 record'); } } };
       await assert.rejects(
         () => runAction({ org, 项目: P, 主体: MEMBER, args: { action: 'task_review', id: 'task-x', 三态: '过', 复核者: 'member-b' } }),
         (e) => e.name === 'Denied' && /复核归属不许代签/.test(e.rule) && /复核者本人/.test(e.howToChange),
@@ -68,7 +68,7 @@ describe('批次1 · P1-2：task_review 复核者归属不许自报', () => {
     const f = await makeFixture();
     try {
       const seen = [];
-      const org = { registry: f.registry, review: { record: async (spec) => { seen.push(spec.复核者); return { 节点: spec.节点 }; } } };
+      const org = { policy:f.policy, registry: f.registry, review: { record: async (spec) => { seen.push(spec.复核者); return { 节点: spec.节点 }; } } };
       await runAction({ org, 项目: P, 主体: MEMBER, args: { action: 'task_review', id: 'task-x', 三态: '过' } });
       assert.deepEqual(seen, ['member-a'], '省略复核者 ⇒ 归属 = 真实主体 id');
       // Lead 也不能把结论记到别人头上（含「代录」）：署名=实际下单者，Lead 验收就签自己。

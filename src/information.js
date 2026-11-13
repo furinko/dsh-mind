@@ -267,7 +267,7 @@ export class InformationService {
         if (write) throw new Denied('信息成长治理', '专业成员读取明确共享的资料；成长与能力候选由Lead整合，成员通过任务交卷反馈。');
         const { currentProfessionalScope } = await import('./professional-context.js');
         const current = await currentProfessionalScope(this.org, actor, spec.project);
-        if (!current.nodes.length || current.council || current.domain?.限定 || current.role === '复核员') throw new Denied('信息资料任务范围', '仅当前活动任务的普通专业成员可读明确共享资料；会审和复核资料由既有读域提供。');
+        if (!current.nodes.length || current.council || current.domain?.限定) throw new Denied('信息资料任务范围', '仅当前普通执行用途可读明确共享资料；会审和复核资料由既有读域提供。');
         spec.subject = current.actor;
       }
     }

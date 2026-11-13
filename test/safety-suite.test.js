@@ -355,13 +355,15 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
   });
 
   it('成员只读自己任务那片；Lead 看全量；复核员只读「绑定复核任务→复核对象」那片', () => {
+    const reviewerMember = {status:'在岗',岗位:'复核员',代:1,代次:{代:'synthetic-purpose-generation'}};
+    const rawReviewTask = {id:'rev-1',描述:'复核任务',状态:'已派发',判据冻结:true,负责人:['复核员'],绑定:[{实例:'r',岗位:'复核员',凭证:{版本:1,代:1,宿主代次:'synthetic-purpose-generation'}}],复核对象:['n1']};
     const view = projectWorkbench({
       项目: 'p-slice',
       节点: [
         { id: 'n1', 描述: '我的', 状态: '执行中', 负责人: ['member-a'], 待决原因: '等我', 独立答案: [{ 成员: 'member-a', 结论: 'x', 反例面: [] }] },
         { id: 'n2', 描述: '别人的', 状态: '执行中', 负责人: ['member-b'] },
         // 复核实例绑定的复核任务（显式复核对象 n1）：读域只有它自己 + n1。
-        { id: 'rev-1', 描述: '复核任务', 状态: '已派发', 负责人: ['复核员'], 绑定: [{ 实例: 'r', 岗位: '复核员' }], 复核对象: ['n1'] },
+        rawReviewTask,
       ],
       // v2：会审是与会话绑定的独立存档，切片按 **参与者**（不是任务负责人）。
       会审存档: [
@@ -383,7 +385,7 @@ describe('升级 / 探针 / 审计 / 工作台', () => {
     const leadView = sliceForViewer(view, { id: 'lead', kind: 'Lead' });
     assert.equal(leadView.任务.节点.length, 3);
     assert.equal(leadView.审计尾.length, 2);
-    const reviewerView = sliceForViewer(view, { id: 'r', kind: '成员', roleId: '复核员' });
+    const reviewerView = sliceForViewer(view, { id: 'r', kind: '成员', roleId: '复核员' }, reviewerMember, [rawReviewTask]);
     assert.match(reviewerView.视图, /复核读域/);
     assert.deepEqual(reviewerView.任务.节点.map((n) => n.id).sort(), ['n1', 'rev-1'].sort(), '读域 = 复核任务 + 显式复核对象');
     assert.ok(!reviewerView.任务.节点.some((n) => n.id === 'n2'), '读域外的任务不可见');

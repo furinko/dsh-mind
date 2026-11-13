@@ -498,7 +498,7 @@ describe('主干环路', () => {
     assert.ok(显式面.条目.some((e) => e.id === answer.id), '可显式检索（读者在可读名单内）');
     assert.match(显式面.说明 ?? '', /显式/);
 
-    assert.equal((await memory.readableBy(answer.id, { 读者: REVIEWER })).可读, true);
+    assert.equal((await memory.readableBy(answer.id, { 读者: REVIEWER })).可读, false, '专业名不授予归档作答特权；真实复核用途另测');
     assert.equal((await memory.readableBy(answer.id, { 读者: LEAD })).可读, true);
     const 成员 = await memory.readableBy(answer.id, { 读者: MEMBER });
     assert.equal(成员.可读, false);

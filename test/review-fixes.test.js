@@ -120,10 +120,10 @@ describe('审查修复 · 批次 1+2', () => {
       () => memory.purge(entry.id, { subject: LEAD, 理由: '这段不敏感，但我想删' }),
       (e) => e instanceof Denied && /记忆处置表/.test(e.rule),
     );
-    // 复核员就算声明了敏感也不行：只读闸先一步拦住（复核员岗 · 只读数）。
+    // 普通成员不因专业名或敏感声明取得删除权；任务外权限仍明确拒绝。
     await assert.rejects(
       () => memory.purge(entry.id, { subject: REVIEWER, 理由: '这是敏感数据', 敏感: true }),
-      (e) => e instanceof Denied && /只读数/.test(e.rule),
+      (e) => e instanceof Denied && /任务外|只读数/.test(e.rule + e.message),
     );
     const purged = await memory.purge(entry.id, { subject: LEAD, 理由: '这是敏感数据', 敏感: true });
     assert.equal(purged.已删除, true);

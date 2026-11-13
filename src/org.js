@@ -9,6 +9,8 @@
  */
 import { ensureDirPath, exists, listDirs, listFiles } from './kernel/fsx.js';
 import { dirname } from 'node:path';
+import { canonical } from './kernel/text.js';
+import { 复核用途 } from './review-scope.js';
 import { randomUUID } from 'node:crypto';
 import { Clock } from './kernel/time.js';
 import { defaultLayout, DIR } from './paths.js';
@@ -86,7 +88,7 @@ export class Org {
     const memory = new MemoryService({ layout, policy, audit, clock, registry });
     const taskMemory = Object.fromEntries(['archiveAnswers','settleCandidates','promoteFromAdopted','invalidate','readKnowledgeEvidence'].map(name => [name, (...args) => memory[name](...args)]));
     const tasks = new TaskGraph({ layout, policy, audit, clock, memory: taskMemory, registry });
-    memory.tasks = { goals: tasks.goals, list: tasks.list.bind(tasks) };
+    memory.tasks = { goals: tasks.goals, list: tasks.list.bind(tasks), identityProvider: registry.identity.bind(registry) };
     const goals = tasks.goals;
     const budgets = new GoalBudgetService({ layout, policy, audit, clock, registry, goals });
     const modelUsage = new ModelUsageService({ layout, policy, clock, registry, goals });
@@ -319,7 +321,13 @@ export class Org {
       生成于: this.clock.iso(),
     });
     // （读者已在上面解析过——会审盲评遮罩与切片共用同一口径。）
-    const visible = 读者 ? sliceForViewer(view, 读者) : view;
+    let finalIdentity = identity, finalNodes = snapshot.节点;
+    if (读者?.kind === '成员') {
+      finalIdentity = await this.registry.identity(); finalNodes = (await this.tasks.snapshot({项目})).节点;
+      const scope = (nodes, member) => ({用途:复核用途({节点:nodes,主体:读者,项目,成员:member}),身份:member && {status:member.status,岗位:member.岗位,代:member.代,代次:member.代次}});
+      if (canonical(scope(snapshot.节点,identity.members?.[读者.id])) !== canonical(scope(finalNodes,finalIdentity.members?.[读者.id]))) throw new Denied('工作台用途变化','资料读取期间复核用途或身份变化，丢弃旧视图后重试。');
+    }
+    const visible = 读者 ? sliceForViewer(view, 读者, finalIdentity.members?.[读者.id], finalNodes) : view;
     visible.核心人设保护 = this.personaProtection?.health() ?? null;
     // 成员目前没有目标全文读域；不从任务可见性推导整个目标/其他任务的可读性。
     const 可读目标 = !读者 || 读者.kind === '主权者' || (读者.kind === 'Lead' && identity.members?.[读者.id]?.岗位 === 'Lead' && identity.members?.[读者.id]?.status === '在岗');

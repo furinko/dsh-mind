@@ -236,14 +236,20 @@ describe('② 读域单源：五个模型可达出口都只给任务作用域', 
     } finally { await f.cleanup(); }
   });
 
-  it('未绑定复核任务 ⇒ 读域为空（未关联任务不得读；不是「复核员就看全量」）', async () => {
+  it('没有真实复核用途时按普通专业任务范围读取，专业名不授予全量或额外空域限制', async () => {
     const { f, org } = await 起组织();
     try {
       const 业务 = await 交卷节点(org, '空读域-业务');
       const 台 = (await 跑(org, REVIEWER, { action: 'workbench' })).数据;
-      assert.deepEqual(台.任务.节点, [], '没有绑定复核任务 ⇒ 零任务可读');
-      assert.match(台.复核读域.说明, /为空/);
-      assert.equal((await 复核读域({ 节点: await org.tasks.list({ 项目: P }), 主体: REVIEWER, 项目: P })).限定, true);
+      assert.deepEqual(台.任务.节点, [], '本人没有普通工作绑定，也没有本任务复核用途，不能读取他人任务');
+      assert.notEqual(台.复核读域?.限定, true, '专业名不制造复核用途');
+      assert.equal((await 复核读域({ 节点: await org.tasks.list({ 项目: P }), 主体: REVIEWER, 项目: P, 成员: (await org.registry.identity()).members[REVIEWER.id] })).限定, false);
+      const ordinary = await org.tasks.create({subject:LEAD,项目:P,描述:'复核专业执行普通工作',负责人:REVIEWER.id,判据:['本人工作范围']});
+      await org.tasks.bind(ordinary.id,{subject:LEAD,项目:P,实例:REVIEWER.id,岗位:REVIEWER.roleId});
+      await org.tasks.dispatch(ordinary.id,{subject:LEAD,项目:P});
+      const mine=(await 跑(org,REVIEWER,{action:'workbench'})).数据;
+      assert.ok(mine.任务.节点.some(n=>n.id===ordinary.id),'普通任务仍正常可见');
+      assert.ok(!mine.任务.节点.some(n=>n.id===业务.id),'不能借专业名读取无关工作');
     } finally { await f.cleanup(); }
   });
 });
@@ -279,7 +285,7 @@ describe('③ 真实署名：不许冒签，冲突排除仍硬拒', () => {
       // 复核员在册在岗，但没有把本节点列为复核对象的复核任务。
       await assert.rejects(
         () => 跑(org, REVIEWER, { action: 'task_review', id: 业务.id, 三态: '过' }),
-        (e) => e instanceof Denied && /缺本任务关联/.test(e.rule),
+        (e) => e instanceof Denied && /缺本任务关联|任务外/.test(e.rule + e.message),
       );
       // 交卷人自己：他是负责人/交卷人，冲突排除先拒（不是「换成自己 id 就过」）。
       await assert.rejects(

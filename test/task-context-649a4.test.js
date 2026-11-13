@@ -136,13 +136,11 @@ describe('任务上下文透传（649a4）', () => {
     assert.equal(采纳.节点.状态, '已采纳', 'Lead 显式采纳（引用真票）后才到已采纳');
     const 采纳后 = await org.tasks.get(node.id, { 项目: P });
     assert.equal(采纳后.复核经过?.[0]?.复核者, 'reviewer', '署名是复核者本人');
-    // v2（2026-10-18 复核者降级）：复核员岗成员的其余写动作按**岗位名**拒——
-    // #preGrantBoundary 的「复核员岗 · 只读数」守卫（修前 R02 是入口解析成复核者主体，
-    // 修后不再换 kind，边界随 roleId 走，越权面同样闭合）。
+    // 当前真实复核用途限制修改资料；专业名本身不再触发全局只读。
     await assert.rejects(
-      () => runAction({ org, 项目: P, 主体: 复核员成员, args: { action: 'memory_write', 类: '知识', 内容: 'x', 来源: '测试', project: P } }),
+      () => runAction({ org, 项目: P, 主体: 复核员成员, args: { action: 'memory_write', 类: '经历', 任务: 复核任务.id, 内容: 'x', 来源: '测试', project: P } }),
       (e) => e instanceof Denied && /只读数/.test(e.rule),
-      '复核员只读守卫按岗位名生效（其余写动作全拒）',
+      '当前独立复核用途不得修改持久资料',
     );
   });
 

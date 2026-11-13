@@ -6,6 +6,7 @@ import { lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { Denied, InvalidBody } from './kernel/errors.js';
 import { readInstanceSnapshot } from './instance-snapshot.js';
+import { 取复核用途同步 } from './review-scope.js';
 
 export const FILE_READ_TOOLS = new Set(['read', 'read_image', 'glob', 'grep']);
 export const FILE_WRITE_TOOLS = new Set(['write', 'edit']);
@@ -120,6 +121,7 @@ export class ToolFileAuthority {
   /** 服务层交卷只允许为本人当前仍有权读取/产出的文件计算摘要，不能借提交绕过撤权。 */
   canCapture(path, task, subject) {
     if (subject?.kind !== '成员') return true;
+    if (typeof task?.项目 !== 'string' || !task.项目) return false;
     const snapshot = readInstanceSnapshot(this.#layout?.identityFile?.());
     const member = snapshot.成员?.[subject.id];
     const parent = snapshot.成员?.[member?.委派者id];
@@ -128,7 +130,7 @@ export class ToolFileAuthority {
       || !(task.绑定 ?? []).some((b) => matchingBinding(b, subject.id, member))) return false;
     // 复核员的文件读权来自 Lead 的 task_attach，不来自通用文件写权。
     // 这里只允许冻结显式引用的已授权文件内容；不授予写权、不自动把读根列成交付物。
-    if (member.岗位 === '复核员') {
+    if (取复核用途同步({ layout: this.#layout, subject, 项目: task.项目, identity: snapshot })?.限定) {
       if (task.判据冻结 !== true || !(task.负责人 ?? []).some(owner => owner === subject.id || owner === member.岗位)
         || this.#decision(subject, task, 'write', 'submit').verdict !== 'allow') return false;
       return (task.复核读根 ?? []).some(root => typeof root === 'string' && isAbsolute(root)

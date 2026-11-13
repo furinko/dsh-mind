@@ -28,6 +28,7 @@ import { DEFAULT_DEBATE_BUDGET, subjectKindForRole } from './policy.js';
 import { judgeZeroDivergence, 盲标分配 } from './review.js';
 import { canonical } from './kernel/text.js';
 import { applyCouncilCreation, assertCouncilCreationOpened, readCouncilRows, COUNCIL_CREATION_RECORDER } from './council-creation-ledger.js';
+import { 取复核用途同步 } from './review-scope.js';
 
 /** 讨论发言的合法类型（§9 消息类型里讨论段专用的三种）。 */
 export const DEBATE_SAY_TYPES = ['分歧', '表态', '答复'];
@@ -61,7 +62,7 @@ export class CouncilService {
    * 受管路径的四条边界（Lead 2026-10-18 批复）：
    *  - 创建/登记/**发书/退役都在会审锁外**（慢宿主调用不占锁）；锁只围状态 append；
    *  - 任一失败只清理**本次创建**的实例，预给参与者不动；
-   *  - 会审绑定只落普通成员岗，复核员在发起前就拒（只读/不提案是本职硬约束）；
+   *  - 会审绑定只落成员实例；实际活动复核用途与咨询提案不能混用，专业名不作准入；
    *  - 适配器缺一/角色卡不可用/资料根不合法/发起者未钉版 ⇒ **副作用前**拒。
    *
    * @param {{ subject: object, 项目: string, 问题: string, 参与者?: string[], 参与岗位?: string[], 资料?: string[], 创建参与者?: Function|null, 发开场书?: Function|null, 退役实例?: Function|null, 模型路由?: object|null }} spec
@@ -90,15 +91,17 @@ export class CouncilService {
     const 档案 = (await this.registry.identity()).members ?? {};
     for (const id of 参与者) {
       const 记录 = 档案[id];
-      if (!记录 || 记录.status === '封存') {
+      if (!记录 || 记录.status !== '在岗') {
         throw new InvalidBody(`会审参与者 ${id} 不在身份档案的在岗名单里：会审答案要落到真实实例头上。`, {
           howToChange: '先 member_spawn / registry_assign 起实例，再把它列入参与者。',
           detail: { 参与者: id, 在册: Boolean(记录), 状态: 记录?.status ?? null },
         });
       }
-      // 复核员不能作为参与者：作答是一次写，与「只读数、不改、不提案」的本职硬约束相冲。
-      // 不为齐卷给它开口子——要复核意见就走真正的复核任务（Lead 建复核任务 + 复核对象）。
-      if (记录.岗位 === '复核员') throw 复核岗不能参会(id);
+      // A specialty name neither bars participation nor exempts blind review.
+      // An instance currently holding real review access cannot also propose.
+      const review = 取复核用途同步({ layout: this.layout, identity: { members: 档案 },
+        项目: spec.项目, subject: { id, kind: '成员', roleId: 记录.岗位 } });
+      if (review?.限定) throw new Denied('会审 · 活动复核用途冲突', `实例 ${id} 当前持有本项目复核资料读域；先完成该用途或另选实际参与实例，不能同时参与提案。`);
     }
 
     // ── 旧路径：全是已登记参与者，行为与 v2 原实现一致（不取锁、不加字段） ──────────
@@ -142,26 +145,21 @@ export class CouncilService {
         });
       }
     }
-    // 来源会话 = 真实登记主体 id；Lead 自己必须已钉版，否则父判/委托凭证会在创建后才炸。
+    // 来源会话来自真实登记主体；专业卡版本不再是普通咨询的权限。
     const 来源会话 = String(spec.subject?.id ?? '').trim();
     if (!来源会话) throw new InvalidBody('会审受管创建缺来源会话：来源只能取真实登记主体 id。', { missing: ['subject.id'] });
-    let 源钉摘要 = null;
+    let sourceCredential = null;
     if (spec.subject.kind === 'Lead') {
-      const 源钉 = await this.registry.cardOf(来源会话);
-      源钉摘要 = 源钉?.卡版本?.摘要 ?? null;
-      if (源钉?.就绪 !== true) {
-        throw new Fault('COUNCIL_SOURCE_NOT_READY', `Lead 实例 ${来源会话} 的钉版未就绪（${源钉?.原因 ?? 'registry 没给就绪读数'}）：先修好岗位卡/身份档案，再发起受管会审；不要先创建实例再补钉。`, {
-          detail: { 来源会话, 就绪: 源钉?.就绪 ?? null, 原因: 源钉?.原因 ?? null },
-        });
-      }
+      const source = 档案[来源会话];
+      if (source?.status !== '在岗' || source.岗位 !== 'Lead') throw new Fault('COUNCIL_SOURCE_NOT_READY', '会审来源不是当前在岗真实Lead。');
+      sourceCredential = participantCredential(source);
     }
-    // 岗位卡/角色种类/复核员全部在副作用前判；任一不合格 ⇒ 零创建。
+    // 真实成员种类与专业资料在副作用前检查；专业名称不作为权限。
     const 岗位快照 = new Map();
     for (const 岗位 of 参与岗位) {
       if (subjectKindForRole(岗位) !== '成员') {
         throw new InvalidBody(`会审参与实例只收普通成员岗：${岗位} 是 ${subjectKindForRole(岗位)} 岗。`, { missing: ['参与岗位'] });
       }
-      if (岗位 === '复核员') throw 复核岗不能参会(岗位);
       const 卡 = await this.registry.get({ id: 岗位 });
       if (!卡) throw new InvalidBody(`岗位「${岗位}」不存在：先建岗位卡，再发起会审。`, { missing: ['参与岗位'] });
       岗位快照.set(岗位, canonical(卡));
@@ -186,8 +184,8 @@ export class CouncilService {
       const withdrawn = new Set([来源会话, 'Lead', id, ...参与岗位, ...参与者]);
       if (!Array.isArray(identity.denylist) || identity.denylist.some(x => withdrawn.has(x?.id))) throw new Denied('会审 · 准备后撤回', '发起者、岗位或参与者资格已撤回，旧会审计划不能继续。');
       if (spec.subject.kind === 'Lead') {
-        const current = identity.members?.[来源会话], pin = await this.registry.cardOf(来源会话);
-        if (current?.岗位 !== 'Lead' || current.status !== '在岗' || pin?.就绪 !== true || pin.卡版本?.摘要 !== 源钉摘要) throw new Denied('会审 · 发起凭证变化', '来源Lead或钉版已变化，不能沿用准备前的凭证。');
+        const current = identity.members?.[来源会话];
+        if (participantCredential(current) !== sourceCredential || current?.岗位 !== 'Lead' || current.status !== '在岗') throw new Denied('会审 · 发起凭证变化', '来源Lead身份或实际代次已变化，不能沿用准备前的凭证。');
       }
       for (const [role, snapshot] of 岗位快照) {
         const card = await this.registry.get({ id: role });
@@ -197,7 +195,7 @@ export class CouncilService {
         if (boundary) throw new Denied(boundary.rule, boundary.reason, boundary);
       }
       for (const participant of 参与者) {
-        if (canonical(identity.members?.[participant] ?? null) !== canonical(档案[participant]) || identity.members?.[participant]?.status !== '在岗') throw new Denied('会审 · 预给参与者变化', `参与者 ${participant} 的登记已变化，不能继续旧计划。`);
+        if (participantCredential(identity.members?.[participant]) !== participantCredential(档案[participant]) || identity.members?.[participant]?.status !== '在岗') throw new Denied('会审 · 预给参与者变化', `参与者 ${participant} 的实际登记已变化，不能继续旧计划。`);
       }
       if (canonical(会审预算(this.policy)) !== canonical(预算)) throw new Denied('会审 · 预算变化', '会审预算已变化，旧计划不能继续。');
       if (canonical(await this.#校验资料(spec.资料)) !== canonical(资料)) throw new Denied('会审 · 资料范围变化', '资料真实路径已变化，不能借旧路径继续创建或发送。');
@@ -214,7 +212,7 @@ export class CouncilService {
         // 先入清单再判钉卡：钉卡不就绪的实例已经真实创建/登记，失败补偿必须能清到它。
         创建实例.push({ 实例, 岗位, 钉卡: 建?.钉卡 });
         if (建?.钉卡?.就绪 !== true) {
-          throw new Fault('COUNCIL_CARD_NOT_READY', `实例 ${实例} 的岗位卡钉版未就绪（${建?.钉卡?.原因 ?? '适配器没给就绪读数'}）：不会把现行卡正文配旧摘要发成会审任务书。`, { detail: { 岗位, 实例, 就绪: 建?.钉卡?.就绪 ?? null } });
+          throw new Fault('COUNCIL_CARD_NOT_READY', `实例 ${实例} 的指定专业资料不可用（${建?.钉卡?.原因 ?? '适配器没给专业资料读数'}）：不会把现行卡正文配旧摘要发成任务书。可修复该专业资料，或在既有Host许可内选择普通委派或其他可用专业；这不是新增用户授权问题。`, { detail: { 岗位, 实例, 就绪: 建?.钉卡?.就绪 ?? null } });
         }
       }
     } catch (error) {
@@ -777,7 +775,7 @@ export class CouncilService {
   /**
    * 会审页数据源：本项目全部会审的存档视图（进行中的也在列，状态字段如实标）。
    * 盲评遮罩（条目19「提交后解锁含盲评」）：作答中且读者是参与者成员时，别人的答案
-   * 只留盲标；Lead/主权者/复核员与解锁后全量。
+   * 只留盲标；Lead/主权者与解锁后全量，专业名不豁免盲评。
    * @param {{ 项目: string, 读者?: object }} query
    */
   async list(query) {
@@ -797,7 +795,7 @@ export class CouncilService {
   // 作废（aborted）同样遮罩：它可能带着已交的早卷，未解锁就揭名 = 绕过盲评。
   #forViewer(view, reader) {
     const 盲评期 = view.状态 === '作答中' || view.状态 === '作废';
-    if (!盲评期 || reader?.kind !== '成员' || reader.roleId === '复核员') return view;
+    if (!盲评期 || reader?.kind !== '成员') return view;
     const 标 = new Map(盲标分配(线程名(view.id), view.参与者).map((e) => [e.id, e.盲标]));
     return {
       ...view,
@@ -1105,15 +1103,8 @@ function 在目录内(目标, 根) {
   const 相对 = relative(根, 目标);
   return 相对 === '' || (!相对.startsWith('..') && !isAbsolute(相对));
 }
-
-/** 复核员不能作为会审参与者：作答是一次写，与「只读数、不改、不提案」的本职硬约束冲突。 */
-function 复核岗不能参会(岗位) {
-  return new Denied('会审 · 复核岗不能作为参与者', `复核员（${岗位}）的「只读数、不改、不参与提案」是本职硬约束；会审作答是一次写，不为齐卷给复核岗开口子。要复核意见请走真正的复核任务（Lead 建复核任务 + 显式复核对象，member_spawn 复核实例）。`, {
-    requireAuthority: 'Lead',
-    howToChange: '把复核员留在复核任务上；会审参与实例用普通成员岗（插件工程 / 文档整理 / 记忆整理…）。',
-    detail: { 岗位, 提示: '复核意见走复核任务，不走会审作答' },
-  });
-}
+const participantCredential = member => canonical(member ? { 状态: member.status, 岗位: member.岗位,
+  代: member.代 ?? 1, 宿主: typeof member.代次 === 'string' ? member.代次 : member.代次?.代 ?? null } : null);
 
 /** 受管创建失败的统一故障形状（阶段、已建清单、补偿失败都进 detail，便于可追）。 */
 function 受管创建失败(code, message, detail, cause, 项目, 已有回执 = []) {

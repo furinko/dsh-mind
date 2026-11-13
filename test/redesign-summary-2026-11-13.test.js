@@ -1,5 +1,6 @@
 import { it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { makeFixture, LEAD } from './helpers.mjs';
 import { Org } from '../src/org.js';
 import { budgetMindContext } from '../components/kernel/lib/runtime-context.js';
@@ -24,8 +25,10 @@ it('active recaps preserve source coverage separately from full originals and do
  const again=await org.turnSummaries.summarize({subject:LEAD,project:P,session:LEAD.id});assert.equal(again.pendingRounds,0);
  await org.memory.organize({subject:LEAD,项目:P,op:'update',id:saved[0].id,内容:'corrected understanding',原因:'new counterexample'});
  assert.equal((await org.memory.query({subject:LEAD,项目:P,id:saved[0].id})).条目[0].内容,'corrected understanding');
+ await org.memory.invalidate(saved[0].id,{subject:LEAD,原因:'先有新反例，旧总结已失效'});
  await org.turnBuffer.forget({subject:LEAD,project:P,session:LEAD.id,throughSeq:end});
- assert.equal((await org.memory.turnSummaries({subject:LEAD,project:P,session:LEAD.id})).length,0);
+ assert.equal((await org.memory.turnSummaries({subject:LEAD,project:P,session:LEAD.id,includeInactive:true})).length,0);
+ const raw=await readFile(org.layout.memoryLog(saved[0].归属,saved[0].类),'utf8');assert.ok(!raw.includes('corrected understanding'));
 }));
 it('assistant suggestions cannot be recorded as user decisions; short replies do not force knowledge',()=>scene(async org=>{
  await rounds(org,1);await assert.rejects(org.turnSummaries.summarize({subject:LEAD,project:P,session:LEAD.id,summary:{用户决定:[{text:'approved',source:'a0-1'}],助手建议:[],认识:[]}}));

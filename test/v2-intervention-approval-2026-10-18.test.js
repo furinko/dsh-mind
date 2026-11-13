@@ -11,7 +11,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
-import { makeFixture, LEAD, REVIEWER } from './helpers.mjs';
+import { makeFixture, seedReviewRelation, LEAD, REVIEWER } from './helpers.mjs';
 import { Org } from '../src/org.js';
 import { ACTIONS } from '../lib/actions.js';
 import { InterventionService, 以放行上下文, 决议动作 } from '../src/intervention.js';
@@ -364,8 +364,9 @@ describe('⑧ 策略钩子：批准只解除介入度 confirm 门', () => {
   it('复核员只读 / 撤回名单 / 失联冻结在带放行时仍拒', async () => {
     const 名单 = await makeFixture({ defaults: { 介入度: '审批' }, denylist: [{ id: 'cap-blocked', 理由: '撤回（测试）', 撤于: '2026-10-18T00:00:00Z' }] });
     try {
+      await seedReviewRelation(名单, { 项目: P, 目标: 't-1' });
       const 带 = (fn) => 以放行上下文({ 原主体: 'reviewer', 请求id: 'iv-x', 步骤: [{ 动作: 'write', 目标: { kind: '任务', id: 't-1' } }] }, fn);
-      const 复核 = await 带(() => 名单.policy.decide({ subject: REVIEWER, action: 'write', target: { id: 't-1', kind: '任务', authority: '自治' }, context: {} }));
+      const 复核 = await 带(() => 名单.policy.decide({ subject: REVIEWER, action: 'write', target: { id: 't-1', kind: '任务', authority: '自治', project: P }, context: {} }));
       assert.notEqual(复核.verdict, 'allow', '审批不能解除复核员只读（前置父判/只读闸任一先拦都算）');
       assert.notEqual(复核.rule, '法律 介入度 · 已批准放行（§4/v2 条目14/17）', '复核员这条路不许被放行上下文点绿');
       const 硬拒 = await 以放行上下文({ 原主体: 'lead', 请求id: 'iv-x', 步骤: [{ 动作: 'write', 目标: { kind: '能力', id: 'cap-blocked' } }] }, () => 名单.policy.decide({ subject: LEAD, action: 'write', target: { id: 'cap-blocked', kind: '能力', authority: '自治' }, context: {} }));

@@ -252,11 +252,11 @@ export function projectWorkbench(input) {
  * @param {{ id: string, kind: string, roleId?: string }} 读者
  * @returns {object}
  */
-export function sliceForViewer(view, 读者) {
+export function sliceForViewer(view, 读者, 成员, 原节点 = view.任务?.节点 ?? []) {
   // v2（2026-10-18 复核者降级 + 条目4/6 补修）：复核员岗实例是成员 kind，但读面**不是**
   // 岗位全量——按「它绑定的复核任务 → 任务载体上的显式复核对象」限定（单源 review-scope）。
   // 写面仍由策略引擎按 roleId 全拒；读面这刀只切到任务作用域内。
-  const 域 = 复核读域({ 节点: view.任务?.节点 ?? [], 主体: 读者, 项目: view.项目 });
+  const 域 = 复核读域({ 节点: 原节点, 主体: 读者, 项目: view.项目, 成员 });
   if (域.限定) return 复核切片(view, 域);
   if (读者?.kind !== '成员') {
     return { ...view, 视图: '全量' };

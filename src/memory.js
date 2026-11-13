@@ -36,8 +36,10 @@ import { 记忆条目在读域, 取复核读域 } from './review-scope.js';
 import { fold as foldTaskEvents, 已被合法采纳 } from './tasks.js';
 
 /** 归档后可读的角色（§7 表）。 */
-// v2（2026-10-18）：复核者退出主体类，复核员岗实例按 roleId 放行（两处消费点各自判）。
 const ANSWER_READERS = ['主权者', 'Lead'];
+const actualReviewDomain = Symbol('actual-review-domain');
+const archivedAnswerReadable = (entry, reader, domain) => ANSWER_READERS.includes(reader?.kind)
+  || reader?.kind === '成员' && domain?.限定 === true && 记忆条目在读域(entry, domain);
 
 /** 检索和来源观察共用基本可见性；岗位只是可选过滤，不额外授予或声称岗位隔离。 */
 function memoryEntryVisible(entry, query) {
@@ -45,7 +47,8 @@ function memoryEntryVisible(entry, query) {
   if (entry.状态 === '物理删除') return false;
   if (entry.类 === '作答' && entry.归档 === true) {
     if (query.显式 !== true) return false;
-    if (!query.读者 || !(ANSWER_READERS.includes(query.读者.kind) || query.读者.roleId === '复核员')) return false;
+    if (!query.读者 || query.subject && (query.读者.id !== query.subject.id || query.读者.kind !== query.subject.kind)
+        || !archivedAnswerReadable(entry, query.读者, query[actualReviewDomain])) return false;
   }
   if (query.项目 && entry.类 === '知识' && entry.项目 && entry.项目 !== query.项目 && entry.归属 !== DIR.跨项目) return false;
   if (query.精确岗位 === true && entry.岗位 !== query.岗位) return false;
@@ -223,9 +226,9 @@ export class MemoryService {
     return this.rememberPersonal({subject,项目:project,类:'经历',标题:'轮级经历总结',内容:body,来源:'保留轮级原文与消息摘要核对；来源范围见轮级总结字段',标签:['轮级总结'],收录检查:check,[总结提交]:metadata});
   }
   async turnSummaries(spec) { return memoryReadSnapshot(this.layout, () => this.#turnSummaries(spec)); }
-  async #turnSummaries({subject,project,session}) {
+  async #turnSummaries({subject,project,session,includeInactive=false}) {
     const records = [];
-    for (const e of (await this.#foldAll()).values()) if (e.轮级总结?.session === digest(session) && e.项目 === project && !是否已被否(e) && e.状态 !== '物理删除' && await this.ownedReadable(e,subject,project)) records.push(e);
+    for (const e of (await this.#foldAll()).values()) if (e.轮级总结?.session === digest(session) && e.项目 === project && (includeInactive || !是否已被否(e)) && e.状态 !== '物理删除' && await this.ownedReadable(e,subject,project)) records.push(e);
     return records;
   }
   async organizePlan(spec = {}) { return this.organize({...spec,[整理计划]:true}); }
@@ -496,7 +499,8 @@ export class MemoryService {
       依据: '记忆服务：写入必带谁记的 + 怎么知道的',
       结果: row.幂等命中 ? '幂等命中（未重复落行）' : `记入${scope}`,
       项目: 通用 ? '通用' : 项目,
-      详情: { 类: kind, 来源: 来源.怎么知道, ...(input.依据 ? { 依据: input.依据 } : {}), ...(input.幂等键 ? { 幂等键: input.幂等键 } : {}) },
+      详情: { 类: kind, 来源摘要: digest(canonical(来源)), 来源作者: 来源.谁,
+        ...(input.依据 ? { 依据摘要: digest(String(input.依据)) } : {}), ...(input.幂等键 ? { 幂等键: input.幂等键 } : {}) },
     });
     return { id: row.id, 类: kind, 归属: scope, 账本: file, 项目, 岗位: row.岗位, ...(row.幂等命中 ? { 幂等命中: true } : {}) };
   }
@@ -1004,7 +1008,7 @@ export class MemoryService {
       }
       const permission = { subject: actor, action: 'read', target: { id: `记忆/检索/${项目}`, kind: '记忆', authority: '自治', zone: '私有', domain: '集体', project: 项目 }, context: { 类: '知识' } };
       if (this.policy.decideCurrentSync(permission)?.verdict !== 'allow') return unavailable();
-      const 域 = await 取复核读域({ tasks: this.tasks, 项目, subject: actor });
+      const 域 = await 取复核读域({ tasks: this.tasks, registry: this.registry, 项目, subject: actor });
       const snapshot = frame ? await this.#observationSnapshot(frame) : null;
       if (snapshot && !snapshot.evidenceValid) { frame.invalid = true; return unknown(); }
       const sources = snapshot?.files ?? [];
@@ -1106,6 +1110,7 @@ export class MemoryService {
     const read = async () => {
       const guard = {}; const result = await this.#query(query, guard);
       if (guard.stamp !== undefined && guard.stamp !== await this.information?.visibilityStamp()) throw new Denied('记忆读取范围变化', '来源、关系或可用状态在读取期间变化，请重新读取。');
+      if (guard.reviewStamp !== undefined && guard.reviewStamp !== (await this.#reviewReadProof(query.subject, query.项目)).stamp) throw new Denied('记忆复核用途变化', '复核用途或实际实例代次在读取期间变化，丢弃旧资料。');
       return guard.unavailable ? { ...result, 来源警示: '收录来源状态不可用，相关派生记忆未提供；原有其他记忆照常读取' } : result;
     };
     return memoryReadSnapshot(this.layout, () => this.information ? this.information.withReadSnapshot(read) : read());
@@ -1127,6 +1132,18 @@ export class MemoryService {
       target: { id: `记忆/检索/${query.项目 ?? '全部项目'}`, kind: '记忆', authority: '自治', zone: '私有', domain: '集体', project: query.项目 ?? null },
       context: { 类: query.类 ?? null },
     });
+    // Derive purpose from current task/identity facts, never a caller-supplied
+    // role name or read-domain object. Direct service reads use the same rule.
+    const proof = await this.#reviewReadProof(query.subject, query.项目);
+    const domain = proof.domain;
+    if (proof.stamp !== undefined) intakeGuard.reviewStamp = proof.stamp;
+    // A requested subset can narrow existing access; it cannot grant review
+    // privilege or override the authoritative purpose-derived domain.
+    const requested = query.读域?.限定 === true ? structuredClone(query.读域) : null;
+    if (requested && !(requested.集合 instanceof Set)) throw new InvalidBody('附加读域必须提供明确引用集合，不能自报复核权限。');
+    const effective = requested && domain?.限定 ? { ...domain, 说明: `${domain.说明}；${requested.说明 ?? '附加选材范围'}`,
+      集合: new Set([...domain.集合].filter(id => requested.项目 === domain.项目 && requested.集合.has(id))) } : requested ?? domain;
+    query = { ...query, 读域: effective, [actualReviewDomain]: domain };
     // 一次调用一条（档位由 ACTION_GRADE 的「只读服务调用=记汇总」定）：
     // 查询命中 50 条 ≠ 50 条审计。拒绝路径不入这条账——引擎的「策略拒绝」已全记。
     await this.audit.append({
@@ -1714,8 +1731,24 @@ export class MemoryService {
     if (entry.收录 && !await this.information?.nativeReadable(entry, { subject: spec.读者, 项目: spec.项目 })) return { 可读: false, 原因: '来源或关系范围不可读' };
     if (entry.连续性 && !['Lead', '主权者'].includes(spec.读者?.kind)) return { 可读: false, 原因: 'Lead连续性仅向Lead或主权者提供' };
     if (entry.类 !== '作答' || entry.归档 !== true) return { 可读: true, 原因: '未归档条目对所有在编主体可读' };
-    if (ANSWER_READERS.includes(spec.读者?.kind) || spec.读者?.roleId === '复核员') return { 可读: true, 原因: `${spec.读者.kind}${spec.读者.roleId === '复核员' ? '/复核员' : ''} 在归档后仍可读（会审分歧清单必须对复核员可见）` };
+    const project = spec.项目 ?? entry.项目;
+    const proof = await this.#reviewReadProof(spec.读者, project);
+    if (archivedAnswerReadable(entry, spec.读者, proof.domain)) {
+      if (proof.stamp !== undefined && proof.stamp !== (await this.#reviewReadProof(spec.读者, project)).stamp) return { 可读: false, 原因: '复核用途或实例代次已变化' };
+      return { 可读: true, 原因: '治理读者或当前真实复核用途内的明确对象，可显式读取归档作答' };
+    }
     return { 可读: false, 原因: `${spec.读者?.kind ?? '未知主体'} 不可读归档作答；自动检索也不进默认面` };
+  }
+
+  async #reviewReadProof(subject, project) {
+    if (subject?.kind !== '成员' || !project || !this.tasks) return { domain: null };
+    const domain = await 取复核读域({ tasks: this.tasks, registry: this.registry, 项目: project, subject });
+    const identity = await (this.registry ?? this.tasks.registry)?.identity?.() ?? await this.tasks.identityProvider?.();
+    const member = identity?.members?.[subject.id];
+    return { domain, stamp: digest(canonical({ id: subject.id, project,
+      member: member ? { 状态: member.status, 岗位: member.岗位, 代: member.代 ?? 1,
+        宿主: typeof member.代次 === 'string' ? member.代次 : member.代次?.代 ?? member.宿主代次 ?? null } : null,
+      limited: domain?.限定 === true, tasks: domain?.复核任务 ?? [], targets: domain?.复核对象 ?? [] })) };
   }
 
   /**
@@ -2268,7 +2301,7 @@ export class MemoryService {
     await this.#feedbackSnapshotUnchanged(snapshot);
     await this.#feedbackActor(frame.subject);
     this.#feedbackRead(frame.subject, { id: `记忆/检索/${frame.project}`, kind: '记忆', authority: '自治', zone: '私有', domain: '集体', project: frame.project }, { 类: '知识' });
-    const domain = await 取复核读域({ tasks: this.tasks, 项目: frame.project, subject: frame.subject });
+    const domain = await 取复核读域({ tasks: this.tasks, registry: this.registry, 项目: frame.project, subject: frame.subject });
     const currentNow = new Date(this.clock.now());
     for (const id of frame.requestedEvidence) {
       const entry = snapshot.byId.get(id);

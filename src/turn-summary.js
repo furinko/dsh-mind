@@ -47,7 +47,7 @@ export class TurnSummaryService {
     return { due:false, id:entry.id, rounds:rounds.length, sourceCount:sources.length, mode:body.形式 };
   }
   async forget({subject,project,session}) {
-    const entries = await this.memory.turnSummaries({subject,project,session});
+    const entries = await this.memory.turnSummaries({subject,project,session,includeInactive:true});
     if (entries.length) return this.memory.organize({subject,项目:project,op:'forget',ids:entries.map(e=>e.id),原因:'轮级经历遗忘，同步清理总结'});
     return {forgotten:0};
   }

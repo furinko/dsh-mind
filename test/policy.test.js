@@ -6,7 +6,7 @@
  */
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeFixture, SOVEREIGN, LEAD, MEMBER, REVIEWER, writeUnder, 钉Lead } from './helpers.mjs';
+import { makeFixture, seedReviewRelation, SOVEREIGN, LEAD, MEMBER, REVIEWER, writeUnder, 钉Lead } from './helpers.mjs';
 import { Denied, Fault, NeedsApproval } from '../src/kernel/errors.js';
 
 /** @type {Awaited<ReturnType<typeof makeFixture>>} */
@@ -92,7 +92,8 @@ describe('策略引擎', () => {
   });
 
   it('复核者只读数、不改被验对象，但可以落复核结论', async () => {
-    const target = { id: 't1', kind: '任务', authority: '自治' };
+    await seedReviewRelation(f, { 项目: 'default', 目标: 't1' });
+    const target = { id: 't1', kind: '任务', authority: '自治', project: 'default' };
     assert.equal((await 判定(REVIEWER, 'read', target)).verdict, 'allow');
     assert.equal((await 判定(REVIEWER, 'review', target)).verdict, 'allow');
     assert.equal((await 判定(REVIEWER, 'write', target)).verdict, 'deny');
@@ -223,7 +224,8 @@ describe('策略引擎', () => {
       '```',
     ].join('\n'));
     assert.equal(await g.policy.reload(), true);
-    const d = await g.policy.decide({ subject: REVIEWER, action: 'write', target: { id: 't1', kind: '任务', authority: '自治' } });
+    await seedReviewRelation(g, { 项目: 'default', 目标: 't1' });
+    const d = await g.policy.decide({ subject: REVIEWER, action: 'write', target: { id: 't1', kind: '任务', authority: '自治', project: 'default' } });
     assert.equal(d.verdict, 'deny', 'P1-05：allow grant 不得放行复核员写');
     assert.match(d.rule, /只读数/);
 

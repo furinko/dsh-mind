@@ -429,7 +429,7 @@ export class RoleRegistry {
    * @param {{ subject: object, 岗位: string, 实例: string, 代?: number, 授权引用?: string, 节点?: string, 会审?: {id: string, 项目: string, 资料?: string[]} }} spec
    *   `授权引用`：可选（v2 起复核员岗与成员同规则，不再必填）；给了就原样进链接受复核。
    *   `会审`（v2 条目18/20 · 补修I）：独立会审的临时参与实例绑定。只允许 **Lead/主权者** 给
-   *   **普通成员岗**（复核员除外）落绑定；`来源会话` 强制取登记主体 id（不接受自报），
+   *   **成员实例**落绑定；`来源会话` 强制取登记主体 id（不接受自报），
    *   身份记录落 `会审绑定 {会审, 项目, 来源会话, 资料}`。会审不占任务节点，故本参数与 `节点` 互斥。
    */
   async assign(spec) {
@@ -870,8 +870,7 @@ export class RoleRegistry {
    * 为什么放在 registry 而不是 council 服务里再判一次：绑定最终落身份档案，写口的判据
    * 必须与档案形状同处；会审服务只负责编排「建 → 绑 → 发」，不复制身份规则。三条硬边界：
    *  - 只有 Lead / 主权者能创建会审参与实例（成员不得自授）；
-   *  - 岗位必须是普通成员岗，**复核员除外**——复核员「只读数、不改、不提案」是本职硬约束，
-   *    会审作答是一次写；不为齐卷给复核岗开口子；
+   *  - 必须是成员实例；专业名称不决定咨询权限，实际复核用途另按任务边界检查；
    *  - `来源会话` 强制取登记主体 id（真实 exec 会话事实），不接受调用方/模型自报。
    *
    * @param {object} spec `assign` 的入参（已归一 实例/岗位）
@@ -883,12 +882,10 @@ export class RoleRegistry {
       throw new InvalidBody('会审参与实例不得同时绑定任务节点：会审已退出任务图（v2 条目18），实例只绑独立会审与来源会话。', { missing: [] });
     }
     const 岗位 = String(spec.岗位 ?? '');
-    if (subjectKindForRole(岗位) !== '成员' || 岗位 === '复核员') {
-      throw new Denied('角色注册表 · 会审参与实例只能是普通成员岗', `岗位「${岗位}」不能作为会审参与实例：角色种类为 ${subjectKindForRole(岗位)}${岗位 === '复核员' ? '（复核员的只读/不提案是本职硬约束）' : ''}。`, {
+    if (subjectKindForRole(岗位) !== '成员') {
+      throw new Denied('角色注册表 · 会审参与实例只能是普通成员岗', `岗位「${岗位}」不能作为会审参与实例：角色种类为 ${subjectKindForRole(岗位)}。`, {
         requireAuthority: 'Lead',
-        howToChange: 岗位 === '复核员'
-          ? '复核意见走真正的复核任务：Lead 建复核任务 + 显式复核对象，再 member_spawn 复核员实例；不要为齐卷给复核岗开口子。'
-          : '会审参与实例只用普通成员岗（插件工程 / 文档整理 / 记忆整理…）；Lead/主权者不由此入口创建。',
+        howToChange: '会审参与实例使用成员专业；Lead/主权者不由此入口创建。真实复核用途按任务边界单独核对。',
       });
     }
     if (!['Lead', '主权者'].includes(spec.subject?.kind)) {

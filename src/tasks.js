@@ -16,7 +16,7 @@ import { parseTaskLedger, readTaskLedger } from './task-ledger.js';
 import { Denied, Fault, InvalidBody } from './kernel/errors.js';
 import { normalizeKnowledgeAdoption, validateKnowledgeEvidenceSource } from './knowledge-reuse-contract.js';
 import { normalizeKnowledgeContext } from './knowledge-applicability.js';
-import { 复核对象引用 } from './review-scope.js';
+import { 复核对象引用, 复核用途 } from './review-scope.js';
 import { artifactReferences, captureArtifactManifest, verifyArtifactManifest } from './artifact-manifest.js';
 import { ToolFileAuthority } from './tool-file-scope.js';
 import { GoalService } from './goals.js';
@@ -646,7 +646,7 @@ export class TaskGraph {
     // （别人代交 / 一岗多人里只交了一部分），他依然参与了产出，独立性一样破。
     if (复核冲突实例名单(node).includes(复核者id)) {
       throw new Denied('任务图 · 负责人不得复核自己的任务（v2 冲突排除）', `复核者 ${复核者id} 是节点 ${id} 的负责人：执行者复核自己的任务 = 自己验收自己。`, {
-        howToChange: '由 Lead 用 member_spawn 起一位与本节点无关的复核员实例复核；该实例用完即封存。',
+        howToChange: '由 Lead 按任务选择未参与产出的真实实例，建立独立复核用途后核对；专业名不决定独立性。',
       });
     }
     // 署名 = 实际操作者（v2 补修 · 真实署名）：任何主体都不能借 `复核者` 字段替别人署名
@@ -666,7 +666,7 @@ export class TaskGraph {
       target: { id, kind: '任务', authority: '自治', zone: '私有', project: spec.项目 },
       context: {},
     });
-    // v2 条目2/6 · 真实署名：成员复核员必须是「真在册在岗复核岗 + 真绑定了一条把本节点
+    // v2 条目2/6 · 真实署名：成员复核必须是「真在册在岗实例 + 真绑定了一条把本节点
     // 列为复核对象的复核任务」；Lead/主权者独立验收不走这条（结构身份，冲突排除已判）。
     await this.#assertReviewerEvidence(id, 复核者id, spec.项目, spec.subject);
     // 补修K（2026-10-18 · 主权者条目4「采纳权在 Lead」）：复核**只出可引用结论**，不推进状态。
@@ -713,93 +713,26 @@ export class TaskGraph {
     return spec.三态 === '不过' ? this.get(id, { 项目: spec.项目 }) : reviewed;
   }
 
-  /**
-   * 复核署名的**证据闸**（v2 口述收敛 2026-10-18 条目2/6/18 的补修）。
-   *
-   * 两条都要，缺一条就只是「账上有个名字」：
-   *  ① **人真**：署名的复核者在身份档案里在岗，且岗位就是「复核员」（普通成员没有复核权）；
-   *  ② **关联真**：存在一条**绑定着这个实例**的复核任务，且该任务的显式 `复核对象`
-   *     含本次被复核节点。复核实例绑的是它自己的复核任务，不是被复核业务节点。
-   *
-   * 为什么关联载体必须是独立 `复核对象` 而不是 `依赖`：依赖的语义是「先做谁」，
-   * 若拿它表达「验哪一单」，就必须等被复核节点先被采纳才能派复核任务——而采纳又
-   * 等复核结论，闭环死锁。这条判据与 create 的 #assertReviewObjects 同源。
-   *
-   * Lead / 主权者不走这条：Lead 的独立验收权来自结构身份（卡里含 review-run），
-   * 不能被「普通复核员岗」变成独占审查权；冲突排除仍在上方与锁内各判一次。
-   *
-   * @param {string} 被复核节点
-   * @param {string} 复核者id
-   * @param {string} 项目
-   * @param {object} subject
-   * @param {object[]|null} nodes 写账时传同一把锁内折叠的项目节点，避免重新读取旧缓存
-   */
+  /** 真实独立复核用途：专业名不授予权限，实际关联、实例凭证和生命周期才承重。 */
   async #assertReviewerEvidence(被复核节点, 复核者id, 项目, subject, nodes = null) {
     if (!subject || ['Lead', '主权者'].includes(subject.kind)) return;
-    if (subject.kind !== '成员' || subject.roleId !== '复核员') {
-      throw new Denied(
-        '任务图 · 复核只属复核员岗 / Lead / 主权者（v2 条目1/2）',
-        `${subject.id}（${subject.kind}${subject.roleId ? `/${subject.roleId}` : ''}）不是复核员岗：普通成员只有执行权，复核是独立于执行的那只眼，必须由复核员岗实例或 Lead/主权者执行。`,
-        {
-          requireAuthority: 'Lead',
-          howToChange: '由 Lead 用 member_spawn 起一位「复核员」岗实例（附复核任务、把被复核节点列进复核对象）再复核。',
-          detail: { 主体: subject.id, kind: subject.kind, roleId: subject.roleId ?? null },
-        },
-      );
-    }
-    // ① 人真：装配面 org.js 恒注入 registry；直接构造的夹具退位（与 bind 同口径）。
-    if (this.registry) {
-      const member = (await this.registry.identity())?.members?.[复核者id];
-      if (!member || member.status !== '在岗') {
-        throw new Denied(
-          '任务图 · 复核署名必须是真实在册在岗复核实例（v2 条目2）',
-          `署名复核者 ${复核者id} 在身份档案里${member ? `状态为 ${member.status}` : '没有登记'}：不接受把复核结论记到一个不存在或不在岗的实例上。`,
-          {
-            requireAuthority: 'Lead',
-            howToChange: '先 registry_assign 登记该复核实例（或经 member_spawn 自动登记），再执行复核。',
-            detail: { 复核者: 复核者id, 被复核节点 },
-          },
-        );
-      }
-      if (member.岗位 !== '复核员') {
-        throw new Denied(
-          '任务图 · 复核署名必须是复核员岗（v2 条目2）',
-          `署名复核者 ${复核者id} 的档案岗位是「${member.岗位}」，不是「复核员」：普通岗位实例不得复核任务。`,
-          {
-            requireAuthority: 'Lead',
-            howToChange: '由 Lead 起一位「复核员」岗实例复核；要换岗走 registry_seal → registry_assign。',
-            detail: { 复核者: 复核者id, 档案岗位: member.岗位, 被复核节点 },
-          },
-        );
-      }
-    }
-    // ② 关联真：复核任务 = 绑定含本实例、且显式复核对象含被复核节点的节点（不能是它自己）。
-    const 关联 = (nodes ?? await this.list({ 项目 })).filter(
-      (n) => String(n.id) !== String(被复核节点)
-        && (n.绑定 ?? []).some((b) => String(b?.实例 ?? '') === 复核者id)
-        && 复核对象引用(n).includes(String(被复核节点)),
-    );
-    if (关联.length === 0) {
-      throw new Denied(
-        '任务图 · 复核实例缺本任务关联（v2 条目6）',
-        `复核者 ${复核者id} 没有被绑到任何「复核对象含 ${被复核节点}」的复核任务上：没有真实关联的署名，只是一串名字。复核对象是显式引用（不是依赖、不是任务书自由文本）。`,
-        {
-          requireAuthority: 'Lead',
-          howToChange: `建一条复核任务（负责人=复核员，create 时带 复核对象=['${被复核节点}']），member_spawn 起复核实例后 task_bind 绑上去；历史任务可在待派发/已派发用 task_bind 只补 复核对象。`,
-          detail: { 复核者: 复核者id, 被复核节点 },
-        },
-      );
-    }
-    // ③ 关联必须仍能授权：共用任务作用域的当前凭证、负责人和生命周期判据。
-    // 核的是复核员自己的任务，不能把业务任务传入 scopeOf 而误判为非负责人。
-    const scopes = 关联.map(node => this.policy.scopeOf(subject, node));
-    if (!scopes.some(scope => scope.ok)) {
-      throw new Denied('任务图 · 复核任务授权已失效', '历史复核关联不授予新出票权：' + scopes.map(scope => scope.reason).join('；'), {
-        requireAuthority: 'Lead',
-        howToChange: '由 Lead 派发尚未生效的复核任务；终态需另立复核任务，凭证变化须重新绑定。不得用旧任务或旧身份继续出票。',
-        detail: { 复核者: 复核者id, 被复核节点, 复核任务: 关联.map(node => node.id) },
+    if (subject.kind !== '成员') throw new Denied('任务图 · 复核需要真实执行主体', '复核只能由真实成员、Lead或主权者执行，不采信自报专业。');
+    const member = this.registry ? (await this.registry.identity())?.members?.[复核者id] : this.policy.state?.identity?.members?.[复核者id];
+    if (!member || member.status !== '在岗') throw new Denied('任务图 · 复核署名必须是真实在册在岗复核实例', '署名实例不存在或已经不在岗；修复真实登记，不需要另行创造身份或通用授权。');
+    const 项目节点 = nodes ?? await this.list({ 项目 });
+    const 用途 = 复核用途({ 节点: 项目节点, 主体: subject, 项目, 成员: member });
+    if (!用途.限定 || !用途.复核对象.includes(String(被复核节点))) {
+      throw new Denied('任务图 · 复核实例缺本任务关联', '当前实例没有有效的本任务独立复核用途；需要同项目显式复核对象、真实实例绑定和仍有效的派发凭证。专业名不能替代关联。', {
+        howToChange: '由Lead按任务选择真实专业实例，建立复核任务并明确复核对象，再绑定和派发；不用为此更换专业。',
+        detail: { 复核者: 复核者id, 被复核节点 },
       });
     }
+    const 关联 = 项目节点.filter(node => node.id !== 被复核节点 && 用途.复核任务.includes(node.id) && 复核对象引用(node).includes(String(被复核节点)));
+    const scopes = 关联.map(node => this.policy.scopeOf(subject, node));
+    if (!scopes.some(scope => scope.ok)) throw new Denied('任务图 · 复核任务授权已失效', '复核任务当前不能授权出票：' + scopes.map(scope => scope.reason).join('；'), {
+      howToChange: '核对派发状态、实例代次和当前绑定；终态另立复核任务，不借旧事实继续出票。',
+      detail: { 复核者: 复核者id, 被复核节点, 复核任务: 关联.map(node => node.id) },
+    });
   }
 
   /**
@@ -1930,7 +1863,7 @@ export class TaskGraph {
         const 撞负责人 = ids.find((谁) => 执行者名单.includes(谁));
         if (撞负责人) {
           throw new Denied('任务图 · 负责人不得复核自己的任务（v2 冲突排除，锁内复检）', `复核者 ${撞负责人} 是节点 ${id} 的负责人（锁内最新折叠视图）：执行者复核自己的任务 = 自己验收自己。`, {
-            howToChange: '由 Lead 用 member_spawn 起一位与本节点无关的复核员实例复核。',
+            howToChange: '由 Lead 按任务选择未参与产出的真实实例，建立独立复核用途后核对。',
           });
         }
       }

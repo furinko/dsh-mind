@@ -446,7 +446,7 @@ describe('⑦ 条目11 绑定 + 署名安全：负责人保岗位名，实例独
       const 业务 = await 执行中节点(org, 'w5-别人节点');
       await assert.rejects(
         () => org.tasks.start(业务.id, { subject: REVIEWER, 项目: P }),
-        (e) => e instanceof Denied && /复核员岗/.test(e.rule),
+        (e) => e instanceof Denied && /任务|复核/.test(e.rule),
       );
     } finally { await f.cleanup(); }
   });

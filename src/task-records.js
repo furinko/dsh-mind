@@ -1,22 +1,23 @@
 /** Scoped original submissions/votes. Read only; no bus handoff or task revival. */
 import {Denied,Fault,InvalidBody} from './kernel/errors.js';
 import {canonical,digest} from './kernel/text.js';
-import {复核读域,在读域,是复核员岗} from './review-scope.js';
+import {复核读域,在读域} from './review-scope.js';
 import {readInstanceSnapshot} from './instance-snapshot.js';
 import {matchingBinding} from './tool-file-scope.js';
 
 const deny=()=>new Denied('任务原记录 · 复核读域','原记录不存在、不属于指定任务或当前主体的复核读域。');
 async function currentDomain(org,项目,subject){
-  if(!是复核员岗(subject))return null;
+  if(subject?.kind!=='成员')return null;
   const snapshot=readInstanceSnapshot(org.layout.identityFile()),member=snapshot.成员?.[subject.id];
-  if(!snapshot.ok||member?.就绪!==true||member.岗位!=='复核员')throw deny();
+  if(!snapshot.ok||member?.就绪!==true)throw deny();
   const nodes=await org.tasks.list({项目});
-  return 复核读域({节点:nodes.filter(n=>(n.绑定??[]).some(b=>matchingBinding(b,subject.id,member))),主体:subject,项目});
+  const domain = 复核读域({节点:nodes,主体:subject,项目,成员:member});
+  if(!domain.限定)throw deny();return domain;
 }
 export async function readTaskRecords({org,项目,subject,args}){
   const allowed=['action','project','原记录','id','提交序','票','偏移','limit','记录偏移','记录长度','数据版本'];
   if(Object.keys(args).some(k=>!allowed.includes(k)))throw new InvalidBody('任务原记录含未知参数。');
-  if(!['Lead','主权者'].includes(subject?.kind)&&!是复核员岗(subject))throw deny();
+  if(!['Lead','主权者','成员'].includes(subject?.kind))throw deny();
   if(args.票!==undefined&&args.提交序!==undefined)throw new InvalidBody('提交序和票不能同时提供；须唯一选择原记录。');
   if(args.提交序!==undefined&&(!Number.isSafeInteger(args.提交序)||args.提交序<1))throw new InvalidBody('提交序不合法。');
   if(args.票!==undefined&&!/^rv-[1-9]\d*$/.test(args.票))throw new InvalidBody('票必须是原始rv-序号。');

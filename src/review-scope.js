@@ -15,16 +15,27 @@
  *    不凭会话 cwd 或无项目的节点 id 去别的项目账本里猜。
  */
 import { 线程等价键 } from './paths.js';
+import { readTaskLedgerSync } from './task-ledger.js';
+import { fold } from './tasks.js';
+import { readInstanceSnapshot } from './instance-snapshot.js';
+import { Fault } from './kernel/errors.js';
 
-/** 复核员岗的判定：普通岗位卡「复核员」+ 成员 kind（v2 条目1：复核者不再是主体类）。 */
-export function 是复核员岗(主体) {
-  return 主体?.kind === '成员' && 主体?.roleId === '复核员';
+/** 从本项目任务真源和在岗实例取用途；调用参数不能授予读域。 */
+export async function 取复核读域({ tasks, 项目, subject, registry }) {
+  if (subject?.kind !== '成员') return null;
+  const identity = await (registry ?? tasks?.registry)?.identity?.() ?? await tasks?.identityProvider?.();
+  if (!identity?.members?.[subject.id]) throw new Fault('REVIEW_IDENTITY_UNAVAILABLE', '复核用途需要真实在岗身份，不能把缺接线当成无复核限制。');
+  return 复核读域({ 节点: await tasks.list({ 项目 }), 主体: subject, 项目, 成员: identity.members[subject.id] });
 }
 
-/** 从本项目任务真源取复核读域；工具检索与交卷来源观察共用，调用参数不能授予读域。 */
-export async function 取复核读域({ tasks, 项目, subject }) {
-  if (!是复核员岗(subject)) return null;
-  return 复核读域({ 节点: await tasks.list({ 项目 }), 主体: subject, 项目 });
+/** 同步工具/策略检查与异步服务使用同一用途判据，严格读取实际任务账本。 */
+export function 取复核用途同步({ layout, subject, 项目, identity }) {
+  if (subject?.kind !== '成员') return null;
+  const snapshot = identity ?? readInstanceSnapshot(layout.identityFile());
+  const member = snapshot.members?.[subject.id] ?? snapshot.成员?.[subject.id];
+  if (snapshot.ok === false || !member) throw new Fault('REVIEW_IDENTITY_UNAVAILABLE', '复核用途的真实身份快照不可读。');
+  const nodes = [...fold(readTaskLedgerSync(layout.taskLog(项目))).values()];
+  return 复核读域({ 节点: nodes, 主体: subject, 项目, 成员: member });
 }
 
 /**
@@ -55,45 +66,31 @@ export function 复核对象引用(node) {
  * }}
  */
 export function 复核读域(spec = {}) {
-  const 节点 = Array.isArray(spec.节点) ? spec.节点 : [];
-  const 主体 = spec.主体 ?? null;
-  const 项目 = spec.项目 ?? null;
-  if (!是复核员岗(主体)) {
-    return {
-      限定: false,
-      复核任务: [],
-      复核对象: [],
-      集合: null,
-      项目,
-      主体: 主体?.id ?? null,
-      说明: '非复核员岗：读域按主体原有边界，不由复核读域裁剪。',
-    };
+  const nodes = Array.isArray(spec.节点) ? spec.节点 : [];
+  const subject = spec.主体 ?? null, member = spec.成员;
+  const project = spec.项目 ?? null;
+  const tasks = [], targets = [];
+  const status = member?.status ?? member?.状态;
+  const generation = typeof member?.代次 === 'string' ? member.代次 : member?.代次?.代 ?? member?.宿主代次 ?? null;
+  const active = new Set(['已派发', '执行中', '已交卷', '未验', '已打回', '待决']);
+  if (subject?.kind === '成员' && status === '在岗') for (const node of nodes) {
+    if (node.项目 != null && node.项目 !== project || !active.has(node.状态) || node.判据冻结 !== true) continue;
+    const refs = 复核对象引用(node); if (!refs.length) continue;
+    const owners = Array.isArray(node.负责人) ? node.负责人 : [node.负责人];
+    if (!owners.includes(subject.id) && !owners.includes(member.岗位)) continue;
+    const bound = (node.绑定 ?? []).some(binding => binding?.实例 === subject.id && binding.岗位 === member.岗位
+      && binding.凭证?.版本 === 1 && binding.凭证.代 === (member.代 ?? 1) && binding.凭证.宿主代次 === generation);
+    if (!bound) continue;
+    tasks.push(String(node.id)); targets.push(...refs);
   }
-  const 实例 = String(主体.id ?? '');
-  const 复核任务 = [];
-  const 复核对象 = [];
-  for (const node of 节点) {
-    const 绑定 = Array.isArray(node?.绑定) ? node.绑定 : [];
-    // 复核实例绑的是**它自己的复核任务**；被复核业务节点的负责人仍是执行者
-    // （把复核实例也挂到业务节点负责人上会与冲突排除自相矛盾）。
-    if (!绑定.some((b) => String(b?.实例 ?? '') === 实例)) continue;
-    复核任务.push(String(node.id));
-    复核对象.push(...复核对象引用(node));
-  }
-  const 任务 = [...new Set(复核任务)];
-  const 对象 = [...new Set(复核对象)];
-  return {
-    限定: true,
-    复核任务: 任务,
-    复核对象: 对象,
-    集合: new Set([...任务, ...对象]),
-    项目,
-    主体: 实例 || null,
-    说明: 任务.length === 0
-      ? '复核读域为空：本实例没有被绑定的复核任务（未关联任务不得读）。'
-      : `复核读域：复核任务 ${任务.length} 个、显式复核对象 ${对象.length} 个（按「已绑定复核任务 → 复核对象」限定，不是岗位全量）。`,
-  };
+  const reviewTasks = [...new Set(tasks)], reviewTargets = [...new Set(targets)];
+  const limited = reviewTasks.length > 0;
+  return { 限定: limited, 复核任务: reviewTasks, 复核对象: reviewTargets,
+    集合: limited ? new Set([...reviewTasks, ...reviewTargets]) : null, 项目: project, 主体: subject?.id ?? null,
+    说明: limited ? `真实复核用途：${reviewTasks.length}个活动任务、${reviewTargets.length}个显式对象；专业名不决定权限。`
+      : '没有当前有效复核用途：按普通执行与资料归属判定，不授予复核特权。' };
 }
+export const 复核用途 = 复核读域;
 
 /**
  * 这个对象 id 在不在读域里。

@@ -14,7 +14,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
-import { makeFixture, writeUnder, LEAD, MEMBER, REVIEWER, seedLegacyIndependentCouncil } from './helpers.mjs';
+import { makeFixture, seedReviewRelation, writeUnder, LEAD, MEMBER, REVIEWER, seedLegacyIndependentCouncil } from './helpers.mjs';
 import { Org } from '../src/org.js';
 import { ProbeRunner } from '../src/probes.js';
 import { runAction } from '../lib/actions.js';
@@ -147,7 +147,8 @@ describe('P1-05 授权块不得越过结构性边界', () => {
       privateFiles: { '集体L1-法律/权限矩阵.md': 私有矩阵({ subject: '成员', action: 'write', authority: '自治', verdict: 'allow' }) },
     });
     try {
-      const d = await f.policy.decide({ subject: REVIEWER, action: 'write', target: { id: 't', kind: '任务', authority: '自治' } });
+      await seedReviewRelation(f, { 项目: P, 目标: 't' });
+      const d = await f.policy.decide({ subject: REVIEWER, action: 'write', target: { id: 't', kind: '任务', authority: '自治', project: P } });
       assert.equal(d.verdict, 'deny');
       assert.match(d.rule, /只读数/);
     } finally { await f.cleanup(); }
