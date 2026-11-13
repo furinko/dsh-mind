@@ -25,13 +25,22 @@
 
 首轮专项65项为64通过、1失败：新增11项全部通过；失败为旧布局迁移调用Windows PowerShell捕获管道被当前沙箱拒绝（spawnSync powershell.exe EPERM）。该同名用例已在未改动基线再次复现，不能计作通过，也不通过改ACL、放宽断言或新跳过来隐藏。原始日志为 `memory-continuity-focused-01.log` 和 `memory-continuity-baseline-migration.log`。
 
-进一步补充项目摘要暂停后接续、旧projection3已报告遗漏后的补读；新增场景现为13项。完整回归用 `test/run-inherited-stdio.mjs` 保留每文件独立进程、4路并行，子进程只继承stdio，TAP由Node公开reporter自行写入新目录，从而避免Node测试worker的捕获管道；不改变测试权限。逐文件原始TAP和汇总保存在 `.w37-full-01`。最终统计及只读咨询结论待完成后补齐，不提前宣称全量通过。
+最终功能提交 `7073109fd422e0a5cfd4ef853fb967e50f2e3ae1`。新增19项全部通过，覆盖暂停180/365天、项目摘要接续、旧projection2/3补读、跨项目撤回、无外部消息幸存、未知时间排序、起点变化后的true/false保留标记及明确遗忘。最后一轮相关回归11文件共131项：130通过、1失败、0跳过/取消；唯一失败是已在原基线复现的Windows迁移捕获管道EPERM，不计作通过。原始结果位于 `.w37-final-related` 和 `memory-continuity-final-related.log`。
+
+前一功能提交 `76333eac094354bccf180fca70041f7944995ec3` 做了完整248文件回归：2631项，2574通过、44失败、13跳过、0取消，**不是全绿**。44项失败涉及的同名测试均在未改动的34b9186、同一权限环境中再次复现；三批基线子集共224项，172通过、44失败、8跳过。包含父suite的48个失败标题逐项比较，无新增未匹配标题。主要涉及Windows权限/链接边界和子进程捕获管道；本轮不把旧失败改成成功、跳过或擅自放宽权限。最后的标记关联修正只重跑了上述全部相关路径，**未再次重跑整套248文件**；不能把前一提交的全量结果冒充最终提交的全量结果。
+
+完整回归使用 `test/run-inherited-stdio.mjs` 保留每文件独立进程、4路并行，子进程只继承stdio，TAP由Node公开reporter写入新目录，不改变测试权限。全量原始TAP保存在 `.w37-full-02`，对照在 `.w37-baseline-failures-01` 至 `03`；中间失败结果 `.w37-full-01` 保留。机器可核对汇总及最终源码散列见 [验证记录](<MEMORY-CONTINUITY-VERIFICATION-2026-11-13.json>)。
+
+只读技术咨询发现的跨项目撤回和未知轮时间问题，先用3项失败复现再修；后续发现unknown轮补回前缀导致保留标记丢失，再用true/false两项失败复现并按幸存原消息恢复标记。原失败日志 `memory-continuity-review-before.log`、`memory-continuity-retain-before.log` 均保留。咨询只做有界静态检查；执行和最后标记修正的验证由Lead完成，不冒称正式独立复核票或全产品已验。
+
+预检最终95个内核模块可加载；未改动的前端549条断言和合成安装器10项自检通过。没有真实运行存量迁移、真实GUI装载验收，也没有新增基于价值自动删除原始经历的算法；现有主动整理和明确遗忘仍保留。
 
 ## 复跑
 
 ```powershell
 node --experimental-test-isolation=none --test --test-concurrency=1 --test-timeout=60000 test/memory-continuity-2026-11-13.test.js
 node --experimental-test-isolation=none --test --test-concurrency=1 --test-timeout=60000 test/redesign-summary-2026-11-13.test.js test/redesign-summary-race-review-2026-11-13.test.js test/turn-buffer-2026-10-22.test.js test/turn-archive-redesign-2026-11-13.test.js test/deploy-turn-v4-readiness-2026-11-13.test.js test/conversation-recall-2026-10-25.test.js
+node test/run-inherited-stdio.mjs
 node test/preflight.mjs
 node components/board/test/client-harness.mjs
 node scripts/verify-profile-install.mjs --selftest

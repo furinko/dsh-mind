@@ -1,0 +1,82 @@
+{
+  "baselineCommit": "34b918677233b1bb42ef3df88050bc82b25bec17",
+  "fullSuiteCommit": "76333eac094354bccf180fca70041f7944995ec3",
+  "finalFunctionalCommit": "7073109fd422e0a5cfd4ef853fb967e50f2e3ae1",
+  "fullSuite": {
+    "node": "v24.22.1",
+    "startedAt": "2026-11-13T10:21:38.265Z",
+    "finishedAt": "2026-11-13T10:27:33.684Z",
+    "files": 248,
+    "totals": {
+      "tests": 2631,
+      "pass": 2574,
+      "fail": 44,
+      "cancelled": 0,
+      "skipped": 13
+    },
+    "failedFiles": [
+      "test/artifact-manifest-2026-10-20.test.js",
+      "test/conversation-recall-2026-10-25.test.js",
+      "test/deployment-layout-2026-10-23.test.js",
+      "test/information-paths-2026-10-25.test.js",
+      "test/host-file-ceiling-2026-11-05.test.js",
+      "test/lead-affect-2026-10-31.test.js",
+      "test/memory-layout-2026-10-23.test.js",
+      "test/member-tool-files-2026-10-20.test.js",
+      "test/persona-core-2026-10-23.test.js",
+      "test/persona-core-settings-2026-10-23.test.js",
+      "test/review-cleanup-recovery.test.js",
+      "test/review-experiments.test.js",
+      "test/task-ledger-project-identity-2026-10-20.test.js",
+      "test/turn-buffer-rename-2026-10-27.test.js"
+    ]
+  },
+  "finalAffectedSuite": {
+    "node": "v24.22.1",
+    "startedAt": "2026-11-13T10:38:34.180Z",
+    "finishedAt": "2026-11-13T10:38:57.529Z",
+    "files": 11,
+    "totals": {
+      "tests": 131,
+      "pass": 130,
+      "fail": 1,
+      "cancelled": 0,
+      "skipped": 0
+    },
+    "failedFiles": [
+      "test/conversation-recall-2026-10-25.test.js"
+    ]
+  },
+  "fullSuiteRerunAfterLastAnnotationFix": false,
+  "newTests": 19,
+  "baselineFailureSubsets": {
+    "totals": {
+      "tests": 224,
+      "pass": 172,
+      "fail": 44,
+      "cancelled": 0,
+      "skipped": 8
+    },
+    "namedFailures": 48,
+    "unmatchedCurrentNames": []
+  },
+  "checks": {
+    "preflightModules": 95,
+    "clientAssertions": 549,
+    "installerSyntheticChecks": 10
+  },
+  "sourceHashes": {
+    "src/turn-summary.js": "980aeadd15a65beb7180923a0935729ac715fd062a801308511aa34ea58ec880",
+    "src/turn-buffer.js": "21a457028c69e1823aa5f134df5932c35174d4e1b59d216a9583d5a2350b8969",
+    "components/kernel/lib/turn-buffer-hooks.js": "19f0f5f747143e8610fda90878f2db9c2540e1772262a0f3a42d68d4db170fb0",
+    "components/kernel/lib/index.js": "9192a76ad46b5edc329002ee79bc7cbed601fd1520719988cfa7372f7ceb3171",
+    "test/memory-continuity-2026-11-13.test.js": "410e604bcb68b42a56d75f86039907799fe5c6effae1de85e267d27af8c78bd5"
+  },
+  "boundaries": [
+    "Development source only; not installed, deployed, pushed, merged or reloaded.",
+    "The full suite is NOT green; retained failures reproduced in unchanged baseline subsets, not reclassified as passes.",
+    "Final 7073109 changes annotation preservation only; all affected memory paths rerun, not the entire suite.",
+    "Advisor performed bounded read-only source review, not independent tests or a formal product review vote.",
+    "No real private memory/profile was used as a test fixture. Normal conversation and task audit records are separate."
+  ]
+}
