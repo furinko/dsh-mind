@@ -155,10 +155,10 @@ it('项目清空使在途模型结果失效，已知及后发现的旧历史均�
   assert.equal((await update(org, simple, fresh)).updated, true);
 }));
 
-it('来源到期退出新会话摘要，坏摘要文件拒绝使用且保留原文件', async () => scene(async ({ org }) => {
-  await capture(org, ['短期资料']); await update(org, simple);
-  org.clock._source = () => new Date(Date.now() + 31 * 86400000);
-  assert.deepEqual((await org.projectBrief.read(spec())).条目, []);
+it('暂停不使来源退出接续摘要，坏摘要文件仍拒绝使用且保留原文件', async () => scene(async ({ org }) => {
+  await capture(org, ['暂停后仍需接续的资料']); await update(org, simple);
+  org.clock._source = () => new Date(Date.now() + 180 * 86400000);
+  assert.equal((await org.projectBrief.read(spec())).条目.length, 1);
   await writeFile(org.projectBrief.file(P), '{broken');
   await assert.rejects(org.projectBrief.read(spec()), { code: 'PROJECT_BRIEF_INVALID' });
   assert.equal(await readFile(org.projectBrief.file(P), 'utf8'), '{broken');

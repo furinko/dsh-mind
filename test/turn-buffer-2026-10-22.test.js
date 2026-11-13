@@ -180,12 +180,13 @@ it('会话、项目和成员隔离；fork继承前缀不复制为新会话的用
   assert.deepEqual(texts(frame), []);
 }));
 
-it('过期内容退出读取，并在下一检查点从缓冲文件移除', async () => scene(async ({ org, session, hooks, emit, read }) => {
-  emit('turn/start', { turn: 1 }); emit('user/message', human('应过期内容'), 'append');
+it('暂停很久后读取和检查点仍保留已完成轮次，不把时间流逝当成遗忘', async () => scene(async ({ org, session, hooks, emit, read }) => {
+  emit('turn/start', { turn: 1 }); emit('user/message', human('暂停后接续的内容'), 'append');
   emit('turn/end', { turn: 1, reason: { kind: 'completed' } }); await hooks.flush();
-  org.clock._source = () => new Date(Date.now() + 31 * 86400000);
-  assert.deepEqual(texts(await read()), []); await hooks.sync(session);
-  assert.doesNotMatch(await readFile(org.turnBuffer.file(P, session.id), 'utf8'), /应过期内容/);
+  org.clock._source = () => new Date(Date.now() + 180 * 86400000);
+  assert.deepEqual(texts(await read()), ['暂停后接续的内容']); await hooks.sync(session);
+  const stored = await org.turnBuffer.load(P, session.id);
+  assert.equal(stored.rounds[0].messages[0].text, '暂停后接续的内容');
 }));
 
 it('原文完整保存，预算投影有标识，多消息分页可取齐且可按消息id读详情', async () => scene(async ({ hooks, emit, read }) => {

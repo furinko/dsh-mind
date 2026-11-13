@@ -39,7 +39,9 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
   };
   async function recoverSources(session, spec) {
     const before = await org.turnBuffer.load(spec.project, spec.session);
-    if (!before || before.sourceProjection === 3) return;
+    // Older projection-3 runs may already have skipped messages by age/time.
+    // Revisit those omissions once; a successful replay records omitted=0.
+    if (!before || before.sourceProjection === 3 && !(before.sourceRecovery?.omitted > 0)) return;
     const query = queryOf();
     if (typeof query?.observeSession !== 'function' || before.nextSeq > 100000) { recoveryUnavailable++; return; }
     const lease = await query.observeSession(spec.session, { projectionMode: 'none' });
@@ -50,7 +52,8 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
       const expected = digest(canonical(before));
       const kept = new Map(before.rounds.flatMap(r => r.messages).map(m => [m.seq, m]));
       const state = { ...before, nextSeq: before.floor, rounds: [], open: null, sourceProjection: 3 };
-      const cutoff = org.clock.ms() - TURN_BUFFER_LIMITS.days * 86400000; let omitted = 0;
+      // Time is provenance, not permission to omit available history.
+      const omitted = 0;
       const nodes = []; const context = {}; let project = projectAtCwd ? projectAtCwd(lease.header.cwd) : spec.project;
       for (let seq = 0; seq < before.nextSeq; seq++) {
         const event = lease.events[seq]; if (event?.seq !== seq) throw new Error('外部来源历史补读存在事件缺口。');
@@ -59,27 +62,35 @@ export function createTurnBufferHooks({ org, projectOf, projectAtCwd, queryOf = 
         const body = eligible && (event.type === 'user/message' || event.type === 'tool/result');
         const source = body || eligible && event.type === 'tool/call' ? event : turnMetadataEvent({ ...event, data: event.type === 'tool/call' ? {} : event.data });
         let row = projectTurnSurfaceEvent(source, nodes, context);
-        if (!eligible) row = { seq, type: 'skip' };
+        // Foreign/disabled bodies are excluded, but their real surface withdrawals
+        // still apply to previously captured messages in this project.
+        if (!eligible) row = row.type === 'replace' ? { ...row, message: undefined } : { seq, type: 'skip' };
         else if (kept.has(seq)) {
           const m = kept.get(seq); const round = before.rounds.find(r => r.messages.some(v => v.seq === seq));
           const retained = { ...m, type: 'message', time: m.at ?? round?.at, turn: round?.turn ?? null };
           row = row.type === 'replace' ? { ...row, message: retained } : retained;
         } else if (row.type === 'message' && !externalConversationMessage(row)) row = { seq, type: 'skip' };
         if (row.type === 'replace' && row.message && !externalConversationMessage(row.message) && !kept.has(seq)) delete row.message;
-        const external = row.type === 'replace' ? row.message : row;
-        if (!kept.has(seq) && externalConversationMessage(external) && (!Number.isFinite(external.time) || external.time < cutoff)) {
-          omitted++; if (row.type === 'replace') delete row.message; else row = { seq, type: 'skip' };
-        }
         foldTurnRecords(state, [row], org.clock.ms());
-        if (seq % 256 === 0) org.turnBuffer.prune(state);
       }
       state.open = before.open; state.nextSeq = before.nextSeq;
-      for (const round of state.rounds) for (const message of round.messages) {
-        const prior = kept.get(message.seq); if (prior && !Object.hasOwn(prior, 'at')) delete message.at;
+      const priorRounds = new Map(before.rounds.map(round => [canonical([round.start, round.turn]), round]));
+      for (const round of state.rounds) {
+        for (const message of round.messages) {
+          const prior = kept.get(message.seq);
+          // Historical messages with unknown time stay unknown, not replay-time now.
+          if (prior ? !Object.hasOwn(prior, 'at') : !Number.isFinite(lease.events[message.seq]?.time)) delete message.at;
+        }
+        const prior = priorRounds.get(canonical([round.start, round.turn]));
+        const startTime = lease.events[round.start]?.time;
+        round.at = round.messages.reduce((latest, message) => Number.isFinite(message.at) ? Math.max(latest, message.at) : latest,
+          prior?.at ?? (Number.isFinite(startTime) ? startTime : 0));
+        if (prior && Object.hasOwn(prior, 'retain')) round.retain = prior.retain;
       }
-      const recovered = state.rounds.some(r => r.messages.some(externalConversationMessage)) ? state : { ...before, sourceProjection: 3 };
-      recovered.sourceRecovery = { version: 3, throughSeq: before.nextSeq, omitted };
-      await org.turnBuffer.recoverProjection({ ...spec, expected, state: recovered, active: () => {
+      // A fully checked replay can remove the last external message too. Falling
+      // back to the old payload in that case would undo its real withdrawals.
+      state.sourceRecovery = { version: 3, throughSeq: before.nextSeq, omitted };
+      await org.turnBuffer.recoverProjection({ ...spec, expected, state, active: () => {
         const now = scope(session); return sameChat(org, session, spec) && now?.project === spec.project && now.session === spec.session && session.seq >= before.nextSeq;
       } });
     } finally { lease[Symbol.dispose](); }

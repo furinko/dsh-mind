@@ -64,9 +64,9 @@ it('公开工具事实、完整结果与附件保留声明；不保存隐藏推�
   assert.doesNotMatch(JSON.stringify(state), /HIDDEN_THINKING|HIDDEN_STREAM/);
 }));
 
-it('过期整理清除旧分块和临时副本，保留选中经历与未完轮，遗忘阻断迟到回灌', async () => scene(async ({ org, spec }) => {
+it('维护只清冗余副本，不因暂停删除完整轮次；明确遗忘仍清正文并阻断迟到回灌', async () => scene(async ({ org, spec }) => {
   const records = [
-    { seq: 0, type: 'turn/start', turn: 1 }, message(1, '过期正文'.repeat(25000)), { seq: 2, type: 'turn/end', turn: 1, reason: 'completed' },
+    { seq: 0, type: 'turn/start', turn: 1 }, message(1, '暂停正文'.repeat(25000)), { seq: 2, type: 'turn/end', turn: 1, reason: 'completed' },
     { seq: 3, type: 'turn/start', turn: 2 }, message(4, '长期保留经历'), { seq: 5, type: 'turn/end', turn: 2, reason: 'completed' },
     { seq: 6, type: 'turn/start', turn: 3 }, message(7, '尚未完成'),
   ];
@@ -75,17 +75,18 @@ it('过期整理清除旧分块和临时副本，保留选中经历与未完轮�
   const file = org.turnBuffer.file(project, spec.session);
   const before = (await org.turnBuffer.storageUsage(spec)).总字节;
   await writeFile(`${file}.tmp-1234-abcd`, '临时私人副本');
-  org.clock._source = () => new Date(Date.now() + 15 * 86400000);
+  org.clock._source = () => new Date(Date.now() + 180 * 86400000);
   await org.registry.markInteraction({ 来源: '部署引导' }); // synthetic maintenance owner remains present
   await org.turnBuffer.maintain(spec);
   const kept = await org.turnBuffer.load(project, spec.session);
-  assert.deepEqual(kept.rounds.map(r => r.messages[0].text), ['长期保留经历', '尚未完成']);
-  assert.ok((await org.turnBuffer.storageUsage(spec)).总字节 < before / 10);
+  assert.deepEqual(kept.rounds.map(r => r.messages[0].text), ['暂停正文'.repeat(25000), '长期保留经历', '尚未完成']);
+  assert.ok((await org.turnBuffer.storageUsage(spec)).总字节 <= before);
+  await assert.rejects(readFile(`${file}.tmp-1234-abcd`), { code: 'ENOENT' });
   await org.turnBuffer.forget({ ...spec, throughSeq: 8 });
   await org.turnBuffer.capture({ ...spec, records, fromSeq: 0, throughSeq: 8 });
   assert.deepEqual((await org.turnBuffer.load(project, spec.session)).rounds, []);
   for (const name of await readdir(dirname(file))) {
-    if (name.startsWith(file.split(/[\\/]/).at(-1))) assert.doesNotMatch(await readFile(join(dirname(file), name), 'utf8'), /过期正文|长期保留经历|尚未完成|临时私人副本/);
+    if (name.startsWith(file.split(/[\\/]/).at(-1))) assert.doesNotMatch(await readFile(join(dirname(file), name), 'utf8'), /暂停正文|长期保留经历|尚未完成|临时私人副本/);
   }
 }));
 

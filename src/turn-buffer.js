@@ -9,8 +9,9 @@ import { currentConversationScope } from './professional-context.js';
 import { externalInputSource, externalToolProjection, validConversationOrigin, externalConversationMessage } from './conversation-origin.js';
 import { hydrateTurnArchive, saveTurnArchive, turnArchiveBytes } from './turn-archive.js';
 
-// Storage has no message, round or text cap. These are presentation budgets only.
-export const TURN_BUFFER_LIMITS = Object.freeze({ days: 14, context: 6000, query: 24000,
+// No calendar expiry or message/round/text storage cap. Budgets only bound reads;
+// rollbackDays limits a redundant migration copy, never the saved experiences.
+export const TURN_BUFFER_LIMITS = Object.freeze({ days: null, context: 6000, query: 24000,
   rollbackDays: 7, summaryRounds: 20 });
 const integer = n => Number.isSafeInteger(n) && n >= 0;
 const identifier = value => typeof value === 'string' && value.trim() && value.length <= 256;
@@ -240,20 +241,10 @@ export class TurnBufferService {
       return state;
     } catch (error) { if (error?.code === 'ENOENT') return null; throw fail(); }
   }
-  prune(state) {
-    // An inline legacy document has not passed the lossless conversion boundary.
-    // Reads and source replay must not trim it before the backup is established.
-    if (state.version !== 4) return state;
-    const protection = state.legacyMigration;
-    const cutoff = this.clock.ms() - TURN_BUFFER_LIMITS.days * 86400000;
-    state.rounds = state.rounds.filter(round => {
-      // Unfinished and explicitly selected experiences survive short-term expiry.
-      if (protection && this.clock.ms() < protection.protectedUntil && (round.start < protection.throughSeq || round.messages.some(message => message.seq < protection.throughSeq))) return true;
-      if (round.at >= cutoff || round.status !== 'closed' || round.retain === true) return true;
-      state.removed += round.messages.length; return false;
-    });
-    return state;
-  }
+  // Kept for callers sharing the archive read path. A pause, a completed chat
+  // turn, an excerpt or an unpinned experience never authorizes deletion.
+  // Explicit forgetting changes the saved state; maintenance collects old copies.
+  prune(state) { return state; }
   async saveState(file, state, { forget = false } = {}) {
     const backupFile = file + '.migration-backup';
     let migration = null;
@@ -326,12 +317,8 @@ export class TurnBufferService {
         sourceProjection: 3, nextSeq: fromSeq, floor: fromSeq, missing: 0, removed: 0, open: null, rounds: [],
         coverageGaps: fromSeq > 0 ? [{ kind: 'uncovered-prefix', throughSeq: fromSeq, detail: '此副本未声明覆盖初始水位之前的历史；继承或宿主不可用范围不能冒充完整。' }] : [] };
       if (state.owner !== undefined || state.version === 4 && !state.legacyMigration?.ownerMissing) state.owner = { kind: 'Lead', project, session };
-      if (throughSeq <= state.nextSeq) {
-        // 重复事件和清空前迟到的批次都不能复活正文；顺便物理清理已到期资料。
-        const previous = JSON.stringify(state); this.prune(state);
-        if (previous !== JSON.stringify(state) && active()) await this.saveState(file, state);
-        return;
-      }
+      // 重复事件和清空前迟到的批次不能复活正文，也不因重复通知或暂停清理旧经历。
+      if (throughSeq <= state.nextSeq) return;
       if (fromSeq > state.nextSeq) { state.missing += fromSeq - state.nextSeq; state.open = null; }
       foldTurnRecords(state, records, this.clock.ms());
       state.nextSeq = throughSeq;
@@ -353,7 +340,7 @@ export class TurnBufferService {
     const frame = { 版本: 1, 项目: project, 会话: session, 数据版本: version,
       来源投影版本: state?.sourceProjection ?? 1, 历史来源补读: state?.sourceRecovery ?? null,
       起始事件序号: state?.floor ?? null, 下次事件序号: state?.nextSeq ?? null, 未核事件数: state?.missing ?? 0, 已清理消息数: state?.removed ?? 0,
-      保留天数: TURN_BUFFER_LIMITS.days, 保存与投影分离: true,
+      保留天数: TURN_BUFFER_LIMITS.days, 自动按天遗忘: false, 保存与投影分离: true,
       覆盖缺口: state?.coverageGaps ?? [], 下一偏移: null, 截断: false, 轮次: [] };
     // 从新到旧分配预算，再恢复时间顺序。可见正文不重复注入，压缩后的原文仍可作为历史资料。
     const items = (state?.rounds ?? []).flatMap(round => round.messages
@@ -416,7 +403,7 @@ export class TurnBufferService {
   }
   async storageUsage({ subject, project, session }) {
     await this.authorize(subject, project, session);
-    return { 总字节: await turnArchiveBytes(this.file(project, session)), 保留天数: TURN_BUFFER_LIMITS.days,
+    return { 总字节: await turnArchiveBytes(this.file(project, session)), 保留天数: TURN_BUFFER_LIMITS.days, 自动按天遗忘: false,
       原文硬轮数上限: null, 回退副本期限天数: TURN_BUFFER_LIMITS.rollbackDays };
   }
   /** Explicit maintenance migration. No old content is discarded on first conversion.

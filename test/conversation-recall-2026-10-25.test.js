@@ -103,17 +103,20 @@ it('长消息末尾细节命中后可按引用续读全文；相同消息id跨�
   assert.equal(new Set(both.条目.map(r => r.id)).size, 2);
 }));
 
-it('清空和到期立即退出召回，旧引用不复活正文，分页拒绝混合版本', () => scene(async org => {
+it('暂停原文继续召回，明确清空后旧引用不复活，分页拒绝混合版本', () => scene(async org => {
   await capture(org, '海盐焦糖第一页'); await capture(org, '海盐焦糖第二页');
-  await capture(org, '过期海盐焦糖', { project: 'expired', at: org.clock.ms() - 31 * 86400000 });
+  await capture(org, '暂停海盐焦糖', { project: 'paused', at: org.clock.ms() - 180 * 86400000 });
   const fresh = await root(org);
-  const page = await org.conversationRecall.read(spec(fresh), { text: '海盐焦糖', limit: 1 }); assert.equal(page.下一偏移, 1);
+  const all = await org.conversationRecall.read(spec(fresh), { text: '海盐焦糖' });
+  assert.equal(all.口径.命中数, 3);
+  assert.ok(all.条目.some(row => row.项目 === 'paused'));
+  const page = await org.conversationRecall.read(spec(fresh), { text: '海盐焦糖', crossProject: false, limit: 1 }); assert.equal(page.下一偏移, 1);
   assert.equal(page.口径.命中数, 2);
   await org.registry.assign({ subject: SOVEREIGN, 岗位: 'Lead', 实例: LEAD.id });
   await org.turnBuffer.forget({ ...spec(), throughSeq: (await org.turnBuffer.load(P, LEAD.id)).nextSeq });
   await org.registry.assign({ subject: SOVEREIGN, 岗位: 'Lead', 实例: fresh.id });
   assert.equal((await org.conversationRecall.read(spec(fresh), { id: page.条目[0].id })).条目.length, 0);
-  await assert.rejects(org.conversationRecall.read(spec(fresh), { text: '海盐焦糖', dataVersion: page.数据版本, offset: 1 }), { code: 'TURN_RECALL_VERSION_CHANGED' });
+  await assert.rejects(org.conversationRecall.read(spec(fresh), { text: '海盐焦糖', crossProject: false, dataVersion: page.数据版本, offset: 1 }), { code: 'TURN_RECALL_VERSION_CHANGED' });
 }));
 
 it('纯工具事件推进水位不打断原文分页；宿主历史回退时不读未来正文', () => scene(async org => {

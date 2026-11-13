@@ -50,9 +50,12 @@ it('implicit migration preserves every old round across consecutive captures, re
   await assert.rejects(org.turnBuffer.rollbackMigration(spec),{code:'TURN_ROLLBACK_NEW_WRITES'});
   org.clock._source=()=>new Date(now+8*86400000); await org.registry.markInteraction({来源:'部署引导'});
   await org.turnBuffer.maintain(spec);
-  assert.equal((await org.turnBuffer.load(project,LEAD.id)).rounds.length,2);
+  const afterGrace = await org.turnBuffer.load(project,LEAD.id);
+  assert.equal(afterGrace.rounds.length,4,'回退副本到期不能删除原始经历或空轮状态');
+  assert.equal(canonical(afterGrace.rounds[0]),canonical(legacy.rounds[0]));
+  assert.equal(canonical(afterGrace.rounds[1]),canonical(legacy.rounds[1]));
   await assert.rejects(readFile(file+'.migration-backup'),{code:'ENOENT'});
-  for(const name of await readdir(dirname(file))) if(name.startsWith(file.split(/[\\/]/).at(-1))) assert.ok(!(await readFile(join(dirname(file),name),'utf8')).includes('OLD_PRIVATE_FULL_BODY'));
+  assert.equal((await org.turnBuffer.readOriginal({...spec,id:'legacy-original',limit:24000})).原文长度,legacy.rounds[0].messages[0].text.length);
 }));
 
 it('explicit lossless migration can restore original bytes but never lowers the global v4 old-reader barrier', () => scene(async ({ org, spec }) => {

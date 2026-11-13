@@ -79,10 +79,10 @@ it('发送回执必须来自同一项目，目录切换使旧调用失去配对'
 it('继承前缀外部不作为当前会话来源补回',async()=>scene(async({org,s,hooks})=>{
  s.append('turn/start',{turn:1});s.append('user/message',user('fork继承的外部','inherited'),'append');s.append('turn/end',{turn:1,reason:{kind:'completed'}});s.inheritedEventCount=s.seq;s.append('turn/start',{turn:2});s.append('user/message',user('本会话外部','own'),'append');s.append('turn/end',{turn:2,reason:{kind:'completed'}});await legacy(org,s);await hooks.sync(s);assert.deepEqual((await all(org)).map(m=>m.id),['own']);
 }));
-it('补读不迁入其他项目或已过期、时间未知的外部，旧本地未知时间不被刷新成现在',async()=>scene(async({org,s,hooks})=>{
+it('补读保留暂停旧来源与未知时间，旧本地未知时间不被刷新成现在',async()=>scene(async({org,s,hooks})=>{
  s.append('turn/start',{turn:1});const old=s.append('user/message',user('过期外部','expired'),'append');old.time=Date.now()-40*86400000;const unknown=s.append('user/message',user('时间未知外部','unknown'),'append');delete unknown.time;
  s.append('user/message',user('原本地旧消息','local',{kind:'user'}),'append');s.append('user/message',user('新外部','new'),'append');s.append('turn/end',{turn:1,reason:{kind:'completed'}});await legacy(org,s);const before=await org.turnBuffer.load(P,LEAD.id);delete before.rounds.flatMap(r=>r.messages)[0].at;await savePrivateBufferState(org.turnBuffer.file(P,LEAD.id),before);
- await hooks.sync(s);const rows=await all(org);assert.deepEqual(rows.map(m=>m.id),['local','new']);assert.equal(Object.hasOwn(rows[0],'at'),false);assert.equal((await org.turnBuffer.load(P,LEAD.id)).sourceRecovery.omitted,2);
+ await hooks.sync(s);const rows=await all(org);assert.deepEqual(rows.map(m=>m.id),['expired','unknown','local','new']);assert.equal(Object.hasOwn(rows.find(m=>m.id==='local'),'at'),false);assert.equal(Object.hasOwn(rows.find(m=>m.id==='unknown'),'at'),false);assert.equal(rows.find(m=>m.id==='expired').at,old.time);assert.equal((await org.turnBuffer.load(P,LEAD.id)).sourceRecovery.omitted,0);
 }));
 it('历史跨目录归属按原事件核对，当前工作区不追授旧外部',async()=>scene(async({org,s,query})=>{
  s.append('turn/start',{turn:1});s.append('user/message',user('项目一外部','p1'),'append');s.append('working-directory/change',{cwd:'/different-project'});s.append('user/message',user('其他项目外部','p2'),'append');s.append('working-directory/change',{cwd:process.cwd()});s.append('turn/end',{turn:1,reason:{kind:'completed'}});await legacy(org,s);
