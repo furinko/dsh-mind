@@ -14,7 +14,7 @@ import { appendLines, atomicWrite, ensureDirPath, listDirs, listFiles, readJsonl
 import { readTaskLedger } from './task-ledger.js';
 import { chainHash } from './kernel/text.js';
 import { monthKey } from './kernel/time.js';
-import { Denied, InvalidBody } from './kernel/errors.js';
+import { Denied, Fault, InvalidBody } from './kernel/errors.js';
 import { DIR } from './paths.js';
 import { observeAudit } from './observability.js';
 import { AuditReadSnapshot } from './audit-read-snapshot.js';
@@ -196,7 +196,18 @@ export class AuditLog {
       // 检查点（第13代复核反例1 · 2026-10-16）：清单同时记每月末 {seq,hash}——append 前
       // 检查点超前于实际尾 ⇒ 该月账本疑似被删，拒写（「删月复活口」在写入面关闭）；
       // verify 侧另有「检查点回卷」红兜住直写文件的旁路。
-      await this.#ensureMonthRegistered(month, { seq: record.seq, hash });
+      // 2026-11-17：清单登记是「行→锚→清单」的最后一笔。失败时前两笔已经落盘，
+      // 调用方却只看到异常——重试会再追加一行（同一事实记两次）。这里把「已落盘」
+      // 作为 Fault 明示出去（与 store 的 STORE_PARTIAL_COMMIT 同口径），不许静默重试。
+      try {
+        await this.#ensureMonthRegistered(month, { seq: record.seq, hash });
+      } catch (error) {
+        throw new Fault(
+          'AUDIT_PARTIAL_COMMIT',
+          `审计行已落盘（${month}#${record.seq}，hash ${String(hash).slice(0, 8)}…），但月份清单登记失败：${error instanceof Error ? error.message : String(error)}。不要盲目重试——重试会追加一行，而不是修复本次；请先核对该月账本尾与清单。`,
+          { detail: { month, seq: record.seq, hash, 已落盘: true, 失败阶段: '清单' }, cause: error },
+        );
+      }
       if (stored.告警) this.onAlarm({ month, ...stored });
       return { seq: record.seq, hash, 时间: at, 月: month };
       }),
