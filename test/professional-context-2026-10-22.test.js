@@ -124,7 +124,9 @@ it('装配总量有界，长正文和元数据不挤入默认上下文', async (
   assert.ok(frame.知识.length > 0 && frame.知识.length <= 4);
   assert.ok(JSON.stringify(frame).length <= PROFESSIONAL_CONTEXT_BUDGET);
   assert.equal(frame.截断, true);
-  assert.ok(frame.知识.every(item => item.摘要.length <= 160 && !Object.hasOwn(item, '内容')));
+  // 断言随「帧内去重」调整：摘要与内容片段同源、版本摘要 是模型用不到的哈希，两者都已移除。
+  // 原意图不变——长正文和元数据不许进默认上下文。
+  assert.ok(frame.知识.every(item => item.内容片段.length <= 600 && !Object.hasOwn(item, '内容') && !Object.hasOwn(item, '摘要') && !Object.hasOwn(item, '版本摘要')));
 }));
 
 it('每次装配更新记忆、替换旧段；未知会话、撤销接线和读取失败都移除旧段', async () => fixture(async org => {

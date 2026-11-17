@@ -75,9 +75,11 @@ export async function recallProfessionalContext({ org, subject, project, onAssem
       if (!entry) continue;
       details.push({ spec, version: full.数据版本 });
       const snippet = recallSnippet(entry); clipped ||= snippet.需继续读取;
-      out.push({ id: entry.id, 类: kind, 摘要: String(row.entry.摘要 ?? '').slice(0, 160), 岗位: entry.岗位 ?? null, 项目: entry.项目 ?? null, 归属: entry.归属 ?? null,
-        ...snippet, 来源说明: String(entry.来源?.怎么知道 ?? '').slice(0, 180), 复验状态: entry.复验状态 ?? null,
-        继续读取: { action: 'memory_query', id: entry.id, 类: kind, 返回模式: '全文' }, 版本摘要: digest(canonical({ 内容: entry.内容, 来源: entry.来源, 知识说明: entry.知识说明 ?? null })) });
+      // 帧内不再重复三份同源信息：摘要与「内容片段」同源，版本摘要 是模型用不到的哈希。
+      // 来源说明 只承担「来源可核」的提示作用，截到 80 字符足够。
+      out.push({ id: entry.id, 类: kind, 岗位: entry.岗位 ?? null, 项目: entry.项目 ?? null, 归属: entry.归属 ?? null,
+        ...snippet, 来源说明: String(entry.来源?.怎么知道 ?? '').slice(0, 80), 复验状态: entry.复验状态 ?? null,
+        继续读取: { action: 'memory_query', id: entry.id, 类: kind, 返回模式: '全文' } });
     }
     return out;
   };

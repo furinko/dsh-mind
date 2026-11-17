@@ -9,8 +9,8 @@ import { selectLeadGoals } from './lead-focus.js';
 export const WORK_CONTEXT_BUDGET = 9000;
 const short = (value, limit) => { const text = String(value ?? ''); return { 文本: text.slice(0, limit), 省略: text.length > limit }; };
 const taskBrief = node => ({ id: node.id, 状态: node.状态, 代: node.代 ?? null,
-  描述: short(node.描述, 360), 判据: (node.判据 ?? []).slice(0, 4).map(value => short(value, 160)),
-  判据省略: (node.判据 ?? []).length > 4, 依赖: (node.依赖 ?? []).slice(0, 8), 依赖省略: (node.依赖 ?? []).length > 8 });
+  描述: short(node.描述, 120), 判据: (node.判据 ?? []).slice(0, 3).map(value => short(value, 100)),
+  判据省略: (node.判据 ?? []).length > 3, 依赖: (node.依赖 ?? []).slice(0, 8), 依赖省略: (node.依赖 ?? []).length > 8 });
 
 async function leadSources(org, actor, project) {
   const snapshot = await org.goals.contextSnapshot({ subject: actor, 项目: project });
@@ -45,14 +45,17 @@ export async function recallWorkContext({ org, subject, project }) {
     frame.截断 = sources.goals.length > sources.selected.length;
     for (const goal of sources.selected) {
       const tasks = sources.linked.get(goal.id);
-      add({ 类型: '目标', id: goal.id, 修订: goal.修订, 状态: goal.状态, 期望结果: short(goal.期望结果, 320),
+      add({ 类型: '目标', id: goal.id, 修订: goal.修订, 状态: goal.状态, 期望结果: short(goal.期望结果, 200),
         下一步: short(goal.下一步, 240), 等待原因: short(goal.等待原因, 160),
-        需求理解: goal.需求理解 ? { 原始表达: short(goal.需求理解.原始表达, 240), 当前理解: short(goal.需求理解.当前理解, 400),
-          来源: short(goal.需求理解.来源, 160), 待验证: (goal.需求理解.待验证 ?? []).slice(0, 3).map(value => short(value, 160)),
-          关键问题: (goal.需求理解.关键问题 ?? []).map(value => short(value, 160)), 分工: (goal.需求理解.分工 ?? []).slice(0, 3).map(item => ({ 岗位: item.岗位, 工作: short(item.工作, 240), 理由: short(item.理由, 160) })),
-          省略: (goal.需求理解.待验证 ?? []).length > 3 || (goal.需求理解.分工 ?? []).length > 3 } : null,
-        完成依据: goal.完成依据.slice(0, 4).map(value => short(value, 160)), 完成依据省略: goal.完成依据.length > 4,
-        约束数: goal.约束.length, 禁止工具: goal.禁止工具,
+        // 需求理解只保留模型推进要用的两样：当前理解与待验证。原始表达/来源/分工是审计材料，
+        // 每步重发没有新信息；需要全量时用 goal_query。
+        需求理解: goal.需求理解 ? { 当前理解: short(goal.需求理解.当前理解, 240),
+          待验证: (goal.需求理解.待验证 ?? []).slice(0, 2).map(value => short(value, 120)),
+          关键问题: (goal.需求理解.关键问题 ?? []).slice(0, 2).map(value => short(value, 120)),
+          分工: (goal.需求理解.分工 ?? []).slice(0, 3).map(item => ({ 岗位: item.岗位, 工作: short(item.工作, 80), 理由: short(item.理由, 80) })),
+          省略: true } : null,
+        // 完成依据只在 goal_complete 逐条核对时要全文，帧里给条数即可。
+        完成依据数: goal.完成依据.length, 约束数: goal.约束.length, 禁止工具: goal.禁止工具,
         交付进展: { 关联任务: tasks.length, 合法采纳: tasks.filter(已被合法采纳).length, 整体效果: '仍需Lead依据当前目标核对，任务采纳不等于目标符合' },
         任务: tasks.slice(-2).map(taskBrief), 任务省略: tasks.length > 2 });
     }
