@@ -519,6 +519,41 @@ export function degradedTool(error) {
  * 返回 JSON 文本，于是模型与工作台读的是同一份字节。
  * @param {{ org: object, 项目: string, 项目键: (exec: object) => string, 宿主服务?: (exec: object) => object }} spec
  */
+/**
+ * 两个面（模型工具 / `/mind` 命令）共用的动作分发 —— 2026-11-17。
+ *
+ * 修前 `mindTool.execute` 与 `mindCommand.handler` 各写一遍同一套装配：主体、项目键、
+ * 钉版、就绪断言、响应整形、专业装配回执。两份代码只靠 test 兜着，漂一处就是
+ * 「工具面拒、命令面放」或反过来的真实越权面。这里只保留两面**真实不同**的规则：
+ *  - 命令面可达 COMMAND_ONLY_ACTIONS；工具面不可（runAction 按 `面` 拒绝）。
+ *  - 命令面的 args 已由 解析参数 归一；工具面在这里归一一次。
+ *  - 专业装配回执只属于模型请求，命令面不产生。
+ * @returns {Promise<string>} 已序列化的响应（memory_query 走专用信封）
+ */
+async function 分发Mind动作({ org, logger, 宿主服务, professionalReceipts, 项目, 主体, args, 面, exec }) {
+  const 本次宿主 = 宿主服务?.(exec);
+  const 登记 = await 钉Lead实例(org, 主体, logger, exec?.agent?.session, 本次宿主);
+  const 本次入参 = 面 === 'command' ? args : normalizeArgs(args);
+  // 命令面专属动作（如改设置的 presence）不受钉版断言：它们只由人敲，认证在别处。
+  if (面 !== 'command' || !COMMAND_ONLY_ACTIONS.includes(本次入参.action)) 断言Lead业务就绪(主体, 本次入参.action, 登记);
+  const 装配记录 = 面 !== 'command' && professionalReceipts && 本次入参.action === 'task_submit'
+    ? await professionalReceipts.beforeSubmit(exec?.agent, 本次入参.id) : null;
+  const 响应 = {
+    成功: true,
+    ...(登记 && 登记.就绪 === false ? { 实例登记: 登记 } : {}),
+    ...(await runAction({
+      org, 项目, subject: 主体, 主体, args: 本次入参,
+      ...(面 === 'command' ? { 面 } : {}),
+      ...(本次宿主 ? { 宿主: 本次宿主 } : {}),
+    })),
+  };
+  if (装配记录) {
+    const 回执 = await professionalReceipts.afterSubmit(exec?.agent, 装配记录, 响应.节点);
+    if (回执) 响应.知识装配回执 = 回执;
+  }
+  return 本次入参.action === 'memory_query' ? serializeMemoryEnvelope(响应) : JSON.stringify(响应, null, 1);
+}
+
 function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations, professionalReceipts }) {
   return {
     name: 'mind',
@@ -714,24 +749,8 @@ function mindTool({ org, 项目, 项目键, 宿主服务, logger, observations, 
         // 子会话 `agentSubject` 算出成员、`runAction` 收到的却是 Lead（两处读数都在回报里）。
         // v2 条目9/10：Lead 实例随主会话出生——**落在这里**（真实 exec 的会话事实），
         // 不在路由面/任意 Lead 形状上自动生造（那是「设置页」这类伪实例的来源）。
-        const 本次宿主 = 宿主服务?.(exec);
-        const 登记 = await 钉Lead实例(org, 主体, logger, exec?.agent?.session, 本次宿主);
-        // v2 条目10（W5 审计反例收口）：内核入口不再「warn 后继续」——模型面的 Lead 自治写
-        // 必须钉版真就绪；诊断读（status / workbench / audit_tail …）照旧放行并带读数。
-        // 分类与 runAction / isConcurrencySafe 共用 READ_ONLY_ACTIONS 这一张表。
-        const 本次入参 = normalizeArgs(args);
-        断言Lead业务就绪(主体, 本次入参.action, 登记);
-        const 装配记录 = 本次入参.action === 'task_submit' ? await professionalReceipts.beforeSubmit(exec?.agent, 本次入参.id) : null;
-        const 响应 = {
-          成功: true,
-          ...(登记 && 登记.就绪 === false ? { 实例登记: 登记 } : {}),
-          ...(await runAction({ org, 项目: 本次项目, subject: 主体, 主体, args: 本次入参, ...(本次宿主 ? { 宿主: 本次宿主 } : {}) })),
-        };
-        if (装配记录) {
-          const 回执 = await professionalReceipts.afterSubmit(exec?.agent, 装配记录, 响应.节点);
-          if (回执) 响应.知识装配回执 = 回执;
-        }
-        return 本次入参.action === 'memory_query' ? serializeMemoryEnvelope(响应) : JSON.stringify(响应, null, 1);
+        // 钉版、就绪断言、装配回执统一在 分发Mind动作 里（工具面与命令面共用）。
+        return await 分发Mind动作({ org, logger, 宿主服务, professionalReceipts, 项目: 本次项目, 主体, args, 面: 'tool', exec });
       }); } catch (error) {
         return JSON.stringify({ 成功: false, ...describeFailure(error) }, null, 1);
       }
@@ -757,7 +776,6 @@ function mindCommand(spec) {
       try {
         const 本次项目 = spec.项目键(agent);
         const 主体 = agentSubject({ agent });
-        const 本次宿主 = spec.宿主服务?.({ agent });
         if (line === '' || line === 'dashboard' || line === 'workbench') {
           // 看板走的也是「按身份切片」的同一条路：Lead 看全量，成员只读自己那片。
           // 投影本体与同源路由**共用**（`看板包`）：同一份 JSON，客户端只换传输层。
@@ -767,18 +785,9 @@ function mindCommand(spec) {
         const [head, ...rest] = line.split(/\s+/);
         const action = ALIASES[head] ?? head;
         const args = 解析参数(rest.join(' '));
-        const 登记 = await 钉Lead实例(spec.org, 主体, spec.logger, agent?.session, 本次宿主);
-        // 业务未就绪在冻结审批请求前拒绝；真实人侧恢复/设置仍走其原认证通道。
-        if (!COMMAND_ONLY_ACTIONS.includes(action)) 断言Lead业务就绪(主体, action, 登记);
-        // `面: 'command'` 是**人侧**的标记：命令面专属动作（如改设置的 `presence`）
-        // 只在这一面可达，`mind` 工具的 enum 里没有它们（模型没有这只手）。
-        // `主体` 一起显式传下去：账上要记**敲这条命令的那个人**，不许归并成一个泛化的 lead。
-        // P1-12（全面审查 2026-10-17）：宿主服务束读 `exec.agent`；命令面手里只有 agent 本身，
-        // 修前把 agent 当 exec 传 ⇒ 宿主.agent 恒 null，/mind member_* 全抛 NO_AGENT。
-        // 两个面统一成 exec 形状：命令面显式包成 { agent }（无工具调用的 signal）。
-        const result = await runAction({ org: spec.org, 项目: 本次项目, subject: 主体, 主体, args: { ...args, action }, 面: 'command', ...(本次宿主 ? { 宿主: 本次宿主 } : {}) });
-        const 响应 = { 成功: true, ...(登记 && 登记.就绪 === false ? { 实例登记: 登记 } : {}), ...result };
-        return { kind: 'success', text: action === 'memory_query' ? serializeMemoryEnvelope(响应) : JSON.stringify(响应, null, 1) };
+        // 与工具面共用同一套分发；命令面的差异（专属动作、exec 形状、无专业回执）在 helper 内收口。
+        const text = await 分发Mind动作({ org: spec.org, logger: spec.logger, 宿主服务: spec.宿主服务, 项目: 本次项目, 主体, args: { ...args, action }, 面: 'command', exec: { agent } });
+        return { kind: 'success', text };
       } catch (error) {
         return { kind: 'error', text: JSON.stringify({ 成功: false, ...describeFailure(error) }, null, 1) };
       }
