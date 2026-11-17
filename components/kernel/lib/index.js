@@ -935,7 +935,7 @@ function 普通成员工具闸(exec, 项目, deps) {
   const parent = 快照.成员?.[member.委派者id];
   if (!parent?.就绪 || parent.岗位 !== 'Lead') return '[dsh-mind] 成员工具闸 · 派发 Lead 未就绪或已封存，无法确认上游权限，通用工具拒绝。';
   try {
-    const project = deps.项目键 ? deps.项目键(exec) : 项目键(exec.agent, 项目);
+    const project = 当前项目键(deps, exec, 项目);
     const 节点 = [...fold(readTaskLedgerSync(deps.org.layout.taskLog(project))).values()].map((node) => ({ ...node, 项目: project }));
     const authority = deps.org.tasks.toolFileAuthority();
     authority.check({ tool: exec.name, args: exec.arguments, cwd: 会话工作目录(exec, deps), nodes: 节点, instance: 主体.id, parent: member.委派者id, member });
@@ -1028,7 +1028,7 @@ function 咨询参与工具闸(exec, 项目, deps) {
     return 拒(`实例未就绪：${member.未就绪原因 ?? '咨询实例不是普通成员岗'}；仅可向派发 Lead 报告。`);
   }
   if (绑定.无效 || 绑定.来源会话 !== member.委派者id) return 拒(`绑定不可用（${绑定.无效 ?? '来源会话与真实委派者冲突'}），unknown ⇒ 拒；请报告派发 Lead。`);
-  const 当前项目 = deps.项目键 ? deps.项目键(exec) : 项目键(exec.agent, 项目);
+  const 当前项目 = 当前项目键(deps, exec, 项目);
   if (当前项目 !== 绑定.项目) return 拒(`会话项目 ${当前项目} 不是绑定项目 ${绑定.项目}，目录变化不扩大咨询权限。`);
   if (!咨询只读工具.has(exec.name)) return 拒(`工具「${exec.name}」不在咨询只读闭名单；写文件、子进程、再派活、能力发布及未知工具一律拒。`);
   if (exec.name === 'mind') {
@@ -1093,7 +1093,7 @@ function 复核员工具闸(exec, 项目, deps) {
   // 那条路恰好也被同一行拒掉。复核边界只应对**已确认的复核员**生效；
   // 其余交普通成员闸按成员规则处理（未就绪成员仍可向 Lead 报告）。
   if (!member || member.状态 !== '在岗' || !member.岗位) return undefined;
-  try { if (!取复核用途同步({ layout: deps.org.layout, subject: 主体, 项目: deps.项目键 ? deps.项目键(exec) : 项目键(exec.agent, 项目), identity: 快照 })?.限定) return undefined; }
+  try { if (!取复核用途同步({ layout: deps.org.layout, subject: 主体, 项目: 当前项目键(deps, exec, 项目), identity: 快照 })?.限定) return undefined; }
   catch (error) { return `[dsh-mind] 复核用途不可判：${错误消息(error)}`; }
   // 报告通道（唯一放行的非只读工具）：只允许发给**派发它的 Lead**，不是全局放行
   // send_message（否则复核员可唤醒任意成员/再派活）。见 成员报告通道()。
@@ -1170,6 +1170,11 @@ function 成员报告通道(exec, 快照, member) {
     }
   }
   return undefined;
+}
+
+/** 当前项目键：优先 apply 装好的可信绑定解析器，退回目录名解析（三处闸共用一份）。 */
+function 当前项目键(deps, exec, 项目) {
+  return deps.项目键 ? deps.项目键(exec) : 项目键(exec.agent, 项目);
 }
 
 /** 会话当前工作目录：官方 `workingDirectory.get(session)` 是已提交的绝对路径，优先用它。 */
