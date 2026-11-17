@@ -865,11 +865,17 @@ function 闸判定(exec, 项目, deps = {}) {
   // 补修I：会审参与实例的**闭名单**先于复核员/范围闸；有绑定即由它收口（预给参与者无绑定⇒不收紧）。
   const 咨询 = 咨询参与工具闸(exec, 项目, deps);
   if (咨询?.拒 !== undefined) { deps.observationBlock?.('kernel.council-scope'); return 咨询.拒; }
-  const 角色拒 = 咨询?.命中 ? undefined : 复核员工具闸(exec, 项目, deps);
+  // 宿主原生子会话（DSH 自带 subagent，未经 member_spawn 登记）：只读放行、写仍拒。
+  // 必须排在这两道成员闸之前：它们的「未登记 ⇒ 拒」会连 read 和向 Lead 报告一起拦掉。
+  const 原生 = 咨询?.命中 ? { 命中: false } : 原生子会话工具闸(exec, 项目, deps);
+  if (原生?.拒 !== undefined) { deps.observationBlock?.('kernel.native-subagent'); return 原生.拒; }
+  const 已收口 = 咨询?.命中 === true || 原生?.命中 === true;
+  const 角色拒 = 已收口 ? undefined : 复核员工具闸(exec, 项目, deps);
   if (角色拒 !== undefined) { deps.observationBlock?.('kernel.reviewer-scope'); return 角色拒; }
-  const 成员拒 = 咨询?.命中 ? undefined : 普通成员工具闸(exec, 项目, deps);
+  const 成员拒 = 已收口 ? undefined : 普通成员工具闸(exec, 项目, deps);
   if (成员拒 !== undefined) { deps.observationBlock?.('kernel.member-files'); return 成员拒; }
-  const 预算拒 = deps.budgetHooks?.guard(exec);
+  // 原生子会话只读：它不签发预算准入、不能派活/写，不占受管创建额度。
+  const 预算拒 = 原生?.命中 ? undefined : deps.budgetHooks?.guard(exec);
   if (预算拒 !== undefined) { deps.observationBlock?.('kernel.goal-budget', deps.budgetHooks.versionOf(exec), 'goal-budget-config'); return 预算拒; }
   if (ENVELOPE_STATE.状态 === '未配置') return undefined;
   if (ENVELOPE_STATE.状态 === '故障') {
@@ -926,6 +932,70 @@ function 普通成员工具闸(exec, 项目, deps) {
     authority.check({ tool: exec.name, args: exec.arguments, cwd: 会话工作目录(exec, deps), nodes: 节点, instance: 主体.id, parent: member.委派者id, member });
   } catch (error) {
     return `[dsh-mind] 成员工具闸 · ${error.rule ?? error.code ?? '范围不可判'}：${错误消息(error)}（fail-closed）。`;
+  }
+  return undefined;
+}
+
+/** 宿主父会话 id：只认真实会话头（parentSession / parentSessionId），不从 cwd 猜。 */
+function 宿主父会话(exec) {
+  const 头 = exec?.agent?.session?.header ?? {};
+  const 值 = typeof 头.parentSession === 'string'
+    ? 头.parentSession
+    : (头.parentSession?.id ?? (typeof 头.parentSessionId === 'string' ? 头.parentSessionId : null));
+  return typeof 值 === 'string' && 值 ? 值 : null;
+}
+
+/**
+ * 宿主原生子会话闸（2026-11-17）。
+ *
+ * DSH 自带的 subagent 工具会起子会话：它们在宿主里是普通子代理，但**没有**经过
+ * member_spawn 的在册登记。修前它们落进复核员闸的「未登记 ⇒ 全拒」，连 read/glob
+ * 和向父会话报告都被拦——宿主能力被插件吃掉，文案还写着「请交回 Lead 诊断」，
+ * 而那条报告通道恰好也被同一行拒掉。
+ *
+ * 规则（只开只读，不放宽写）：
+ *  - 只处理**未登记**子会话；在册成员仍走原成员/复核闸。
+ *  - 只认父会话是**在岗 Lead** 的原生子会话；父是成员/未知 ⇒ 交后续闸（默认拒）。
+ *  - 只放行只读闭名单 + send_message（且只能发给父 Lead）。
+ *  - 私有区原始账本仍拒读：原生父子关系不是读私有账本的凭据。
+ * @returns {{命中: boolean, 拒?: string}|undefined} undefined = 不适用
+ */
+const 原生子会话只读工具 = new Set(['read', 'read_image', 'glob', 'grep', 'skill']);
+
+function 原生子会话工具闸(exec, 项目, deps) {
+  const 主体 = agentSubject(exec);
+  if (主体?.kind !== '成员' || !主体.id) return undefined;
+  const 快照 = readInstanceSnapshot(deps.org?.layout?.identityFile?.());
+  if (快照?.ok !== true) return undefined;      // 快照不可判：交后续闸，不在此处 fail-open
+  if (快照.成员?.[主体.id]) return undefined;   // 在册成员：交成员/复核闸
+  const 父 = 宿主父会话(exec);
+  if (!父) return undefined;                    // 来源不可判：交后续闸（默认拒）
+  const 父成员 = 快照.成员?.[父];
+  if (!父成员 || 父成员.岗位 !== 'Lead' || 父成员.就绪 !== true) return undefined;
+  if (exec.name === 'send_message') return { 命中: true, 拒: 成员报告通道(exec, 快照, { 委派者id: 父, 状态: '宿主原生子会话' }) };
+  if (!原生子会话只读工具.has(exec.name)) {
+    return { 命中: true, 拒: `[dsh-mind] 宿主原生子会话只读：工具「${exec.name}」不在只读闭名单（write / edit / pwsh / bash / mind 一律拒）。这是 DSH 原生 subagent，未经 member_spawn 登记；需要写请由派发你的 Lead 建任务并正规登记成员。` };
+  }
+  return { 命中: true, 拒: 原生子会话读路径(exec, deps) };
+}
+
+function 原生子会话读路径(exec, deps) {
+  const 参数 = exec?.arguments;
+  let 目标 = (exec.name === 'read' || exec.name === 'read_image') ? 参数?.file_path : 参数?.path;
+  if (目标 === undefined || 目标 === null || String(目标).trim() === '') {
+    if (exec.name === 'glob' || exec.name === 'grep') 目标 = 会话工作目录(exec, deps);
+    else return undefined;
+  }
+  const 私有根 = deps.org?.layout?.privateRoot;
+  if (!私有根) return undefined;                // 私有区不可判：宿主沙箱照旧，这里不额外加码
+  const 基准 = 会话工作目录(exec, deps);
+  let 绝对;
+  try { 绝对 = 规范路径(isAbsolute(目标) ? 目标 : resolvePath(基准 ?? '.', 目标)); }
+  catch { return '[dsh-mind] 宿主原生子会话读路径 · 目标无法规范化（unknown ⇒ 拒）。'; }
+  const 私有 = 规范路径(私有根);
+  const 搜索 = exec.name === 'glob' || exec.name === 'grep';
+  if (在目录内(绝对, 私有) || (搜索 && 在目录内(私有, 绝对))) {
+    return '[dsh-mind] 宿主原生子会话读路径 · 私有区原始账本禁止直读，也不得从父目录递归搜索；需要请由 Lead 走 mind 的只读动作。';
   }
   return undefined;
 }
@@ -1008,9 +1078,12 @@ function 复核员工具闸(exec, 项目, deps) {
     return `[dsh-mind] 工具闸 · 身份档案同步快照不可用，无法确认复核员只读边界（unknown ⇒ 拒，不拿空表放行）：${快照.原因 ?? '未知原因'}。`;
   }
   const member = 快照.成员?.[主体.id];
-  if (!member || member.状态 !== '在岗' || !member.岗位) {
-    return `[dsh-mind] 工具闸 · 成员身份未就绪：${主体.id} ${member ? `状态为 ${member.状态 ?? '缺失'}、岗位 ${member.岗位 ?? '缺失'}` : '没有在册记录'}。未知/封存实例不能因无法识别复核岗位而获得通用工具权限，请交回 Lead 诊断。`;
-  }
+  // 2026-11-17：未登记 / 非在岗 / 无岗位的会话不是「复核员闸」能判的对象。
+  // 修前这里直接全拒，普通成员闸根本走不到：DSH 原生 subagent 因此连 read 和向
+  // Lead 报告（send_message）都被拦，错误文案还写着「请交回 Lead 诊断」——
+  // 那条路恰好也被同一行拒掉。复核边界只应对**已确认的复核员**生效；
+  // 其余交普通成员闸按成员规则处理（未就绪成员仍可向 Lead 报告）。
+  if (!member || member.状态 !== '在岗' || !member.岗位) return undefined;
   try { if (!取复核用途同步({ layout: deps.org.layout, subject: 主体, 项目: deps.项目键 ? deps.项目键(exec) : 项目键(exec.agent, 项目), identity: 快照 })?.限定) return undefined; }
   catch (error) { return `[dsh-mind] 复核用途不可判：${错误消息(error)}`; }
   // 报告通道（唯一放行的非只读工具）：只允许发给**派发它的 Lead**，不是全局放行

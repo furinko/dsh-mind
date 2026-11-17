@@ -35,7 +35,11 @@ it('A窗口的心情与可读缘由在B窗口及服务重建后延续，不新�
   assert.deepEqual(fromB.mood, { valence: -0.6, arousal: -0.2 });
   assert.equal(fromB.entries[0].id, made.id); assert.equal(fromB.entries[0].context.session, LEAD.id);
   assert.equal((await org.memory.query({ subject: LEAD, 项目: P, 类: '偏好' })).条目.length, 0);
-  assert.equal((await stat(service.file)).mode & 0o777, 0o600);
+  // Windows 没有 POSIX 权限位：0o600 建的文件在 NTFS 上回读是 0o666（基线实测 438）。
+  // 断言只在 POSIX 上有意义；Windows 只核对「不是只读」这一位真实含义。
+  const 权限 = (await stat(service.file)).mode & 0o777;
+  if (process.platform === 'win32') assert.equal(权限 & 0o200, 0o200, `Windows 上不应是只读文件，实际 ${权限.toString(8)}`);
+  else assert.equal(权限, 0o600);
 }));
 it('整体余波跨项目和关系延续，私人事件、人物、动机与来源不会随之泄漏', async () => scene(async (service, org) => {
   const made = await write(service, record('private', { account: body({ event: 'private-person-secret', desires: ['private-desire'] }) }));
