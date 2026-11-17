@@ -93,14 +93,14 @@ test('文案表不留孤儿：每个 key 都对应 manifest 里的命令面动�
 });
 
 test('工具 schema 的 enum 直接引用 ACTIONS，不在内核里另抄一份', () => {
-  const kernel = readFileSync(new URL('../components/kernel/lib/index.js', import.meta.url), 'utf8');
-  assert.match(kernel, /enum:\s*ACTIONS\b/, '内核工具 schema 必须直接用 ACTIONS，别处手抄清单会漂');
-  // 反向守：内核里不该出现第二张动作字面量清单
-  assert.equal(
-    /\[\s*'status'\s*,\s*'workbench'/.test(kernel),
-    false,
-    '内核里出现了手抄的动作清单，应改为引用 ACTIONS',
-  );
+  // 2026-11-17：参数表已从 kernel/lib/index.js 拆到 mind-tool-input.js；断言仍钉同一事实。
+  const schema模块 = readFileSync(new URL('../components/kernel/lib/mind-tool-input.js', import.meta.url), 'utf8');
+  const 内核 = readFileSync(new URL('../components/kernel/lib/index.js', import.meta.url), 'utf8');
+  assert.match(schema模块, /enum:\s*ACTIONS\b/, '内核工具 schema 必须直接用 ACTIONS，别处手抄清单会漂');
+  // 反向守：两处都不该出现第二张动作字面量清单
+  for (const 源 of [内核, schema模块]) {
+    assert.equal(/\[\s*'status'\s*,\s*'workbench'/.test(源), false, '出现手抄的动作清单，应改为引用 ACTIONS');
+  }
 });
 
 test('动作总数守住：manifest 与派生视图数量一致（防止某条被静默吞掉）', () => {
