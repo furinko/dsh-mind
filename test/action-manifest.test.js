@@ -23,6 +23,7 @@ import {
   COMMAND_ONLY_ACTIONS,
   COMMAND_ACTIONS,
   READ_ONLY_ACTIONS,
+  HANDLERS,
   是写动作,
 } from '../lib/actions.js';
 
@@ -108,4 +109,23 @@ test('动作总数守住：manifest 与派生视图数量一致（防止某条�
   assert.equal(COMMAND_ONLY_ACTION_IDS.length, COMMAND_ONLY_ACTIONS.length);
   assert.equal(READ_ONLY_ACTION_IDS.length, READ_ONLY_ACTIONS.length);
   assert.ok(ACTION_MANIFEST.length >= 90, `动作表意外缩水：${ACTION_MANIFEST.length}`);
+});
+
+test('HANDLERS 与 manifest 一一对应：不要「能选到但没实现」，也不要死 handler', () => {
+  const manifestIds = ACTION_MANIFEST.map((e) => e.id).sort();
+  const handlerIds = Object.keys(HANDLERS).sort();
+
+  const 缺实现 = manifestIds.filter((id) => !handlerIds.includes(id));
+  const 死代码 = handlerIds.filter((id) => !manifestIds.includes(id));
+
+  assert.deepEqual(
+    缺实现,
+    [],
+    `这些动作在工具 schema 里能选到，但没有 handler（模型选中即报「未知 action」）：${缺实现.join(',')}`,
+  );
+  assert.deepEqual(
+    死代码,
+    [],
+    `这些 handler 不在 manifest 里，模型永远调不到（历史退役残留）：${死代码.join(',')}`,
+  );
 });
