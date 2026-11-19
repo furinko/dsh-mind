@@ -9,7 +9,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { hostCapabilities, assertExecutionHost } from '../lib/host-execution.js';
+import { hostCapabilities, assertExecutionHost, prepareExecution } from '../lib/host-execution.js';
 
 const agent = { id: 'parent', session: { id: 'parent' } };
 const hostCreation = { prepare() {}, available: () => true };
@@ -40,5 +40,46 @@ describe('宿主能力探测', () => {
     assert.equal(hostCapabilities({ ...base, subagents: { drainChildren() {} } }, 'subagent').release, 'drainChildren');
     assert.equal(hostCapabilities({ ...base, subagents: { drainContinuableChildren() {} } }, 'subagent').release, 'drainContinuableChildren');
     assert.equal(hostCapabilities({ ...base, subagents: {} }, 'subagent').release, null);
+  });
+
+  it('返回值形状变化时按候选字段唯一取 id（无名册的降级路径）', async () => {
+    const host = {
+      agent: { id: 'parent', session: { id: 'parent' } },
+      subagents: { sendMessage() {} },
+      hostCreation: {
+        available: () => true,
+        prepare: () => ({
+          tool: 'subagent', callId: 'c1',
+          async execute() { return { callId: 'c1', tool: 'subagent', value: { kind: 'started', sessionId: 'child-9' } }; },
+        }),
+      },
+    };
+    const r = await prepareExecution({ host, mode: 'subagent', name: 'w', description: 'd' }).execute();
+    assert.equal(r.实例, 'child-9');
+    assert.match(r.目录核对 ?? '', /降级/);
+  });
+
+  it('宿主只回名称时用名册把名称解析成实例 id；无名册则明确失败', async () => {
+    const make = (subagents) => ({
+      agent: { id: 'parent', session: { id: 'parent' } },
+      subagents,
+      hostCreation: {
+        available: () => true,
+        prepare: () => ({
+          tool: 'subagent', callId: 'c1',
+          async execute() { return { callId: 'c1', tool: 'subagent', value: { kind: 'activation', name: 'agent-1' } }; },
+        }),
+      },
+    });
+    const host = make({ sendMessage() {}, listChildren: async () => [{ id: 'child-9', name: 'agent-1', mode: 'continuable' }] });
+    const r = await prepareExecution({ host, mode: 'subagent', name: 'w', description: 'd' }).execute();
+    assert.equal(r.实例, 'child-9');
+    assert.equal(r.目录核对, undefined);
+
+    const noRoster = make({ sendMessage() {} });
+    await assert.rejects(
+      () => prepareExecution({ host: noRoster, mode: 'subagent', name: 'w', description: 'd' }).execute(),
+      /无法登记该子会话/,
+    );
   });
 });
