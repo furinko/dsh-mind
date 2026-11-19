@@ -103,6 +103,8 @@ const 冻结动作表 = [
   // task_settle（W3 批3）：结账——环路最后一步，仅 Lead（policy 的 settle 动作守着）。
   // 它是**工具面可达**的：收尾必须是 Lead 显式拍板的一步，藏进 review 内部就没有独立动作记录了。
   'task_settle',
+  // task_scope_grant（2026-11-19）：派发后由派发 Lead 追加文件范围；成员不能自授。
+  'task_scope_grant',
   // review_exempt（v2 口述收敛 2026-10-18 条目5）：复核豁免登记——读部署设置「复核免审」
   // 全局开关（默认关 ⇒ 一律拒）。它只往任务图落 review_exempted 标记事件，不改设置。
   // 提名机制（review_nominate）随复核者降级移除：复核员是普通岗位卡，

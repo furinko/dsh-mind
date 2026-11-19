@@ -47,6 +47,31 @@ describe('普通成员通用工具文件边界', () => {
       s.host.ctx.agents.delete(LEAD.id);assert.match(s.guard('read',{file_path:s.input}),/根 Agent/);
     }finally{await s.cleanup();}
   });
+  it('派发后扩范围：成员不能自授、非派发 Lead 不能扩；派发 Lead 扩读生效且写仍拒，终态后不能再扩', async () => {
+    const s = await setup({ configured: false });
+    try {
+      // 部署上限允许 cwd 与 outside；任务初始只冻结 cwd
+      s.org.tasks.configureToolFiles({ read: [s.cwd, s.outside], write: [s.cwd, s.outside] });
+      const n = await s.dispatch({ 读: [s.cwd], 写: [s.cwd] });
+      const extra = join(s.outside, 'extra.txt');
+      await writeFile(extra, 'outside input');
+      assert.match(s.guard('read', { file_path: extra }), /本人真实绑定/);
+      await assert.rejects(() => s.org.tasks.grantScope(n.id, { subject: MEMBER, 项目: P, 工具文件范围: { 读: [s.outside] }, 理由: 'self' }), /成员自助权限/);
+      await assert.rejects(() => s.org.tasks.grantScope(n.id, { subject: { id: 'lead-2', kind: 'Lead' }, 项目: P, 工具文件范围: { 读: [s.outside] }, 理由: 'other lead' }), /只有该 Lead 能扩展/);
+      const granted = await s.org.tasks.grantScope(n.id, { subject: LEAD, 项目: P, 工具文件范围: { 读: [s.outside] }, 理由: '成员申请：需要外部输入', 请求: 'req-1' });
+      assert.equal(granted.扩展.读.length, 1);
+      assert.equal(s.guard('read', { file_path: extra }), undefined);
+      assert.match(s.guard('write', { file_path: join(s.outside, 'w.txt'), content: 'x' }), /本人真实绑定/, '只扩了读，写仍拒');
+      const node = await s.org.tasks.get(n.id, { 项目: P });
+      assert.equal(node.工具文件范围扩展?.length, 1);
+      assert.equal(node.工具文件范围扩展[0].授予者, 'lead');
+      assert.match(JSON.stringify(node.工具文件范围扩展[0]), /req-1/);
+      await s.org.tasks.start(n.id, { subject: MEMBER, 项目: P });
+      await s.org.tasks.submit(n.id, { subject: MEMBER, 项目: P, 结论: 'done' });
+      await assert.rejects(() => s.org.tasks.grantScope(n.id, { subject: LEAD, 项目: P, 工具文件范围: { 读: [s.outside] }, 理由: 'late' }), /已派发\/执行中/);
+    } finally { await s.cleanup(); }
+  });
+
   it('终止立即撤回旧任务文件许可，后继须重新绑定并显式授范围', async () => {
     const s = await setup();
     try {

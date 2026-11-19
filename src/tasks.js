@@ -1340,6 +1340,37 @@ export class TaskGraph {
    *   （2026-10-13 第三批性能收口：修前调用方落线后再 `get()` 一次全量读+折叠；
    *   现在锁内已经把新行折进去了，直接给——顺带消掉「写后再读」可能读到别人中途写入的竞态。）
    */
+  /**
+   * 2026-11-19 · 派发后扩范围：成员工作中发现目录不够时向 Lead 申请，由**派发 Lead** 决定并落账。
+   * 只增不减：原冻结范围仍由 dispatched 事件持有；扩展单独成列，随任务终态与换人失效。
+   * 上限仍受宿主可授范围约束（toolFileAuthority.grant 复核）；成员不能自批，别的 Lead 不能扩别人的任务。
+   */
+  async grantScope(id, spec) {
+    if (spec.subject?.kind !== 'Lead') {
+      throw new Denied('任务文件范围 · 仅派发 Lead 可扩', '文件范围扩展不是成员自助权限：成员只能向派发 Lead 申请，由 Lead 判断后落账。', {
+        requireAuthority: 'Lead',
+        howToChange: '向派发你的 Lead 说明需要哪些目录和原因；Lead 复核后执行 task_scope_grant。',
+      });
+    }
+    const node = await this.#require(id, spec.项目);
+    if (!['已派发', '执行中'].includes(node.状态)) {
+      throw new InvalidBody(`只有已派发/执行中的任务可以扩展文件范围（当前：${node.状态}）。`);
+    }
+    if (node.工具文件范围?.授予者 !== spec.subject.id) {
+      throw new Denied('任务文件范围 · 非本任务派发 Lead', `任务 ${id} 的文件范围由 ${node.工具文件范围?.授予者 ?? '未知'} 授予；只有该 Lead 能扩展。`, {
+        requireAuthority: 'Lead',
+        howToChange: '由原派发 Lead 执行；正式改派后由新 Lead 重新授予。',
+      });
+    }
+    const grant = this.#toolFileAuthority.grant(spec.工具文件范围, spec.subject);
+    if (grant.读.length === 0 && grant.写.length === 0) throw new InvalidBody('扩展范围不能为空。');
+    const { 节点 } = await this.#append(spec.项目, {
+      kind: 'scope_granted', id, 授予者: spec.subject.id, 读: grant.读, 写: grant.写,
+      理由: spec.理由 ?? '', 请求: spec.请求 ?? null,
+    }, spec.subject, '状态变更');
+    return { 节点, 扩展: { 读: grant.读, 写: grant.写 } };
+  }
+
   async #append(项目, event, subject, 审计动作 = '状态变更', eventBuilder = null, inLockGuard = null) {
     const file = this.layout.taskLog(项目);
     let finalEvent = event;
@@ -1976,6 +2007,7 @@ export function fold(rows, visitor = null) {
           node.状态 = row.状态;
           // 换人不继承旧文件授权；旧交付物与原作者签名仍保留。
           delete node.工具文件范围;
+          delete node.工具文件范围扩展;
           delete node.待决原因;
           delete node.待决类型;
         }
@@ -1993,6 +2025,19 @@ export function fold(rows, visitor = null) {
         }
         // v2 条目6：bound 也可以只补/覆盖复核对象（受审计的显式正门，W7 补授权路径）。
         if (Array.isArray(row.复核对象)) node.复核对象 = [...new Set(row.复核对象.map(String))];
+        break;
+      // 2026-11-19：派发 Lead 事后为同一任务追加文件范围（成员申请 → Lead 裁决）。
+      // 只增不减：旧冻结范围仍由 dispatched 事件持有，扩展单独成列，换人/终态一并失效。
+      case 'scope_granted':
+        node.工具文件范围扩展 = [...(node.工具文件范围扩展 ?? []), {
+          授予者: row.授予者 ?? null,
+          读: Array.isArray(row.读) ? row.读 : [],
+          写: Array.isArray(row.写) ? row.写 : [],
+          理由: row.理由 ?? '',
+          请求: row.请求 ?? null,
+          由: row.by?.id ?? null,
+          于: row.at,
+        }];
         break;
       case 'started':
         node.状态 = row.状态 ?? '执行中';

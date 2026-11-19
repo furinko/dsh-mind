@@ -118,6 +118,14 @@ export class ToolFileAuthority {
     // ceiling. The production kernel ALWAYS installs the live host bridge.
     return this.#configured;
   }
+  /** 任务的有效根：派发时冻结的根 + **同一派发 Lead** 事后追加的扩展（只增不减）。 */
+  #rootsOf(task, key, parent) {
+    const 基础 = Array.isArray(task?.工具文件范围?.[key]) ? task.工具文件范围[key] : [];
+    const 扩展 = (task?.工具文件范围扩展 ?? [])
+      .filter((e) => e && e.授予者 === parent && Array.isArray(e[key]))
+      .flatMap((e) => e[key]);
+    return [...基础, ...扩展];
+  }
   /** 服务层交卷只允许为本人当前仍有权读取/产出的文件计算摘要，不能借提交绕过撤权。 */
   canCapture(path, task, subject) {
     if (subject?.kind !== '成员') return true;
@@ -164,15 +172,15 @@ export class ToolFileAuthority {
       && n.工具文件范围?.版本 === 1 && n.工具文件范围.授予者 === parent);
     const overlaps = (root, intersect = false) => typeof root === 'string' && this.#rootStillValid(root)
       && (insideFileRoot(target, root) || (intersect && insideFileRoot(root, target)));
-    const scoped = grants.filter(task => Array.isArray(task.工具文件范围[key])
-      && task.工具文件范围[key].some(root => overlaps(root) && this.#withinCeiling(root, writing, parent)));
+    const scoped = grants.filter(task => this.#rootsOf(task, key, parent)
+      .some(root => overlaps(root) && this.#withinCeiling(root, writing, parent)));
     if (!scoped.length) throw new Denied('成员通用工具 · 任务文件范围', `目标不在本人真实绑定的活动任务所冻结的${key}根内，或绑定岗位/实例凭证已变化、父 Lead 可授上限已撤回；工作目录、负责人岗位名和产物引用不构成授权。`);
     // 宿主没有可信的本次任务归因。命中同一路径的任务不能借另一条重叠授权
     // 洗掉目标限制；不相关路径的独立工作仍按各自范围判定。
     // 递归搜索还会触及目标目录下的更窄任务根：反向包含只用于附加限制，绝不授予搜索权限。
     // 上限变窄只撤销授权，不能让仍活动的重叠任务限制消失。
-    const constrained = grants.filter(task => Array.isArray(task.工具文件范围[key])
-      && task.工具文件范围[key].some(root => overlaps(root, recursive)));
+    const constrained = grants.filter(task => this.#rootsOf(task, key, parent)
+      .some(root => overlaps(root, recursive)));
     return { writing, recursive, target, scoped, constrained };
   }
   check(input) {
