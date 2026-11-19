@@ -38,10 +38,10 @@ describe('宿主能力探测', () => {
     }, 'subagent');
     assert.equal(caps.create, true);
     assert.equal(caps.send, true);
-    assert.equal(caps.list, true);
+    assert.equal(caps.list, false, 'listDescendants 行形状未适配，不冒充可用目录');
     assert.equal(caps.resolveName, true);
     assert.equal(caps.listDescendants, true);
-    assert.doesNotThrow(() => assertExecutionHost({ agent, hostCreation, subagents: { sendMessage() {}, listDescendants() {} } }, 'subagent'));
+    assert.doesNotThrow(() => assertExecutionHost({ agent, hostCreation, subagents: { sendMessage() {}, listDescendants() {}, resolveName() {} } }, 'subagent'));
   });
 
   it('既无目录也无 resolveName：创建前就拒，避免孤儿', () => {
